@@ -12,10 +12,10 @@ struct KeyCapView: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .font(.system(size: 10, weight: .medium, design: .rounded))
             .foregroundStyle(Color.vfTextSecondary)
-            .frame(minWidth: 20, minHeight: 20)
-            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 16)
+            .padding(.horizontal, 3)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.sm)
                     .fill(Color.white.opacity(0.06))

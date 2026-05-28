@@ -13,7 +13,7 @@ extension Color {
 
     // Status
     static let vfRecordingRed = Color(red: 1.00, green: 0.27, blue: 0.27)
-    static let vfWarningAmber = Color(red: 1.00, green: 0.65, blue: 0.15)
+    static let vfWarningAmber = Color(red: 1.00, green: 0.624, blue: 0.039) // #FF9F0A
     static let vfSuccessGreen = Color(red: 0.30, green: 0.78, blue: 0.40)
 
     // Surfaces (dark theme)

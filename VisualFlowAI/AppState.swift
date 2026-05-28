@@ -60,6 +60,14 @@ final class AppState {
     var elapsedSeconds: Double = 0
     var frameCount: Int = 0
 
+    /// Index into `Self.processingSteps` for the currently-shown
+    /// processing label. Cycled by a Task while `state == .processing`.
+    var processingStepIndex: Int = 0
+
+    /// User-driven toggle for the result pill's expanded variant.
+    /// Reset on every new recording.
+    var isResultExpanded: Bool = false
+
     // MARK: Result
 
     var resultPrompt: String = """
@@ -101,11 +109,38 @@ final class AppState {
     // MARK: Internal
 
     private var timer: Timer?
+    private var processingStepTask: Task<Void, Never>?
+
+    // MARK: - Derived
+
+    /// True while the menu-bar icon and pill should both reflect the
+    /// "active recording" identity. Defined in one place so the
+    /// MenuBarExtra label and the pill bridge agree.
+    var isRecordingActive: Bool {
+        state == .recording || state == .wrappingUp || state == .autoStopped
+    }
+
+    /// Total recording budget, pre-formatted for the pill timer chip.
+    /// Matches the 180s threshold the ticker enforces below.
+    var totalDisplay: String { "3:00" }
+
+    /// The current processing-step label, cycled by `startProcessingStepRotation`.
+    var processingStepLabel: String {
+        Self.processingSteps[processingStepIndex % Self.processingSteps.count]
+    }
+
+    private static let processingSteps: [String] = [
+        "Listening to your narration\u{2026}",
+        "Looking at your screen\u{2026}",
+        "Writing your prompt\u{2026}"
+    ]
 
     // MARK: - Transitions
 
     func startRecording() {
         timer?.invalidate()
+        cancelProcessingStepRotation()
+        isResultExpanded = false
         state = .recording
         elapsedSeconds = 0
         frameCount = 0
@@ -121,9 +156,12 @@ final class AppState {
         timer?.invalidate()
         timer = nil
         state = .processing
+        startProcessingStepRotation()
 
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 4 * 1_000_000_000)
+            guard let self else { return }
+            self.cancelProcessingStepRotation()
             self.state = .done
         }
     }
@@ -131,17 +169,44 @@ final class AppState {
     func cancelRecording() {
         timer?.invalidate()
         timer = nil
+        cancelProcessingStepRotation()
         elapsedSeconds = 0
         frameCount = 0
+        isResultExpanded = false
         state = .idle
     }
 
     func resetToIdle() {
         timer?.invalidate()
         timer = nil
+        cancelProcessingStepRotation()
         elapsedSeconds = 0
         frameCount = 0
+        isResultExpanded = false
         state = .idle
+    }
+
+    func toggleResultExpanded() {
+        isResultExpanded.toggle()
+    }
+
+    // MARK: - Processing step rotation
+
+    private func startProcessingStepRotation() {
+        processingStepTask?.cancel()
+        processingStepIndex = 0
+        processingStepTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_300_000_000)
+                guard let self, !Task.isCancelled, self.state == .processing else { return }
+                self.processingStepIndex += 1
+            }
+        }
+    }
+
+    private func cancelProcessingStepRotation() {
+        processingStepTask?.cancel()
+        processingStepTask = nil
     }
 
     // MARK: - Ticker
