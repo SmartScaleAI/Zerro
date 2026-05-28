@@ -29,7 +29,7 @@ extension AppState {
             return .wrappingUp(elapsed: elapsedDisplay, totalDisplay: totalDisplay)
 
         case .processing:
-            return .processing(stepLabel: processingStepLabel)
+            return .processing(stepLabel: processingStageLabel)
 
         case .done:
             return isResultExpanded ? .resultExpanded : .resultCompact

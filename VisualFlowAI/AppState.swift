@@ -57,6 +57,10 @@ public enum RecordingFailureReason: Equatable {
     case streamStartFailed
     case writerStartFailed
     case captureInterrupted
+    /// Phase 8: the local processing pipeline (audio isolation / frame
+    /// extraction / manifest) threw. Routed here so failures surface on
+    /// the amber pill instead of being swallowed.
+    case processingFailed
 
     var userMessage: String {
         switch self {
@@ -72,6 +76,8 @@ public enum RecordingFailureReason: Equatable {
             return "Couldn\u{2019}t open the recording file."
         case .captureInterrupted:
             return "Recording was interrupted."
+        case .processingFailed:
+            return "Couldn\u{2019}t process the recording."
         }
     }
 }
@@ -104,14 +110,24 @@ final class AppState {
 
     /// Path to the most recently finalized recording on disk. Set by
     /// `handleSessionFinish` when the writer completes successfully;
-    /// cleared on cancel and on every new startRecording. Phase 8's
-    /// processing pipeline reads this to drive frame extraction +
-    /// audio analysis. For Phase 7 it's just held.
+    /// cleared on cancel and on every new startRecording.
     var lastRecordingURL: URL?
 
-    /// Index into `Self.processingSteps` for the currently-shown
-    /// processing label. Cycled by a Task while `state == .processing`.
-    var processingStepIndex: Int = 0
+    /// The Phase 8 processed output (isolated audio + downsampled
+    /// frames + manifest, all colocated in a working directory). Set
+    /// when `runProcessing` completes successfully; cleared on cancel,
+    /// reset, and at the start of every new recording. Phase 9 reads
+    /// this for STT + multimodal prompt generation. The working
+    /// directory IS the unit of cleanup — Phase 8 Step 5 will own the
+    /// delete policy on cancel + the launch-sweep for orphans.
+    var processedRecording: ProcessedRecording?
+
+    /// The label shown on the .processing pill. Driven by real stage
+    /// transitions from the Phase 8 ProcessingPipeline (via its
+    /// `onStage` callback), not a canned rotation. Default placeholder
+    /// matches the first pipeline stage so the brief gap (~ms) before
+    /// `onStage` fires doesn't show a generic "Processing…" flash.
+    var processingStageLabel: String = "Saving your narration\u{2026}"
 
     /// User-driven toggle for the result pill's expanded variant.
     /// Reset on every new recording.
@@ -161,7 +177,6 @@ final class AppState {
     /// callbacks (onElapsed, onFinish) stay valid; cleared on session
     /// completion / cancel so memory is reclaimed.
     private var recordingSession: RecordingSession?
-    private var processingStepTask: Task<Void, Never>?
 
     // MARK: - Derived
 
@@ -175,17 +190,6 @@ final class AppState {
     /// Total recording budget, pre-formatted for the pill timer chip.
     /// Matches the 180s threshold handleElapsedUpdate enforces.
     var totalDisplay: String { "3:00" }
-
-    /// The current processing-step label, cycled by `startProcessingStepRotation`.
-    var processingStepLabel: String {
-        Self.processingSteps[processingStepIndex % Self.processingSteps.count]
-    }
-
-    private static let processingSteps: [String] = [
-        "Listening to your narration\u{2026}",
-        "Looking at your screen\u{2026}",
-        "Writing your prompt\u{2026}"
-    ]
 
     // MARK: - Transitions
 
@@ -207,10 +211,21 @@ final class AppState {
             NSLog("[AppState] startRecording ignored — state is %@", String(describing: state))
             return
         }
-        cancelProcessingStepRotation()
+        // Clean prior session artifacts before clearing the references.
+        // Anything still on disk from the previous session (last source
+        // .mov, last processed working dir) is dead now — Phase 9 has
+        // already had its window to consume the prior result, and
+        // keeping them would just leak disk between recordings.
+        if let priorRecording = lastRecordingURL {
+            WorkingDirectory.remove(at: priorRecording)
+        }
+        if let priorWorkingDir = processedRecording?.workingDirectory {
+            WorkingDirectory.remove(at: priorWorkingDir)
+        }
         isResultExpanded = false
         activeSelection = selection
         lastRecordingURL = nil
+        processedRecording = nil
         elapsedSeconds = 0
         frameCount = 0
 
@@ -273,26 +288,41 @@ final class AppState {
             return
         }
         // No live session — cancelling from .processing/.done just
-        // resets the UI.
+        // resets the UI. Delete the on-disk artifacts before clearing
+        // the refs: a cancel-during-.done means the user is throwing
+        // away the result they were looking at, so the working dir is
+        // garbage now (Phase 9 won't run on a discarded result).
+        if let priorRecording = lastRecordingURL {
+            WorkingDirectory.remove(at: priorRecording)
+        }
+        if let priorWorkingDir = processedRecording?.workingDirectory {
+            WorkingDirectory.remove(at: priorWorkingDir)
+        }
         recordingSession = nil
-        cancelProcessingStepRotation()
         elapsedSeconds = 0
         frameCount = 0
         isResultExpanded = false
         activeSelection = nil
         lastRecordingURL = nil
+        processedRecording = nil
         state = .idle
     }
 
     func resetToIdle() {
         recordingSession?.cancel()
+        if let priorRecording = lastRecordingURL {
+            WorkingDirectory.remove(at: priorRecording)
+        }
+        if let priorWorkingDir = processedRecording?.workingDirectory {
+            WorkingDirectory.remove(at: priorWorkingDir)
+        }
         recordingSession = nil
-        cancelProcessingStepRotation()
         elapsedSeconds = 0
         frameCount = 0
         isResultExpanded = false
         activeSelection = nil
         lastRecordingURL = nil
+        processedRecording = nil
         state = .idle
     }
 
@@ -326,35 +356,75 @@ final class AppState {
         switch outcome {
         case .finished(let url):
             lastRecordingURL = url
-            // Move into the mock processing flow. Phase 8 replaces
-            // this fake 4s sleep with real frame extraction +
-            // model calls; for Phase 7 the placeholder result is
-            // still the right user-visible outcome.
+            // Phase 8 Step 1: run real audio isolation in place of the
+            // old mock 4s sleep. Frame extraction (Step 2), manifest
+            // (Step 3), and the proper per-stage pill mapping (Step 4)
+            // slot into runProcessing as they land; for now the pill
+            // keeps its timer-based step rotation and we end on the
+            // existing placeholder result. The working-dir path is
+            // logged so the isolated audio can be played + verified.
             state = .processing
-            startProcessingStepRotation()
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 4 * 1_000_000_000)
-                guard let self, self.state == .processing else { return }
-                self.cancelProcessingStepRotation()
-                self.state = .done
-            }
+            runProcessing(sourceURL: url)
         case .cancelled:
-            cancelProcessingStepRotation()
             elapsedSeconds = 0
             frameCount = 0
             isResultExpanded = false
             activeSelection = nil
             lastRecordingURL = nil
+            processedRecording = nil
             state = .idle
         case .failed(let error):
             NSLog("[AppState] session failed: %@", String(describing: error))
-            cancelProcessingStepRotation()
             elapsedSeconds = 0
             frameCount = 0
             isResultExpanded = false
             activeSelection = nil
             lastRecordingURL = nil
+            processedRecording = nil
             state = .failed(reason: Self.failureReason(from: error))
+        }
+    }
+
+    // MARK: - Phase 8 processing
+
+    /// Runs the local processing pipeline against the finished recording.
+    /// Step 1 isolates the narration audio; later steps add frames +
+    /// manifest. On success we land on the existing placeholder result
+    /// (.done); on failure we route to the amber pill via
+    /// `.processingFailed` rather than swallowing the error.
+    ///
+    /// The `state == .processing` guards mean a cancel during processing
+    /// (which resets to .idle) wins — we never stomp a newer state with
+    /// a late-arriving pipeline result.
+    private func runProcessing(sourceURL: URL) {
+        // Reset the placeholder explicitly — handleSessionFinish set
+        // state = .processing before this Task starts running, so for
+        // ~ms before the pipeline fires its first onStage the pill
+        // would otherwise show whatever label survived the prior run.
+        processingStageLabel = "Saving your narration\u{2026}"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await ProcessingPipeline().process(
+                    sourceURL: sourceURL,
+                    onStage: { [weak self] stage in
+                        self?.processingStageLabel = stage.userMessage
+                    }
+                )
+                guard self.state == .processing else { return }
+                self.processedRecording = result
+                // Source .mov is no longer needed — the audio + frames
+                // + manifest in the working dir are everything Phase 9
+                // will consume. Drop the .mov so a 3-min recording
+                // doesn't double-occupy tmp until the next sweep.
+                WorkingDirectory.remove(at: sourceURL)
+                self.lastRecordingURL = nil
+                self.state = .done
+            } catch {
+                NSLog("[Processing] failed: %@", String(describing: error))
+                guard self.state == .processing else { return }
+                self.state = .failed(reason: .processingFailed)
+            }
         }
     }
 
@@ -391,25 +461,6 @@ final class AppState {
 
     func toggleResultExpanded() {
         isResultExpanded.toggle()
-    }
-
-    // MARK: - Processing step rotation
-
-    private func startProcessingStepRotation() {
-        processingStepTask?.cancel()
-        processingStepIndex = 0
-        processingStepTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_300_000_000)
-                guard let self, !Task.isCancelled, self.state == .processing else { return }
-                self.processingStepIndex += 1
-            }
-        }
-    }
-
-    private func cancelProcessingStepRotation() {
-        processingStepTask?.cancel()
-        processingStepTask = nil
     }
 
     // MARK: - Display

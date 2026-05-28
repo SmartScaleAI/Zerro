@@ -68,6 +68,13 @@ struct VisualFlowAIApp: App {
                     areaSelector: selectorCtrl
                 )
             }
+            // Phase 8 launch-sweep: clear orphaned visualflow-*
+            // recordings and working dirs from prior crashes / force-
+            // quits. Runs in this one-shot block (NOT App.init body,
+            // which SwiftUI may re-invoke). Safe to run before any
+            // new artifact is created — anything alive in the current
+            // run is constructed after this returns.
+            WorkingDirectory.sweep()
         }
     }
 
