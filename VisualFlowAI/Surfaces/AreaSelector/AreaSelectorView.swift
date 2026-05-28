@@ -4,67 +4,76 @@
 //
 //  Created by Colin Breeding on 5/27/26.
 //
-//  Static SwiftUI surface for the drag-to-select crosshair overlay
-//  that runs before recording begins. Phase 2.5 is visual-only — no
-//  mouse-drag interaction, no AppKit / NSEvent wiring, no actual
-//  screen capture. A real implementation will replace the hardcoded
-//  selection rect with state driven by NSEvent.localMonitor in a
-//  later phase.
+//  SwiftUI surface for the drag-to-select crosshair overlay that
+//  runs before recording begins. Phase 6 Checkpoint 2 drives every
+//  geometry from `AreaSelectorState` — the rectangle, the handles,
+//  the dimensions readout — and renders nothing selection-related
+//  until a drag begins. Mouse events arrive via the NSView event
+//  layer in AreaSelectorWindowController and mutate the same state;
+//  this view is read-only and never claims hit-testing (the root
+//  wrapper in the controller disables it for the entire tree, so
+//  events pass through to the AppKit layer underneath).
 //
-//  Visual-state note: the 8-handle layout (4 corners + 4 edge midpoints)
-//  rendered here represents the *settled* selection — the moment after
-//  the user releases the mouse, when the rectangle is ready to confirm
-//  or resize. The *during-drag* state, per native macOS convention,
-//  shows only the 4 corner handles. Phase 2.5 captures the settled
-//  state; the drag-in-progress variant comes when interaction wires in.
+//  Visual-state branches:
+//    • No selection (`state.selectionRect == nil`)
+//        Dim overlay + instruction pill. The user hasn't pressed
+//        mouseDown yet, or just opened the overlay.
+//    • Active drag (`state.isDragging == true`)
+//        Dim overlay with cutout + selection border + 4 corner
+//        handles + live dimensions readout + instruction pill.
+//    • Settled (Checkpoint 3 — not yet wired)
+//        Same as active drag but with 8 handles (4 corners + 4 edge
+//        midpoints) and a confirm affordance.
 //
 
 import SwiftUI
 
 struct AreaSelectorView: View {
-    /// Fixed selection rectangle for the static preview. The "480 × 240"
-    /// label in the mockup is derived from these dimensions.
-    private let selectionSize = CGSize(width: 480, height: 240)
+    let state: AreaSelectorState
+    /// Distance from the top of the overlay window's bounds to the top
+    /// of the visible (menu-bar-excluded) area. Used to align the
+    /// instruction pill with where the recording pill sits — both should
+    /// hover 24pt below the menu bar, not 24pt from the top of the
+    /// physical screen. Defaults to 0 so previews and any non-overlay
+    /// usage render correctly.
+    var topInset: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
             let bounds = geo.size
-            let selection = centeredSelection(in: bounds)
+            let selection = state.selectionRect
 
             ZStack(alignment: .topLeading) {
                 dimCutout(bounds: bounds, selection: selection)
-                selectionBorder(at: selection)
-                selectionHandles(at: selection)
-                dimensionsLabel(at: selection)
+                if let selection {
+                    selectionBorder(at: selection)
+                    selectionHandles(at: selection)
+                    dimensionsLabel(at: selection)
+                }
                 instructionPill(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
         }
     }
 
-    private func centeredSelection(in bounds: CGSize) -> CGRect {
-        CGRect(
-            x: (bounds.width - selectionSize.width) / 2,
-            y: (bounds.height - selectionSize.height) / 2 + 20,
-            width: selectionSize.width,
-            height: selectionSize.height
-        )
-    }
-
     // MARK: - Dim cutout
     //
-    // Single `Path` with the outer bounds and the inner selection,
-    // filled with `.eoFill` (even-odd) so the area inside the
-    // selection stays clear of the dim color. One path is cheaper
-    // than four positioned rectangles and avoids subpixel seams.
+    // Single `Path` with the outer bounds and (optionally) the inner
+    // selection, filled with `.eoFill` so the selection stays clear
+    // of the dim color. One path is cheaper than four positioned
+    // rectangles and avoids subpixel seams along the cutout edges.
+    // No `.allowsHitTesting(false)` here — superseded by the root
+    // wrapper in AreaSelectorWindowController, which disables it
+    // for the entire tree.
 
-    private func dimCutout(bounds: CGSize, selection: CGRect) -> some View {
+    private func dimCutout(bounds: CGSize, selection: CGRect?) -> some View {
         Path { path in
             path.addRect(CGRect(origin: .zero, size: bounds))
-            path.addRect(selection)
+            if let selection {
+                path.addRect(selection)
+            }
         }
         .fill(Color.black.opacity(0.5), style: FillStyle(eoFill: true))
-        .allowsHitTesting(false)
     }
 
     // MARK: - Selection border
@@ -74,24 +83,23 @@ struct AreaSelectorView: View {
             .stroke(Color.vfBrandBlue, lineWidth: 1.5)
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
-            .allowsHitTesting(false)
     }
 
-    // MARK: - 8 handles
+    // MARK: - Handles
     //
-    // 4 corners + 4 edge midpoints, per the mockup's settled state.
+    // Native macOS convention: 4 corners while a drag is in flight, 8
+    // (corners + edge midpoints) once the selection is settled. The
+    // edge midpoints aren't actionable yet — confirm/cancel is the only
+    // exit in C3 — but rendering them is the visual signal that the
+    // rectangle is "live" and would be the resize affordance when
+    // resize lands. Branching on `state.isDragging` keeps the visual
+    // language consistent with macOS Screenshot's behavior.
 
     private func selectionHandles(at rect: CGRect) -> some View {
-        let positions: [CGPoint] = [
-            CGPoint(x: rect.minX, y: rect.minY), // top-left
-            CGPoint(x: rect.midX, y: rect.minY), // top-mid
-            CGPoint(x: rect.maxX, y: rect.minY), // top-right
-            CGPoint(x: rect.maxX, y: rect.midY), // right-mid
-            CGPoint(x: rect.maxX, y: rect.maxY), // bottom-right
-            CGPoint(x: rect.midX, y: rect.maxY), // bottom-mid
-            CGPoint(x: rect.minX, y: rect.maxY), // bottom-left
-            CGPoint(x: rect.minX, y: rect.midY)  // left-mid
-        ]
+        let positions: [CGPoint] = state.isDragging
+            ? cornerHandlePositions(at: rect)
+            : cornerHandlePositions(at: rect) + edgeMidpointHandlePositions(at: rect)
+
         return ForEach(positions.indices, id: \.self) { i in
             Rectangle()
                 .fill(Color.white)
@@ -101,7 +109,32 @@ struct AreaSelectorView: View {
         }
     }
 
+    private func cornerHandlePositions(at rect: CGRect) -> [CGPoint] {
+        [
+            CGPoint(x: rect.minX, y: rect.minY), // top-left
+            CGPoint(x: rect.maxX, y: rect.minY), // top-right
+            CGPoint(x: rect.maxX, y: rect.maxY), // bottom-right
+            CGPoint(x: rect.minX, y: rect.maxY)  // bottom-left
+        ]
+    }
+
+    private func edgeMidpointHandlePositions(at rect: CGRect) -> [CGPoint] {
+        [
+            CGPoint(x: rect.midX, y: rect.minY), // top
+            CGPoint(x: rect.maxX, y: rect.midY), // right
+            CGPoint(x: rect.midX, y: rect.maxY), // bottom
+            CGPoint(x: rect.minX, y: rect.midY)  // left
+        ]
+    }
+
     // MARK: - Dimensions label
+    //
+    // Reported in points (not backing-store pixels) for consistency
+    // with what the user perceives as the selected region — the
+    // selection rect is in view-local points, NSScreen.frame is in
+    // points, and ScreenCaptureKit's content filters operate in
+    // points too. Retina backing-scale conversion belongs to the
+    // capture layer, not the readout.
 
     private func dimensionsLabel(at rect: CGRect) -> some View {
         Text("\(Int(rect.width)) \u{00D7} \(Int(rect.height))")
@@ -119,9 +152,17 @@ struct AreaSelectorView: View {
 
     // MARK: - Top instruction pill
     //
-    // KeyCapView for the `esc` token — this is the surface where
-    // keyboard cues deserve visual weight (the user is being taught
-    // how to dismiss).
+    // Sized and positioned to match the recording pill (PillView.capsuleWidth/
+    // capsuleHeight = 392 × 50, top edge 24pt below the menu bar) so that
+    // the area selector and the recording session feel like a continuous
+    // surface across the two phases. `topInset` is the menu-bar height in
+    // points, supplied by AreaSelectorWindowController — without it we'd
+    // be measuring 24pt down from the physical screen top, behind the
+    // menu bar.
+
+    private static let pillWidth: CGFloat = 392
+    private static let pillHeight: CGFloat = 50
+    private static let pillTopGap: CGFloat = 24
 
     private func instructionPill(in bounds: CGSize) -> some View {
         HStack(spacing: VFSpacing.sm) {
@@ -141,11 +182,13 @@ struct AreaSelectorView: View {
                 .foregroundStyle(Color.vfTextSecondary)
                 .fixedSize()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .frame(width: Self.pillWidth, height: Self.pillHeight)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
-        .position(x: bounds.width / 2, y: 40)
+        .position(
+            x: bounds.width / 2,
+            y: topInset + Self.pillTopGap + Self.pillHeight / 2
+        )
     }
 }
 
@@ -265,11 +308,26 @@ private struct PulseLoginBackdrop: View {
 }
 
 // MARK: - Preview
+//
+// Seeds the preview state with synthetic mouseDown + mouseUp points
+// that reproduce the original Phase 2.5 centered 480×240 rectangle.
+// Without this seed the preview would render an empty overlay,
+// which is correct runtime behavior but uninformative as a design
+// snapshot. The 4-handle variant is what renders here (Checkpoint 2);
+// the 8-handle settled variant is the Checkpoint 3 reference.
 
 #Preview("Area Selector") {
     ZStack {
         PulseLoginBackdrop()
-        AreaSelectorView()
+        AreaSelectorView(state: makePreviewState())
     }
     .frame(width: 640, height: 480)
+}
+
+@MainActor
+private func makePreviewState() -> AreaSelectorState {
+    let s = AreaSelectorState()
+    s.beginDrag(at: CGPoint(x: 80, y: 130))
+    s.updateDrag(to: CGPoint(x: 560, y: 370))
+    return s
 }

@@ -6,13 +6,31 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		FF8546CF2FC74ACC000EB1A6 /* VisualFlowAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VisualFlowAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF90F6FF2FC7C36A004BFBAD /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShortcuts.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		FF8546DE2FC74C4A000EB1A6 /* Exceptions for "VisualFlowAI" folder in "VisualFlowAI" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FF8546CE2FC74ACC000EB1A6 /* VisualFlowAI */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FF8546D12FC74ACC000EB1A6 /* VisualFlowAI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FF8546DE2FC74C4A000EB1A6 /* Exceptions for "VisualFlowAI" folder in "VisualFlowAI" target */,
+			);
 			path = VisualFlowAI;
 			sourceTree = "<group>";
 		};
@@ -23,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -34,6 +53,7 @@
 			children = (
 				FF8546D12FC74ACC000EB1A6 /* VisualFlowAI */,
 				FF8546D02FC74ACC000EB1A6 /* Products */,
+				FF90F6FE2FC7C363004BFBAD /* Shortcuts */,
 			);
 			sourceTree = "<group>";
 		};
@@ -43,6 +63,14 @@
 				FF8546CF2FC74ACC000EB1A6 /* VisualFlowAI.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		FF90F6FE2FC7C363004BFBAD /* Shortcuts */ = {
+			isa = PBXGroup;
+			children = (
+				FF90F6FF2FC7C36A004BFBAD /* AppShortcuts.swift */,
+			);
+			path = Shortcuts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -65,6 +93,7 @@
 			);
 			name = VisualFlowAI;
 			packageProductDependencies = (
+				FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */,
 			);
 			productName = VisualFlowAI;
 			productReference = FF8546CF2FC74ACC000EB1A6 /* VisualFlowAI.app */;
@@ -94,6 +123,9 @@
 			);
 			mainGroup = FF8546C62FC74ACC000EB1A6;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF8546D02FC74ACC000EB1A6 /* Products */;
 			projectDirPath = "";
@@ -255,6 +287,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VisualFlowAI/Info.plist;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -285,6 +319,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VisualFlowAI/Info.plist;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -325,6 +361,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FF8546C72FC74ACC000EB1A6 /* Project object */;
 }

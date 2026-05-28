@@ -18,6 +18,7 @@ struct VisualFlowAIApp: App {
     @State private var permissions: PermissionsManager
     @State private var onboarding: OnboardingState
     @State private var pillController: PillWindowController
+    @State private var areaSelectorController: AreaSelectorWindowController
 
     /// Guard so the hotkey handler is appended to the library's handler
     /// list exactly once across the app's lifetime. SwiftUI re-invokes
@@ -37,11 +38,13 @@ struct VisualFlowAIApp: App {
         let state = AppState()
         let perms = PermissionsManager()
         let onb = OnboardingState()
+        let selectorCtrl = AreaSelectorWindowController()
         _appState = State(initialValue: state)
         _preferences = State(initialValue: PreferencesStore())
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
         _pillController = State(initialValue: PillWindowController(appState: state))
+        _areaSelectorController = State(initialValue: selectorCtrl)
 
         // Tell the AppDelegate whether to bring the onboarding window
         // forward post-launch. `.defaultLaunchBehavior(.presented)`
@@ -50,13 +53,18 @@ struct VisualFlowAIApp: App {
         // an .accessory-activation-policy app.
         AppDelegate.shouldPresentOnboardingOnLaunch = !onb.hasCompletedOnboarding
 
-        // Register the global hotkey exactly once. Captures the three
+        // Register the global hotkey exactly once. Captures the four
         // long-lived instances weakly — @State keeps them alive for the
         // app's lifetime, so weak references stay valid.
         if !Self.didRegisterGlobalShortcuts {
             Self.didRegisterGlobalShortcuts = true
-            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak perms, weak onb] in
-                Self.handleHotkey(state: state, permissions: perms, onboarding: onb)
+            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak perms, weak onb, weak selectorCtrl] in
+                Self.handleHotkey(
+                    state: state,
+                    permissions: perms,
+                    onboarding: onb,
+                    areaSelector: selectorCtrl
+                )
             }
         }
     }
@@ -73,6 +81,19 @@ struct VisualFlowAIApp: App {
                 .environment(permissions)
                 .environment(onboarding)
         } label: {
+            // OnboardingOpenerRegistrar is a zero-size sibling whose
+            // only job is to capture SwiftUI's `openWindow` environment
+            // action into AppDelegate.requestOpenOnboarding *as soon
+            // as the app launches*. The MenuBarExtra label is the only
+            // always-mounted View in this app — Window scenes only
+            // mount their content when the window is on screen, and
+            // MenuBarExtra's dropdown content only mounts when opened.
+            // Without this, the hotkey can't re-open onboarding once
+            // the user has dismissed it, because the closure that was
+            // previously captured in OnboardingWindowView.onAppear is
+            // never reset on later launches when `hasCompletedOnboarding`
+            // suppresses auto-presentation.
+            OnboardingOpenerRegistrar()
             MenuBarIconView(isRecording: appState.isRecordingActive)
         }
         .menuBarExtraStyle(.window)
@@ -100,23 +121,32 @@ struct VisualFlowAIApp: App {
     // MARK: - Hotkey gating
 
     /// Decides what the global hotkey does given the current setup
-    /// state. Three outcomes, in priority order:
+    /// state. Four outcomes, in priority order:
     ///   1. Onboarding incomplete — bring onboarding forward (any step).
     ///   2. Onboarding complete but a required permission is no longer
     ///      .granted — bring onboarding forward, jumped to the relevant
     ///      step so the System Settings deep link is immediately
     ///      reachable. DEFERRED: replace with a brief non-blocking
     ///      notification once UNUserNotification permission infra exists.
-    ///   3. All gates satisfied — start the recording flow as usual.
+    ///   3. All gates satisfied — present the area-selector overlay.
+    ///      Recording does NOT start here; it starts on confirm via
+    ///      the selector's callback (Phase 6 wiring).
     @MainActor
     private static func handleHotkey(
         state: AppState?,
         permissions: PermissionsManager?,
-        onboarding: OnboardingState?
+        onboarding: OnboardingState?,
+        areaSelector: AreaSelectorWindowController?
     ) {
-        guard let state, let permissions, let onboarding else { return }
+        guard let state, let permissions, let onboarding, let areaSelector else {
+            NSLog("[Hotkey] dropped — one of state/permissions/onboarding/areaSelector was nil")
+            return
+        }
+
+        NSLog("[Hotkey] fired — hasCompletedOnboarding=%@", onboarding.hasCompletedOnboarding ? "Y" : "N")
 
         if !onboarding.hasCompletedOnboarding {
+            NSLog("[Hotkey] gating: onboarding incomplete — opening onboarding")
             AppDelegate.openOnboarding()
             return
         }
@@ -125,18 +155,39 @@ struct VisualFlowAIApp: App {
         // the app was running. We only treat Screen Recording + Mic as
         // gating; Accessibility is informational per Checkpoint 3.
         permissions.refreshStatuses()
+        NSLog("[Hotkey] permission statuses — screen=%@ mic=%@ accessibility=%@",
+              String(describing: permissions.screenRecordingStatus),
+              String(describing: permissions.microphoneStatus),
+              String(describing: permissions.accessibilityStatus))
+
         if permissions.screenRecordingStatus != .granted {
+            NSLog("[Hotkey] gating: screen recording not granted — opening onboarding @ screenRecording")
             onboarding.jump(to: .screenRecording)
             AppDelegate.openOnboarding()
             return
         }
         if permissions.microphoneStatus != .granted {
+            NSLog("[Hotkey] gating: microphone not granted — opening onboarding @ microphone")
             onboarding.jump(to: .microphone)
             AppDelegate.openOnboarding()
             return
         }
 
-        state.startRecording()
+        NSLog("[Hotkey] all gates passed — presenting area selector")
+
+        // hotkey → area selector → (on confirm) → startRecording(selection:)
+        // AppState stores the selection on `activeSelection` for Phase 7's
+        // ScreenCaptureKit integration; Phase 6 doesn't consume it beyond
+        // persistence.
+        areaSelector.present(
+            onConfirm: { [weak state] selection in
+                state?.startRecording(selection: selection)
+            },
+            onCancel: {
+                // No-op: ESC simply dismisses the overlay; the user
+                // returns to whatever they were doing.
+            }
+        )
     }
 }
 
@@ -173,6 +224,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     static func openOnboarding() {
         NSApp.activate(ignoringOtherApps: true)
-        requestOpenOnboarding?()
+        if let opener = requestOpenOnboarding {
+            opener()
+        } else {
+            // Should be impossible once OnboardingOpenerRegistrar
+            // captures `openWindow` at launch, but log loudly if it
+            // ever happens — this exact silent-no-op was the bug that
+            // made hotkey presses look like they did nothing.
+            NSLog("[Onboarding] openOnboarding() called but requestOpenOnboarding is nil — registrar didn't mount")
+        }
+    }
+}
+
+// MARK: - OnboardingOpenerRegistrar
+//
+// Zero-size helper view whose only job is to capture the SwiftUI
+// `openWindow` environment action into AppDelegate.requestOpenOnboarding
+// at app launch. Lives inside the MenuBarExtra label (the only
+// always-mounted View) so the closure is available before the user
+// ever interacts with anything. See VisualFlowAIApp.body for why this
+// matters.
+
+private struct OnboardingOpenerRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.requestOpenOnboarding = {
+                    openWindow(id: OnboardingScene.windowID)
+                }
+            }
     }
 }

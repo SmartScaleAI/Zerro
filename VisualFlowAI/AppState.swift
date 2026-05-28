@@ -60,6 +60,14 @@ final class AppState {
     var elapsedSeconds: Double = 0
     var frameCount: Int = 0
 
+    /// The region selected by the user via the area-selector overlay,
+    /// stored at startRecording time and held for the duration of the
+    /// session. Phase 6 only persists the value; Phase 7's
+    /// ScreenCaptureKit integration consumes it to scope the capture
+    /// to that rectangle. `nil` when the session was started without
+    /// a selection (e.g. tests, previews).
+    var activeSelection: SelectionRect?
+
     /// Index into `Self.processingSteps` for the currently-shown
     /// processing label. Cycled by a Task while `state == .processing`.
     var processingStepIndex: Int = 0
@@ -137,10 +145,15 @@ final class AppState {
 
     // MARK: - Transitions
 
-    func startRecording() {
+    /// `selection` is the area-selector region that produced this
+    /// session. Optional so existing call sites (previews, dev tooling,
+    /// future "record full screen" paths) can omit it. Phase 7 reads
+    /// `activeSelection` to scope ScreenCaptureKit.
+    func startRecording(selection: SelectionRect? = nil) {
         timer?.invalidate()
         cancelProcessingStepRotation()
         isResultExpanded = false
+        activeSelection = selection
         state = .recording
         elapsedSeconds = 0
         frameCount = 0
@@ -173,6 +186,7 @@ final class AppState {
         elapsedSeconds = 0
         frameCount = 0
         isResultExpanded = false
+        activeSelection = nil
         state = .idle
     }
 
@@ -183,6 +197,7 @@ final class AppState {
         elapsedSeconds = 0
         frameCount = 0
         isResultExpanded = false
+        activeSelection = nil
         state = .idle
     }
 

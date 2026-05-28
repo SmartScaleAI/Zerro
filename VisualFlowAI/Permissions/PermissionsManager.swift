@@ -98,10 +98,43 @@ final class PermissionsManager {
     }
 
     private func computeScreenRecordingStatus() -> PermissionStatus {
+        // Primary check. Reliable for installed/release builds.
         if CGPreflightScreenCaptureAccess() {
             return .granted
         }
+        // Fallback: during development the binary's codesign identity
+        // changes on every rebuild, and TCC can lag (or never refresh)
+        // its association — so CGPreflightScreenCaptureAccess() returns
+        // false even though the user has granted the permission. The
+        // CGWindowList behavior is the canonical second-opinion check:
+        // with screen recording granted, foreign-process window dicts
+        // carry real `kCGWindowName` values; without it they're blank
+        // or nil. We look at windows owned by OTHER processes (own-pid
+        // names are visible without permission), and treat any
+        // non-empty name as proof of permission.
+        if hasScreenRecordingPermissionViaWindowList() {
+            return .granted
+        }
         return defaults.bool(forKey: Keys.hasRequestedScreenRecording) ? .denied : .notDetermined
+    }
+
+    private func hasScreenRecordingPermissionViaWindowList() -> Bool {
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        guard let infoList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return false
+        }
+        for entry in infoList {
+            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int32, ownerPID != myPID else {
+                continue
+            }
+            if let name = entry[kCGWindowName as String] as? String, !name.isEmpty {
+                return true
+            }
+        }
+        return false
     }
 
     private func computeMicrophoneStatus() -> PermissionStatus {
