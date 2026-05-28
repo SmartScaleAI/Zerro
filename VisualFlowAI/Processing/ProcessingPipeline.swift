@@ -49,16 +49,28 @@ struct ProcessingPipeline {
     /// "isolating," "extracting," "manifest" leaks to the pill). Phase
     /// 9 will add new stages for STT + model calls and adjust these
     /// to match the perceived flow.
+    /// Stages the .processing pill cycles through during a full
+    /// recording → result flow. The first three (.isolatingAudio,
+    /// .extractingFrames, .writingManifest) fire from inside
+    /// `process()` here. The last two (.transcribing, .writingPrompt)
+    /// fire from AppState.runPromptGeneration AFTER process() returns
+    /// — they live in this enum so the pill label has a single source
+    /// of truth, even though they're driven by Phase 9 API work and
+    /// not by the pipeline itself.
     enum Stage {
         case isolatingAudio
         case extractingFrames
         case writingManifest
+        case transcribing
+        case writingPrompt
 
         var userMessage: String {
             switch self {
             case .isolatingAudio:    return "Saving your narration\u{2026}"
             case .extractingFrames:  return "Capturing key moments\u{2026}"
             case .writingManifest:   return "Wrapping up\u{2026}"
+            case .transcribing:      return "Transcribing your narration\u{2026}"
+            case .writingPrompt:     return "Writing your prompt\u{2026}"
             }
         }
     }

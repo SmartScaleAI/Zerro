@@ -39,6 +39,14 @@ struct PillView: View {
     var onSendChip: (String) -> Void = { _ in }
     var onDismissError: () -> Void = {}
 
+    /// The generated structured prompt, displayed in the .resultExpanded
+    /// body. Threaded from AppState.generatedPrompt via PillWindowController
+    /// so the pure-renderer PillView doesn't need to know about AppState.
+    /// `nil` falls back to a placeholder so previews and the brief
+    /// transition window (state flips to .done before the markdown view
+    /// can re-render) don't render an empty card.
+    var generatedPrompt: String? = nil
+
     var body: some View {
         content
             .frame(width: lockedCapsuleWidth, height: lockedCapsuleHeight)
@@ -132,6 +140,7 @@ struct PillView: View {
         case .resultCompact:
             ResultPillContent(
                 expanded: false,
+                markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onSendChip: onSendChip
@@ -139,6 +148,7 @@ struct PillView: View {
         case .resultExpanded:
             ResultPillContent(
                 expanded: true,
+                markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onSendChip: onSendChip
@@ -399,6 +409,11 @@ private struct ProcessingPillContent: View {
 
 private struct ResultPillContent: View {
     let expanded: Bool
+    /// The structured Markdown prompt to render in the body. Threaded
+    /// from AppState.generatedPrompt at the PillView level; falls back
+    /// to `placeholderMarkdown` when the call site hasn't supplied one
+    /// (previews; transient state windows).
+    let markdown: String
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
     let onSendChip: (String) -> Void
@@ -538,7 +553,7 @@ private struct ResultPillContent: View {
 
     private var markdownScroll: some View {
         ScrollView {
-            HighlightedMarkdownView(markdown: Self.sampleMarkdown)
+            HighlightedMarkdownView(markdown: markdown)
                 .padding(.horizontal, VFSpacing.xl + VFSpacing.xs)
                 .padding(.vertical, VFSpacing.xl)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -590,7 +605,12 @@ private struct ResultPillContent: View {
         .buttonStyle(.plain)
     }
 
-    private static let sampleMarkdown = """
+    /// Fallback markdown when no generatedPrompt has been threaded in.
+    /// Used by SwiftUI previews and for the brief transition window
+    /// between state flipping to .done and the result body rendering.
+    /// Production call sites always have a real generatedPrompt by the
+    /// time the pill morphs into a result state.
+    static let placeholderMarkdown = """
     ## Context
     A 1:18 narrated walkthrough of the Pulse analytics login screen,
     captured while reviewing visual hierarchy and information density

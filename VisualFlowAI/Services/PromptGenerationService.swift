@@ -1,0 +1,78 @@
+//
+//  PromptGenerationService.swift
+//  VisualFlowAI
+//
+//  Created by Colin Breeding on 5/28/26.
+//
+//  Provider-neutral protocol for the Phase 9 prompt-generation step.
+//  Phase 9 v1 concrete impl is `OpenAIPromptGenerationService` (GPT-4o
+//  multimodal). Future providers (Anthropic / Gemini / local) implement
+//  this same shape — AppState's orchestration doesn't change when we
+//  swap.
+//
+//  The `systemPrompt` is passed at call time rather than read from the
+//  constant inside the impl so the wire test layer / future
+//  experimentation can swap prompts without touching provider code.
+//  Production call sites should always pass
+//  `PromptGenerationSystemPrompt.value` verbatim.
+//
+
+import Foundation
+
+protocol PromptGenerationService: Sendable {
+    /// Generates a structured Markdown prompt from `timeline`. The
+    /// impl is responsible for resolving each frame's local image URL
+    /// into the provider's image-content format (e.g. base64 data URL
+    /// for OpenAI), at request-build time — TimelineItem.frame carries
+    /// the URL, not the bytes, to keep the in-memory timeline small.
+    func generatePrompt(
+        timeline: InterleavedTimeline,
+        systemPrompt: String
+    ) async throws -> PromptGenerationResult
+}
+
+// MARK: - PromptGenerationResult
+
+struct PromptGenerationResult: Sendable {
+    /// Raw Markdown returned by the model. The orchestrator copies
+    /// this verbatim to the clipboard — no post-processing, no
+    /// stripping. The system prompt's "Rules" section is what keeps
+    /// the output clean.
+    let prompt: String
+
+    /// Token counts + model id, used for the cost log line. Provider-
+    /// neutral so a future Anthropic impl can fill in its own input/
+    /// output counts the same way.
+    let usage: TokenUsage
+}
+
+// MARK: - TokenUsage
+
+struct TokenUsage: Sendable {
+    let inputTokens: Int
+    let outputTokens: Int
+    /// Model id exactly as reported by the provider (e.g. the dated
+    /// alias `gpt-4o-2024-08-06` rather than the rolling `gpt-4o`).
+    /// Logged for cost attribution + retroactive analysis when pricing
+    /// changes.
+    let model: String
+}
+
+// MARK: - PromptGenerationError
+
+/// Known failure shapes. Phase 9 Step 5 maps these to
+/// RecordingFailureReason cases (apiKeyMissing, apiAuth, networkOffline,
+/// rateLimited, providerError). The associated values are for logging,
+/// never user-visible.
+enum PromptGenerationError: Error {
+    case missingAPIKey
+    case auth
+    case rateLimited
+    case network(underlying: Error)
+    case server(status: Int, body: String?)
+    case decodeFailure(underlying: Error)
+    /// Provider returned a valid response but with no text content
+    /// (e.g. `choices[0].message.content` was null or empty). Distinct
+    /// from `server` because it's the model's choice, not an outage.
+    case emptyContent
+}

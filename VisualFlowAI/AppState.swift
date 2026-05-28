@@ -28,6 +28,7 @@
 //  it scales the published elapsed without affecting the file duration.
 //
 
+import CoreMedia
 import Foundation
 import SwiftUI
 
@@ -51,16 +52,40 @@ public enum RecordingState: Equatable {
 /// shows. Kept narrow — Phase 7 surfaces these as a flat message; a
 /// later phase can branch on the case for richer recovery affordances.
 public enum RecordingFailureReason: Equatable {
+    // Phase 7 — capture-side failures
     case screenRecordingRevoked
     case microphoneRevoked
     case microphoneUnavailable
     case streamStartFailed
     case writerStartFailed
     case captureInterrupted
-    /// Phase 8: the local processing pipeline (audio isolation / frame
-    /// extraction / manifest) threw. Routed here so failures surface on
-    /// the amber pill instead of being swallowed.
+
+    // Phase 8 — local processing failures
+    /// The local processing pipeline (audio isolation / frame extraction /
+    /// manifest) threw. Routed here so failures surface on the amber pill
+    /// instead of being swallowed.
     case processingFailed
+
+    // Phase 9 — API failures
+    /// User hasn't entered an OpenAI key in Settings, or the stored key
+    /// is blank. Distinguished from `.apiAuth` so the message can guide
+    /// them to the right Settings panel rather than "check your key".
+    case apiKeyMissing
+    /// The provider rejected our key (401). Different copy from
+    /// `.apiKeyMissing` — points to the key itself, not its absence.
+    case apiAuth
+    /// Network couldn't reach OpenAI (offline, DNS failure, timeout).
+    /// Distinct from `.providerError` so the user knows it's a local-
+    /// connectivity issue rather than something OpenAI-side.
+    case networkOffline
+    /// Provider returned 429 even after our single in-flight retry.
+    /// Suggests sustained rate-limiting, not a transient burst.
+    case rateLimited
+    /// Catch-all for provider-side failures (5xx, schema drift, empty
+    /// content, decode errors). Single user-facing copy on purpose —
+    /// the user can't act on the distinction between "5xx" and "the
+    /// JSON shape changed"; what matters is "try again later".
+    case providerError
 
     var userMessage: String {
         switch self {
@@ -78,6 +103,16 @@ public enum RecordingFailureReason: Equatable {
             return "Recording was interrupted."
         case .processingFailed:
             return "Couldn\u{2019}t process the recording."
+        case .apiKeyMissing:
+            return "Add your OpenAI API key in Settings to generate prompts."
+        case .apiAuth:
+            return "OpenAI rejected your API key \u{2014} check it in Settings."
+        case .networkOffline:
+            return "Couldn\u{2019}t reach OpenAI \u{2014} check your connection."
+        case .rateLimited:
+            return "Hit OpenAI\u{2019}s rate limit \u{2014} try again in a minute."
+        case .providerError:
+            return "OpenAI returned an error \u{2014} try again."
         }
     }
 }
@@ -135,20 +170,12 @@ final class AppState {
 
     // MARK: Result
 
-    var resultPrompt: String = """
-    Refactor the `UserProfileCard` React component in `src/components/profile/UserProfileCard.tsx` to address the following:
-
-    1. Split the avatar, header, and stats sections into their own subcomponents under `src/components/profile/parts/`.
-    2. Replace the local `useState` hooks tracking `isFollowing` and `followerCount` with a single `useReducer` so optimistic updates can be rolled back on API failure.
-    3. Extract the inline `fetchUser` call into a new `useUserProfile(userId)` hook in `src/hooks/useUserProfile.ts` that returns `{ data, error, isLoading, refresh }`.
-    4. Memoize the formatted join-date string with `useMemo` keyed on `user.createdAt`.
-    5. Replace the existing CSS modules with Tailwind classes, matching the spacing tokens defined in `tailwind.config.ts`.
-    6. Add a `Skeleton` loading state that mirrors the final layout instead of the current spinner.
-    7. Ensure the component is fully accessible: avatar `<img>` needs an `alt`, the follow button needs `aria-pressed`, and stats should be in a `<dl>`.
-    8. Add unit tests in `UserProfileCard.test.tsx` covering the loading, error, and follow/unfollow optimistic-update paths.
-
-    Keep the public props API unchanged so existing call sites in `ProfilePage` and `UserSearchResult` continue to work without edits.
-    """
+    /// The structured prompt produced by Phase 9's two-step API flow
+    /// (Whisper transcribe → GPT-4o generate). Set when the .processing
+    /// → .done transition fires; nil at all other times. The pill's
+    /// expanded result body reads this; Phase 9 Step 6 copies it to
+    /// the clipboard on the Copy button click.
+    var generatedPrompt: String?
 
     // MARK: Recents
 
@@ -226,6 +253,7 @@ final class AppState {
         activeSelection = selection
         lastRecordingURL = nil
         processedRecording = nil
+        generatedPrompt = nil
         elapsedSeconds = 0
         frameCount = 0
 
@@ -305,6 +333,7 @@ final class AppState {
         activeSelection = nil
         lastRecordingURL = nil
         processedRecording = nil
+        generatedPrompt = nil
         state = .idle
     }
 
@@ -323,6 +352,7 @@ final class AppState {
         activeSelection = nil
         lastRecordingURL = nil
         processedRecording = nil
+        generatedPrompt = nil
         state = .idle
     }
 
@@ -372,6 +402,7 @@ final class AppState {
             activeSelection = nil
             lastRecordingURL = nil
             processedRecording = nil
+            generatedPrompt = nil
             state = .idle
         case .failed(let error):
             NSLog("[AppState] session failed: %@", String(describing: error))
@@ -381,21 +412,25 @@ final class AppState {
             activeSelection = nil
             lastRecordingURL = nil
             processedRecording = nil
+            generatedPrompt = nil
             state = .failed(reason: Self.failureReason(from: error))
         }
     }
 
-    // MARK: - Phase 8 processing
+    // MARK: - Processing pipeline (Phase 8 → Phase 9)
 
-    /// Runs the local processing pipeline against the finished recording.
-    /// Step 1 isolates the narration audio; later steps add frames +
-    /// manifest. On success we land on the existing placeholder result
-    /// (.done); on failure we route to the amber pill via
-    /// `.processingFailed` rather than swallowing the error.
+    /// Runs the local processing pipeline against the finished
+    /// recording (isolate audio → extract frames → write manifest),
+    /// then hands off to `runPromptGeneration` which calls Whisper +
+    /// GPT-4o. The .processing → .done transition fires from inside
+    /// runPromptGeneration after the model returns; we never stop at
+    /// the pipeline result. Failures at either step route to the
+    /// amber pill via `.processingFailed` (Phase 9 Step 5 will split
+    /// this into per-failure-mode cases).
     ///
-    /// The `state == .processing` guards mean a cancel during processing
-    /// (which resets to .idle) wins — we never stomp a newer state with
-    /// a late-arriving pipeline result.
+    /// The `state == .processing` guards mean a cancel during
+    /// processing (which resets to .idle) wins — we never stomp a
+    /// newer state with a late-arriving pipeline result.
     private func runProcessing(sourceURL: URL) {
         // Reset the placeholder explicitly — handleSessionFinish set
         // state = .processing before this Task starts running, so for
@@ -419,11 +454,70 @@ final class AppState {
                 // doesn't double-occupy tmp until the next sweep.
                 WorkingDirectory.remove(at: sourceURL)
                 self.lastRecordingURL = nil
-                self.state = .done
+                // Phase 8 done → kick off Phase 9 API work. The
+                // .processing → .done transition fires from inside
+                // runPromptGeneration after the model returns. Stage
+                // labels for the two API stages continue updating the
+                // pill in place.
+                self.runPromptGeneration(processed: result)
             } catch {
                 NSLog("[Processing] failed: %@", String(describing: error))
                 guard self.state == .processing else { return }
                 self.state = .failed(reason: .processingFailed)
+            }
+        }
+    }
+
+    /// Phase 9: Whisper transcribe → Interleaver → GPT-4o generate.
+    /// Pill cycles through `.transcribing` then `.writingPrompt` stage
+    /// labels while the API work happens. The `.processing → .done`
+    /// transition fires here on success; failures route to
+    /// `.failed(.processingFailed)` (Phase 9 Step 5 will refine this
+    /// into per-failure-mode cases — apiKeyMissing, apiAuth, etc.).
+    private func runPromptGeneration(processed: ProcessedRecording) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage
+                let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
+                let transcript = try await OpenAITranscriptionService().transcribe(
+                    audioFileURL: audioURL
+                )
+                NSLog(
+                    "[PromptGen] transcript: %d segments, fullText.count=%d",
+                    transcript.segments.count,
+                    transcript.fullText.count
+                )
+                guard self.state == .processing else { return }
+
+                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                let timeline = Interleaver.merge(
+                    frames: processed.frames,
+                    transcript: transcript
+                )
+                let result = try await OpenAIPromptGenerationService().generatePrompt(
+                    timeline: timeline,
+                    systemPrompt: PromptGenerationSystemPrompt.value
+                )
+                NSLog(
+                    "[PromptGen] OK \u{2014} model=%@ in=%d out=%d, prompt.count=%d",
+                    result.usage.model,
+                    result.usage.inputTokens,
+                    result.usage.outputTokens,
+                    result.prompt.count
+                )
+                Self.logCost(
+                    audioDuration: processed.duration,
+                    usage: result.usage
+                )
+
+                guard self.state == .processing else { return }
+                self.generatedPrompt = result.prompt
+                self.state = .done
+            } catch {
+                NSLog("[PromptGen] failed: %@", String(describing: error))
+                guard self.state == .processing else { return }
+                self.state = .failed(reason: Self.failureReason(from: error))
             }
         }
     }
@@ -450,6 +544,33 @@ final class AppState {
                 return .writerStartFailed
             }
         }
+        // Phase 9 API failures. TranscriptionError and PromptGenerationError
+        // share a shape but aren't Equatable (associated values on the
+        // .network/.server/.decodeFailure cases), so we pattern-match
+        // each rather than compare with ==.
+        if let txError = error as? TranscriptionError {
+            switch txError {
+            case .missingAPIKey: return .apiKeyMissing
+            case .auth:          return .apiAuth
+            case .rateLimited:   return .rateLimited
+            case .network(let underlying):
+                return Self.isOfflineClass(underlying) ? .networkOffline : .providerError
+            case .server, .decodeFailure:
+                return .providerError
+            }
+        }
+        if let pgError = error as? PromptGenerationError {
+            switch pgError {
+            case .missingAPIKey: return .apiKeyMissing
+            case .auth:          return .apiAuth
+            case .rateLimited:   return .rateLimited
+            case .network(let underlying):
+                return Self.isOfflineClass(underlying) ? .networkOffline : .providerError
+            case .server, .decodeFailure, .emptyContent:
+                return .providerError
+            }
+        }
+
         // Anything else came from SCStream / AVCaptureSession runtime
         // — treat as a generic capture interruption. The most common
         // path here is the user revoking Screen Recording mid-session,
@@ -457,6 +578,50 @@ final class AppState {
         // later phase can branch on the error code to surface the
         // .screenRecordingRevoked / .microphoneRevoked variants.
         return .captureInterrupted
+    }
+
+    /// Detects URLError codes that mean "the local machine couldn't
+    /// reach the network" vs. "the network reached an unhappy server".
+    /// Offline-class codes go to .networkOffline (actionable: check
+    /// connection); others fall through to .providerError.
+    private static func isOfflineClass(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet,
+             .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .dataNotAllowed,
+             .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
+
+    // MARK: - Cost logging
+
+    /// Emits a one-line-per-stage cost estimate to the console after a
+    /// successful run. Whisper is per-minute (round up to nearest
+    /// fractional minute, the OpenAI billing model). GPT-4o is per-
+    /// token (input + output priced separately). Pricing constants
+    /// pinned with a date comment in their respective service files —
+    /// when OpenAI changes pricing, those are the two places to update.
+    private static func logCost(audioDuration: CMTime, usage: TokenUsage) {
+        let durationSeconds = CMTimeGetSeconds(audioDuration)
+        let whisperCost = OpenAITranscriptionService.estimatedCost(audioDurationSeconds: durationSeconds)
+        let gptCost = OpenAIPromptGenerationService.estimatedCost(usage: usage)
+        NSLog(
+            "[Cost] whisper-1: audio=%.1fs \u{2192} $%.4f",
+            durationSeconds, whisperCost
+        )
+        NSLog(
+            "[Cost] %@: in=%d out=%d \u{2192} $%.4f",
+            usage.model, usage.inputTokens, usage.outputTokens, gptCost
+        )
+        NSLog("[Cost] total: $%.4f", whisperCost + gptCost)
     }
 
     func toggleResultExpanded() {

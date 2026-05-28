@@ -185,13 +185,23 @@ private struct PillHostView: View {
                 appState.cancelRecording()
             },
             onCopy: {
-                // Phase 3: real clipboard copy + acknowledgement.
+                // Phase 9 Step 6: write the generated prompt to the
+                // system clipboard. clearContents() drops anything the
+                // user had on the pasteboard before; that's the
+                // expected behavior — the Copy button's contract is
+                // "the prompt is now on your clipboard", not "the
+                // prompt has been added to whatever was there".
+                guard let prompt = appState.generatedPrompt, !prompt.isEmpty else { return }
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(prompt, forType: .string)
             },
             onToggleExpand: { appState.toggleResultExpanded() },
             onSendChip: { _ in
-                // Phase 3: route to Cursor/Windsurf/v0/save.
+                // Cursor / Windsurf / v0 chips stay visual-only this phase.
             },
-            onDismissError: { appState.dismissFailure() }
+            onDismissError: { appState.dismissFailure() },
+            generatedPrompt: appState.generatedPrompt
         )
     }
 }
