@@ -77,6 +77,7 @@ final class PermissionsManager {
     /// where the TCC prompt is one-shot per bundle ID.
     private enum Keys {
         static let hasRequestedScreenRecording = "vf.permissions.hasRequestedScreenRecording"
+        static let hasRequestedMicrophone      = "vf.permissions.hasRequestedMicrophone"
     }
 
     // MARK: - Init
@@ -139,10 +140,28 @@ final class PermissionsManager {
 
     private func computeMicrophoneStatus() -> PermissionStatus {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: return .granted
-        case .notDetermined: return .notDetermined
-        case .denied, .restricted: return .denied
-        @unknown default: return .denied
+        case .authorized:
+            return .granted
+        case .denied, .restricted:
+            return .denied
+        case .notDetermined:
+            // Dev-time TCC drift mitigation, mirrors the CGWindowList
+            // fallback in computeScreenRecordingStatus. When the binary
+            // is rebuilt (ad-hoc signing identity churns) or entitlements
+            // change, TCC stops recognizing the previously-granted
+            // identity and AVCaptureDevice flips back to .notDetermined
+            // even though the user granted in a prior launch. Once we
+            // have *ever* requested for this bundle, treat .notDetermined
+            // as .granted — actual denial returns .denied (not
+            // .notDetermined), so this can't mask a real "no" answer.
+            // If TCC really has revoked, RecordingSession.start() will
+            // fail and C5's failure path surfaces it via .failed(.mic*).
+            if defaults.bool(forKey: Keys.hasRequestedMicrophone) {
+                return .granted
+            }
+            return .notDetermined
+        @unknown default:
+            return .denied
         }
     }
 
@@ -168,7 +187,11 @@ final class PermissionsManager {
 
     /// Triggers the system Microphone prompt on first call. Same one-shot
     /// behavior as Screen Recording — denied state needs the deep link.
+    /// Records `hasRequestedMicrophone` so the TCC-drift fallback in
+    /// computeMicrophoneStatus can treat future `.notDetermined`
+    /// readings as `.granted` (binary identity drift across rebuilds).
     func requestMicrophone() async {
+        defaults.set(true, forKey: Keys.hasRequestedMicrophone)
         _ = await AVCaptureDevice.requestAccess(for: .audio)
         refreshStatuses()
     }
