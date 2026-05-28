@@ -21,6 +21,7 @@ enum PillState: Equatable {
     case processing(stepLabel: String)
     case resultCompact
     case resultExpanded
+    case error(message: String)
 }
 
 // MARK: - PillView
@@ -36,6 +37,7 @@ struct PillView: View {
     var onCopy: () -> Void = {}
     var onToggleExpand: () -> Void = {}
     var onSendChip: (String) -> Void = { _ in }
+    var onDismissError: () -> Void = {}
 
     var body: some View {
         content
@@ -74,15 +76,19 @@ struct PillView: View {
     /// and keeps its content-driven sizing.
     private var lockedCapsuleWidth: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact: return Self.capsuleWidth
-        case .resultExpanded:                                       return nil
+        case .recording, .wrappingUp, .processing, .resultCompact, .error:
+            return Self.capsuleWidth
+        case .resultExpanded:
+            return nil
         }
     }
 
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact: return Self.capsuleHeight
-        case .resultExpanded:                                       return nil
+        case .recording, .wrappingUp, .processing, .resultCompact, .error:
+            return Self.capsuleHeight
+        case .resultExpanded:
+            return nil
         }
     }
 
@@ -137,6 +143,8 @@ struct PillView: View {
                 onToggleExpand: onToggleExpand,
                 onSendChip: onSendChip
             )
+        case .error(let message):
+            ErrorPillContent(message: message, onDismiss: onDismissError)
         }
     }
 
@@ -145,6 +153,48 @@ struct PillView: View {
         case .resultExpanded: return 18
         default:              return 28
         }
+    }
+}
+
+// MARK: - ErrorPillContent
+//
+// Same chrome geometry as the recording/processing capsules so the
+// transition into .failed feels like a state morph, not a separate
+// surface. Amber-tinted (per the C0 brief's "amber-tinted message"
+// guidance — distinct from .vfRecordingRed so the user reads it as
+// "something went wrong, the recording is over" rather than "still
+// recording, wrap up"). Single-line message + dismiss X. C5 scope:
+// non-actionable; if a later phase needs Retry / Open Settings it
+// will add buttons here.
+
+private struct ErrorPillContent: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: VFSpacing.md) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(Color.vfWarningAmber)
+
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextPrimary)
+                .fixedSize()
+
+            Spacer(minLength: VFSpacing.md)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .contentShape(Rectangle())
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
     }
 }
 

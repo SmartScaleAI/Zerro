@@ -33,6 +33,9 @@ extension AppState {
 
         case .done:
             return isResultExpanded ? .resultExpanded : .resultCompact
+
+        case .failed(let reason):
+            return .error(message: reason.userMessage)
         }
     }
 }

@@ -36,11 +36,12 @@ struct VisualFlowAIApp: App {
 
     init() {
         let state = AppState()
+        let prefs = PreferencesStore()
         let perms = PermissionsManager()
         let onb = OnboardingState()
         let selectorCtrl = AreaSelectorWindowController()
         _appState = State(initialValue: state)
-        _preferences = State(initialValue: PreferencesStore())
+        _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
         _pillController = State(initialValue: PillWindowController(appState: state))
@@ -53,14 +54,15 @@ struct VisualFlowAIApp: App {
         // an .accessory-activation-policy app.
         AppDelegate.shouldPresentOnboardingOnLaunch = !onb.hasCompletedOnboarding
 
-        // Register the global hotkey exactly once. Captures the four
-        // long-lived instances weakly — @State keeps them alive for the
+        // Register the global hotkey exactly once. Captures the long-
+        // lived instances weakly — @State keeps them alive for the
         // app's lifetime, so weak references stay valid.
         if !Self.didRegisterGlobalShortcuts {
             Self.didRegisterGlobalShortcuts = true
-            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak perms, weak onb, weak selectorCtrl] in
+            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl] in
                 Self.handleHotkey(
                     state: state,
+                    preferences: prefs,
                     permissions: perms,
                     onboarding: onb,
                     areaSelector: selectorCtrl
@@ -134,12 +136,13 @@ struct VisualFlowAIApp: App {
     @MainActor
     private static func handleHotkey(
         state: AppState?,
+        preferences: PreferencesStore?,
         permissions: PermissionsManager?,
         onboarding: OnboardingState?,
         areaSelector: AreaSelectorWindowController?
     ) {
-        guard let state, let permissions, let onboarding, let areaSelector else {
-            NSLog("[Hotkey] dropped — one of state/permissions/onboarding/areaSelector was nil")
+        guard let state, let preferences, let permissions, let onboarding, let areaSelector else {
+            NSLog("[Hotkey] dropped — one of state/preferences/permissions/onboarding/areaSelector was nil")
             return
         }
 
@@ -175,13 +178,16 @@ struct VisualFlowAIApp: App {
 
         NSLog("[Hotkey] all gates passed — presenting area selector")
 
-        // hotkey → area selector → (on confirm) → startRecording(selection:)
-        // AppState stores the selection on `activeSelection` for Phase 7's
-        // ScreenCaptureKit integration; Phase 6 doesn't consume it beyond
-        // persistence.
+        // hotkey → area selector → (on confirm) → startRecording(selection:mic:)
+        // Mic device is read fresh from preferences at confirm time so a
+        // Settings change between recordings takes effect on the next one
+        // without restarting the app.
         areaSelector.present(
-            onConfirm: { [weak state] selection in
-                state?.startRecording(selection: selection)
+            onConfirm: { [weak state, weak preferences] selection in
+                state?.startRecording(
+                    selection: selection,
+                    microphoneDeviceID: preferences?.microphoneDeviceID ?? ""
+                )
             },
             onCancel: {
                 // No-op: ESC simply dismisses the overlay; the user

@@ -190,7 +190,8 @@ private struct PillHostView: View {
             onToggleExpand: { appState.toggleResultExpanded() },
             onSendChip: { _ in
                 // Phase 3: route to Cursor/Windsurf/v0/save.
-            }
+            },
+            onDismissError: { appState.dismissFailure() }
         )
     }
 }
