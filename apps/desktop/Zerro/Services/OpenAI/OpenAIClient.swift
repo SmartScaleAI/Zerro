@@ -1,0 +1,175 @@
+//
+//  OpenAIClient.swift
+//  Zerro
+//
+//  Created by Colin Breeding on 5/28/26.
+//
+//  Shared OpenAI-specific plumbing: API key resolution (Keychain at
+//  request time, not at app launch — so Settings changes apply on
+//  the next recording without a restart), the URLSession config, the
+//  single-retry-on-429 wrapper, the multipart/form-data builder used
+//  by the Whisper upload, and the typed mapping from HTTP status →
+//  the right error case for each service.
+//
+//  The key is intentionally NEVER logged, NEVER echoed in error
+//  messages, NEVER held statically. Read per-request, used once, dropped.
+//
+
+import Foundation
+
+enum OpenAIClient {
+
+    // MARK: - Constants
+
+    /// Base URL for all OpenAI API requests in this app. Pinned so
+    /// future moves to a regional endpoint / proxy are a one-line change.
+    static let baseURL = URL(string: "https://api.openai.com/v1")!
+
+    /// Default request timeout in seconds. 60s covers Whisper for the
+    /// 3-minute audio cap; multimodal requests can take longer and may
+    /// need a per-request override later (deferred until we see real
+    /// p95 latency in production).
+    static let defaultTimeout: TimeInterval = 60
+
+    // MARK: - URLSession
+
+    /// Shared session for all OpenAI calls. Default config is correct
+    /// (we don't need caching for API requests). Pulled out so tests
+    /// can swap to URLProtocol mock later.
+    static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = defaultTimeout
+        config.timeoutIntervalForResource = defaultTimeout * 2
+        config.urlCache = nil
+        config.httpAdditionalHeaders = ["Accept": "application/json"]
+        return URLSession(configuration: config)
+    }()
+
+    // MARK: - API key
+
+    /// Reads the OpenAI API key from Keychain. Returns nil if the user
+    /// hasn't set one in Settings. Callers should map nil to their
+    /// `missingAPIKey` error case rather than fabricating one.
+    static func resolveAPIKey() -> String? {
+        guard let key = KeychainStore.openAIAPIKey.read() else { return nil }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Request building
+
+    /// Stamps the Bearer auth header onto `request` using an
+    /// already-resolved key. Mutating in place keeps multipart-body
+    /// callers from rebuilding the entire request. Key resolution and the
+    /// nil → `missingAPIKey` mapping happen earlier at the call site via
+    /// `resolveAPIKey()`, so by here the key is known non-empty.
+    static func authenticate(_ request: inout URLRequest, apiKey: String) {
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    }
+
+    // MARK: - Single-retry-on-429
+
+    /// Performs `request` via the shared session, with one retry on
+    /// HTTP 429. Respects `Retry-After` (in seconds) if present,
+    /// falls back to a 2-second wait. Returns the response on success
+    /// AND on non-429 errors — interpretation (auth vs server vs
+    /// network) is the caller's job, since each service maps error
+    /// cases differently.
+    ///
+    /// Why one retry and not exponential backoff: per Phase 9 plan,
+    /// recordings are user-initiated and infrequent. A single retry
+    /// handles the rare burst case; persistent rate-limiting deserves
+    /// a user-visible message (not a hidden backoff that makes the
+    /// pill appear stuck).
+    static func performWithRetry(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            // URLSession should always return HTTPURLResponse for HTTP
+            // schemes — if it doesn't, something is deeply wrong with
+            // the request. Treat as network-class failure.
+            throw URLError(.badServerResponse)
+        }
+
+        if httpResponse.statusCode != 429 {
+            return (data, httpResponse)
+        }
+
+        let retryAfter = retryAfterSeconds(httpResponse) ?? 2.0
+        try await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
+
+        let (retryData, retryResponse) = try await session.data(for: request)
+        guard let retryHTTP = retryResponse as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return (retryData, retryHTTP)
+    }
+
+    private static func retryAfterSeconds(_ response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After") else {
+            return nil
+        }
+        return TimeInterval(raw.trimmingCharacters(in: .whitespaces))
+    }
+
+    // MARK: - Multipart/form-data
+
+    /// Builds a `multipart/form-data` body from an array of text +
+    /// binary parts. The companion `MultipartBuilder.contentType` is
+    /// what the caller sets as the request's `Content-Type` header.
+    ///
+    /// Why this lives here and not in a generic utilities file: the
+    /// Whisper upload is the only multipart user in the app. Adding
+    /// a generic library would be premature.
+    struct MultipartBuilder {
+        let boundary: String
+
+        init() {
+            // Random boundary per builder so concurrent uploads don't
+            // accidentally share one. UUID is 32 hex chars — plenty
+            // to make collision-with-actual-payload-bytes a non-issue.
+            self.boundary = "vf-boundary-\(UUID().uuidString)"
+        }
+
+        var contentType: String { "multipart/form-data; boundary=\(boundary)" }
+
+        /// Builds the body bytes from the supplied parts in order.
+        /// Order matters for some endpoints (OpenAI is forgiving here
+        /// but other providers aren't) — caller controls it.
+        func build(parts: [Part]) -> Data {
+            var body = Data()
+            for part in parts {
+                body.append("--\(boundary)\r\n")
+                switch part {
+                case .text(let name, let value):
+                    body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+                    body.append("\(value)\r\n")
+                case .file(let name, let filename, let mimeType, let data):
+                    body.append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n")
+                    body.append("Content-Type: \(mimeType)\r\n\r\n")
+                    body.append(data)
+                    body.append("\r\n")
+                }
+            }
+            body.append("--\(boundary)--\r\n")
+            return body
+        }
+
+        enum Part {
+            case text(name: String, value: String)
+            case file(name: String, filename: String, mimeType: String, data: Data)
+        }
+    }
+}
+
+// MARK: - Data convenience
+
+/// Internal helper so the multipart builder reads cleanly. UTF-8 is
+/// safe for every header/value we emit (ASCII-only field names + UTF-8
+/// values). File and boundary appends pass `Data` directly.
+private extension Data {
+    mutating func append(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            append(data)
+        }
+    }
+}
