@@ -97,6 +97,16 @@ final class RecordingSession: NSObject {
     private let microphoneDeviceID: String
     private let onElapsed: (TimeInterval) -> Void
     private let onFinish: (Outcome) -> Void
+    /// Throttled live-mic peak level (0...1). Emitted ~12.5Hz from the
+    /// audioQueue handler so the pill's waveform can animate against
+    /// real input without hammering the MainActor — see
+    /// `handleAudioSampleBuffer`. Optional so non-pill consumers
+    /// (tests, future headless modes) don't pay the cost. `nonisolated`
+    /// because the audioQueue handler reads it from outside MainActor;
+    /// `@MainActor @Sendable` on the closure because it's invoked from
+    /// inside a `Task { @MainActor }` hop so the call site can touch
+    /// MainActor-isolated state (AppState).
+    nonisolated private let onAudioLevel: (@MainActor @Sendable (Float) -> Void)?
     /// DEV-ONLY: multiplies the elapsed value reported via onElapsed
     /// before it reaches AppState's threshold checks. Lets the
     /// 150s/180s wrappingUp/autoStop transitions be exercised without
@@ -153,6 +163,19 @@ final class RecordingSession: NSObject {
     nonisolated(unsafe) private var audioInput: AVAssetWriterInput?
     nonisolated(unsafe) private var sessionStartPTS: CMTime?
 
+    // MARK: - AudioQueue-only state (live waveform throttle)
+    //
+    // Touched only from `audioQueue` (which is serial) inside
+    // `handleAudioSampleBuffer`. Same single-writer guarantee as the
+    // writer-queue state above.
+    nonisolated(unsafe) private var audioLevelPeakAccumulator: Float = 0
+    nonisolated(unsafe) private var audioLevelLastEmit: CFAbsoluteTime = 0
+    /// Emit interval for `onAudioLevel`. ~12.5Hz — slow enough that the
+    /// MainActor isn't flooded, fast enough that the waveform reads as
+    /// "alive" during normal speech. `nonisolated` since the audioQueue
+    /// handler that reads it lives outside MainActor.
+    nonisolated private static let audioLevelEmitInterval: CFAbsoluteTime = 0.08
+
     // MARK: - Immutable
 
     let outputURL: URL
@@ -164,12 +187,14 @@ final class RecordingSession: NSObject {
         microphoneDeviceID: String,
         onElapsed: @escaping (TimeInterval) -> Void,
         onFinish: @escaping (Outcome) -> Void,
+        onAudioLevel: (@MainActor @Sendable (Float) -> Void)? = nil,
         clockMultiplier: Double = 1.0
     ) {
         self.selection = selection
         self.microphoneDeviceID = microphoneDeviceID
         self.onElapsed = onElapsed
         self.onFinish = onFinish
+        self.onAudioLevel = onAudioLevel
         self.clockMultiplier = clockMultiplier
         self.outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("zerro-\(UUID().uuidString).mov")
@@ -550,10 +575,86 @@ final class RecordingSession: NSObject {
 
     nonisolated private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+
+        // Sample the peak amplitude on every audio buffer (audioQueue is
+        // serial, so the accumulator + emit-time fields are
+        // single-writer-safe), then emit at most every
+        // `audioLevelEmitInterval`. This gives the pill waveform a
+        // smooth ~12.5Hz feed without hammering MainActor on every
+        // ~23ms audio buffer.
+        if onAudioLevel != nil {
+            let peak = Self.audioPeakLevel(sampleBuffer)
+            if peak > audioLevelPeakAccumulator { audioLevelPeakAccumulator = peak }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - audioLevelLastEmit >= Self.audioLevelEmitInterval {
+                let levelToEmit = audioLevelPeakAccumulator
+                audioLevelLastEmit = now
+                audioLevelPeakAccumulator = 0
+                Task { @MainActor [weak self] in
+                    self?.onAudioLevel?(levelToEmit)
+                }
+            }
+        }
+
         let buffer = UncheckedSendable(sampleBuffer)
         writerQueue.async { [weak self] in
             self?.appendAudio(buffer.value)
         }
+    }
+
+    /// Reads the loudest sample in `sampleBuffer` and returns its
+    /// magnitude normalized to 0...1. Handles the two PCM formats the
+    /// macOS mic pipeline produces in practice: signed 16-bit integer
+    /// and 32-bit float. Anything exotic returns 0 so the waveform
+    /// floors out instead of feeding garbage into the UI.
+    nonisolated private static func audioPeakLevel(_ sampleBuffer: CMSampleBuffer) -> Float {
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer),
+              let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
+            return 0
+        }
+        let asbd = asbdPtr.pointee
+        guard asbd.mFormatID == kAudioFormatLinearPCM else { return 0 }
+
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        guard CMBlockBufferGetDataPointer(
+            blockBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &totalLength,
+            dataPointerOut: &dataPointer
+        ) == kCMBlockBufferNoErr, let dataPointer, totalLength > 0 else {
+            return 0
+        }
+
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let isSigned = (asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
+
+        if isFloat && asbd.mBitsPerChannel == 32 {
+            let count = totalLength / MemoryLayout<Float>.size
+            return dataPointer.withMemoryRebound(to: Float.self, capacity: count) { ptr in
+                var maxAbs: Float = 0
+                for i in 0..<count {
+                    let v = ptr[i]
+                    let a = v < 0 ? -v : v
+                    if a > maxAbs { maxAbs = a }
+                }
+                return min(maxAbs, 1.0)
+            }
+        } else if isSigned && asbd.mBitsPerChannel == 16 {
+            let count = totalLength / MemoryLayout<Int16>.size
+            return dataPointer.withMemoryRebound(to: Int16.self, capacity: count) { ptr in
+                var maxAbs: Int32 = 0
+                for i in 0..<count {
+                    let v = Int32(ptr[i])
+                    let a = v < 0 ? -v : v
+                    if a > maxAbs { maxAbs = a }
+                }
+                return Float(maxAbs) / Float(Int16.max)
+            }
+        }
+        return 0
     }
 
     /// Runs on writerQueue. Drops samples that arrive before the

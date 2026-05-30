@@ -225,7 +225,8 @@ private struct PillHostView: View {
             onDismissError: { appState.dismissFailure() },
             onDismissResult: { appState.resetToIdle() },
             generatedPrompt: appState.generatedPrompt,
-            resultHadNoNarration: appState.resultHadNoNarration
+            resultHadNoNarration: appState.resultHadNoNarration,
+            audioLevels: appState.audioLevels
         )
     }
 }

@@ -155,6 +155,19 @@ final class AppState {
     var elapsedSeconds: Double = 0
     var frameCount: Int = 0
 
+    /// Rolling buffer of live mic-input peak levels (0...1, after a
+    /// display-side gain). Fed at ~12.5Hz by RecordingSession's
+    /// `onAudioLevel` callback during an active capture; each emit
+    /// shifts the array left and appends the latest sample. Sized to
+    /// match the pill waveform's 22 bars so the view can render
+    /// directly against this without resampling.
+    var audioLevels: [CGFloat] = Array(repeating: 0, count: AppState.waveformBarCount)
+
+    /// Bar count for the recording-pill waveform. Kept here so the
+    /// rolling buffer above and the WaveformView call site agree on
+    /// length without crossing module boundaries.
+    static let waveformBarCount = 22
+
     /// The region selected by the user via the area-selector overlay,
     /// stored at startRecording time and held for the duration of the
     /// session. Consumed by Phase 7's RecordingSession to scope the
@@ -294,6 +307,7 @@ final class AppState {
         resultHadNoNarration = false
         elapsedSeconds = 0
         frameCount = 0
+        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
 
         let session = RecordingSession(
             selection: selection,
@@ -305,6 +319,12 @@ final class AppState {
             },
             onFinish: { [weak self] outcome in
                 self?.handleSessionFinish(outcome)
+            },
+            onAudioLevel: { [weak self] level in
+                // Throttled to ~12.5Hz inside RecordingSession; safe to
+                // mutate @Observable state on every emit. MainActor-
+                // hopped on the session side.
+                self?.handleAudioLevel(level)
             }
         )
         recordingSession = session
@@ -372,6 +392,7 @@ final class AppState {
         recordingSession = nil
         elapsedSeconds = 0
         frameCount = 0
+        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
         activeSelection = nil
         lastRecordingURL = nil
@@ -394,6 +415,7 @@ final class AppState {
         recordingSession = nil
         elapsedSeconds = 0
         frameCount = 0
+        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
         activeSelection = nil
         lastRecordingURL = nil
@@ -404,6 +426,29 @@ final class AppState {
     }
 
     // MARK: - Session callbacks
+
+    /// Fired ~12.5Hz from `RecordingSession.onAudioLevel`. Each call
+    /// shifts the rolling buffer left and appends the latest mic peak
+    /// (after a display-side gain so conversational speech reads as
+    /// active rather than near-zero) so the pill's WaveformView can
+    /// render directly against `audioLevels`.
+    private func handleAudioLevel(_ rawPeak: Float) {
+        // Speech peaks usually sit in the 0.05–0.3 range; multiply so
+        // normal speaking volume drives bars to ~60–80% height, and
+        // clamp at 1.0. A small floor keeps every bar slightly tall so
+        // a silent moment doesn't look like a dead waveform.
+        let gained = min(1.0, rawPeak * 4.0)
+        let floor: CGFloat = 0.08
+        let level = max(floor, CGFloat(gained))
+
+        var next = audioLevels
+        if next.count != AppState.waveformBarCount {
+            next = Array(repeating: 0, count: AppState.waveformBarCount)
+        }
+        next.removeFirst()
+        next.append(level)
+        audioLevels = next
+    }
 
     /// Fired ~5Hz from RecordingSession.onElapsed (every 6th video
     /// sample at 30fps). Drives the pill timer and the 150s/180s
@@ -445,6 +490,7 @@ final class AppState {
         case .cancelled:
             elapsedSeconds = 0
             frameCount = 0
+            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
             isResultExpanded = false
             activeSelection = nil
             lastRecordingURL = nil
@@ -456,6 +502,7 @@ final class AppState {
             NSLog("[AppState] session failed: %@", String(describing: error))
             elapsedSeconds = 0
             frameCount = 0
+            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
             isResultExpanded = false
             activeSelection = nil
             lastRecordingURL = nil

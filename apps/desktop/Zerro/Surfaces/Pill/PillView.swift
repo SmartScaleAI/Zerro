@@ -57,6 +57,13 @@ struct PillView: View {
     /// via PillWindowController so PillView stays a pure renderer.
     var resultHadNoNarration: Bool = false
 
+    /// Live mic-input peak levels for the recording/wrappingUp waveform.
+    /// 22-element rolling buffer threaded from AppState.audioLevels.
+    /// `nil` falls back to the static sample bars so previews and the
+    /// idle-pill-during-warmup window still render a plausible
+    /// waveform.
+    var audioLevels: [CGFloat]? = nil
+
     var body: some View {
         content
             .frame(width: lockedCapsuleWidth, height: lockedCapsuleHeight)
@@ -130,6 +137,7 @@ struct PillView: View {
                 accentColor: .vfTextPrimary,
                 middleLabel: nil,
                 pulsingDot: true,
+                audioLevels: audioLevels,
                 onCancel: onCancel,
                 onStop: onStop
             )
@@ -148,6 +156,7 @@ struct PillView: View {
                 accentColor: .vfWarningAmber,
                 middleLabel: nil,
                 pulsingDot: false,
+                audioLevels: audioLevels,
                 onCancel: onCancel,
                 onStop: onStop
             )
@@ -276,6 +285,9 @@ private struct RecordingPillContent: View {
     let accentColor: Color
     let middleLabel: String?
     let pulsingDot: Bool
+    /// Live mic-input peak levels; `nil` falls back to the static
+    /// sample so previews still render a plausible waveform.
+    let audioLevels: [CGFloat]?
     let onCancel: () -> Void
     let onStop: () -> Void
 
@@ -303,12 +315,18 @@ private struct RecordingPillContent: View {
             }
 
             WaveformView(
-                bars: Array(WaveformView.sampleBarsLong.prefix(22)),
+                bars: audioLevels ?? Array(WaveformView.sampleBarsLong.prefix(22)),
                 color: accentColor,
                 barWidth: 2,
                 spacing: 2,
                 maxHeight: 16
             )
+            // Animate height changes between emits so the 12.5Hz feed
+            // reads as a continuously breathing waveform instead of
+            // stepping frame-to-frame. Duration slightly under the
+            // emit interval so each value nearly finishes before the
+            // next arrives.
+            .animation(.easeOut(duration: 0.1), value: audioLevels)
             .fixedSize()
 
             if let middleLabel {
