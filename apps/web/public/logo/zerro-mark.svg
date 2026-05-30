@@ -1,0 +1,6 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <g fill="currentColor">
+    <path d="M150 362 V180 Q150 150 180 150 H288 Q300 150 300 162 V208 H208 V362 Z"/>
+    <path d="M150 362 V180 Q150 150 180 150 H288 Q300 150 300 162 V208 H208 V362 Z" transform="rotate(180 256 256)"/>
+  </g>
+</svg>
