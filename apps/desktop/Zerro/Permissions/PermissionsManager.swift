@@ -75,6 +75,20 @@ final class PermissionsManager {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var pollTimer: Timer?
+    @ObservationIgnored private var monitoringTimer: Timer?
+
+    /// Observer for `didBecomeActive` events that fire while a polling
+    /// session is active. Used to auto-probe CGWindowList when the user
+    /// returns focus to Zerro after a likely System Settings visit —
+    /// covers the dev-drift case on ad-hoc-signed builds where
+    /// CGPreflight false-negatives even after the user has enabled the
+    /// permission toggle. Installed in `startPolling`, torn down in
+    /// `stopPolling`. Skips the very first focus return (which is
+    /// almost always the dismissal of the CGRequest popup itself —
+    /// probing then would either redundantly run on a fresh grant or
+    /// spawn a popup right on top of the user's deny answer).
+    @ObservationIgnored private var pollingFocusObserver: NSObjectProtocol?
+    @ObservationIgnored private var hasSeenFirstFocusReturnInPollingSession = false
 
     /// Set to `true` while a screen-recording TCC popup is in flight.
     /// Suppresses `.denied` reporting from `computeScreenRecordingStatus`
@@ -155,10 +169,23 @@ final class PermissionsManager {
     private var hasPerformedInitialRefresh = false
 
     private func computeScreenRecordingStatus() -> PermissionStatus {
-        // SCShareableContent probe is the most reliable signal — covers
-        // dev codesign drift where CGPreflight returns false despite
-        // the user having actually granted in Settings.
-        if Self.isScreenRecordingGranted() || screenRecordingGrantedViaShareable {
+        // Cheap, popup-free signal first.
+        if Self.isScreenRecordingGranted() {
+            return .granted
+        }
+        // Cached result from an explicit fallback probe — set by
+        // `refreshScreenRecordingViaShareable` (debug "Probe Shareable")
+        // or `refreshScreenRecordingViaWindowList` ("Check Again" on the
+        // denied step). We do NOT call either fallback automatically from
+        // this method: on macOS 14+ both `SCShareableContent.current` AND
+        // `CGWindowListCopyWindowInfo` (when reading `kCGWindowName`) can
+        // spawn macOS's "Grant access in Privacy & Security" popup when
+        // permission isn't granted. The previous implementation called
+        // CGWindowList here on every refresh, which fired a duplicate
+        // popup the instant `didBecomeActive` fired post-user-click. Both
+        // fallbacks are now reserved for explicit user actions where one
+        // popup is acceptable.
+        if screenRecordingGrantedViaShareable {
             return .granted
         }
         // While a popup is in flight, treat the not-granted state as
@@ -309,6 +336,28 @@ final class PermissionsManager {
         // either way after Deny, so we need the activation signal to
         // distinguish "popup still up" from "user denied".
         startPolling()
+
+        // Safety net for the "CGRequest is a silent no-op" case. macOS
+        // shows the request popup only on the FIRST call per bundle
+        // (and on macOS Tahoe, `tccutil reset All` doesn't always
+        // restore that one-shot eligibility). Subsequent calls return
+        // immediately without spawning a popup, didBecomeActive never
+        // fires, finalize never runs, and the Continue button on the
+        // onboarding step becomes sticky — re-clicks are rejected by
+        // the `isAwaitingScreenRecordingResponse` guard. After this
+        // timeout, force-finalize so status flips to .denied and the
+        // Open System Settings deep-link UI becomes available. If the
+        // popup DID appear and the user clicks within the timeout, the
+        // native finalize path runs first and the timeout's
+        // isAwaiting guard short-circuits. If the user clicks after
+        // the timeout, polling's CGPreflight check picks up the grant
+        // within ~1s and the status flips to .granted directly.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.isAwaitingScreenRecordingResponse else { return }
+            NSLog("[Permissions] CGRequest appears to have been a no-op \u{2014} force-finalizing")
+            self.finalizeScreenRecordingResponse()
+        }
     }
 
     /// Subscribes to `NSApplication.didBecomeActiveNotification`. The TCC
@@ -401,7 +450,13 @@ final class PermissionsManager {
     ///
     /// `.titled` filters the borderless pill / overlays out — those
     /// manage their own z-ordering.
-    private func reactivateApp() {
+    /// Public so other flows that lose focus to a system-owned popup
+    /// (SecurityAgent for Keychain access, System Settings deep-links)
+    /// can re-grab focus and bring our windows back to the front.
+    /// Currently called by: the permission-grant transition detector
+    /// (internal) and `APIKeyStepView.loadFromKeychain` (external, for
+    /// the SecurityAgent popup on ad-hoc-signed dev builds).
+    func reactivateApp() {
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in
             let titledWindows = NSApp.windows.filter {
@@ -488,23 +543,110 @@ final class PermissionsManager {
         guard pollTimer == nil else { return }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Refresh the cheap synchronous checks first so the
-                // common case (CGPreflight transitions to true) lands
-                // immediately.
-                self.refreshStatuses()
-                // Then probe the more reliable async signal. If
-                // CGPreflight is lagging behind the real grant — common
-                // in dev builds with codesign drift — this is what
-                // surfaces the transition.
-                await self.refreshScreenRecordingViaShareable()
+                // CGPreflight only. We deliberately do NOT call
+                // `refreshScreenRecordingViaShareable` (popup-spawning)
+                // or CGWindowList (also popup-spawning on macOS 14+)
+                // from the timer. The focus-return observer below
+                // handles dev-drift detection on a one-shot basis when
+                // the user likely just came back from System Settings.
+                self?.refreshStatuses()
             }
         }
+        hasSeenFirstFocusReturnInPollingSession = false
+        installPollingFocusObserver()
     }
 
     func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        uninstallPollingFocusObserver()
+    }
+
+    /// Auto-probes via CGWindowList when Zerro regains focus during a
+    /// polling session, on the heuristic "user likely just toggled the
+    /// permission in System Settings and returned". Handles the
+    /// dev-drift case (ad-hoc-signed builds where CGPreflight stays
+    /// false even after the user grants) by detecting the grant via a
+    /// popup-free path when the timing is right.
+    ///
+    /// First focus return per polling session is skipped: it's almost
+    /// always the dismissal of the CGRequest popup itself (the user
+    /// just clicked Allow/Deny/Open Settings), and probing then would
+    /// either redundantly run on a fresh grant CGPreflight already
+    /// caught OR spawn a CGWindowList popup right on top of the deny
+    /// answer the user just gave.
+    ///
+    /// Subsequent focus returns trigger one probe (with a 300ms delay
+    /// so the OS state can propagate from a Settings toggle). The
+    /// probe is silent when the grant exists; if it doesn't, one popup
+    /// may appear — acceptable since the user just returned to Zerro
+    /// during a denied-state polling session, where the implication is
+    /// "I've been working on permissions".
+    private func installPollingFocusObserver() {
+        guard pollingFocusObserver == nil else { return }
+        pollingFocusObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Skip the first focus return — it's the popup
+                // dismissal, not a Settings-return.
+                if !self.hasSeenFirstFocusReturnInPollingSession {
+                    self.hasSeenFirstFocusReturnInPollingSession = true
+                    return
+                }
+                // Don't probe while another CGRequest popup is in
+                // flight (the safety-net case in requestScreenRecording
+                // could leave isAwaiting=true briefly while a popup
+                // shows late).
+                if self.isAwaitingScreenRecordingResponse { return }
+                // Let TCC's view of the world catch up to whatever the
+                // user just did in Settings before probing.
+                try? await Task.sleep(for: .milliseconds(300))
+                if self.isAwaitingScreenRecordingResponse { return }
+                self.refreshScreenRecordingViaWindowList()
+            }
+        }
+    }
+
+    private func uninstallPollingFocusObserver() {
+        if let observer = pollingFocusObserver {
+            NotificationCenter.default.removeObserver(observer)
+            pollingFocusObserver = nil
+        }
+        hasSeenFirstFocusReturnInPollingSession = false
+    }
+
+    /// Probes `CGWindowListCopyWindowInfo` for non-self windows with a
+    /// non-empty name. With Screen Recording granted, other apps' window
+    /// names are visible; without it, names are stripped. So a single
+    /// non-empty name = strong evidence we actually have the grant
+    /// (covers dev-drift on ad-hoc-signed builds where CGPreflight
+    /// false-negatives). On success, sets `screenRecordingGrantedViaShareable`
+    /// and refreshes — the UI sees the .granted transition via the
+    /// standard path.
+    ///
+    /// Side-effect warning: on macOS 14+, reading `kCGWindowName` from
+    /// CGWindowList triggers macOS's "Open System Settings / Deny" popup
+    /// when permission isn't granted. NEVER call from automatic refresh
+    /// paths. Acceptable for user-initiated invocations (the "Check
+    /// Again" button on the denied onboarding step) where one popup on
+    /// user action is the right tradeoff: silent when granted, one
+    /// prompt when not.
+    func refreshScreenRecordingViaWindowList() {
+        // CGPreflight first — if it returns true, no need to probe
+        // CGWindowList and risk a popup.
+        if Self.isScreenRecordingGranted() {
+            refreshStatuses()
+            return
+        }
+        let wasGranted = screenRecordingGrantedViaShareable
+        screenRecordingGrantedViaShareable = Self.hasScreenRecordingPermissionViaWindowList()
+        if !wasGranted && screenRecordingGrantedViaShareable {
+            refreshStatuses()
+        }
     }
 
     /// Probes `SCShareableContent.current` and updates
@@ -513,7 +655,14 @@ final class PermissionsManager {
     /// Recording is NOT granted. Success = real grant. When that flips
     /// from false to true we re-run `refreshStatuses` so the UI catches
     /// up via the standard transition path.
-    private func refreshScreenRecordingViaShareable() async {
+    ///
+    /// Side-effect warning: when permission isn't granted, this call
+    /// spawns a system "Open System Settings / Deny" popup. NEVER call
+    /// from a polling loop. Reserved for explicit, user-initiated
+    /// invocation (the debug "Probe Shareable" button) where one popup
+    /// is acceptable to reliably break a stuck dev-drift state
+    /// CGWindowList missed.
+    func refreshScreenRecordingViaShareable() async {
         let wasGranted = screenRecordingGrantedViaShareable
         do {
             _ = try await SCShareableContent.current
@@ -539,6 +688,63 @@ final class PermissionsManager {
         if status == .denied { startPolling() } else { stopPolling() }
     }
 
+    // MARK: - Mid-session monitoring (Phase 10)
+
+    /// Watches Screen Recording + Microphone TCC status for the duration
+    /// of an active recording and fires `onRevoked` if either flips away
+    /// from `.granted`. The callback runs on the MainActor, receives the
+    /// dedicated `.screenRecordingRevoked` / `.microphoneRevoked` failure
+    /// reason for AppState to set, and the monitor stops itself before
+    /// firing (so the callback can teardown the recording without racing
+    /// against a second tick).
+    ///
+    /// Polling at 1Hz mirrors `startPolling`'s cadence — TCC reads are
+    /// synchronous and cheap, and a ≤1s observation lag from a real
+    /// revocation to the pill flipping into the failure state is well
+    /// under the perceptual threshold for "the app reacted to my change".
+    /// Idempotent — calling while already monitoring is a no-op.
+    ///
+    /// Without this, a mid-session revocation is caught only when the
+    /// next sample append fails inside the writer, which reads as a
+    /// generic `.captureInterrupted` until `captureFailureReason()`
+    /// re-classifies on the failure boundary. Proactive monitoring
+    /// lands the user on the correct copy immediately.
+    func startMonitoring(
+        onRevoked: @escaping @MainActor (RecordingFailureReason) -> Void
+    ) {
+        guard monitoringTimer == nil else { return }
+        // Snapshot at start. We only fire on a granted → not-granted
+        // transition; the session is up so granted is the baseline by
+        // construction. (If somehow it isn't, we'd false-positive on the
+        // first tick — guarded by the snapshot to prevent that.)
+        let baselineScreen = Self.isScreenRecordingGrantedWithDevDriftFallback()
+        let baselineMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if baselineScreen && !Self.isScreenRecordingGrantedWithDevDriftFallback() {
+                    self.stopMonitoring()
+                    onRevoked(.screenRecordingRevoked)
+                    return
+                }
+                if baselineMic && AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+                    self.stopMonitoring()
+                    onRevoked(.microphoneRevoked)
+                    return
+                }
+            }
+        }
+    }
+
+    /// Tears down the recording-monitor timer. Safe to call when not
+    /// monitoring. AppState calls this from every recording exit path
+    /// (handleSessionFinish for finished/cancelled/failed, plus the
+    /// inline cancel paths) so the timer can't outlive the session.
+    func stopMonitoring() {
+        monitoringTimer?.invalidate()
+        monitoringTimer = nil
+    }
+
     /// Clears the persisted "has requested" tracking flags and recomputes
     /// statuses so the onboarding flow rebuilds from a clean slate. Used
     /// by the DEBUG "Reset Onboarding" menu action — without this, a
@@ -547,10 +753,58 @@ final class PermissionsManager {
     /// leak window names, which can flip the screen-recording step to
     /// the allowed view before the user has actually granted anything.
     /// The TCC grant itself lives in the OS, not in UserDefaults — to
-    /// clear that, run `tccutil reset ScreenCapture <bundle-id>`.
+    /// clear that, use `resetTCCGrants()` (or the DEBUG "Reset
+    /// Permissions" menu action that wraps it).
     func resetRequestFlags() {
         defaults.removeObject(forKey: Keys.hasRequestedScreenRecording)
         defaults.removeObject(forKey: Keys.hasRequestedMicrophone)
         refreshStatuses()
     }
+
+    #if DEBUG
+    /// Shells out to `tccutil reset All <bundleID>` to clear every TCC
+    /// grant for this bundle (ScreenCapture + Microphone + Accessibility +
+    /// any other service the OS has tracked), then clears our local
+    /// tracking flags and refreshes statuses. Wraps the terminal command
+    /// the dev-time workflow previously required so the onboarding flow
+    /// can be re-tested from the menu-bar dropdown without dropping to a
+    /// shell.
+    ///
+    /// `reset All` is preferred over `reset <service>` on macOS Tahoe
+    /// (26.x): per-service resets occasionally leave the System Settings
+    /// → Privacy & Security row stale (toggle still rendered ON), while
+    /// the `All` variant reliably clears the bundle's entire entry in
+    /// one pass.
+    ///
+    /// macOS caches TCC authorization per-process, so the *next* prompt
+    /// only fires for a freshly-launched binary — calling this and then
+    /// invoking `requestScreenRecording()` in the same process tends to
+    /// see the cached grant rather than the cleared one. The menu action
+    /// pairs this with `NSApp.terminate` so the user relaunches into a
+    /// clean state.
+    func resetTCCGrants() {
+        guard let bundleID = Bundle.main.bundleIdentifier else {
+            NSLog("[Permissions] resetTCCGrants: no bundle identifier")
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "All", bundleID]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            NSLog(
+                "[Permissions] tccutil reset All %@ exited %d",
+                bundleID,
+                process.terminationStatus
+            )
+        } catch {
+            NSLog(
+                "[Permissions] tccutil reset All failed: %@",
+                String(describing: error)
+            )
+        }
+        resetRequestFlags()
+    }
+    #endif
 }

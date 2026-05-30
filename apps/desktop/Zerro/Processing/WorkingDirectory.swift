@@ -69,6 +69,35 @@ enum WorkingDirectory {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Free bytes available on the volume that backs our temp directory
+    /// — the disk we'll write the recording, audio.m4a, and frames to.
+    /// Returns nil if the OS won't give us a number (extremely rare;
+    /// failures here shouldn't block the recording, so callers should
+    /// treat nil as "assume we have space" rather than refuse to start).
+    ///
+    /// `volumeAvailableCapacityForImportantUsageKey` is the right key
+    /// here: it reflects what's *actually* available to a user-initiated
+    /// write after the system reclaims purgeable / cached content,
+    /// matching what the user sees in About This Mac → Storage. The
+    /// older `volumeAvailableCapacityKey` undercounts by the size of
+    /// purgeable content and would refuse recordings the OS would
+    /// actually have happily accommodated.
+    static func freeBytes() -> Int64? {
+        let tempURL = FileManager.default.temporaryDirectory
+        do {
+            let values = try tempURL.resourceValues(
+                forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+            )
+            return values.volumeAvailableCapacityForImportantUsage
+        } catch {
+            NSLog(
+                "[Cleanup] freeBytes: couldn\u{2019}t read volume capacity: %@",
+                String(describing: error)
+            )
+            return nil
+        }
+    }
+
     /// Scans `NSTemporaryDirectory()` and deletes every entry whose
     /// basename starts with `prefix` (`zerro-`). Run once at app
     /// launch. Anything created in the current run is created AFTER

@@ -46,6 +46,22 @@ struct PermissionsDebugSection: View {
             HStack(spacing: 8) {
                 Button("Refresh") { permissions.refreshStatuses() }
                     .controlSize(.small)
+                Button("Probe WindowList") {
+                    // CGWindowListCopyWindowInfo on kCGWindowName —
+                    // popup-free if permission is granted; spawns the
+                    // "Open System Settings" popup once if not. Cheap
+                    // dev-drift detector for ad-hoc-signed builds.
+                    permissions.refreshScreenRecordingViaWindowList()
+                }
+                .controlSize(.small)
+                Button("Probe Shareable") {
+                    // SCShareableContent.current — slowest but most
+                    // reliable dev-drift detector. Always spawns the
+                    // popup if not actually granted, so save it for
+                    // cases where Probe WindowList missed.
+                    Task { await permissions.refreshScreenRecordingViaShareable() }
+                }
+                .controlSize(.small)
                 Toggle("Poll", isOn: $isPolling)
                     .toggleStyle(.switch)
                     .controlSize(.mini)

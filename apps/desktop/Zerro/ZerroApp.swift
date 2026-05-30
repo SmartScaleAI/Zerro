@@ -41,11 +41,17 @@ struct ZerroApp: App {
         let perms = PermissionsManager()
         let onb = OnboardingState()
         let selectorCtrl = AreaSelectorWindowController()
+        let pillCtrl = PillWindowController(appState: state)
+        // Phase 10: let AppState start/stop TCC monitoring around an
+        // active recording so a mid-session revocation lands the user on
+        // the dedicated failure pill within ~1s. Weak ref — both objects
+        // live in @State for the app's lifetime.
+        state.permissions = perms
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
-        _pillController = State(initialValue: PillWindowController(appState: state))
+        _pillController = State(initialValue: pillCtrl)
         _recordingFocusController = State(initialValue: RecordingFocusWindowController(appState: state))
         _areaSelectorController = State(initialValue: selectorCtrl)
 
@@ -61,13 +67,14 @@ struct ZerroApp: App {
         // app's lifetime, so weak references stay valid.
         if !Self.didRegisterGlobalShortcuts {
             Self.didRegisterGlobalShortcuts = true
-            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl] in
+            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
                     state: state,
                     preferences: prefs,
                     permissions: perms,
                     onboarding: onb,
-                    areaSelector: selectorCtrl
+                    areaSelector: selectorCtrl,
+                    pillController: pillCtrl
                 )
             }
             // Phase 8 launch-sweep: clear orphaned zerro-*
@@ -157,7 +164,8 @@ struct ZerroApp: App {
         preferences: PreferencesStore?,
         permissions: PermissionsManager?,
         onboarding: OnboardingState?,
-        areaSelector: AreaSelectorWindowController?
+        areaSelector: AreaSelectorWindowController?,
+        pillController: PillWindowController?
     ) {
         guard let state, let preferences, let permissions, let onboarding, let areaSelector else {
             NSLog("[Hotkey] dropped — one of state/preferences/permissions/onboarding/areaSelector was nil")
@@ -174,10 +182,14 @@ struct ZerroApp: App {
             state.stopRecording()
             return
         }
-        // 0b. Processing in flight — ignore. The record hotkey must not
-        // interrupt local/API work; the pill's Cancel is that affordance.
+        // 0b. Processing in flight — flash the pill instead of starting a
+        // new recording. The record hotkey must not interrupt local/API
+        // work (the pill's Cancel is that affordance), but a silent drop
+        // reads as "the hotkey didn't fire" — the brief scale pulse
+        // signals "registered, but the app is busy".
         if state.state == .processing {
-            NSLog("[Hotkey] processing in flight — ignoring hotkey")
+            NSLog("[Hotkey] processing in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
             return
         }
 

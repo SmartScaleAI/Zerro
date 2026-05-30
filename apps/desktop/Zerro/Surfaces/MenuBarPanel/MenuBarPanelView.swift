@@ -96,13 +96,30 @@ struct MenuBarPanelView: View {
                 // screen-recording step's dev-drift CGWindowList
                 // fallback doesn't false-positive into the allowed
                 // view before the user has been prompted (the TCC
-                // grant itself still lives in the OS — reset that
-                // with `tccutil reset ScreenCapture <bundle-id>`).
+                // grant itself still lives in the OS — use "Reset
+                // Permissions & Quit" below for that).
                 onboarding.hasCompletedOnboarding = false
                 onboarding.currentStep = .welcome
                 permissions.resetRequestFlags()
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
+            }
+            MenuRow(label: "Reset Permissions & Quit") {
+                // Resets the actual TCC grants (ScreenCapture +
+                // Microphone + Accessibility) for this bundle ID via
+                // `tccutil`, so the next launch sees the system in the
+                // same state a fresh install would — onboarding's
+                // permission prompts will fire for real. Also clears
+                // the onboarding-completed flag so relaunching lands
+                // directly on the onboarding window. We terminate
+                // because macOS caches authorization per-process: a
+                // new prompt only fires for a freshly-launched binary;
+                // staying in-process would see the cached grant rather
+                // than the cleared one.
+                permissions.resetTCCGrants()
+                onboarding.hasCompletedOnboarding = false
+                onboarding.currentStep = .welcome
+                NSApplication.shared.terminate(nil)
             }
             PermissionsDebugSection()
             #endif

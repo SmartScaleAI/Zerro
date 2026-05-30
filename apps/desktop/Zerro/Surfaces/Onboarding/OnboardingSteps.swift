@@ -115,7 +115,17 @@ struct ScreenRecordingStepView: View {
                 description: "macOS won\u{2019}t re-prompt \u{2014} you need to enable it manually.",
                 breadcrumbLabel: "Screen Recording",
                 settingsURL: SystemSettingsURLs.screenRecording,
-                secondary: .checkAgain { permissions.refreshStatuses() }
+                // CGWindowList-based probe in addition to CGPreflight.
+                // Catches dev-drift on ad-hoc-signed builds where the
+                // cheap CGPreflight check stays false even after the
+                // user grants in Settings. Stays silent when the grant
+                // exists (the common case after the user has just
+                // enabled it); may spawn one popup if permission is
+                // still actually missing — acceptable for a user-
+                // initiated "Check Again" action.
+                secondary: .checkAgain {
+                    permissions.refreshScreenRecordingViaWindowList()
+                }
             )
         }
     }
@@ -235,6 +245,7 @@ enum APIKeyValidationState: Equatable {
 
 struct APIKeyStepView: View {
     @Environment(OnboardingState.self) private var onboarding
+    @Environment(PermissionsManager.self) private var permissions
 
     @State private var apiKey: String = ""
     @State private var liveValidationState: APIKeyValidationState = .untouched
@@ -384,12 +395,31 @@ struct APIKeyStepView: View {
     // MARK: - Behavior
 
     private func loadFromKeychain() {
-        guard let stored = keychain.read(), !stored.isEmpty else { return }
+        // Time the read so we can detect when SecurityAgent actually
+        // showed a popup (a synchronous user prompt blocks for >>100ms)
+        // vs. a fast in-process unlock (typically <10ms). We only need
+        // to re-grab focus in the popup case; in the silent path the
+        // window never lost focus and reactivating would unnecessarily
+        // boost it to .floating for 30s.
+        let start = CFAbsoluteTimeGetCurrent()
+        let stored = keychain.read()
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        guard let stored, !stored.isEmpty else { return }
         apiKey = stored
         // Pre-filled key is treated as validated per the spec —
         // "if a key is already present when onboarding runs, pre-fill
         // the masked field and mark it validated."
         liveValidationState = .valid
+        if elapsed > 0.1 {
+            // SecurityAgent popup almost certainly fired (codesign
+            // identity drifted from when the key was last stored — the
+            // common case on ad-hoc-signed dev builds). Focus was
+            // handed off to SecurityAgent and may not have come back to
+            // our .accessory-policy menu-bar app; reactivate so the
+            // onboarding window doesn't sink behind whatever else was
+            // open.
+            permissions.reactivateApp()
+        }
     }
 
     private func verify() {

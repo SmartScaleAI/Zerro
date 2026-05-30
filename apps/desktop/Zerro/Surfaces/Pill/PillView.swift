@@ -21,7 +21,14 @@ enum PillState: Equatable {
     case processing(stepLabel: String)
     case resultCompact
     case resultExpanded
-    case error(message: String)
+    /// `retryable` drives whether the error pill renders a Retry button
+    /// alongside Dismiss. Set by the bridge from
+    /// `AppState.canRetryFailure` — combines the failure reason's
+    /// `isRetryable` (network / rate-limit / provider) with the
+    /// per-failure-chain attempt cap. False means the only affordance is
+    /// Dismiss (the user has to fix the underlying cause: Settings, free
+    /// up disk, re-record, etc.).
+    case error(message: String, retryable: Bool)
 }
 
 // MARK: - PillView
@@ -37,6 +44,12 @@ struct PillView: View {
     var onCopy: () -> Void = {}
     var onToggleExpand: () -> Void = {}
     var onDismissError: () -> Void = {}
+    /// Re-runs the API stage against the already-processed recording on
+    /// disk. Wired in `PillWindowController` to `AppState.retryFailedPrompt`;
+    /// only invoked when the active `.error` state has `retryable == true`.
+    /// Default no-op so #Preview blocks can keep passing literal states
+    /// without ceremony.
+    var onRetryError: () -> Void = {}
     /// Closes the result pill from either compact or expanded state. The
     /// affordance is a small "x" badge tucked into the chrome's top-right
     /// corner so users can dismiss after copying without having to wait
@@ -180,8 +193,12 @@ struct PillView: View {
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
             )
-        case .error(let message):
-            ErrorPillContent(message: message, onDismiss: onDismissError)
+        case .error(let message, let retryable):
+            ErrorPillContent(
+                message: message,
+                onRetry: retryable ? onRetryError : nil,
+                onDismiss: onDismissError
+            )
         }
     }
 
@@ -200,12 +217,21 @@ struct PillView: View {
 // surface. Amber-tinted (per the C0 brief's "amber-tinted message"
 // guidance — distinct from .vfRecordingRed so the user reads it as
 // "something went wrong, the recording is over" rather than "still
-// recording, wrap up"). Single-line message + dismiss X. C5 scope:
-// non-actionable; if a later phase needs Retry / Open Settings it
-// will add buttons here.
+// recording, wrap up").
+//
+// Phase 10: Retry button appears left of Dismiss when `onRetry` is
+// non-nil — wired only for transient API failures (network / rate-limit
+// / provider) that the bridge can re-run against the already-processed
+// recording. For non-retryable errors (auth, permission, disk, capture)
+// `onRetry` is nil and only the dismiss X renders.
 
 private struct ErrorPillContent: View {
     let message: String
+    /// Non-nil only when the active failure is transient and the
+    /// per-failure-chain attempt cap hasn't been hit. The bridge passes
+    /// `PillView.onRetryError` through when `retryable == true` and `nil`
+    /// otherwise; this view doesn't track the cap itself.
+    let onRetry: (() -> Void)?
     let onDismiss: () -> Void
 
     var body: some View {
@@ -228,6 +254,22 @@ private struct ErrorPillContent: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: VFSpacing.md)
+
+            if let onRetry {
+                Button(action: onRetry) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .medium))
+                        Text("Retry")
+                            .font(.system(size: 12))
+                            .fixedSize()
+                    }
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+            }
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
@@ -787,14 +829,27 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Error \u{00B7} Short") {
-    PillView(state: .error(message: "Recording was interrupted."))
+    PillView(state: .error(message: "Recording was interrupted.", retryable: false))
         .padding(40)
         .background(Color.vfPanelBackground)
 }
 
 #Preview("Error \u{00B7} Long") {
     // The longest production message — exercises the two-line wrap.
-    PillView(state: .error(message: "Add your OpenAI API key in Settings to generate prompts."))
+    PillView(state: .error(
+        message: "Add your OpenAI API key in Settings to generate prompts.",
+        retryable: false
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Error \u{00B7} Retryable") {
+    // Transient API failure — exercises the Retry-button affordance.
+    PillView(state: .error(
+        message: "Couldn\u{2019}t reach OpenAI \u{2014} check your connection.",
+        retryable: true
+    ))
         .padding(40)
         .background(Color.vfPanelBackground)
 }

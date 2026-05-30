@@ -101,6 +101,28 @@ public enum RecordingFailureReason: Equatable {
     /// JSON shape changed"; what matters is "try again later".
     case providerError
 
+    /// Whether the failure is worth re-running the API stage against the
+    /// already-processed artifacts. True only for transient API-side
+    /// failures — the local audio/frames/manifest on disk are still good,
+    /// the request just needs another shot. Everything else (auth needs
+    /// Settings, permissions need System Settings, disk needs cleanup,
+    /// capture failures need a fresh recording) routes the user out to
+    /// the cause; a Retry button there would be a trap that always fails
+    /// the same way. The Retry button only appears on the pill when this
+    /// is true AND the per-failure-chain retry count is under
+    /// `AppState.maxFailureRetries`.
+    var isRetryable: Bool {
+        switch self {
+        case .networkOffline, .rateLimited, .providerError:
+            return true
+        case .screenRecordingRevoked, .microphoneRevoked, .microphoneUnavailable,
+             .streamStartFailed, .writerStartFailed, .captureInterrupted,
+             .processingFailed, .recordingTooShort, .diskFull,
+             .apiKeyMissing, .apiAuth:
+            return false
+        }
+    }
+
     var userMessage: String {
         switch self {
         case .screenRecordingRevoked:
@@ -255,6 +277,48 @@ final class AppState {
     /// already walked away from. Nil whenever no pipeline is running.
     private var processingTask: Task<Void, Never>?
 
+    /// Consecutive Retry presses against the current failure chain. Cap
+    /// keeps a "Retry → fail → Retry" loop from running forever on a
+    /// sustained outage — after the cap the Retry button hides and the
+    /// only affordance left is Dismiss (which throws the artifacts away
+    /// and returns to idle). Reset on every transition out of .failed via
+    /// a non-retry path (resetToIdle, cancelRecording, startRecording).
+    private var failureRetryAttempts: Int = 0
+
+    /// How many times in a row the user can press Retry on the same
+    /// processed-recording chain before the affordance hides. 2 was
+    /// chosen as the smallest cap that still tolerates a single
+    /// genuinely-transient blip plus a "give it one more shot" without
+    /// trapping the user on a sustained outage.
+    static let maxFailureRetries = 2
+
+    /// Minimum free bytes on the temp-directory volume required before
+    /// `startRecording` will proceed. Below this we refuse upfront with
+    /// `.diskFull` so the user isn't asked to narrate for 3 minutes only
+    /// to lose the recording at finalize.
+    ///
+    /// Sizing rationale: a 3-min ScreenCaptureKit capture at typical
+    /// region bitrates lands around 600 MB; the working dir adds the
+    /// extracted audio.m4a (a few MB), the JPEG frames (~150 frames at
+    /// ~150 KB each ≈ 25 MB), and the manifest. 1.5 GB gives roughly
+    /// 2× headroom over the worst real recording we've measured —
+    /// enough to absorb a high-bitrate full-screen 3-min capture without
+    /// being so conservative we'd block users on tight disks who could
+    /// have safely recorded a shorter session. The reactive disk-full
+    /// chain walk in `isOutOfSpace` still backstops cases where another
+    /// process eats the disk between this check and finalize.
+    static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+
+    /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
+    /// uses it to start/stop the mid-session TCC monitor around an active
+    /// recording so a revocation in System Settings turns into a clean
+    /// `.failed(.screenRecordingRevoked)` / `.microphoneRevoked` pill
+    /// within ~1s instead of waiting for the writer to fail. Weak so the
+    /// AppState ↔ PermissionsManager pair doesn't form a retain cycle
+    /// (both are held by ZerroApp's @State for the app's lifetime, so the
+    /// weak ref stays valid).
+    @ObservationIgnored weak var permissions: PermissionsManager?
+
     // MARK: - Derived
 
     /// True while the menu-bar icon and pill should both reflect the
@@ -288,6 +352,23 @@ final class AppState {
             NSLog("[AppState] startRecording ignored — state is %@", String(describing: state))
             return
         }
+        // Phase 10: pre-flight free-space check. Refuse upfront with the
+        // existing .diskFull copy ("Your Mac is out of storage — free up
+        // space and try again.") so the user isn't asked to narrate for
+        // 3 minutes only to lose the recording at finalize. A nil
+        // capacity read is treated as "assume OK" — the reactive
+        // chain-walk in isOutOfSpace still catches a genuine ENOSPC at
+        // write time, so a false-positive refuse here is worse than a
+        // false-positive proceed.
+        if let free = WorkingDirectory.freeBytes(), free < Self.minimumFreeBytesToRecord {
+            NSLog(
+                "[AppState] startRecording refused — only %lld bytes free (need %lld)",
+                free,
+                Self.minimumFreeBytesToRecord
+            )
+            state = .failed(reason: .diskFull)
+            return
+        }
         // Clean prior session artifacts before clearing the references.
         // Anything still on disk from the previous session (last source
         // .mov, last processed working dir) is dead now — Phase 9 has
@@ -305,6 +386,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        failureRetryAttempts = 0
         elapsedSeconds = 0
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
@@ -339,6 +421,16 @@ final class AppState {
                 try await session.start()
                 guard let self, self.recordingSession === session else { return }
                 self.state = .recording
+                // Phase 10: watch for TCC revocation during the live
+                // session so we surface .screenRecordingRevoked /
+                // .microphoneRevoked the moment the user toggles the
+                // permission off, rather than waiting for the writer to
+                // fail on its next sample append. Stopped on every
+                // recording-exit path (handleSessionFinish, the inline
+                // cancel paths) so the timer can't outlive the session.
+                self.permissions?.startMonitoring { [weak self] reason in
+                    self?.handleMidSessionRevocation(reason)
+                }
             } catch {
                 NSLog("[AppState] session.start() failed: %@", String(describing: error))
                 guard let self, self.recordingSession === session else { return }
@@ -347,6 +439,29 @@ final class AppState {
                 self.state = .failed(reason: Self.failureReason(from: error))
             }
         }
+    }
+
+    /// Fired by PermissionsManager.startMonitoring when Screen Recording
+    /// or Microphone TCC flips away from .granted during an active
+    /// recording. Tears down the writer (which writes whatever it can
+    /// finalize, then no-ops the partial file) and sets the dedicated
+    /// failure state directly so the user sees the right copy
+    /// immediately. We don't wait for handleSessionFinish(.cancelled) to
+    /// drive the state — that branch is guarded so it won't overwrite
+    /// the failure we set here.
+    private func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
+        guard isRecordingActive, let session = recordingSession else { return }
+        NSLog("[AppState] permission revoked mid-session: %@", String(describing: kind))
+        permissions?.stopMonitoring()
+        session.cancel()
+        recordingSession = nil
+        elapsedSeconds = 0
+        frameCount = 0
+        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
+        isResultExpanded = false
+        activeSelection = nil
+        lastRecordingURL = nil
+        state = .failed(reason: kind)
     }
 
     /// Manual stop. State stays at .recording (or .wrappingUp) during
@@ -399,6 +514,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        failureRetryAttempts = 0
         state = .idle
     }
 
@@ -422,6 +538,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        failureRetryAttempts = 0
         state = .idle
     }
 
@@ -475,6 +592,18 @@ final class AppState {
     /// of recordingSession and the transition into the next state.
     private func handleSessionFinish(_ outcome: RecordingSession.Outcome) {
         recordingSession = nil
+        // Mid-session revocation already set state = .failed and tore
+        // down everything we'd reset here. The writer's tail callback
+        // (.cancelled because we called session.cancel(); or .failed
+        // because the writer noticed the revocation first) would
+        // otherwise stomp our specific .screenRecordingRevoked /
+        // .microphoneRevoked copy with .idle or a generic capture
+        // failure. Short-circuit to preserve the proactive classification.
+        if case .failed = state {
+            permissions?.stopMonitoring()
+            return
+        }
+        permissions?.stopMonitoring()
         switch outcome {
         case .finished(let url):
             lastRecordingURL = url
@@ -496,7 +625,8 @@ final class AppState {
             lastRecordingURL = nil
             processedRecording = nil
             generatedPrompt = nil
-        resultHadNoNarration = false
+            resultHadNoNarration = false
+            failureRetryAttempts = 0
             state = .idle
         case .failed(let error):
             NSLog("[AppState] session failed: %@", String(describing: error))
@@ -645,6 +775,36 @@ final class AppState {
     func dismissFailure() {
         guard case .failed = state else { return }
         resetToIdle()
+    }
+
+    /// True when the current failure is transient AND we have a processed
+    /// recording on disk to re-run AND we haven't already exhausted
+    /// `maxFailureRetries`. The pill reads this via the bridge to decide
+    /// whether the error pill renders a Retry button alongside Dismiss.
+    var canRetryFailure: Bool {
+        guard case .failed(let reason) = state else { return false }
+        return reason.isRetryable
+            && processedRecording != nil
+            && failureRetryAttempts < Self.maxFailureRetries
+    }
+
+    /// User-driven Retry from the error pill. Re-runs the API stage
+    /// (Whisper → Interleaver → GPT-4o) against the already-processed
+    /// audio + frames + manifest still on disk in `processedRecording`'s
+    /// working directory. Bumps the per-chain attempt counter so the
+    /// affordance hides after `maxFailureRetries` consecutive failures —
+    /// prevents a loop on sustained outages.
+    func retryFailedPrompt() {
+        guard canRetryFailure, let processed = processedRecording else { return }
+        failureRetryAttempts += 1
+        state = .processing
+        // runPromptGeneration starts at the `.transcribing` stage and
+        // walks through `.writingPrompt` — exactly the work that needs to
+        // re-run. The working dir's artifacts are untouched by the prior
+        // failure (both runProcessing's and runPromptGeneration's catch
+        // blocks leave them in place), so the second attempt reads the
+        // same audio.m4a + frames + manifest the first one did.
+        runPromptGeneration(processed: processed)
     }
 
     /// Below this many non-whitespace characters, the transcript is

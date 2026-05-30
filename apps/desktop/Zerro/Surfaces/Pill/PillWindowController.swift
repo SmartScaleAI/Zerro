@@ -24,6 +24,13 @@ final class PillViewModel {
     /// so that hide → show transitions don't replay a stale morph (the
     /// controller decides whether to animate based on prior visibility).
     var pillState: PillState = .recording(elapsed: "0:00", totalDisplay: "3:00")
+
+    /// Monotonically bumped by `PillWindowController.flashBusy()`. The
+    /// host view observes changes and runs a brief scale-down-and-back
+    /// animation in response — visible "your key registered but the app
+    /// is busy" feedback for ⌘⇧R presses during .processing, which the
+    /// hotkey handler would otherwise silently drop.
+    var flashTrigger: Int = 0
 }
 
 @MainActor
@@ -104,6 +111,17 @@ final class PillWindowController {
         // recompute it against the current (transparent) backing so the
         // shadow's bounding box can't fill with a non-clear color.
         window?.invalidateShadow()
+    }
+
+    /// Visible nudge for ⌘⇧R presses that the hotkey handler intentionally
+    /// drops (e.g. during .processing — the pill's Cancel is the right
+    /// affordance there, not a second recording). Bumps a trigger on the
+    /// view-model that the SwiftUI host watches with `.onChange`,
+    /// animating a brief scale-down-and-back. No new chrome, no copy —
+    /// just enough motion that the user reads the press as registered.
+    func flashBusy() {
+        guard window?.isVisible == true else { return }
+        viewModel.flashTrigger &+= 1
     }
 
     // MARK: - Window setup
@@ -199,6 +217,11 @@ private struct PillHostView: View {
     let viewModel: PillViewModel
     let appState: AppState
 
+    /// Driven by viewModel.flashTrigger — when the trigger bumps, the
+    /// scale animates 1.0 → 0.96 → 1.0 over ~180ms so a ⌘⇧R press during
+    /// processing reads as registered-but-busy instead of silently dropped.
+    @State private var flashScale: CGFloat = 1.0
+
     var body: some View {
         PillView(
             state: viewModel.pillState,
@@ -223,10 +246,27 @@ private struct PillHostView: View {
             },
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
+            onRetryError: { appState.retryFailedPrompt() },
             onDismissResult: { appState.resetToIdle() },
             generatedPrompt: appState.generatedPrompt,
             resultHadNoNarration: appState.resultHadNoNarration,
             audioLevels: appState.audioLevels
         )
+        .scaleEffect(flashScale)
+        .onChange(of: viewModel.flashTrigger) { _, _ in
+            // Two-step so the property ends back at 1.0 — `repeatCount(1,
+            // autoreverses: true)` returns the visual to start but
+            // leaves the property at the inner value, which would block
+            // the next flash from animating.
+            Task { @MainActor in
+                withAnimation(.easeOut(duration: 0.08)) {
+                    flashScale = 0.96
+                }
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation(.easeIn(duration: 0.10)) {
+                    flashScale = 1.0
+                }
+            }
+        }
     }
 }

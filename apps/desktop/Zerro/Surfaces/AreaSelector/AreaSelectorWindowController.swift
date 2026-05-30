@@ -44,6 +44,7 @@ final class AreaSelectorWindowController {
     private var preferences: PreferencesStore?
     private var mouseMonitor: Any?
     private var keyMonitor: Any?
+    private var screenChangeObserver: NSObjectProtocol?
 
     /// Builds and shows the overlay on the screen containing the
     /// cursor. `onConfirm` fires when the user accepts a selection
@@ -104,6 +105,45 @@ final class AreaSelectorWindowController {
         win.makeKey()
 
         installEventMonitors(for: win, state: state)
+        installScreenChangeObserver()
+    }
+
+    /// Phase 10: catch the case where the overlay is presented on an
+    /// external display and that display is unplugged while the overlay
+    /// is open. Without this, the window is stranded — pinned to a
+    /// screen that's no longer in `NSScreen.screens` — and the user has
+    /// no visible affordance to recover from. On the notification, if
+    /// our window's screen is gone, dismiss via the cancel path so
+    /// AppState returns to .idle and the next hotkey press re-presents
+    /// on the (now-only) remaining display.
+    private func installScreenChangeObserver() {
+        guard screenChangeObserver == nil else { return }
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleScreenParametersChanged()
+            }
+        }
+    }
+
+    private func handleScreenParametersChanged() {
+        guard let window, let screen = window.screen else {
+            // No screen at all means the display the window was on has
+            // detached. Route through state.cancel so the onCancel
+            // callback fires (AppState's no-op onCancel keeps us at
+            // .idle, which is the correct landing here).
+            state?.cancel()
+            return
+        }
+        // The window's screen object can survive the underlying display
+        // disappearing for a tick; if it isn't in the live list, treat
+        // it as gone.
+        if !NSScreen.screens.contains(where: { $0 === screen }) {
+            state?.cancel()
+        }
     }
 
     /// Tears down the overlay window, releases the state model, and
@@ -111,8 +151,12 @@ final class AreaSelectorWindowController {
     func dismiss() {
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
+        }
         mouseMonitor = nil
         keyMonitor = nil
+        screenChangeObserver = nil
 
         window?.orderOut(nil)
         window = nil

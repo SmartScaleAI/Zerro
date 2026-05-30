@@ -35,7 +35,7 @@ extension AppState {
             return isResultExpanded ? .resultExpanded : .resultCompact
 
         case .failed(let reason):
-            return .error(message: reason.userMessage)
+            return .error(message: reason.userMessage, retryable: canRetryFailure)
         }
     }
 }
