@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Inter } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
+import {
+  OrganizationJsonLd,
+  WebSiteJsonLd,
+} from "@/components/structured-data";
 import "./globals.css";
 
 const inter = Inter({
@@ -12,11 +17,39 @@ const inter = Inter({
 const sansFont = "var(--font-inter), ui-sans-serif, system-ui, sans-serif";
 
 export const metadata: Metadata = {
-  title: "Zerro — Give your agent eyes and ears",
+  title: {
+    default: "Zerro — Give your agent eyes and ears",
+    template: "%s — Zerro",
+  },
   description:
     "Record your screen, dictate what you want, and Zerro hands you a structured prompt — ready to paste into your AI agent. Like voice dictation for your codebase. Record it. Paste it. Zerro in between.",
   applicationName: "Zerro",
   metadataBase: new URL("https://getzerro.app"),
+  alternates: {
+    canonical: "/",
+  },
+  keywords: [
+    "voice dictation for coding",
+    "AI prompt generator",
+    "macOS menu bar app",
+    "Cursor prompt",
+    "Windsurf prompt",
+    "screen recording to prompt",
+    "AI coding agent",
+  ],
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  // Paste the Google Search Console verification token here once available:
+  // verification: { google: "your-token" },
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
@@ -25,7 +58,6 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
-  manifest: "/site.webmanifest",
   openGraph: {
     title: "Zerro — Give your agent eyes and ears",
     description:
@@ -53,6 +85,8 @@ export default function RootLayout({
         className={`${inter.variable} bg-background font-light w-full text-foreground antialiased`}
         style={{ fontFamily: sansFont }}
       >
+        <OrganizationJsonLd />
+        <WebSiteJsonLd />
         <div
           className={`${inter.variable} min-h-screen w-full bg-background font-light text-foreground`}
           style={{ fontFamily: sansFont }}
@@ -66,6 +100,7 @@ export default function RootLayout({
             {children}
           </ThemeProvider>
         </div>
+        <Analytics />
       </body>
     </html>
   );

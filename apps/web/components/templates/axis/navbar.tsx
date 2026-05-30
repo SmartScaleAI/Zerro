@@ -121,6 +121,8 @@ const Navbar = () => {
               size="icon"
               className="rounded-full"
               onClick={() => setIsOpen(!isOpen)}
+              aria-label={isOpen ? "Close menu" : "Open menu"}
+              aria-expanded={isOpen}
             >
               <AnimatePresence mode="wait" initial={false}>
                 {isOpen ? (

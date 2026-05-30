@@ -145,5 +145,8 @@
   }
   html {
     @apply font-sans;
+    /* Reserve the scrollbar gutter so content width stays stable when page
+       height changes (e.g. expanding an FAQ accordion). */
+    scrollbar-gutter: stable;
   }
 }

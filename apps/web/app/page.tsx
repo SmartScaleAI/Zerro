@@ -1,5 +1,4 @@
-"use client";
-
+import type { Metadata } from "next";
 import Navbar from "@/components/templates/axis/navbar";
 import Hero from "@/components/templates/axis/hero";
 import Feature from "@/components/templates/axis/feature";
@@ -9,11 +8,46 @@ import NowTalking from "@/components/templates/axis/now-talking";
 import Pricing from "@/components/templates/axis/pricing";
 import FinalCTA from "@/components/templates/axis/final-cta";
 import Footer from "@/components/templates/axis/footer";
+import WhatIsZerro from "@/components/templates/axis/what-is-zerro";
+import Comparison from "@/components/templates/axis/comparison";
+import Faq from "@/components/templates/axis/faq";
 import { GradientField } from "@/components/ui/gradient-field";
+import {
+  SoftwareApplicationJsonLd,
+  FaqJsonLd,
+} from "@/components/structured-data";
+import { faqEntries } from "@/components/templates/axis/faq-data";
+
+export const metadata: Metadata = {
+  // Absolute so the homepage title is fully controlled and lead-with-product,
+  // rather than relying on the root template suffix.
+  title: {
+    absolute: "Zerro — Voice dictation for your AI coding agent",
+  },
+  description:
+    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get a structured Markdown prompt ready to paste into Cursor, Windsurf, or v0. Local-first, bring your own keys.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "Zerro — Voice dictation for your AI coding agent",
+    description:
+      "Record your screen, dictate what you want, and Zerro hands you a structured prompt for your AI agent. Native macOS, local-first, bring your own keys.",
+    url: "https://getzerro.app",
+    siteName: "Zerro",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Zerro — Voice dictation for your AI coding agent",
+    description:
+      "Record your screen, dictate what you want, and get a structured prompt for your AI agent. Native macOS, local-first, BYOK.",
+  },
+};
 
 const Page = () => {
   return (
     <div className="relative mx-auto w-full overflow-hidden">
+      <SoftwareApplicationJsonLd />
+      <FaqJsonLd entries={faqEntries} />
       <Navbar />
 
       {/* Ambient hero gradient field — multi-color corners, constrained to the hero area */}
@@ -39,11 +73,14 @@ const Page = () => {
 
       <main className="relative flex flex-col gap-24 lg:gap-40 mt-44 mb-14 lg:mt-52 lg:mb-32 mx-auto w-full">
         <Hero />
+        <WhatIsZerro />
         <Feature />
         <ToolFeature />
         <BuiltRight />
+        <Comparison />
         <NowTalking />
         <Pricing />
+        <Faq />
         <FinalCTA />
         <Footer />
       </main>
