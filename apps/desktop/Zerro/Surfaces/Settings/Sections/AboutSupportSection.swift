@@ -26,6 +26,8 @@ struct AboutSupportSection: View {
             SettingsSection("About & Support") {
                 VersionRow()
                 SettingsRowDivider()
+                CheckForUpdatesRow()
+                SettingsRowDivider()
                 CopyDiagnosticInfoRow()
                 SettingsRowDivider()
                 SendFeedbackRow()
@@ -90,6 +92,63 @@ private struct CopyDiagnosticInfoRow: View {
         Task {
             try? await Task.sleep(nanoseconds: 1_400_000_000)
             await MainActor.run { didCopy = false }
+        }
+    }
+}
+
+private struct CheckForUpdatesRow: View {
+    private enum CheckState: Equatable {
+        case idle
+        case checking
+        case upToDate
+        case updateAvailable
+    }
+
+    @State private var state: CheckState = .idle
+
+    var body: some View {
+        SettingsRow(
+            label: "Check for Updates",
+            description: "See if a newer version of Zerro is available."
+        ) {
+            Button(action: check) {
+                HStack(spacing: 6) {
+                    switch state {
+                    case .idle:
+                        Text("Check")
+                    case .checking:
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 10, height: 10)
+                        Text("Checking…")
+                    case .upToDate:
+                        Image(systemName: "checkmark")
+                        Text("Up to date")
+                    case .updateAvailable:
+                        Image(systemName: "arrow.down.circle")
+                        Text("Update available")
+                    }
+                }
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
+            .disabled(state == .checking)
+        }
+    }
+
+    private func check() {
+        state = .checking
+        Task {
+            // DEFERRED Phase 14: replace the simulated delay + fixed
+            // .upToDate verdict with Sparkle's real update check. The
+            // .updateAvailable branch above is already wired so Sparkle
+            // just needs to set the resulting state.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            await MainActor.run { state = .upToDate }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            await MainActor.run {
+                if state == .upToDate { state = .idle }
+            }
         }
     }
 }
