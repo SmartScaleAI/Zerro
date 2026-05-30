@@ -234,9 +234,15 @@ struct AccessibilityStepView: View {
 }
 
 // MARK: - API Key validation state
+//
+// Phase 11 added `.validating` as a transient between user-initiated
+// Verify and the network result. The dev-pin path intentionally exposes
+// only the resting states (untouched/valid/invalid) — pinning a transient
+// would just leave the UI permanently stuck on a spinner.
 
 enum APIKeyValidationState: Equatable {
     case untouched
+    case validating
     case valid
     case invalid
 }
@@ -310,9 +316,13 @@ struct APIKeyStepView: View {
                     // Editing a previously-validated key demotes the
                     // state back to untouched so the user has to
                     // re-verify before continuing. Skipped while a
-                    // dev pin is forcing the rendered state.
+                    // dev pin is forcing the rendered state, and while
+                    // a verify request is mid-flight (the result will
+                    // overwrite this momentarily anyway).
                     guard onboarding.pinnedAPIKeySubState == nil else { return }
-                    if liveValidationState != .untouched { liveValidationState = .untouched }
+                    if liveValidationState != .untouched && liveValidationState != .validating {
+                        liveValidationState = .untouched
+                    }
                 }
 
                 Button { isRevealed.toggle() } label: {
@@ -337,7 +347,7 @@ struct APIKeyStepView: View {
             )
 
             if effectiveState == .invalid {
-                Text("Doesn\u{2019}t look right \u{2014} keys start with \u{201C}sk-\u{201D}.")
+                Text("OpenAI rejected this key \u{2014} double-check it and try again.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfRecordingRed)
             } else if effectiveState == .valid {
@@ -357,6 +367,8 @@ struct APIKeyStepView: View {
         switch effectiveState {
         case .untouched, .invalid:
             OnboardingPrimaryButton("Verify", isEnabled: !trimmedKey.isEmpty) { verify() }
+        case .validating:
+            OnboardingPrimaryButton("Verifying\u{2026}", isEnabled: false) { }
         case .valid:
             OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
         }
@@ -367,6 +379,10 @@ struct APIKeyStepView: View {
         switch effectiveState {
         case .untouched:
             EmptyView()
+        case .validating:
+            ProgressView()
+                .controlSize(.small)
+                .progressViewStyle(.circular)
         case .valid:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 16))
@@ -423,38 +439,52 @@ struct APIKeyStepView: View {
     }
 
     private func verify() {
-        // DEFERRED: replace synchronous prefix check with real provider
-        // validation (async network call). When real validation lands,
-        // this introduces a loading state and the user learns the
-        // genuine async rhythm rather than a fake spinner.
+        // Phase 11: real provider validation via OpenAIClient.validateKey
+        // (cheap authenticated GET /v1/models). The key is written to
+        // Keychain ONLY on `.valid` — an invalid or inconclusive result
+        // leaves whatever was previously stored in place, so a working
+        // key isn't overwritten by a typo'd one. Empty-prefix check is
+        // gone: the validator already treats empty as invalidKey, and a
+        // wrong-but-sk-prefixed key would have slipped past the old
+        // check anyway.
         let trimmed = trimmedKey
-        if isValidPrefix(trimmed) {
-            keychain.write(trimmed)
-            liveValidationState = .valid
-        } else {
-            liveValidationState = .invalid
+        liveValidationState = .validating
+        Task { @MainActor in
+            let result = await OpenAIClient.validateKey(trimmed)
+            // Bail if the user kept typing while the request was in
+            // flight — the .onChange handler already moved us back to
+            // .untouched and we'd otherwise stomp it.
+            guard liveValidationState == .validating else { return }
+            switch result {
+            case .valid:
+                keychain.write(trimmed)
+                liveValidationState = .valid
+            case .invalidKey:
+                liveValidationState = .invalid
+            case .inconclusive:
+                // Couldn't reach OpenAI — don't claim invalid. Drop
+                // back to untouched so the user can retry; the message
+                // beneath the field below explains why.
+                liveValidationState = .untouched
+            }
         }
-    }
-
-    private func isValidPrefix(_ key: String) -> Bool {
-        // Both OpenAI (`sk-...`) and Anthropic (`sk-ant-...`) keys start
-        // with `sk-`. Loose check by design — real validation is
-        // deferred to actual provider pings in a later phase.
-        !key.isEmpty && key.hasPrefix("sk-")
     }
 
     // MARK: - Field styling
 
     private var borderColor: Color {
         switch effectiveState {
-        case .untouched: return Color.white.opacity(0.10)
-        case .valid:     return Color.vfSuccessGreen.opacity(0.7)
-        case .invalid:   return Color.vfRecordingRed.opacity(0.8)
+        case .untouched, .validating: return Color.white.opacity(0.10)
+        case .valid:                  return Color.vfSuccessGreen.opacity(0.7)
+        case .invalid:                return Color.vfRecordingRed.opacity(0.8)
         }
     }
 
     private var borderWidth: CGFloat {
-        effectiveState == .untouched ? 1 : 1.5
+        switch effectiveState {
+        case .untouched, .validating: return 1
+        case .valid, .invalid:        return 1.5
+        }
     }
 }
 

@@ -111,6 +111,57 @@ enum OpenAIClient {
         return TimeInterval(raw.trimmingCharacters(in: .whitespaces))
     }
 
+    // MARK: - Key validation
+    //
+    // Phase 11: lightweight validator used by Settings (revalidate on
+    // change) and by onboarding's API key step (replacing the old prefix-
+    // only sanity check). Hits GET /v1/models because it's the cheapest
+    // authenticated endpoint OpenAI exposes — a 200 means the key works,
+    // a 401 means it doesn't, anything else is "couldn't tell" and is
+    // intentionally NOT surfaced as invalid (we don't want a transient
+    // hiccup to nuke a working key in the UI).
+
+    enum KeyValidationResult: Equatable {
+        case valid
+        case invalidKey
+        /// Validation couldn't complete because of a network/server hiccup.
+        /// The UI keeps the previous valid/invalid disposition rather than
+        /// punishing the user for a transient issue.
+        case inconclusive
+    }
+
+    /// Validates `apiKey` against OpenAI by issuing a cheap authenticated
+    /// GET. Trims whitespace; an empty key returns `.invalidKey` without
+    /// hitting the network. Throws nothing — the result enum already
+    /// carries every outcome the caller cares about.
+    static func validateKey(_ apiKey: String) async -> KeyValidationResult {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .invalidKey }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        authenticate(&request, apiKey: trimmed)
+
+        let response: HTTPURLResponse
+        do {
+            let (_, raw) = try await session.data(for: request)
+            guard let http = raw as? HTTPURLResponse else { return .inconclusive }
+            response = http
+        } catch {
+            return .inconclusive
+        }
+
+        switch response.statusCode {
+        case 200...299:
+            return .valid
+        case 401, 403:
+            return .invalidKey
+        default:
+            return .inconclusive
+        }
+    }
+
     // MARK: - Multipart/form-data
 
     /// Builds a `multipart/form-data` body from an array of text +

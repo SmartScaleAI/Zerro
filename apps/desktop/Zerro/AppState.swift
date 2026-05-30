@@ -12,8 +12,7 @@
 //
 //  Sections:
 //    1. RecordingState  — the discrete UI states the app can be in.
-//    2. RecentPrompt    — model for an entry in the recent-prompts list.
-//    3. AppState        — @Observable @MainActor class that holds live
+//    2. AppState        — @Observable @MainActor class that holds live
 //                          state, owns the per-session RecordingSession,
 //                          and exposes the transitions (start/stop/
 //                          cancel/reset).
@@ -157,14 +156,6 @@ public enum RecordingFailureReason: Equatable {
     }
 }
 
-// MARK: - RecentPrompt
-
-struct RecentPrompt: Identifiable {
-    var id: UUID = UUID()
-    var title: String
-    var timestamp: Date
-}
-
 // MARK: - AppState
 
 @MainActor
@@ -240,25 +231,14 @@ final class AppState {
     var resultHadNoNarration: Bool = false
 
     // MARK: Recents
+    //
+    // Phase 11: history moved off AppState onto a dedicated
+    // RecentPromptStore. AppState reaches into it via `recentPromptStore`
+    // (wired by ZerroApp.init) on a successful prompt-generation run; the
+    // menu-bar surfaces + Settings History tab read the store directly
+    // from the SwiftUI environment.
 
-    var recentPrompts: [RecentPrompt] = [
-        RecentPrompt(
-            title: "Refactor login flow to use OAuth",
-            timestamp: Date().addingTimeInterval(-60 * 60 * 2)
-        ),
-        RecentPrompt(
-            title: "Add dark mode toggle to settings",
-            timestamp: Date().addingTimeInterval(-60 * 60 * 26)
-        ),
-        RecentPrompt(
-            title: "Fix race condition in upload queue",
-            timestamp: Date().addingTimeInterval(-60 * 60 * 49)
-        ),
-        RecentPrompt(
-            title: "Migrate analytics events to new schema",
-            timestamp: Date().addingTimeInterval(-60 * 60 * 72)
-        ),
-    ]
+    @ObservationIgnored weak var recentPromptStore: RecentPromptStore?
 
     // MARK: Internal
 
@@ -761,6 +741,11 @@ final class AppState {
                 guard self.state == .processing else { return }
                 self.generatedPrompt = result.prompt
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
+                // Phase 11: persist successful prompts to the history
+                // store so the menu-bar Recent Prompts submenu, Paste-
+                // last row, and Settings History tab can surface them.
+                // Wired via a weak ref on AppState set by ZerroApp.init.
+                self.recentPromptStore?.add(prompt: result.prompt)
                 self.state = .done
             } catch {
                 NSLog("[PromptGen] failed: %@", String(describing: error))

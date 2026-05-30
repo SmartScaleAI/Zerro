@@ -13,10 +13,20 @@ extension Color {
     // Text/icons sitting on top of a `vfBrandAccent` fill.
     static let vfOnBrand = Color(red: 0.07, green: 0.07, blue: 0.09)
 
-    // Status
-    static let vfRecordingRed = Color(red: 1.00, green: 0.27, blue: 0.27)
+    // Status — Apple HIG palette per the Phase 2.5 design decision
+    // (#FF453A / #FF9F0A / #30D158). Values had drifted slightly before
+    // Phase 11 R2; re-pinned here so the Settings destructive buttons +
+    // Verified pill + Launch-at-Login toggle land on the exact HIG hex.
+    static let vfRecordingRed = Color(red: 1.00, green: 0.271, blue: 0.227) // #FF453A
     static let vfWarningAmber = Color(red: 1.00, green: 0.624, blue: 0.039) // #FF9F0A
-    static let vfSuccessGreen = Color(red: 0.30, green: 0.78, blue: 0.40)
+    static let vfSuccessGreen = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
+
+    /// Semantic alias for destructive UI (Clear History, Reset to
+    /// Defaults, the Delete button in Recent Prompts). Same hex as
+    /// `vfRecordingRed`; the named alias keeps the button styles from
+    /// reading as if they're coupled to "the recording-pill red" when
+    /// the meaning is "destructive action."
+    static let vfDestructive = vfRecordingRed
 
     // Surfaces (dark theme)
     static let vfPanelBackground = Color(red: 0.10, green: 0.10, blue: 0.12)

@@ -17,6 +17,8 @@ struct ZerroApp: App {
     @State private var preferences: PreferencesStore
     @State private var permissions: PermissionsManager
     @State private var onboarding: OnboardingState
+    @State private var recentPrompts: RecentPromptStore
+    @State private var launchAtLogin: LaunchAtLoginController
     @State private var pillController: PillWindowController
     @State private var recordingFocusController: RecordingFocusWindowController
     @State private var areaSelectorController: AreaSelectorWindowController
@@ -40,6 +42,8 @@ struct ZerroApp: App {
         let prefs = PreferencesStore()
         let perms = PermissionsManager()
         let onb = OnboardingState()
+        let history = RecentPromptStore()
+        let launch = LaunchAtLoginController()
         let selectorCtrl = AreaSelectorWindowController()
         let pillCtrl = PillWindowController(appState: state)
         // Phase 10: let AppState start/stop TCC monitoring around an
@@ -47,10 +51,17 @@ struct ZerroApp: App {
         // the dedicated failure pill within ~1s. Weak ref — both objects
         // live in @State for the app's lifetime.
         state.permissions = perms
+        // Phase 11: same lifetime contract, same weak-ref pattern. The
+        // AppState pipeline writes to the store after a successful prompt
+        // generation; the menu-bar surfaces + Settings tab read from it
+        // via the SwiftUI environment.
+        state.recentPromptStore = history
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
+        _recentPrompts = State(initialValue: history)
+        _launchAtLogin = State(initialValue: launch)
         _pillController = State(initialValue: pillCtrl)
         _recordingFocusController = State(initialValue: RecordingFocusWindowController(appState: state))
         _areaSelectorController = State(initialValue: selectorCtrl)
@@ -98,6 +109,7 @@ struct ZerroApp: App {
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
+                .environment(recentPrompts)
         } label: {
             // OnboardingOpenerRegistrar is a zero-size sibling whose
             // only job is to capture SwiftUI's `openWindow` environment
@@ -116,10 +128,50 @@ struct ZerroApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
+        // Phase 11 (revision 2): replaced the stock `Settings { ... }`
+        // scene with a custom Window so the dark surface can bleed up
+        // under the floating traffic-light buttons (Wispr Flow Hub
+        // style). The `.hiddenTitleBar` style + the AppKit-level
+        // properties applied by `applySettingsWindowChrome()` together
+        // give us a chromeless surface with the traffic lights still
+        // present for close/minimize/zoom.
+        //
+        // ⌘, binding: registered via `.appSettings` CommandGroup
+        // below so the standard Settings keyboard shortcut continues
+        // to work, and the menu-bar Preferences row routes through
+        // openWindow(id:) too.
+        //
+        // The Recent Prompts window is intentionally NOT a separate
+        // scene anymore — clicking that row inside Settings now swaps
+        // the route in-window (see SettingsView's SettingsRoute enum).
+        Window("Zerro Settings", id: SettingsScene.windowID) {
             SettingsView()
                 .environment(preferences)
                 .environment(permissions)
+                .environment(onboarding)
+                .environment(recentPrompts)
+                .environment(launchAtLogin)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        // Round 5: explicit initial size. `idealWidth/idealHeight` on
+        // SettingsView's `.frame()` isn't a reliable signal for
+        // window-open sizing under `.hiddenTitleBar` +
+        // `.contentSize` resizability — macOS will fall back to a
+        // smaller default. `.defaultSize` is the SwiftUI-blessed
+        // initial-size hint; the WindowConfigurator additionally
+        // forces `setContentSize` every time the window mounts so a
+        // user mid-session resize doesn't persist into the next open.
+        .defaultSize(
+            width: SettingsScene.preferredWidth,
+            height: SettingsScene.preferredHeight
+        )
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                SettingsMenuItem()
+            }
         }
 
         // Single-instance onboarding window. `.defaultLaunchBehavior` is
@@ -315,5 +367,31 @@ private struct OnboardingOpenerRegistrar: View {
                     openWindow(id: OnboardingScene.windowID)
                 }
             }
+    }
+}
+
+// MARK: - SettingsMenuItem
+//
+// Phase 11 (revision 2): replaces the stock Settings menu item that the
+// SwiftUI `Settings { ... }` scene installs for free. We need this
+// custom item because the Settings scene was replaced with a regular
+// Window — `.appSettings` is the menu command group keyed to ⌘, , and
+// CommandGroup(replacing:.appSettings) keeps that shortcut alive while
+// routing the click to openWindow(id:) for our custom Window.
+//
+// In an LSUIElement (accessory) app the main menu isn't visible by
+// default, but the keyboard shortcut still registers when the app is
+// foreground. The menu-bar dropdown's "Preferences…" row is the
+// primary entry point; ⌘, works once a Zerro window has focus.
+
+private struct SettingsMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings...") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: SettingsScene.windowID)
+        }
+        .keyboardShortcut(",", modifiers: .command)
     }
 }

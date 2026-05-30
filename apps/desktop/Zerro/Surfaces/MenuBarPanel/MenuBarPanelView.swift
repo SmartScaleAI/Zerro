@@ -30,11 +30,11 @@ struct MenuBarPanelView: View {
     @Environment(PermissionsManager.self) private var permissions
     #endif
 
-    // `openSettings` is the modern (macOS 14+) idiomatic way to surface the
-    // Settings scene. We're on macOS 26+, so no AppKit selector fallback is
-    // shipped. NSApp.activate is paired with the call because LSUIElement
-    // apps don't always come forward on their own when a window opens.
-    @Environment(\.openSettings) private var openSettings
+    // Phase 11 (revision 2): the stock `Settings { ... }` scene was
+    // replaced with a custom Window (see ZerroApp.body), so this row
+    // routes through `openWindow(id:)` instead of `openSettings()`.
+    // NSApp.activate is paired with the call because LSUIElement apps
+    // don't always come forward on their own when a window opens.
 
     // `openWindow` is used by the DEBUG onboarding opener AND by the
     // production hotkey-gating path (registered into AppDelegate so the
@@ -72,7 +72,8 @@ struct MenuBarPanelView: View {
 
             MenuRow(label: "Preferences\u{2026}", trailing: .hotkey("\u{2318},")) {
                 NSApp.activate(ignoringOtherApps: true)
-                openSettings()
+                openWindow(id: SettingsScene.windowID)
+                MenuBarExtraDismiss.dismiss()
             }
             MenuRow(label: "Quit Zerro", trailing: .hotkey("\u{2318}Q")) {
                 NSApplication.shared.terminate(nil)
@@ -210,6 +211,41 @@ struct MenuBarPanelView: View {
     }
 }
 
+// MARK: - MenuBarExtraDismiss
+//
+// Programmatically hides the `MenuBarExtra(.window)` dropdown. The
+// `.window` style hosts content in a persistent NSPanel that does NOT
+// auto-dismiss when focus moves to another window (unlike the legacy
+// NSMenu-style dropdown), so any row that navigates elsewhere — e.g.
+// Preferences opening the Settings window — has to close the dropdown
+// itself, otherwise it lingers on top of whatever just opened.
+//
+// Implementation notes:
+// 1) We MUST match only the MenuBarExtra panel, NOT any window whose
+//    class name merely contains "NSStatusBar" — the status-item BUTTON
+//    is hosted in an NSStatusBarWindow too, and ordering THAT out
+//    removes the menu bar icon itself (so clicking it no longer
+//    shows the dropdown). Earlier iteration of this helper made
+//    exactly that mistake.
+// 2) We use `orderOut(_:)` rather than `close()`. `close()` can release
+//    the panel and prevent SwiftUI from re-showing it; `orderOut(_:)`
+//    just hides the panel so the next status-item click re-shows it
+//    normally.
+// 3) Match is intentionally narrow ("MenuBarExtra" substring). If a
+//    future macOS renames the panel class, the failure mode is "the
+//    dropdown stays open" — never "the icon disappears."
+
+@MainActor
+enum MenuBarExtraDismiss {
+    static func dismiss() {
+        for window in NSApp.windows {
+            let className = String(describing: type(of: window))
+            guard className.contains("MenuBarExtra") else { continue }
+            window.orderOut(nil)
+        }
+    }
+}
+
 // MARK: - MenuRow
 
 private enum RowTrailing {
@@ -288,30 +324,52 @@ private struct MenuRow: View {
 //
 // The one row that breaks the uniform tight row height — main label
 // plus a smaller dimmer secondary preview line below. Hotkey hint
-// `⌃⌘V` is right-aligned on the main label row only.
+// `⌃⌘V` is right-aligned on the main label row only. Phase 11: reads
+// the most-recent entry from the RecentPromptStore in the environment;
+// clicking copies that prompt's full body to the clipboard. When the
+// history is empty the row renders disabled with a "No prompts yet"
+// preview line.
 
 private struct PasteLastPromptRow: View {
+    @Environment(RecentPromptStore.self) private var recentPrompts
     @State private var isHovered = false
 
+    private var entry: RecentPrompt? { recentPrompts.mostRecent }
+
+    private var isDisabled: Bool { entry == nil }
+    private var isActive: Bool { isHovered && !isDisabled }
+
+    private var primaryColor: Color {
+        isDisabled ? Color.vfTextTertiary : Color.vfTextPrimary
+    }
+
+    private var secondaryColor: Color {
+        if isDisabled { return Color.vfTextTertiary.opacity(0.7) }
+        return isActive ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary
+    }
+
+    private var hotkeyColor: Color {
+        if isDisabled { return Color.vfTextTertiary.opacity(0.6) }
+        return isActive ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary
+    }
+
     var body: some View {
-        Button {
-            // Phase 2.5: no behavior yet.
-        } label: {
+        Button(action: copyToClipboard) {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 0) {
                     Text("Paste last prompt")
                         .font(.system(size: 13))
-                        .foregroundStyle(Color.vfTextPrimary)
+                        .foregroundStyle(primaryColor)
                         .fixedSize()
                     Spacer(minLength: VFSpacing.lg)
                     Text("\u{2303}\u{2318}V")
                         .font(.system(size: 12))
-                        .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary)
+                        .foregroundStyle(hotkeyColor)
                         .fixedSize()
                 }
-                Text("Polish the Pulse login form\u{2026}")
+                Text(entry?.title ?? "No prompts yet")
                     .font(.system(size: 11))
-                    .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary)
+                    .foregroundStyle(secondaryColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -320,35 +378,59 @@ private struct PasteLastPromptRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+                    .fill(isActive ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
             .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .onHover { isHovered = $0 }
+    }
+
+    private func copyToClipboard() {
+        guard let entry else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(entry.prompt, forType: .string)
     }
 }
 
-// MARK: - Recent Prompts submenu (preview-only)
+// MARK: - Recent Prompts submenu
 //
-// In production the submenu would be its own floating panel with native
-// NSMenu interaction. For Phase 2.5 this struct is composed into a
-// side-by-side `#Preview` to spec the visual shape.
+// Real submenu wiring landed in Phase 11. The view reads the
+// RecentPromptStore from the environment and renders the most recent
+// entries (capped at `displayCap` to keep the floating panel scannable —
+// older entries are still available in the Settings History tab). Each
+// row copies the underlying prompt body to the clipboard on click.
+//
+// Note on the `MenuBarExtra(.window)` constraint: `MenuBarExtra` with
+// `.window` style hosts a SwiftUI panel, not a real NSMenu, so genuine
+// "open a sibling NSMenu on hover" isn't available. This submenu still
+// renders inline-via-#Preview in design previews; in production the
+// row taps copy directly to the clipboard, which is the actual user
+// goal anyway. A floating-panel implementation can come later if the
+// hover-open shape becomes important.
 
 struct RecentPromptsSubmenu: View {
-    private let items: [String] = [
-        "Polish the Pulse login form\u{2026}",
-        "Debug the React hydration error\u{2026}",
-        "Summarize Tuesday\u{2019}s standup",
-        "Redesign the onboarding flow\u{2026}",
-        "Fix the nav overflow bug\u{2026}"
-    ]
+    @Environment(RecentPromptStore.self) private var recentPrompts
+
+    /// Cap on items rendered in the submenu. The Settings History tab
+    /// is the full-list surface; this is the quick-access affordance.
+    private static let displayCap = 8
+
+    private var items: [RecentPrompt] {
+        Array(recentPrompts.prompts.prefix(Self.displayCap))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(items, id: \.self) { item in
-                RecentPromptSubmenuRow(label: item)
+            if items.isEmpty {
+                RecentPromptsEmptyState()
+            } else {
+                ForEach(items) { entry in
+                    RecentPromptSubmenuRow(entry: entry)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -356,17 +438,26 @@ struct RecentPromptsSubmenu: View {
     }
 }
 
+private struct RecentPromptsEmptyState: View {
+    var body: some View {
+        Text("No prompts yet")
+            .font(.system(size: 12))
+            .foregroundStyle(Color.vfTextTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+    }
+}
+
 private struct RecentPromptSubmenuRow: View {
-    let label: String
+    let entry: RecentPrompt
 
     @State private var isHovered = false
 
     var body: some View {
-        Button {
-            // Phase 2.5: no behavior yet.
-        } label: {
+        Button(action: copy) {
             HStack(spacing: 0) {
-                Text(label)
+                Text(entry.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.vfTextPrimary)
                     .lineLimit(1)
@@ -392,6 +483,12 @@ private struct RecentPromptSubmenuRow: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
     }
+
+    private func copy() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(entry.prompt, forType: .string)
+    }
 }
 
 // MARK: - Previews
@@ -415,10 +512,27 @@ private struct MenuPanelChrome<Content: View>: View {
     }
 }
 
+/// Pre-seeded history used by the previews so the submenu/Paste-last
+/// row render with realistic data without writing to the user's actual
+/// Application Support directory.
+@MainActor
+private func previewRecentPromptStore() -> RecentPromptStore {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zerro-preview-history-\(UUID().uuidString).json")
+    let store = RecentPromptStore(fileURL: url)
+    store.add(prompt: "Polish the Pulse login form so the password field aligns with the submit button.")
+    store.add(prompt: "Debug the React hydration error firing on the dashboard route.")
+    store.add(prompt: "Summarize Tuesday\u{2019}s standup into three bullets.")
+    store.add(prompt: "Redesign the onboarding flow to land the user in the editor faster.")
+    store.add(prompt: "Fix the nav overflow bug at the 768px breakpoint.")
+    return store
+}
+
 #Preview("Dropdown") {
     MenuPanelChrome {
         MenuBarPanelView()
             .environment(AppState())
+            .environment(previewRecentPromptStore())
     }
     .padding(40)
     .background(Color.vfPanelBackground)
@@ -429,6 +543,7 @@ private struct MenuPanelChrome<Content: View>: View {
         MenuPanelChrome {
             MenuBarPanelView(highlightRecentPrompts: true)
                 .environment(AppState())
+                .environment(previewRecentPromptStore())
         }
 
         // Native NSMenu aligns the submenu's top with the selected
@@ -437,6 +552,7 @@ private struct MenuPanelChrome<Content: View>: View {
         // Paste last prompt) — vertical offset approximates that.
         MenuPanelChrome {
             RecentPromptsSubmenu()
+                .environment(previewRecentPromptStore())
         }
         .padding(.top, 130)
     }
