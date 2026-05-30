@@ -39,11 +39,7 @@ struct WelcomeStepView: View {
                 VStack(spacing: VFSpacing.sm) {
                     (
                         Text("Record your screen, narrate what you want, and get a ready-to-paste prompt for ")
-                        + Text("Cursor").fontWeight(.semibold).foregroundColor(.vfTextPrimary)
-                        + Text(", ")
-                        + Text("Windsurf").fontWeight(.semibold).foregroundColor(.vfTextPrimary)
-                        + Text(", or ")
-                        + Text("v0").fontWeight(.semibold).foregroundColor(.vfTextPrimary)
+                        + Text("your agent").fontWeight(.semibold).foregroundColor(.vfTextPrimary)
                         + Text(".")
                     )
                     .font(.system(size: 14))

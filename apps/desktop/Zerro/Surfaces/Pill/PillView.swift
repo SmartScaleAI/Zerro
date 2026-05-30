@@ -37,6 +37,11 @@ struct PillView: View {
     var onCopy: () -> Void = {}
     var onToggleExpand: () -> Void = {}
     var onDismissError: () -> Void = {}
+    /// Closes the result pill from either compact or expanded state. The
+    /// affordance is a small "x" badge tucked into the chrome's top-right
+    /// corner so users can dismiss after copying without having to wait
+    /// for the next hotkey press.
+    var onDismissResult: () -> Void = {}
 
     /// The generated structured prompt, displayed in the .resultExpanded
     /// body. Threaded from AppState.generatedPrompt via PillWindowController
@@ -154,7 +159,8 @@ struct PillView: View {
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
                 onCopy: onCopy,
-                onToggleExpand: onToggleExpand
+                onToggleExpand: onToggleExpand,
+                onDismiss: onDismissResult
             )
         case .resultExpanded:
             ResultPillContent(
@@ -162,7 +168,8 @@ struct PillView: View {
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
                 onCopy: onCopy,
-                onToggleExpand: onToggleExpand
+                onToggleExpand: onToggleExpand,
+                onDismiss: onDismissResult
             )
         case .error(let message):
             ErrorPillContent(message: message, onDismiss: onDismissError)
@@ -444,6 +451,10 @@ private struct ResultPillContent: View {
     let noNarration: Bool
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
+    /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
+    /// as a circular close badge after the Hide/View toggle in the header
+    /// strip, separated by a thin vertical hairline divider.
+    let onDismiss: () -> Void
 
     /// Transient "Copied" confirmation. Flips true on tap, reverts after
     /// `copyFeedbackDuration`. Local to this view — the clipboard write
@@ -453,6 +464,11 @@ private struct ResultPillContent: View {
     /// is fine: the feedback is a sub-2s flash, not durable state.
     @State private var didCopy = false
     @State private var copyResetTask: Task<Void, Never>?
+
+    /// Tracks hover on the dismiss button itself (not the whole pill)
+    /// so the circular dark-gray background fills in only when the
+    /// cursor is on the X. The divider + glyph stay visible at rest.
+    @State private var isHoveringDismiss = false
 
     /// How long the "Copied" confirmation stays up before reverting.
     private static let copyFeedbackDuration: Duration = .seconds(1.6)
@@ -521,10 +537,49 @@ private struct ResultPillContent: View {
             HStack(spacing: VFSpacing.md) {
                 copyButton
                 expandToggle
+                dismissDivider
+                dismissButton
             }
         }
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, 10)
+    }
+
+    /// Thin vertical hairline between the Hide/View toggle and the
+    /// close X — visually groups dismiss as a separate affordance from
+    /// expand/collapse. Always visible.
+    private var dismissDivider: some View {
+        Rectangle()
+            .fill(Color.vfHairline)
+            .frame(width: 1, height: 20)
+    }
+
+    /// Close X. The glyph is always visible; only the circular dark-gray
+    /// background fills in when the cursor is over the button itself, so
+    /// dismiss has a clear hover affordance without lighting up whenever
+    /// the user moves over the rest of the pill.
+    private var dismissButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .semibold))
+                // Match the Hide/View label color at rest so the X reads
+                // as a peer to the other header controls; bump to primary
+                // (white) on hover to mirror the circular background fade
+                // in and signal the button is active.
+                .foregroundStyle(isHoveringDismiss ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle()
+                        .fill(Color(red: 0.28, green: 0.28, blue: 0.30))
+                        .opacity(isHoveringDismiss ? 1 : 0)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHoveringDismiss = hovering
+        }
+        .animation(.easeInOut(duration: 0.15), value: isHoveringDismiss)
     }
 
     private var copyButton: some View {

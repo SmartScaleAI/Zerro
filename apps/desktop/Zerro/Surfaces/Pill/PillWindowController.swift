@@ -177,7 +177,7 @@ final class PillWindowController {
                     // grows downward — instead of snapping to the new frame and
                     // letting SwiftUI play its morph on top.
                     NSAnimationContext.runAnimationGroup { ctx in
-                        ctx.duration = 0.45
+                        ctx.duration = 0.20
                         ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                         ctx.allowsImplicitAnimation = true
                         window.animator().setFrame(targetFrame, display: true)
@@ -223,6 +223,7 @@ private struct PillHostView: View {
             },
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
+            onDismissResult: { appState.resetToIdle() },
             generatedPrompt: appState.generatedPrompt,
             resultHadNoNarration: appState.resultHadNoNarration
         )

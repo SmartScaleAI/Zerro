@@ -30,4 +30,9 @@ extension Color {
 
     // Borders/separators
     static let vfHairline = Color.white.opacity(0.08)
+
+    // Selection / hover fill used by the menu-bar dropdown rows. Fixed
+    // #1868BF — a muted blue that holds up over the panel's dark
+    // background without the saturation of full `systemBlue`.
+    static let vfMenuRowHover = Color(red: 0x18 / 255.0, green: 0x68 / 255.0, blue: 0xBF / 255.0)
 }

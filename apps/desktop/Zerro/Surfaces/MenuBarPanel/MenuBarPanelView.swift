@@ -206,12 +206,12 @@ private struct MenuRow: View {
 
     private var labelColor: Color {
         if isDisabled { return Color.vfTextTertiary }
-        return isSelected ? Color.vfOnBrand : Color.vfTextPrimary
+        return Color.vfTextPrimary
     }
 
     private var trailingColor: Color {
         if isDisabled { return Color.vfTextTertiary.opacity(0.6) }
-        return isSelected ? Color.vfOnBrand.opacity(0.7) : Color.vfTextTertiary
+        return isSelected ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary
     }
 
     var body: some View {
@@ -227,10 +227,14 @@ private struct MenuRow: View {
                 trailingView
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected ? Color.vfMenuRowHover : Color.clear)
+            )
             .contentShape(Rectangle())
-            .background(isSelected ? Color.vfBrandAccent : Color.clear)
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -272,25 +276,29 @@ private struct PasteLastPromptRow: View {
                 HStack(spacing: 0) {
                     Text("Paste last prompt")
                         .font(.system(size: 13))
-                        .foregroundStyle(isHovered ? Color.vfOnBrand : Color.vfTextPrimary)
+                        .foregroundStyle(Color.vfTextPrimary)
                         .fixedSize()
                     Spacer(minLength: VFSpacing.lg)
                     Text("\u{2303}\u{2318}V")
                         .font(.system(size: 12))
-                        .foregroundStyle(isHovered ? Color.vfOnBrand.opacity(0.7) : Color.vfTextTertiary)
+                        .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary)
                         .fixedSize()
                 }
                 Text("Polish the Pulse login form\u{2026}")
                     .font(.system(size: 11))
-                    .foregroundStyle(isHovered ? Color.vfOnBrand.opacity(0.75) : Color.vfTextSecondary)
+                    .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+            )
             .contentShape(Rectangle())
-            .background(isHovered ? Color.vfBrandAccent : Color.clear)
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -335,7 +343,7 @@ private struct RecentPromptSubmenuRow: View {
             HStack(spacing: 0) {
                 Text(label)
                     .font(.system(size: 13))
-                    .foregroundStyle(isHovered ? Color.vfOnBrand : Color.vfTextPrimary)
+                    .foregroundStyle(Color.vfTextPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -343,14 +351,18 @@ private struct RecentPromptSubmenuRow: View {
 
                 Text("Copy")
                     .font(.system(size: 12))
-                    .foregroundStyle(isHovered ? Color.vfOnBrand.opacity(0.7) : Color.vfTextTertiary)
+                    .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary)
                     .fixedSize()
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+            )
             .contentShape(Rectangle())
-            .background(isHovered ? Color.vfBrandAccent : Color.clear)
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }

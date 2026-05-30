@@ -48,9 +48,9 @@ extension PillState {
     /// shuffle.
     static func morphAnimation(from old: PillState?, to new: PillState?) -> Animation {
         if Self.isResult(old) || Self.isResult(new) {
-            return .spring(response: 0.45, dampingFraction: 0.80)
+            return .spring(response: 0.20, dampingFraction: 0.82)
         }
-        return .spring(response: 0.35, dampingFraction: 0.85)
+        return .spring(response: 0.16, dampingFraction: 0.85)
     }
 
     private static func isResult(_ state: PillState?) -> Bool {
