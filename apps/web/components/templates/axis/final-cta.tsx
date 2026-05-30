@@ -5,6 +5,7 @@ import { AnimatedBorder } from "@/components/ui/animated-border";
 import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
+import { DOWNLOAD_URL } from "@/lib/site-config";
 import { motion } from "motion/react";
 
 const FinalCTA = () => {
@@ -74,6 +75,8 @@ const FinalCTA = () => {
                         <Button
                             className="relative rounded-full gap-2 hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
                             size="lg"
+                            nativeButton={false}
+                            render={<a href={DOWNLOAD_URL} download />}
                         >
                             <AnimatedBorder />
                             <AppleIcon className="h-4 w-4" />

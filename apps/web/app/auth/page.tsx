@@ -7,28 +7,25 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { GradientField } from "@/components/ui/gradient-field";
 
 const Page = () => {
     return (
         <div className="relative flex min-h-screen h-full w-full flex-col items-center justify-center gap-6 p-4">
-            <Image
-                src="/images/templates/axis/auth-background.svg"
-                alt="Background"
-                fill
-                className="object-cover"
-                priority
-                sizes="100vw"
-            />
-            <div className="relative z-10 flex flex-col items-center">
+            <GradientField solid edgeFade="none" className="inset-0 z-0" />
+            <Link href="/" className="relative z-10 flex items-center">
                 <Image
-                    className="ml-2 h-12 w-20 invert"
-                    src="/logo/templates/axis/light-logo.svg"
-                    alt="Light Logo"
-                    width={100}
-                    height={100}
+                    src="/logo/zerro-mark.svg"
+                    alt="Zerro"
+                    width={36}
+                    height={36}
+                    className="-ml-1 h-9 w-9 text-foreground dark:invert"
                     priority
                 />
-            </div>
+                <span className="text-xl font-medium tracking-tight text-foreground">
+                    Zerro
+                </span>
+            </Link>
 
             <Card className="relative z-10 w-full max-w-105 border-0 bg-background dark:bg-background/80 shadow-xl backdrop-blur-sm rounded-4xl">
                 <CardContent className="px-8 pt-8 pb-8 max-w-sm mx-auto space-y-8">
@@ -131,7 +128,7 @@ const Page = () => {
                 </CardContent>
             </Card>
 
-            <p className="relative z-10 max-w-xs text-center text-xs text-white/80">
+            <p className="relative z-10 max-w-xs text-center text-xs text-muted-foreground">
                 By clicking continue, you agree to our{" "}
                 <Link
                     href="/terms"

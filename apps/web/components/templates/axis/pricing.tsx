@@ -5,6 +5,7 @@ import { AnimatedBorder } from "@/components/ui/animated-border";
 import { BorderTrail } from "@/components/ui/border-trail";
 import { Card } from "@/components/ui/card";
 import { GradientField } from "@/components/ui/gradient-field";
+import { DOWNLOAD_URL } from "@/lib/site-config";
 import { cn } from "@/lib/utils";
 import { Check, Bell } from "lucide-react";
 import { AppleIcon } from "@/components/ui/apple-icon";
@@ -34,6 +35,7 @@ const tiers: Tier[] = [
         badge: "Available now",
         badgeStyle: "primary",
         features: [
+            "7-day free trial — no card required",
             "All features and future updates",
             "Bring your own OpenAI + Gemini keys",
             "Keys stored in your macOS Keychain",
@@ -53,6 +55,7 @@ const tiers: Tier[] = [
         badge: "Coming soon",
         badgeStyle: "muted",
         features: [
+            "7-day free trial",
             "No API keys required",
             "Monthly recording credits included",
             "We manage all token usage",
@@ -200,6 +203,12 @@ const Pricing = () => {
                                     size="lg"
                                     variant={tier.cta.variant === "primary" ? "default" : "outline"}
                                     disabled={!tier.available}
+                                    {...(tier.available
+                                        ? {
+                                              nativeButton: false,
+                                              render: <a href={DOWNLOAD_URL} download />,
+                                          }
+                                        : {})}
                                 >
                                     {tier.available && <AnimatedBorder />}
                                     <Icon className="h-4 w-4" />

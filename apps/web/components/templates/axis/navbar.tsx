@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
 import { Menu, X } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
+import { DOWNLOAD_URL } from "@/lib/site-config"
 import {
   AnimatePresence,
   motion,
@@ -100,6 +101,8 @@ const Navbar = () => {
             <Button
               className="relative gap-2 rounded-full hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
               size="lg"
+              nativeButton={false}
+              render={<a href={DOWNLOAD_URL} download />}
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
@@ -111,6 +114,8 @@ const Navbar = () => {
             <Button
               className="relative gap-2 rounded-full hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
               size="default"
+              nativeButton={false}
+              render={<a href={DOWNLOAD_URL} download />}
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
