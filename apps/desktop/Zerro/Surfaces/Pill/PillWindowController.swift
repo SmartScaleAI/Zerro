@@ -89,14 +89,15 @@ final class PillWindowController {
             withAnimation(animation) {
                 viewModel.pillState = pillState
             }
+            positionAtTopCenter(animated: true)
         } else {
             // No morph when transitioning from hidden — otherwise the
             // pill animates from whatever it was last showing (often a
             // stale `.resultCompact`), which reads as a glitch.
             viewModel.pillState = pillState
+            positionAtTopCenter(animated: false)
         }
 
-        positionAtTopCenter()
         window?.orderFrontRegardless()
         // Belt-and-suspenders: if the window's shadow region was sized
         // to include corner padding, invalidating forces AppKit to
@@ -151,18 +152,39 @@ final class PillWindowController {
         window = win
     }
 
-    private func positionAtTopCenter() {
+    private func positionAtTopCenter(animated: Bool) {
         guard let window, let screen = NSScreen.main else { return }
-        // The hosting view is content-sized; let it tell us its current
-        // fitting size so the window grows/shrinks across morphs.
-        if let hosting = window.contentView as? NSHostingView<PillHostView> {
-            window.setContentSize(hosting.fittingSize)
-        }
-        let visible = screen.visibleFrame
-        let size = window.frame.size
-        let originX = visible.midX - size.width / 2
-        let originY = visible.maxY - 24 - size.height
-        window.setFrameOrigin(NSPoint(x: originX, y: originY))
+        guard let hosting = window.contentView as? NSHostingView<PillHostView> else { return }
+
+               // Force a layout pass so `fittingSize` reflects the SwiftUI tree's
+               // NEW state (just set via `viewModel.pillState =` inside the
+               // caller's withAnimation block). Without this, fittingSize can
+               // lag by a cycle — the window then snaps to the OLD size while
+               // the SwiftUI content morphs to the NEW one, which read as the
+               // off-center "expands rightward" effect on the compact↔expanded
+               // morph and left the pill x-shifted after the collapse.
+               hosting.layoutSubtreeIfNeeded()
+               let targetSize = hosting.fittingSize
+               let visible = screen.visibleFrame
+               let originX = visible.midX - targetSize.width / 2
+               let originY = visible.maxY - 24 - targetSize.height
+               let targetFrame = NSRect(x: originX, y: originY, width: targetSize.width, height: targetSize.height)
+
+               if animated {
+                    // Animate the full frame (origin + size) in lockstep with the
+                    // SwiftUI spring so the window grows top-center anchored — top
+                    // edge fixed, width grows symmetrically about center, height
+                    // grows downward — instead of snapping to the new frame and
+                    // letting SwiftUI play its morph on top.
+                    NSAnimationContext.runAnimationGroup { ctx in
+                        ctx.duration = 0.45
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                        ctx.allowsImplicitAnimation = true
+                        window.animator().setFrame(targetFrame, display: true)
+                    }
+                } else {
+                    window.setFrame(targetFrame, display: true)
+                }
     }
 }
 
