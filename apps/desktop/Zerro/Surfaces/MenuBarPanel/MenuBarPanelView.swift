@@ -27,6 +27,7 @@ struct MenuBarPanelView: View {
 
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
+    @Environment(PermissionsManager.self) private var permissions
     #endif
 
     // `openSettings` is the modern (macOS 14+) idiomatic way to surface the
@@ -90,9 +91,16 @@ struct MenuBarPanelView: View {
             MenuRow(label: "Reset Onboarding") {
                 // Clear both persisted flags in-process; no relaunch
                 // needed. Opens the window immediately so the next
-                // run-through is one click away.
+                // run-through is one click away. Also clears the
+                // PermissionsManager "has requested" tracking so the
+                // screen-recording step's dev-drift CGWindowList
+                // fallback doesn't false-positive into the allowed
+                // view before the user has been prompted (the TCC
+                // grant itself still lives in the OS — reset that
+                // with `tccutil reset ScreenCapture <bundle-id>`).
                 onboarding.hasCompletedOnboarding = false
                 onboarding.currentStep = .welcome
+                permissions.resetRequestFlags()
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
             }

@@ -739,7 +739,13 @@ final class AppState {
     /// mic's `.denied`/`.restricted` state is reported reliably, so a
     /// direct authorizationStatus read is enough there.
     private static func captureFailureReason() -> RecordingFailureReason {
-        if !PermissionsManager.isScreenRecordingGranted() {
+        // Use the dev-drift-tolerant variant here: at this point we
+        // just had an active SCStream (we got far enough to fail
+        // mid-capture), so the binary really did have permission a
+        // moment ago. The CGWindowList second opinion catches
+        // dev-time CGPreflight drift; the strict variant would
+        // misreport a mic revocation as a screen-recording one.
+        if !PermissionsManager.isScreenRecordingGrantedWithDevDriftFallback() {
             return .screenRecordingRevoked
         }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
