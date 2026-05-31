@@ -26,70 +26,42 @@ struct PermissionsDebugSection: View {
 
     @Environment(PermissionsManager.self) private var permissions
 
-    @State private var isPolling: Bool = false
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("DEBUG \u{00B7} PERMISSIONS")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.6)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-
-            row(label: "Screen", status: permissions.screenRecordingStatus) {
+        // Just the live permission status rows now — the "DEBUG" header, the
+        // probe/refresh actions, and the poll toggle live in
+        // MenuBarPanelView so the whole debug block reads as one flat list.
+        // These lead that list.
+        VStack(alignment: .leading, spacing: 8) {
+            // Live TCC status + a Request button per permission. Request
+            // triggers the system prompt when the status is .notDetermined.
+            statusRow(label: "Screen", status: permissions.screenRecordingStatus) {
                 permissions.requestScreenRecording()
             }
-            row(label: "Mic", status: permissions.microphoneStatus) {
+            statusRow(label: "Mic", status: permissions.microphoneStatus) {
                 Task { await permissions.requestMicrophone() }
             }
-
-            HStack(spacing: 8) {
-                Button("Refresh") { permissions.refreshStatuses() }
-                    .controlSize(.small)
-                Button("Probe WindowList") {
-                    // CGWindowListCopyWindowInfo on kCGWindowName —
-                    // popup-free if permission is granted; spawns the
-                    // "Open System Settings" popup once if not. Cheap
-                    // dev-drift detector for ad-hoc-signed builds.
-                    permissions.refreshScreenRecordingViaWindowList()
-                }
-                .controlSize(.small)
-                Button("Probe Shareable") {
-                    // SCShareableContent.current — slowest but most
-                    // reliable dev-drift detector. Always spawns the
-                    // popup if not actually granted, so save it for
-                    // cases where Probe WindowList missed.
-                    Task { await permissions.refreshScreenRecordingViaShareable() }
-                }
-                .controlSize(.small)
-                Toggle("Poll", isOn: $isPolling)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .onChange(of: isPolling) { _, newValue in
-                        if newValue { permissions.startPolling() }
-                        else { permissions.stopPolling() }
-                    }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 2)
         }
         .padding(.vertical, 4)
     }
 
+    /// Live status + Request for one permission. Status is pushed left, the
+    /// Request button pinned right via a Spacer so the two rows align. The
+    /// 16pt horizontal inset matches the MenuRow label position (6 outer +
+    /// 10 inner) so these line up with the rest of the debug list.
     @ViewBuilder
-    private func row(label: String, status: PermissionStatus, request: @escaping () -> Void) -> some View {
+    private func statusRow(label: String, status: PermissionStatus, request: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .frame(width: 50, alignment: .leading)
             Text(statusLabel(status))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(statusColor(status))
-                .frame(width: 110, alignment: .leading)
+            Spacer(minLength: 8)
             Button("Request") { request() }
                 .controlSize(.small)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 16)
     }
 
     private func statusLabel(_ status: PermissionStatus) -> String {

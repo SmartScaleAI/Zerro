@@ -248,6 +248,11 @@ private struct PillHostView: View {
             onDismissError: { appState.dismissFailure() },
             onRetryError: { appState.retryFailedPrompt() },
             onDismissResult: { appState.resetToIdle() },
+            // Phase 17 — confirmation-pill resolutions. Keep uses the
+            // recording's selected mode (the safe default); Switch applies
+            // the suggested opposite mode to this one generation only.
+            onKeepMode: { appState.resolveModeSwitch(switchTo: false) },
+            onSwitchMode: { appState.resolveModeSwitch(switchTo: true) },
             generatedPrompt: appState.generatedPrompt,
             resultHadNoNarration: appState.resultHadNoNarration,
             audioLevels: appState.audioLevels

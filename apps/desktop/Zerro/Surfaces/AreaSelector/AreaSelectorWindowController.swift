@@ -89,6 +89,12 @@ final class AreaSelectorWindowController {
             selectedID: preferences.microphoneDeviceID
         )
 
+        // Phase 17: seed the Instruct/Explain switch from the persisted
+        // last-used default. A tap flips it in `state`; the value is
+        // written back to prefs at record-start (confirm) so a cancelled
+        // overlay doesn't silently change the default.
+        state.setOutputMode(preferences.defaultOutputMode)
+
         state.onConfirm = { [weak self] rect in
             self?.dismiss()
             onConfirm(rect)
@@ -212,6 +218,11 @@ final class AreaSelectorWindowController {
             if event.type == .mouseMoved {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
+                // Phase 17: hover tint for the mode toggle's non-selected
+                // segment.
+                state.setHoveredOutputMode(selectionRect.flatMap {
+                    AreaSelectorView.outputMode(at: point, forSelection: $0, in: size)
+                })
                 if state.isMicMenuOpen, let rect = selectionRect {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
@@ -224,6 +235,14 @@ final class AreaSelectorWindowController {
                 // Record button — start recording.
                 if let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
+                    return nil
+                }
+                // Mode toggle — select Instruct/Explain (Phase 17). Checked
+                // before the mic chip / drag logic so a tap acts on the
+                // toggle rather than re-dragging underneath it.
+                if let rect = selectionRect,
+                   let mode = AreaSelectorView.outputMode(at: point, forSelection: rect, in: size) {
+                    state.setOutputMode(mode)
                     return nil
                 }
                 // Mic chip — open/close the dropdown.
@@ -255,9 +274,14 @@ final class AreaSelectorWindowController {
                 case .leftMouseDown:
                     state.beginDrag(at: point)
                 case .leftMouseDragged:
-                    state.updateDrag(to: point)
+                    // Only extend an in-flight drag. A press that began on a
+                    // toolbar control (mode toggle, mic chip, dropdown row)
+                    // was consumed at mouseDown without calling beginDrag, so
+                    // isDragging is false here — and its trailing dragged/up
+                    // events must NOT resize the already-settled selection.
+                    if state.isDragging { state.updateDrag(to: point) }
                 case .leftMouseUp:
-                    state.endDrag(at: point)
+                    if state.isDragging { state.endDrag(at: point) }
                 default:
                     break
                 }
@@ -355,6 +379,11 @@ final class AreaSelectorWindowController {
             screenLocalizedName: window.screen?.localizedName,
             target: .area
         )
+        // Phase 17: this is record-start — commit the toolbar's mode
+        // selection as the new last-used default. The confirm callback in
+        // ZerroApp reads `preferences.defaultOutputMode` (mirroring how it
+        // reads the mic device) and hands it to startRecording.
+        preferences?.defaultOutputMode = state.outputMode
         state.confirm(with: selection)
     }
 
@@ -372,6 +401,9 @@ final class AreaSelectorWindowController {
             screenLocalizedName: window.screen?.localizedName,
             target: .window(id: candidate.id, title: candidate.title)
         )
+        // Phase 17: record-start — commit the toolbar's mode selection as
+        // the new last-used default (see confirmAreaSelection).
+        preferences?.defaultOutputMode = state.outputMode
         state.confirm(with: selection)
     }
 

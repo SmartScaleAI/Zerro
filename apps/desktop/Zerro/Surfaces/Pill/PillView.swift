@@ -29,6 +29,15 @@ enum PillState: Equatable {
     /// Dismiss (the user has to fix the underlying cause: Settings, free
     /// up disk, re-record, etc.).
     case error(message: String, retryable: Bool)
+    /// Phase 17 — mode-switch confirmation. Fires in the dead time between
+    /// `.processing` and the result when the (stubbed in Phase 17, real in
+    /// Phase 18) detector thinks the user verbally asked for the opposite
+    /// of the mode they selected on the overlay. `suggestedMode` is that
+    /// opposite mode — the pill reads "Switch to [suggestedMode] for this
+    /// one?" and offers a per-recording override. Same capsule chrome as
+    /// `.processing`; resolved by Keep (use the selected mode) or Switch
+    /// (use `suggestedMode` for this one generation only).
+    case confirmSwitch(suggestedMode: OutputMode)
 }
 
 // MARK: - PillView
@@ -55,6 +64,13 @@ struct PillView: View {
     /// corner so users can dismiss after copying without having to wait
     /// for the next hotkey press.
     var onDismissResult: () -> Void = {}
+    /// Phase 17 confirm-pill resolutions. `onKeepMode` keeps the recording's
+    /// selected mode (the safe default — also the effect of dismissing or
+    /// ignoring the pill); `onSwitchMode` applies the suggested opposite
+    /// mode to this one recording. Default no-ops so `#Preview` blocks can
+    /// pass literal `.confirmSwitch` states without ceremony.
+    var onKeepMode: () -> Void = {}
+    var onSwitchMode: () -> Void = {}
 
     /// The generated structured prompt, displayed in the .resultExpanded
     /// body. Threaded from AppState.generatedPrompt via PillWindowController
@@ -116,14 +132,17 @@ struct PillView: View {
         switch state {
         case .recording, .wrappingUp, .processing, .resultCompact, .error:
             return Self.capsuleWidth
-        case .resultExpanded:
+        // .confirmSwitch sizes to its content's natural width (it may widen
+        // slightly to fit the mode name) while keeping the locked height —
+        // see lockedCapsuleHeight. Per the locked mockup it stays one line.
+        case .resultExpanded, .confirmSwitch:
             return nil
         }
     }
 
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact:
+        case .recording, .wrappingUp, .processing, .resultCompact, .confirmSwitch:
             return Self.capsuleHeight
         // .error keeps the locked 392 width (so it still reads as the same
         // capsule it morphed from) but drives its own height: a long
@@ -198,6 +217,12 @@ struct PillView: View {
                 message: message,
                 onRetry: retryable ? onRetryError : nil,
                 onDismiss: onDismissError
+            )
+        case .confirmSwitch(let suggestedMode):
+            ConfirmSwitchPillContent(
+                suggestedMode: suggestedMode,
+                onKeep: onKeepMode,
+                onSwitch: onSwitchMode
             )
         }
     }
@@ -477,6 +502,83 @@ private struct ProcessingPillContent: View {
             }
             .foregroundStyle(Color.vfTextSecondary)
             .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
+// MARK: - ConfirmSwitchPillContent
+//
+// Phase 17 — the mode-switch confirmation, matching the approved Claude
+// Design mockup. Reuses ProcessingPillContent's chrome geometry (locked
+// capsule height, same vertical rhythm) so the morph out of `.processing`
+// reads as the same pill changing its mind, not a new surface. Layout
+// mirrors the recording pill: a left cluster (circular blue icon badge +
+// bold question) and a right action cluster (secondary "Keep", primary
+// blue "Switch"), separated by a Spacer so the buttons sit at the trailing
+// edge. The pill is content-driven width (the Spacer's minLength fixes the
+// airy gap) — it widens a touch for a longer mode name but stays one line
+// and never changes height. Blue is `vfAccentBlue` (#0A84FF), the one
+// locked saturated accent: the badge glyph and the primary fill.
+
+private struct ConfirmSwitchPillContent: View {
+    let suggestedMode: OutputMode
+    let onKeep: () -> Void
+    let onSwitch: () -> Void
+
+    var body: some View {
+        HStack(spacing: VFSpacing.md) {
+            iconBadge
+
+            Text("Switch to \(suggestedMode.displayName) for this one?")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.vfTextPrimary)
+                .fixedSize()
+
+            // Airy gap between the question and the actions, pushing the
+            // buttons to the trailing edge (per the mockup).
+            Spacer(minLength: 120)
+
+            keepButton
+            switchButton
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
+    }
+
+    /// Double-arrow glyph in a soft blue disc — the mockup's left badge.
+    private var iconBadge: some View {
+        Image(systemName: "arrow.left.arrow.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.vfAccentBlue)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(Color.vfAccentBlue.opacity(0.20)))
+    }
+
+    private var keepButton: some View {
+        Button(action: onKeep) {
+            Text("Keep")
+                // Matches the secondary text buttons across the other pill
+                // steps (Cancel / View): 12pt regular, secondary tint.
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    private var switchButton: some View {
+        Button(action: onSwitch) {
+            Text("Switch")
+                // Matches the primary filled buttons across the other pill
+                // steps (Stop / Copy): 13pt semibold on a capsule fill.
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.vfAccentBlue, in: Capsule())
         }
         .buttonStyle(.plain)
         .fixedSize()
@@ -850,6 +952,20 @@ private struct ResultPillContent: View {
         message: "Couldn\u{2019}t reach OpenAI \u{2014} check your connection.",
         retryable: true
     ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Confirm \u{00B7} Switch to Explain") {
+    // Selected mode was Instruct → the detected opposite is Explain.
+    PillView(state: .confirmSwitch(suggestedMode: .explain))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Confirm \u{00B7} Switch to Instruct") {
+    // Selected mode was Explain → the detected opposite is Instruct.
+    PillView(state: .confirmSwitch(suggestedMode: .instruct))
         .padding(40)
         .background(Color.vfPanelBackground)
 }

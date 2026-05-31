@@ -30,7 +30,10 @@ import Foundation
 // at the view layer) so downstream code in AppState / PromptGeneration
 // can read it without dragging SwiftUI into non-view modules.
 
-enum OutputMode: String, Codable, CaseIterable, Equatable {
+// `public` so it can appear in the (public) `RecordingState.confirmingMode`
+// associated value — same reason `RecordingFailureReason` is public. The
+// app is a single module, so this only widens a nominal access level.
+public enum OutputMode: String, Codable, CaseIterable, Equatable {
     case instruct
     case explain
 
@@ -38,6 +41,16 @@ enum OutputMode: String, Codable, CaseIterable, Equatable {
         switch self {
         case .instruct: return "Instruct"
         case .explain:  return "Explain"
+        }
+    }
+
+    /// The other mode. With exactly two modes this is the mode the Phase
+    /// 17 confirmation pill suggests switching to. Earns a real
+    /// implementation only if/when a third mode is ever added.
+    var opposite: OutputMode {
+        switch self {
+        case .instruct: return .explain
+        case .explain:  return .instruct
         }
     }
 }

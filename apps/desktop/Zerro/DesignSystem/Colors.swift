@@ -45,4 +45,13 @@ extension Color {
     // #1868BF — a muted blue that holds up over the panel's dark
     // background without the saturation of full `systemBlue`.
     static let vfMenuRowHover = Color(red: 0x18 / 255.0, green: 0x68 / 255.0, blue: 0xBF / 255.0)
+
+    /// Locked accent for the Phase 17 mode-switch confirmation pill —
+    /// the "arrow.left.arrow.right" glyph and the primary "Switch" fill.
+    /// Fixed #0A84FF (macOS systemBlue) per the approved Claude Design
+    /// mockup. Deliberately NOT `vfBrandAccent` (which is the app's
+    /// monochrome white); this is the one place the design calls for a
+    /// saturated blue, signalling a reversible per-recording choice
+    /// rather than the brand identity.
+    static let vfAccentBlue = Color(red: 0x0A / 255.0, green: 0x84 / 255.0, blue: 0xFF / 255.0)
 }

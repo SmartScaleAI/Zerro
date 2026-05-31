@@ -274,6 +274,9 @@ struct AreaSelectorView: View {
     static let toolbarHeight: CGFloat = 40
     static let recordButtonWidth: CGFloat = 116
     static let micChipWidth: CGFloat = 168
+    /// Phase 17: the Instruct/Explain switch, leftmost in the cluster.
+    /// Two equal segments share this width; `modeSegmentFrame` splits it.
+    static let modeToggleWidth: CGFloat = 150
     private static let toolbarItemGap: CGFloat = 8
     private static let toolbarGap: CGFloat = 14
     private static let toolbarMargin: CGFloat = 8
@@ -281,9 +284,11 @@ struct AreaSelectorView: View {
     /// View-local frame (top-left origin) of the whole floating toolbar
     /// for a given selection. Placed `toolbarGap` below the selection,
     /// flipped above if there isn't room, and clamped so it never spills
-    /// past the overlay bounds.
+    /// past the overlay bounds. Cluster order, left → right: mode toggle,
+    /// mic chip, Record button.
     static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
-        let width = micChipWidth + toolbarItemGap + recordButtonWidth
+        let width = modeToggleWidth + toolbarItemGap
+            + micChipWidth + toolbarItemGap + recordButtonWidth
         let size = CGSize(width: width, height: toolbarHeight)
 
         var originY = rect.maxY + toolbarGap
@@ -304,10 +309,49 @@ struct AreaSelectorView: View {
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
     }
 
-    /// Mic-picker chip: the left segment of the toolbar.
+    /// Mode toggle: the leftmost segment of the toolbar (Phase 17).
+    static func modeToggleFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds)
+        return CGRect(x: t.minX, y: t.minY, width: modeToggleWidth, height: t.height)
+    }
+
+    /// View-local frame of one mode segment within the toggle. The toggle
+    /// is split into two equal halves: `.instruct` left, `.explain` right.
+    /// Shared by the view (render) and the controller (click + hover
+    /// hit-test) so they can't drift.
+    static func modeSegmentFrame(
+        for mode: OutputMode,
+        forSelection rect: CGRect,
+        in bounds: CGSize
+    ) -> CGRect {
+        let toggle = modeToggleFrame(forSelection: rect, in: bounds)
+        let half = toggle.width / 2
+        let x = (mode == .instruct) ? toggle.minX : toggle.minX + half
+        return CGRect(x: x, y: toggle.minY, width: half, height: toggle.height)
+    }
+
+    /// The mode segment under `point`, or nil if `point` is off the
+    /// toggle. Used by the controller's monitor for both click (select)
+    /// and mouse-move (hover tint).
+    static func outputMode(
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in bounds: CGSize
+    ) -> OutputMode? {
+        for mode in OutputMode.allCases {
+            if modeSegmentFrame(for: mode, forSelection: rect, in: bounds).contains(point) {
+                return mode
+            }
+        }
+        return nil
+    }
+
+    /// Mic-picker chip: the middle segment of the toolbar, after the
+    /// mode toggle.
     static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
         let t = toolbarFrame(forSelection: rect, in: bounds)
-        return CGRect(x: t.minX, y: t.minY, width: micChipWidth, height: t.height)
+        let x = t.minX + modeToggleWidth + toolbarItemGap
+        return CGRect(x: x, y: t.minY, width: micChipWidth, height: t.height)
     }
 
     /// Record button: the right segment of the toolbar.
@@ -407,8 +451,13 @@ struct AreaSelectorView: View {
     @ViewBuilder
     private func recordButton(in bounds: CGSize) -> some View {
         if let rect = state.confirmableSelectionRect {
+            let modeFrame = Self.modeToggleFrame(forSelection: rect, in: bounds)
             let micFrame = Self.micChipFrame(forSelection: rect, in: bounds)
             let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds)
+
+            modeToggle
+                .frame(width: modeFrame.width, height: modeFrame.height)
+                .position(x: modeFrame.midX, y: modeFrame.midY)
 
             micChip
                 .frame(width: micFrame.width, height: micFrame.height)
@@ -418,6 +467,41 @@ struct AreaSelectorView: View {
                 .frame(width: recFrame.width, height: recFrame.height)
                 .position(x: recFrame.midX, y: recFrame.midY)
         }
+    }
+
+    /// Two-segment Instruct/Explain switch. The selected segment fills
+    /// with the brand accent; the other reads as plain material and
+    /// lightens on hover. Same capsule chrome (material, hairline,
+    /// shadow) as the mic chip so it reads as one of the bottom controls.
+    /// Hit-testing + selection live in the controller's mouse monitor
+    /// (the SwiftUI tree is hit-test-disabled).
+    private var modeToggle: some View {
+        HStack(spacing: 0) {
+            ForEach(OutputMode.allCases, id: \.self) { mode in
+                modeSegment(mode)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+    }
+
+    private func modeSegment(_ mode: OutputMode) -> some View {
+        let isSelected = state.outputMode == mode
+        let isHovered = state.hoveredOutputMode == mode
+        return Text(mode.displayName)
+            .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+            .foregroundStyle(isSelected ? Color.vfOnBrand : Color.vfTextPrimary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isSelected
+                          ? Color.vfBrandAccent
+                          : (isHovered ? Color.primary.opacity(0.10) : Color.clear))
+                    .padding(2)
+            )
     }
 
     private var micChip: some View {

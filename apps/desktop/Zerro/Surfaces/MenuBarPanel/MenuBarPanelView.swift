@@ -15,6 +15,7 @@
 //
 
 import AppKit
+import AVFoundation
 import SwiftUI
 
 struct MenuBarPanelView: View {
@@ -23,11 +24,32 @@ struct MenuBarPanelView: View {
     /// highlighted while the submenu is open.
     var highlightRecentPrompts: Bool = false
 
+    /// Begins the recording flow — same entry point as the global hotkey, so
+    /// it presents the area-selector overlay first (gating on onboarding /
+    /// permissions) rather than recording immediately. Wired by ZerroApp;
+    /// defaults to a no-op so previews compile.
+    var onStartRecording: () -> Void = {}
+
     @Environment(AppState.self) private var appState
+    @Environment(PreferencesStore.self) private var preferences
+    @Environment(RecentPromptStore.self) private var recentPrompts
+
+    /// Drives the Recent Prompts side panel (a trailing popover). Opened on
+    /// hover via `recentRowHovered` / `recentPanelHovered`.
+    @State private var showRecentPrompts = false
+    @State private var recentRowHovered = false
+    @State private var recentPanelHovered = false
+    /// Drives the Microphone picker side panel (a trailing popover). Opened
+    /// on hover via `micRowHovered` / `micPanelHovered`.
+    @State private var showMicrophonePicker = false
+    @State private var micRowHovered = false
+    @State private var micPanelHovered = false
 
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
+    /// Drives the debug "Poll continuously" toggle.
+    @State private var isPolling = false
     #endif
 
     // Phase 11 (revision 2): the stock `Settings { ... }` scene was
@@ -47,29 +69,94 @@ struct MenuBarPanelView: View {
         VStack(spacing: 0) {
             header
 
+            // Phase 17: transient indicator that the LAST result ran with a
+            // pill-override mode rather than the selected one. Present only
+            // while `effectiveOutputMode` is set (a Switch fired, until the
+            // next return to idle), and scoped to "this one" so it never
+            // reads as a change to the persisted default.
+            if let effective = appState.effectiveOutputMode {
+                modeOverrideIndicator(effective)
+            }
+
             menuDivider
 
-            MenuRow(label: "Open Zerro")
-            MenuRow(label: "Check for updates\u{2026}")
-
-            menuDivider
-
-            PasteLastPromptRow()
-            MenuRow(label: "Recent Prompts", trailing: .submenu, forceSelected: highlightRecentPrompts)
+            CopyLastPromptRow()
+            MenuRow(
+                label: "Recent Prompts",
+                trailing: .submenu,
+                forceSelected: highlightRecentPrompts || showRecentPrompts
+            ) {
+                showRecentPrompts = true
+            }
+            .onHover { hovering in
+                recentRowHovered = hovering
+                updatePanelVisibility(
+                    hovered: recentRowHovered || recentPanelHovered,
+                    isStillHovered: { recentRowHovered || recentPanelHovered },
+                    setVisible: { showRecentPrompts = $0 }
+                )
+            }
+            // Side panel of recent prompts with per-row Copy buttons. A
+            // trailing popover is the closest native shape to an NSMenu
+            // submenu under MenuBarExtra(.window) (which can't host real
+            // submenus). Opens on hover of the row or the panel; the content
+            // reads RecentPromptStore from the environment, passed explicitly
+            // so it resolves inside the popover's separate hosting context.
+            .popover(isPresented: $showRecentPrompts, arrowEdge: .trailing) {
+                RecentPromptsSubmenu()
+                    .environment(recentPrompts)
+                    .onHover { hovering in
+                        recentPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: recentRowHovered || recentPanelHovered,
+                            isStillHovered: { recentRowHovered || recentPanelHovered },
+                            setVisible: { showRecentPrompts = $0 }
+                        )
+                    }
+            }
 
             menuDivider
 
             primaryRecordingRow
-            MenuRow(label: "Microphone", trailing: .submenu)
-            MenuRow(label: "Hotkey\u{2026}")
+            MenuRow(
+                label: "Microphone",
+                trailing: .submenu,
+                forceSelected: showMicrophonePicker
+            ) {
+                showMicrophonePicker = true
+            }
+            .onHover { hovering in
+                micRowHovered = hovering
+                updatePanelVisibility(
+                    hovered: micRowHovered || micPanelHovered,
+                    isStillHovered: { micRowHovered || micPanelHovered },
+                    setVisible: { showMicrophonePicker = $0 }
+                )
+            }
+            // Same hover-opened trailing popover as Recent Prompts — the
+            // input device list with the current selection checked.
+            .popover(isPresented: $showMicrophonePicker, arrowEdge: .trailing) {
+                MicrophonePicker()
+                    .environment(preferences)
+                    .onHover { hovering in
+                        micPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: micRowHovered || micPanelHovered,
+                            isStillHovered: { micRowHovered || micPanelHovered },
+                            setVisible: { showMicrophonePicker = $0 }
+                        )
+                    }
+            }
 
             menuDivider
 
-            MenuRow(label: "Help Center")
             MenuRow(label: "Send feedback")
-
-            menuDivider
-
+            // Phase 14 / C3.4: Sparkle "Check for Updates…". Owns the
+            // SPUStandardUpdaterController at app-launch lifetime (see
+            // ZerroApp.updater @StateObject) — this view just reads it
+            // out of the environment so the controller stays alive
+            // when the dropdown closes.
+            CheckForUpdatesView()
             MenuRow(label: "Preferences\u{2026}", trailing: .hotkey("\u{2318},")) {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsScene.windowID)
@@ -85,6 +172,22 @@ struct MenuBarPanelView: View {
             // affordances on a menu-bar-only app. Replaced by the
             // onboarding dev panel when that ships.
             menuDivider
+            // Single header over the whole debug block (permission status,
+            // manual triggers, onboarding resets, and the probe actions).
+            debugSectionTitle
+            // Permission status rows lead the debug list.
+            PermissionsDebugSection()
+            // Phase 17 manual trigger: arms the stub mode-switch detector
+            // to "match" on the next recording's generation pass, so the
+            // confirmation pill flow is testable end to end without real
+            // detection. One-shot — consumed by that generation. The label
+            // reflects the armed state (appState is @Observable).
+            // DEFERRED Phase 18: real detection removes the need for this.
+            MenuRow(label: appState.debugForceModeSwitchPill
+                    ? "Mode-Switch Pill: Armed \u{2713}"
+                    : "Force Mode-Switch Pill") {
+                appState.debugForceModeSwitchPill = true
+            }
             MenuRow(label: "Open Onboarding\u{2026}") {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
@@ -122,7 +225,24 @@ struct MenuBarPanelView: View {
                 onboarding.currentStep = .welcome
                 NSApplication.shared.terminate(nil)
             }
-            PermissionsDebugSection()
+            // Permission probe/refresh actions, styled as regular menu rows.
+            MenuRow(label: "Refresh statuses") {
+                permissions.refreshStatuses()
+            }
+            MenuRow(label: "Probe via WindowList") {
+                // CGWindowListCopyWindowInfo on kCGWindowName — popup-free if
+                // permission is granted; spawns the "Open System Settings"
+                // popup once if not. Cheap dev-drift detector for ad-hoc-
+                // signed builds.
+                permissions.refreshScreenRecordingViaWindowList()
+            }
+            MenuRow(label: "Probe via Shareable") {
+                // SCShareableContent.current — slowest but most reliable
+                // dev-drift detector. Always spawns the popup if not actually
+                // granted, so save it for cases where WindowList missed.
+                Task { await permissions.refreshScreenRecordingViaShareable() }
+            }
+            debugPollRow
             #endif
         }
         .padding(.vertical, 4)
@@ -162,7 +282,13 @@ struct MenuBarPanelView: View {
             )
         } else {
             MenuRow(label: "Start Recording", trailing: .hotkey("\u{2318}\u{21E7}R")) {
-                appState.startRecording()
+                // Route through the same entry point as the global hotkey so
+                // the area-selector overlay (with its mode toggle + mic
+                // picker) is presented first — recording starts on confirm,
+                // not on this click. Close the dropdown so the overlay isn't
+                // behind it.
+                MenuBarExtraDismiss.dismiss()
+                onStartRecording()
             }
         }
     }
@@ -173,13 +299,13 @@ struct MenuBarPanelView: View {
         HStack(spacing: VFSpacing.sm) {
             ZStack {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.vfBrandAccent)
+                    .fill(Color.black)
                 Image("MenuBarLogo")
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 13, height: 13)
-                    .foregroundStyle(Color.vfOnBrand)
+                    .foregroundStyle(Color.white)
             }
             .frame(width: 22, height: 22)
 
@@ -204,57 +330,170 @@ struct MenuBarPanelView: View {
         .padding(.vertical, 6)
     }
 
+    /// Phase 17 — transient "this result was switched" note. Echoes the
+    /// confirmation pill's copy ("…for this one") and uses the same blue
+    /// accent + double-arrow glyph so the two read as one signal. Cleared
+    /// when `effectiveOutputMode` returns to nil on the next idle.
+    private func modeOverrideIndicator(_ mode: OutputMode) -> some View {
+        HStack(spacing: VFSpacing.sm) {
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.vfAccentBlue)
+            Text("Switched to \(mode.displayName) for this one")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextSecondary)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    /// Open/close delays for the hover-driven side panels (Recent Prompts,
+    /// Microphone). The open delay is a hover-intent guard so brushing past
+    /// the row doesn't flash the panel open; the (shorter) close delay lets
+    /// the cursor cross the arrow gap from the row into the panel without it
+    /// snapping shut.
+    private static let panelOpenDelayMS = 250
+    private static let panelCloseDelayMS = 180
+
+    /// Debounced show/hide for a hover side panel. `hovered` is the desired
+    /// state captured at call time (row OR panel hovered); after the matching
+    /// delay it commits only if the live hover state still agrees — so a
+    /// quick brush-past neither opens the panel nor leaves it lingering.
+    private func updatePanelVisibility(
+        hovered: Bool,
+        isStillHovered: @escaping () -> Bool,
+        setVisible: @escaping (Bool) -> Void
+    ) {
+        Task { @MainActor in
+            try? await Task.sleep(
+                for: .milliseconds(hovered ? Self.panelOpenDelayMS : Self.panelCloseDelayMS)
+            )
+            if isStillHovered() == hovered {
+                setVisible(hovered)
+            }
+        }
+    }
+
     private var menuDivider: some View {
         Divider()
             .overlay(Color.vfHairline)
             .padding(.vertical, 4)
     }
+
+    #if DEBUG
+    /// Header for the debug-only block. Styled like the other small section
+    /// eyebrows; left-aligned full width.
+    private var debugSectionTitle: some View {
+        HStack(spacing: 0) {
+            Text("DEBUG")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    /// Continuous-polling toggle. A toggle can't ride a `MenuRow` (its
+    /// trailing slot only does hotkey/submenu), so this row matches the
+    /// MenuRow label font + leading inset (16 = 6 outer + 10 inner) by hand.
+    private var debugPollRow: some View {
+        HStack(spacing: 0) {
+            Text("Poll continuously")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextPrimary)
+            Spacer(minLength: VFSpacing.lg)
+            Toggle("", isOn: $isPolling)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .onChange(of: isPolling) { _, newValue in
+                    if newValue { permissions.startPolling() }
+                    else { permissions.stopPolling() }
+                }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 5)
+    }
+    #endif
 }
 
 // MARK: - MenuBarExtraDismiss
 //
-// Programmatically hides the `MenuBarExtra(.window)` dropdown. The
+// Programmatically closes the `MenuBarExtra(.window)` dropdown. The
 // `.window` style hosts content in a persistent NSPanel that does NOT
 // auto-dismiss when focus moves to another window (unlike the legacy
 // NSMenu-style dropdown), so any row that navigates elsewhere — e.g.
-// Preferences opening the Settings window — has to close the dropdown
-// itself, otherwise it lingers on top of whatever just opened.
+// Preferences opening the Settings window, or a Copy action — has to
+// close the dropdown itself, otherwise it lingers on top of whatever
+// just opened.
 //
-// Implementation notes:
-// 1) We MUST match only the MenuBarExtra panel, NOT any window whose
-//    class name merely contains "NSStatusBar" — the status-item BUTTON
-//    is hosted in an NSStatusBarWindow too, and ordering THAT out
-//    removes the menu bar icon itself (so clicking it no longer
-//    shows the dropdown). Earlier iteration of this helper made
-//    exactly that mistake.
-// 2) We use `orderOut(_:)` rather than `close()`. `close()` can release
-//    the panel and prevent SwiftUI from re-showing it; `orderOut(_:)`
-//    just hides the panel so the next status-item click re-shows it
-//    normally.
-// 3) Match is intentionally narrow ("MenuBarExtra" substring). If a
-//    future macOS renames the panel class, the failure mode is "the
-//    dropdown stays open" — never "the icon disappears."
+// We close it by clicking the STATUS-ITEM BUTTON rather than ordering the
+// panel out. `orderOut` hides the panel but leaves SwiftUI's own
+// presented-state toggle "on" (and the button highlighted) — so the icon
+// stays selected and the next click just toggles back "off", needing a
+// second click to re-open. `performClick` goes through the same path a
+// real click would, so SwiftUI's state and the button highlight both
+// reset and a single click re-opens the menu as expected.
 
 @MainActor
 enum MenuBarExtraDismiss {
     static func dismiss() {
-        for window in NSApp.windows {
-            let className = String(describing: type(of: window))
-            guard className.contains("MenuBarExtra") else { continue }
-            window.orderOut(nil)
+        // Only act when the dropdown is actually open — otherwise clicking
+        // the status button would OPEN it.
+        let isOpen = NSApp.windows.contains {
+            String(describing: type(of: $0)).contains("MenuBarExtra") && $0.isVisible
         }
+        guard isOpen else { return }
+
+        if let button = statusItemButton() {
+            button.performClick(nil)
+        } else {
+            // Fallback: hide the panel directly. The double-click-to-reopen
+            // quirk may return, but the dropdown still closes. Match is
+            // narrow ("MenuBarExtra") so we never order the status-item
+            // window out and lose the icon.
+            for window in NSApp.windows
+            where String(describing: type(of: window)).contains("MenuBarExtra") {
+                window.orderOut(nil)
+            }
+        }
+    }
+
+    /// The MenuBarExtra's status-item button, searched across the app's
+    /// windows (it lives in an NSStatusBarWindow). The app has exactly one
+    /// status item, so the first match is the right one.
+    private static func statusItemButton() -> NSStatusBarButton? {
+        for window in NSApp.windows {
+            if let button = firstStatusButton(in: window.contentView) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    private static func firstStatusButton(in view: NSView?) -> NSStatusBarButton? {
+        guard let view else { return nil }
+        if let button = view as? NSStatusBarButton { return button }
+        for subview in view.subviews {
+            if let found = firstStatusButton(in: subview) { return found }
+        }
+        return nil
     }
 }
 
 // MARK: - MenuRow
 
-private enum RowTrailing {
+enum RowTrailing {
     case none
     case hotkey(String)
     case submenu
 }
 
-private struct MenuRow: View {
+struct MenuRow: View {
     let label: String
     var trailing: RowTrailing = .none
     var forceSelected: Bool = false
@@ -320,17 +559,16 @@ private struct MenuRow: View {
     }
 }
 
-// MARK: - PasteLastPromptRow
+// MARK: - CopyLastPromptRow
 //
 // The one row that breaks the uniform tight row height — main label
-// plus a smaller dimmer secondary preview line below. Hotkey hint
-// `⌃⌘V` is right-aligned on the main label row only. Phase 11: reads
-// the most-recent entry from the RecentPromptStore in the environment;
-// clicking copies that prompt's full body to the clipboard. When the
-// history is empty the row renders disabled with a "No prompts yet"
-// preview line.
+// plus a smaller dimmer secondary preview line below showing which
+// prompt will be copied. Phase 11: reads the most-recent entry from the
+// RecentPromptStore in the environment; clicking copies that prompt's
+// full body to the clipboard. When the history is empty the row renders
+// disabled with a "No prompts yet" preview line.
 
-private struct PasteLastPromptRow: View {
+private struct CopyLastPromptRow: View {
     @Environment(RecentPromptStore.self) private var recentPrompts
     @State private var isHovered = false
 
@@ -348,25 +586,13 @@ private struct PasteLastPromptRow: View {
         return isActive ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary
     }
 
-    private var hotkeyColor: Color {
-        if isDisabled { return Color.vfTextTertiary.opacity(0.6) }
-        return isActive ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary
-    }
-
     var body: some View {
         Button(action: copyToClipboard) {
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 0) {
-                    Text("Paste last prompt")
-                        .font(.system(size: 13))
-                        .foregroundStyle(primaryColor)
-                        .fixedSize()
-                    Spacer(minLength: VFSpacing.lg)
-                    Text("\u{2303}\u{2318}V")
-                        .font(.system(size: 12))
-                        .foregroundStyle(hotkeyColor)
-                        .fixedSize()
-                }
+                Text("Copy last prompt")
+                    .font(.system(size: 13))
+                    .foregroundStyle(primaryColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(entry?.title ?? "No prompts yet")
                     .font(.system(size: 11))
                     .foregroundStyle(secondaryColor)
@@ -393,6 +619,8 @@ private struct PasteLastPromptRow: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(entry.prompt, forType: .string)
+        // Close the dropdown once the prompt is on the clipboard.
+        MenuBarExtraDismiss.dismiss()
     }
 }
 
@@ -406,11 +634,10 @@ private struct PasteLastPromptRow: View {
 //
 // Note on the `MenuBarExtra(.window)` constraint: `MenuBarExtra` with
 // `.window` style hosts a SwiftUI panel, not a real NSMenu, so genuine
-// "open a sibling NSMenu on hover" isn't available. This submenu still
-// renders inline-via-#Preview in design previews; in production the
-// row taps copy directly to the clipboard, which is the actual user
-// goal anyway. A floating-panel implementation can come later if the
-// hover-open shape becomes important.
+// "open a sibling NSMenu on hover" isn't available. The Recent Prompts
+// row presents this view as a trailing `.popover` instead — the closest
+// native shape to a submenu — and each row copies its prompt body to the
+// clipboard, then dismisses the popover.
 
 struct RecentPromptsSubmenu: View {
     @Environment(RecentPromptStore.self) private var recentPrompts
@@ -452,6 +679,7 @@ private struct RecentPromptsEmptyState: View {
 private struct RecentPromptSubmenuRow: View {
     let entry: RecentPrompt
 
+    @Environment(\.dismiss) private var dismiss
     @State private var isHovered = false
 
     var body: some View {
@@ -488,6 +716,99 @@ private struct RecentPromptSubmenuRow: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(entry.prompt, forType: .string)
+        // Close the side panel, then the whole dropdown, once the prompt is
+        // on the clipboard.
+        dismiss()
+        MenuBarExtraDismiss.dismiss()
+    }
+}
+
+// MARK: - MicrophonePicker
+//
+// Input-device picker presented as the Microphone row's trailing popover.
+// Mirrors the Settings Capture picker's enumeration (.microphone +
+// .external, audio) and writes the selection straight to
+// PreferencesStore.microphoneDeviceID — empty string is the "System
+// Default" sentinel. Selecting a device dismisses the panel.
+
+private struct MicrophonePicker: View {
+    @Environment(PreferencesStore.self) private var preferences
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var devices: [AVCaptureDevice] = []
+
+    var body: some View {
+        VStack(spacing: 0) {
+            row(id: "", name: "System Default")
+            ForEach(devices, id: \.uniqueID) { device in
+                row(id: device.uniqueID, name: device.localizedName)
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(width: 260)
+        .onAppear(perform: refreshDevices)
+    }
+
+    private func row(id: String, name: String) -> some View {
+        MicrophonePickerRow(name: name, isSelected: isSelected(id)) {
+            preferences.microphoneDeviceID = id
+            dismiss()
+        }
+    }
+
+    /// True when `id` is the active selection. A stored id that no longer
+    /// resolves to a connected device falls back to "System Default",
+    /// matching the Settings picker's behavior.
+    private func isSelected(_ id: String) -> Bool {
+        let stored = preferences.microphoneDeviceID
+        let effective = devices.contains(where: { $0.uniqueID == stored }) ? stored : ""
+        return effective == id
+    }
+
+    private func refreshDevices() {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        devices = session.devices
+    }
+}
+
+private struct MicrophonePickerRow: View {
+    let name: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: VFSpacing.sm) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .opacity(isSelected ? 1 : 0)
+                    .frame(width: 12)
+                Text(name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -533,6 +854,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
         MenuBarPanelView()
             .environment(AppState())
             .environment(previewRecentPromptStore())
+            .environmentObject(UpdaterViewModel())
     }
     .padding(40)
     .background(Color.vfPanelBackground)
@@ -544,6 +866,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
             MenuBarPanelView(highlightRecentPrompts: true)
                 .environment(AppState())
                 .environment(previewRecentPromptStore())
+                .environmentObject(UpdaterViewModel())
         }
 
         // Native NSMenu aligns the submenu's top with the selected

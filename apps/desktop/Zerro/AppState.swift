@@ -41,6 +41,13 @@ public enum RecordingState: Equatable {
     case wrappingUp
     case autoStopped
     case processing
+    /// Phase 17 — paused between transcription and generation, awaiting the
+    /// user's answer on the mode-switch confirmation pill. `suggested` is
+    /// the opposite mode the (stubbed) detector flagged. Resolving via
+    /// `resolveModeSwitch(switchTo:)` returns to `.processing` and runs the
+    /// single generation with the effective mode. Lives between
+    /// `.processing` and `.done` and only ever entered when a match fires.
+    case confirmingMode(suggested: OutputMode)
     case done
     case failed(reason: RecordingFailureReason)
 }
@@ -188,6 +195,24 @@ final class AppState {
     /// capture; `nil` started without a selection (e.g. tests).
     var activeSelection: SelectionRect?
 
+    /// Phase 17: the output mode selected for THIS recording — captured at
+    /// `startRecording` time from the overlay toggle (which also writes it
+    /// back to `PreferencesStore.defaultOutputMode` as the last-used
+    /// default). This is the source of truth for prompt composition; the
+    /// generation path reads it (or a per-recording pill override) and
+    /// never re-reads the persisted default, so an override can't be
+    /// silently undone. Defaults to `.instruct` so test/menu-bar call
+    /// sites that don't pass a mode still compose a valid prompt.
+    var recordingOutputMode: OutputMode = .instruct
+
+    /// Phase 17: the mode a pill override actually ran with, when the user
+    /// tapped "Switch" on the confirmation pill. Transient and per-recording
+    /// — it drives the menu-bar "ran as X" indicator and is cleared on every
+    /// return to idle, so it can never imply the persisted default changed.
+    /// `nil` whenever no override fired (the common case), which the
+    /// indicator reads as "ran with the selected mode."
+    var effectiveOutputMode: OutputMode?
+
     /// Path to the most recently finalized recording on disk. Set by
     /// `handleSessionFinish` when the writer completes successfully;
     /// cleared on cancel and on every new startRecording.
@@ -258,6 +283,28 @@ final class AppState {
     /// already walked away from. Nil whenever no pipeline is running.
     private var processingTask: Task<Void, Never>?
 
+    /// Phase 17: everything needed to resume prompt generation after the
+    /// confirmation pill pauses the pipeline. Stashed when we enter
+    /// `.confirmingMode` so `resolveModeSwitch(switchTo:)` can run the
+    /// single generation with the effective mode — without re-transcribing
+    /// (no double API spend). Cleared on resolution and on every reset path.
+    private struct PendingGeneration {
+        let timeline: InterleavedTimeline
+        let transcript: Transcript
+        let processed: ProcessedRecording
+    }
+    @ObservationIgnored private var pendingGeneration: PendingGeneration?
+
+    #if DEBUG
+    /// Debug-only arming flag for the mode-switch confirmation pill. Set by
+    /// the menu-bar dropdown's debug row; consumed (one-shot) by the next
+    /// recording's generation pass to force the stub detector to "match" so
+    /// the pill flow can be exercised end to end without real detection.
+    /// DEFERRED Phase 18: real string-match detection replaces the need for
+    /// this manual trigger.
+    var debugForceModeSwitchPill: Bool = false
+    #endif
+
     /// Consecutive Retry presses against the current failure chain. Cap
     /// keeps a "Retry → fail → Retry" loop from running forever on a
     /// sustained outage — after the cap the Retry button hides and the
@@ -327,7 +374,8 @@ final class AppState {
     /// these into a dedicated .failed state with user-visible feedback.
     func startRecording(
         selection: SelectionRect? = nil,
-        microphoneDeviceID: String = ""
+        microphoneDeviceID: String = "",
+        outputMode: OutputMode = .instruct
     ) {
         guard state == .idle else {
             // State name is .public — RecordingState case names contain
@@ -364,6 +412,9 @@ final class AppState {
         }
         isResultExpanded = false
         activeSelection = selection
+        recordingOutputMode = outputMode
+        effectiveOutputMode = nil
+        pendingGeneration = nil
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
@@ -466,6 +517,8 @@ final class AppState {
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
+        effectiveOutputMode = nil
+        pendingGeneration = nil
         activeSelection = nil
         lastRecordingURL = nil
         state = .failed(reason: kind)
@@ -516,6 +569,8 @@ final class AppState {
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
+        effectiveOutputMode = nil
+        pendingGeneration = nil
         activeSelection = nil
         lastRecordingURL = nil
         processedRecording = nil
@@ -540,6 +595,8 @@ final class AppState {
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
+        effectiveOutputMode = nil
+        pendingGeneration = nil
         activeSelection = nil
         lastRecordingURL = nil
         processedRecording = nil
@@ -628,6 +685,8 @@ final class AppState {
             frameCount = 0
             audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
             isResultExpanded = false
+            effectiveOutputMode = nil
+            pendingGeneration = nil
             activeSelection = nil
             lastRecordingURL = nil
             processedRecording = nil
@@ -641,6 +700,8 @@ final class AppState {
             frameCount = 0
             audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
             isResultExpanded = false
+            effectiveOutputMode = nil
+            pendingGeneration = nil
             activeSelection = nil
             lastRecordingURL = nil
             processedRecording = nil
@@ -737,12 +798,14 @@ final class AppState {
         }
     }
 
-    /// Phase 9: Whisper transcribe → Interleaver → GPT-4o generate.
-    /// Pill cycles through `.transcribing` then `.writingPrompt` stage
-    /// labels while the API work happens. The `.processing → .done`
-    /// transition fires here on success; failures route to
-    /// `.failed(.processingFailed)` (Phase 9 Step 5 will refine this
-    /// into per-failure-mode cases — apiKeyMissing, apiAuth, etc.).
+    /// Phase 9 + 17: Whisper transcribe → Interleaver → mode-switch check →
+    /// GPT-4o generate. The pill shows `.transcribing` while Whisper runs.
+    /// After transcription the (Phase 17-stubbed) detector decides whether
+    /// the user verbally asked for the opposite output mode; on a match we
+    /// pause at `.confirmingMode` for the confirmation pill and resume from
+    /// `resolveModeSwitch(switchTo:)`. Otherwise generation runs straight
+    /// through with the recording's selected mode. The `.processing → .done`
+    /// transition fires from `runGeneration`.
     private func runPromptGeneration(processed: ProcessedRecording) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -764,15 +827,94 @@ final class AppState {
                 )
                 guard self.state == .processing else { return }
 
-                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
-                Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
                 let timeline = Interleaver.merge(
                     frames: processed.frames,
                     transcript: transcript
                 )
+
+                // Phase 17: decide the effective mode BEFORE composing the
+                // prompt, so the single generation runs with it. The
+                // detector is a no-op stub in Phase 17 (DEFERRED Phase 18);
+                // the debug trigger forces a match so the pill is testable.
+                var detection = ModeSwitchDetector.detect(
+                    transcript: transcript.fullText,
+                    selectedMode: self.recordingOutputMode
+                )
+                #if DEBUG
+                if self.debugForceModeSwitchPill {
+                    self.debugForceModeSwitchPill = false
+                    detection = ModeSwitchDetection(
+                        didMatch: true,
+                        suggestedMode: self.recordingOutputMode.opposite
+                    )
+                }
+                #endif
+
+                if detection.didMatch,
+                   let suggested = detection.suggestedMode,
+                   suggested != self.recordingOutputMode {
+                    // Pause for the confirmation pill. Stash everything the
+                    // resume needs so we don't re-transcribe (no double API
+                    // spend). Keep / Switch both route through
+                    // resolveModeSwitch(switchTo:).
+                    self.pendingGeneration = PendingGeneration(
+                        timeline: timeline,
+                        transcript: transcript,
+                        processed: processed
+                    )
+                    Log.breadcrumb(category: .stateMachine, message: "mode-switch confirm shown")
+                    self.state = .confirmingMode(suggested: suggested)
+                    return
+                }
+
+                // No switch suggested — generate with the selected mode.
+                self.runGeneration(
+                    timeline: timeline,
+                    transcript: transcript,
+                    processed: processed,
+                    mode: self.recordingOutputMode
+                )
+            } catch {
+                Log.transcription.error("failed: \(error.localizedDescription, privacy: .private)")
+                guard self.state == .processing else { return }
+                let reason = Self.failureReason(from: error)
+                // Phase 13B: transcription-stage failures worth triaging
+                // (provider decode / 5xx) reach Sentry; user/environment
+                // failures are gated out by shouldCapture.
+                if Self.shouldCapture(reason) {
+                    CrashReporting.capture(
+                        error,
+                        message: "Transcription failed",
+                        stage: "transcription",
+                        context: ["errorCode": Self.errorCodeString(reason)]
+                    )
+                }
+                self.state = .failed(reason: reason)
+            }
+        }
+    }
+
+    /// Phase 17: the generation half of the API flow, split out so it runs
+    /// either straight after transcription (no switch) or on resume from the
+    /// confirmation pill. Takes the EFFECTIVE output mode as a parameter —
+    /// the recording's selected mode, or the suggested opposite when the
+    /// user tapped "Switch" — and composes the prompt for exactly that mode.
+    /// Never re-reads the persisted default. The `.processing → .done`
+    /// transition fires here on success.
+    private func runGeneration(
+        timeline: InterleavedTimeline,
+        transcript: Transcript,
+        processed: ProcessedRecording,
+        mode: OutputMode
+    ) {
+        processingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
                 let result = try await OpenAIPromptGenerationService().generatePrompt(
                     timeline: timeline,
-                    systemPrompt: PromptGenerationSystemPrompt.value
+                    systemPrompt: PromptGenerationSystemPrompt.composed(for: mode)
                 )
                 // Model name (.public — "gpt-4o", a constant we control)
                 // and token counts (.public — metrics, not content).
@@ -804,26 +946,57 @@ final class AppState {
                 Log.promptGen.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
-                // Phase 13B: report engineering-signal failures to
-                // Sentry. apiKeyMissing / apiAuth / networkOffline /
-                // rateLimited are gated out by shouldCapture; the
-                // remaining .providerError (decode failures, 5xx
-                // floods, empty content) is the bucket we want to
-                // triage. Distinguish transcription vs generation by
-                // the error TYPE so the dashboard's `stage` tag
-                // pinpoints which API call broke.
+                // Phase 13B: report engineering-signal failures to Sentry.
+                // The remaining .providerError (decode failures, 5xx floods,
+                // empty content) is the bucket we want to triage.
                 if Self.shouldCapture(reason) {
-                    let stage = (error is TranscriptionError) ? "transcription" : "promptGeneration"
                     CrashReporting.capture(
                         error,
                         message: "Prompt generation failed",
-                        stage: stage,
+                        stage: "promptGeneration",
                         context: ["errorCode": Self.errorCodeString(reason)]
                     )
                 }
                 self.state = .failed(reason: reason)
             }
         }
+    }
+
+    /// Phase 17: resolves the mode-switch confirmation pill. `switchTo ==
+    /// true` applies the suggested opposite mode to THIS recording only — a
+    /// per-recording override that does NOT touch the persisted default;
+    /// `false` (and, equivalently, dismissing or ignoring the pill) keeps
+    /// the recording's selected mode. Either way generation resumes from the
+    /// stashed timeline with the effective mode; the persisted default is
+    /// never re-read. A no-op outside `.confirmingMode`, so a stray or
+    /// double call can't double-run generation.
+    func resolveModeSwitch(switchTo: Bool) {
+        guard case .confirmingMode(let suggested) = state,
+              let pending = pendingGeneration else { return }
+        pendingGeneration = nil
+
+        let effectiveMode: OutputMode = switchTo ? suggested : recordingOutputMode
+        if switchTo {
+            // Transient — drives the menu-bar "ran as X" indicator, cleared
+            // on the next return to idle. Never persisted: an override is
+            // per-recording, it does not become the new default.
+            effectiveOutputMode = suggested
+            Log.breadcrumb(category: .stateMachine, message: "mode-switch accepted")
+        } else {
+            Log.breadcrumb(category: .stateMachine, message: "mode-switch kept")
+        }
+
+        // Set the stage label before flipping to .processing so the morph
+        // out of the confirm pill lands directly on "Writing your prompt…"
+        // rather than briefly showing the stale transcription label.
+        processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+        state = .processing
+        runGeneration(
+            timeline: pending.timeline,
+            transcript: pending.transcript,
+            processed: pending.processed,
+            mode: effectiveMode
+        )
     }
 
     /// User-driven dismissal of the failure pill. Same as cancel —

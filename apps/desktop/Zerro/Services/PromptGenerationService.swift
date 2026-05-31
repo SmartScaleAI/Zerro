@@ -13,8 +13,9 @@
 //  The `systemPrompt` is passed at call time rather than read from the
 //  constant inside the impl so the wire test layer / future
 //  experimentation can swap prompts without touching provider code.
-//  Production call sites should always pass
-//  `PromptGenerationSystemPrompt.value` verbatim.
+//  Production call sites should always pass the value from
+//  `PromptGenerationSystemPrompt.composed(for:)` verbatim (Phase 17: base
+//  layer + the effective output mode's layer).
 //
 
 import Foundation

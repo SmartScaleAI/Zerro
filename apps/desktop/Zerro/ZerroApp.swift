@@ -24,6 +24,13 @@ struct ZerroApp: App {
     @State private var recordingFocusController: RecordingFocusWindowController
     @State private var areaSelectorController: AreaSelectorWindowController
 
+    /// Phase 14 / C3.4: Sparkle updater. Must live for the full app
+    /// session — owning it inside the MenuBarExtra content closure
+    /// would tear down `SPUStandardUpdaterController` every time the
+    /// dropdown closes, killing automatic update checks and any
+    /// in-flight download UI (Phase 4 lifetime learning).
+    @StateObject private var updater = UpdaterViewModel()
+
     /// Guard so the hotkey handler is appended to the library's handler
     /// list exactly once across the app's lifetime. SwiftUI re-invokes
     /// `App.init` whenever it re-evaluates the App struct (for example,
@@ -119,12 +126,27 @@ struct ZerroApp: App {
         // `.task` on this content view, so pill updates keep flowing
         // while the dropdown is closed and while the app is backgrounded.
         MenuBarExtra {
-            MenuBarPanelView()
+            MenuBarPanelView(
+                // Menu "Start Recording" runs the same path as the global
+                // hotkey: present the area selector first (gated on
+                // onboarding / permissions), record on confirm.
+                onStartRecording: {
+                    Self.handleHotkey(
+                        state: appState,
+                        preferences: preferences,
+                        permissions: permissions,
+                        onboarding: onboarding,
+                        areaSelector: areaSelectorController,
+                        pillController: pillController
+                    )
+                }
+            )
                 .environment(appState)
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
                 .environment(recentPrompts)
+                .environmentObject(updater)
         } label: {
             // OnboardingOpenerRegistrar is a zero-size sibling whose
             // only job is to capture SwiftUI's `openWindow` environment
@@ -262,6 +284,15 @@ struct ZerroApp: App {
             pillController?.flashBusy()
             return
         }
+        // Phase 17: the mode-switch confirmation pill is awaiting an answer
+        // (Keep/Switch). Like .processing, the record hotkey must not start
+        // a new recording over it — flash to signal "registered, but resolve
+        // the pill first".
+        if case .confirmingMode = state.state {
+            Log.hotkey.notice("mode-switch confirm in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
+            return
+        }
 
         if !onboarding.hasCompletedOnboarding {
             Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
@@ -308,7 +339,12 @@ struct ZerroApp: App {
                 }
                 state.startRecording(
                     selection: selection,
-                    microphoneDeviceID: preferences?.microphoneDeviceID ?? ""
+                    microphoneDeviceID: preferences?.microphoneDeviceID ?? "",
+                    // Phase 17: the overlay's mode toggle persisted its
+                    // selection to defaultOutputMode at confirm; read it
+                    // fresh here (same pattern as the mic device) so this
+                    // recording composes with the chosen mode.
+                    outputMode: preferences?.defaultOutputMode ?? .instruct
                 )
             },
             onCancel: {

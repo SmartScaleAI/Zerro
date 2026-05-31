@@ -195,6 +195,32 @@ final class AreaSelectorState {
         if isMicChipHovered != hovered { isMicChipHovered = hovered }
     }
 
+    // MARK: - Output mode (Phase 17)
+    //
+    // The toolbar carries an Instruct/Explain switch so the output mode
+    // for this recording is chosen right here at capture time. The
+    // controller seeds it from the persisted last-used default and, on a
+    // segment click, both flips it here and writes the new value back to
+    // `PreferencesStore.defaultOutputMode` — so the toolbar selection IS
+    // the next default. The confirmed selection is read at record-start
+    // and handed to `AppState.startRecording(outputMode:)`.
+
+    /// Currently-selected output mode for this recording. Mirrors the
+    /// persisted default; the controller keeps the two in sync on tap.
+    private(set) var outputMode: OutputMode = .instruct
+
+    /// The mode segment currently under the cursor, for the hover tint
+    /// on the non-selected side. nil when the cursor is off the toggle.
+    private(set) var hoveredOutputMode: OutputMode?
+
+    func setOutputMode(_ mode: OutputMode) {
+        if outputMode != mode { outputMode = mode }
+    }
+
+    func setHoveredOutputMode(_ mode: OutputMode?) {
+        if hoveredOutputMode != mode { hoveredOutputMode = mode }
+    }
+
     func setMicrophones(_ devices: [AudioInputDevice], selectedID: String) {
         microphones = devices
         selectedMicrophoneID = selectedID
