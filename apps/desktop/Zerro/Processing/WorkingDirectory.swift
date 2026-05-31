@@ -29,6 +29,7 @@
 //
 
 import Foundation
+import os
 
 enum WorkingDirectory {
 
@@ -90,9 +91,10 @@ enum WorkingDirectory {
             )
             return values.volumeAvailableCapacityForImportantUsage
         } catch {
-            NSLog(
-                "[Cleanup] freeBytes: couldn\u{2019}t read volume capacity: %@",
-                String(describing: error)
+            // Error description marked .private — volume URL errors
+            // typically embed the full path of the failing volume.
+            Log.cleanup.error(
+                "freeBytes: couldn’t read volume capacity: \(error.localizedDescription, privacy: .private)"
             )
             return nil
         }
@@ -114,7 +116,7 @@ enum WorkingDirectory {
                 options: [.skipsHiddenFiles]
             )
         } catch {
-            NSLog("[Cleanup] sweep: couldn't list tmp: %@", String(describing: error))
+            Log.cleanup.error("sweep: couldn't list tmp: \(error.localizedDescription, privacy: .private)")
             return
         }
 
@@ -124,15 +126,16 @@ enum WorkingDirectory {
                 try fm.removeItem(at: entry)
                 removed += 1
             } catch {
-                NSLog(
-                    "[Cleanup] sweep: couldn't remove %@: %@",
-                    entry.lastPathComponent,
-                    String(describing: error)
+                // The basename is .public — it's a `zerro-*` name we
+                // generated ourselves, no user content. The error
+                // description is .private (paths).
+                Log.cleanup.error(
+                    "sweep: couldn't remove \(entry.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .private)"
                 )
             }
         }
         if removed > 0 {
-            NSLog("[Cleanup] sweep removed %d orphaned entries", removed)
+            Log.cleanup.notice("sweep removed \(removed, privacy: .public) orphaned entries")
         }
     }
 }

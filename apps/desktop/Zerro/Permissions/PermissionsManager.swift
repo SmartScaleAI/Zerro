@@ -48,6 +48,7 @@ import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import Foundation
+import os
 import ScreenCaptureKit
 import Observation
 
@@ -355,7 +356,7 @@ final class PermissionsManager {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self, self.isAwaitingScreenRecordingResponse else { return }
-            NSLog("[Permissions] CGRequest appears to have been a no-op \u{2014} force-finalizing")
+            Log.permissions.notice("CGRequest appears to have been a no-op — force-finalizing")
             self.finalizeScreenRecordingResponse()
         }
     }
@@ -784,7 +785,7 @@ final class PermissionsManager {
     /// clean state.
     func resetTCCGrants() {
         guard let bundleID = Bundle.main.bundleIdentifier else {
-            NSLog("[Permissions] resetTCCGrants: no bundle identifier")
+            Log.permissions.error("resetTCCGrants: no bundle identifier")
             return
         }
         let process = Process()
@@ -793,15 +794,14 @@ final class PermissionsManager {
         do {
             try process.run()
             process.waitUntilExit()
-            NSLog(
-                "[Permissions] tccutil reset All %@ exited %d",
-                bundleID,
-                process.terminationStatus
+            // Bundle ID is .public (compile-time-derived from our own
+            // Info.plist, not user content); exit status is .public.
+            Log.permissions.notice(
+                "tccutil reset All \(bundleID, privacy: .public) exited \(process.terminationStatus, privacy: .public)"
             )
         } catch {
-            NSLog(
-                "[Permissions] tccutil reset All failed: %@",
-                String(describing: error)
+            Log.permissions.error(
+                "tccutil reset All failed: \(error.localizedDescription, privacy: .private)"
             )
         }
         resetRequestFlags()

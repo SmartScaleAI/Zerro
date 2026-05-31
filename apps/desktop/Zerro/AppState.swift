@@ -30,6 +30,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import os
 import SwiftUI
 
 // MARK: - RecordingState
@@ -329,7 +330,9 @@ final class AppState {
         microphoneDeviceID: String = ""
     ) {
         guard state == .idle else {
-            NSLog("[AppState] startRecording ignored — state is %@", String(describing: state))
+            // State name is .public — RecordingState case names contain
+            // no user content.
+            Log.state.notice("startRecording ignored — state is \(String(describing: self.state), privacy: .public)")
             return
         }
         // Phase 10: pre-flight free-space check. Refuse upfront with the
@@ -341,10 +344,9 @@ final class AppState {
         // write time, so a false-positive refuse here is worse than a
         // false-positive proceed.
         if let free = WorkingDirectory.freeBytes(), free < Self.minimumFreeBytesToRecord {
-            NSLog(
-                "[AppState] startRecording refused — only %lld bytes free (need %lld)",
-                free,
-                Self.minimumFreeBytesToRecord
+            // Byte counts are .public — capacity metrics, not user content.
+            Log.state.notice(
+                "startRecording refused — only \(free, privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
             )
             state = .failed(reason: .diskFull)
             return
@@ -401,6 +403,11 @@ final class AppState {
                 try await session.start()
                 guard let self, self.recordingSession === session else { return }
                 self.state = .recording
+                // Phase 13A: breadcrumb the .idle → .recording transition
+                // so it appears in the trail attached to any subsequent
+                // crash or non-fatal capture. StaticString literal —
+                // never interpolated runtime content.
+                Log.breadcrumb(category: .stateMachine, message: "recording started")
                 // Phase 10: watch for TCC revocation during the live
                 // session so we surface .screenRecordingRevoked /
                 // .microphoneRevoked the moment the user toggles the
@@ -412,7 +419,9 @@ final class AppState {
                     self?.handleMidSessionRevocation(reason)
                 }
             } catch {
-                NSLog("[AppState] session.start() failed: %@", String(describing: error))
+                // Error description is .private — capture errors carry
+                // file paths and device-identifying strings.
+                Log.state.error("session.start() failed: \(error.localizedDescription, privacy: .private)")
                 guard let self, self.recordingSession === session else { return }
                 self.recordingSession = nil
                 self.activeSelection = nil
@@ -443,7 +452,13 @@ final class AppState {
     /// the failure we set here.
     private func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
         guard isRecordingActive, let session = recordingSession else { return }
-        NSLog("[AppState] permission revoked mid-session: %@", String(describing: kind))
+        // Failure-reason case name is .public — no user content.
+        Log.state.notice("permission revoked mid-session: \(String(describing: kind), privacy: .public)")
+        // Phase 13A: breadcrumb at .warning level. The trail will read
+        // "...recording started → permission revoked mid-session → ..."
+        // which is exactly the lead-up signal you'd want before a
+        // related crash or capture lands.
+        Log.breadcrumb(category: .permissionChange, level: .warning, message: "permission revoked mid-session")
         permissions?.stopMonitoring()
         session.cancel()
         recordingSession = nil
@@ -621,7 +636,7 @@ final class AppState {
             failureRetryAttempts = 0
             state = .idle
         case .failed(let error):
-            NSLog("[AppState] session failed: %@", String(describing: error))
+            Log.state.error("session failed: \(error.localizedDescription, privacy: .private)")
             elapsedSeconds = 0
             frameCount = 0
             audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
@@ -657,6 +672,9 @@ final class AppState {
         // ~ms before the pipeline fires its first onStage the pill
         // would otherwise show whatever label survived the prior run.
         processingStageLabel = "Saving your narration\u{2026}"
+        // Phase 13A: marks the .recording → .processing handoff in the
+        // Sentry breadcrumb trail.
+        Log.breadcrumb(category: .pipelineStage, message: "processing started")
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -689,7 +707,7 @@ final class AppState {
                 // pill in place.
                 self.runPromptGeneration(processed: result)
             } catch {
-                NSLog("[Processing] failed: %@", String(describing: error))
+                Log.processing.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 // Disk-full and too-short/empty recordings get actionable
                 // copy; every other pipeline failure stays on the generic
@@ -730,18 +748,24 @@ final class AppState {
             guard let self else { return }
             do {
                 self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage
+                // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
+                // failure can be triaged by the breadcrumb sequence
+                // alone, without having to look at the failure event.
+                Log.breadcrumb(category: .pipelineStage, message: "transcription started")
                 let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
                 let transcript = try await OpenAITranscriptionService().transcribe(
                     audioFileURL: audioURL
                 )
-                NSLog(
-                    "[PromptGen] transcript: %d segments, fullText.count=%d",
-                    transcript.segments.count,
-                    transcript.fullText.count
+                // Counts are .public — segment count and char count
+                // are metrics, not content. The transcript TEXT itself
+                // never enters a log call anywhere.
+                Log.transcription.info(
+                    "segments=\(transcript.segments.count, privacy: .public) fullText.count=\(transcript.fullText.count, privacy: .public)"
                 )
                 guard self.state == .processing else { return }
 
                 self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
                 let timeline = Interleaver.merge(
                     frames: processed.frames,
                     transcript: transcript
@@ -750,12 +774,12 @@ final class AppState {
                     timeline: timeline,
                     systemPrompt: PromptGenerationSystemPrompt.value
                 )
-                NSLog(
-                    "[PromptGen] OK \u{2014} model=%@ in=%d out=%d, prompt.count=%d",
-                    result.usage.model,
-                    result.usage.inputTokens,
-                    result.usage.outputTokens,
-                    result.prompt.count
+                // Model name (.public — "gpt-4o", a constant we control)
+                // and token counts (.public — metrics, not content).
+                // result.prompt.count is the LENGTH of the generated
+                // prompt, not the text itself.
+                Log.promptGen.info(
+                    "OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public)"
                 )
                 Self.logCost(
                     audioDuration: processed.duration,
@@ -771,8 +795,13 @@ final class AppState {
                 // Wired via a weak ref on AppState set by ZerroApp.init.
                 self.recentPromptStore?.add(prompt: result.prompt)
                 self.state = .done
+                // Phase 13A: terminal-success breadcrumb. If a crash
+                // lands during result presentation (UI bug, copy
+                // affordance), the trail makes it obvious the pipeline
+                // itself completed first.
+                Log.breadcrumb(category: .pipelineStage, message: "prompt generation completed")
             } catch {
-                NSLog("[PromptGen] failed: %@", String(describing: error))
+                Log.promptGen.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
                 // Phase 13B: report engineering-signal failures to
@@ -1062,15 +1091,19 @@ final class AppState {
         let durationSeconds = CMTimeGetSeconds(audioDuration)
         let whisperCost = OpenAITranscriptionService.estimatedCost(audioDurationSeconds: durationSeconds)
         let gptCost = OpenAIPromptGenerationService.estimatedCost(usage: usage)
-        NSLog(
-            "[Cost] whisper-1: audio=%.1fs \u{2192} $%.4f",
-            durationSeconds, whisperCost
+        // All cost lines: durations, model names, token counts, and
+        // dollar amounts are .public — operational metrics with no user
+        // content. Pre-format Doubles with String(format:) for terse
+        // interpolation that's SDK-stable across Xcode versions.
+        let durStr = String(format: "%.1fs", durationSeconds)
+        let whisperStr = String(format: "$%.4f", whisperCost)
+        let gptStr = String(format: "$%.4f", gptCost)
+        let totalStr = String(format: "$%.4f", whisperCost + gptCost)
+        Log.cost.info("whisper-1: audio=\(durStr, privacy: .public) → \(whisperStr, privacy: .public)")
+        Log.cost.info(
+            "\(usage.model, privacy: .public): in=\(usage.inputTokens, privacy: .public) out=\(usage.outputTokens, privacy: .public) → \(gptStr, privacy: .public)"
         )
-        NSLog(
-            "[Cost] %@: in=%d out=%d \u{2192} $%.4f",
-            usage.model, usage.inputTokens, usage.outputTokens, gptCost
-        )
-        NSLog("[Cost] total: $%.4f", whisperCost + gptCost)
+        Log.cost.info("total: \(totalStr, privacy: .public)")
     }
 
     func toggleResultExpanded() {

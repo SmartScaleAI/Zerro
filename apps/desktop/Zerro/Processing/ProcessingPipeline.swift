@@ -37,6 +37,7 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
+import os
 import UniformTypeIdentifiers
 
 struct ProcessingPipeline {
@@ -87,7 +88,9 @@ struct ProcessingPipeline {
         onStage: @MainActor (Stage) -> Void = { _ in }
     ) async throws -> ProcessedRecording {
         let workingDirectory = try WorkingDirectory.make()
-        NSLog("[Processing] working dir: %@", workingDirectory.path)
+        // Full path is .private (under /var/folders/.../T/zerro-work-… which
+        // contains the user's short name in the realpath).
+        Log.processing.info("working dir: \(workingDirectory.path, privacy: .private)")
 
         do {
             let asset = AVURLAsset(url: sourceURL)
@@ -106,15 +109,14 @@ struct ProcessingPipeline {
 
             await MainActor.run { onStage(.isolatingAudio) }
             let audioURL = try await isolateAudio(from: sourceURL, into: workingDirectory)
-            NSLog("[Processing] isolated audio: %@", audioURL.lastPathComponent)
+            // Basename is .public — "audio.m4a" is our own constant.
+            Log.processing.info("isolated audio: \(audioURL.lastPathComponent, privacy: .public)")
 
             await MainActor.run { onStage(.extractingFrames) }
             let frames = try await extractFrames(from: sourceURL, into: workingDirectory)
-            NSLog(
-                "[Processing] extracted %d frames (first=%@, last=%@)",
-                frames.count,
-                frames.first?.url.lastPathComponent ?? "—",
-                frames.last?.url.lastPathComponent ?? "—"
+            // Frame basenames are `frame-NNN.jpg` (our own format), .public.
+            Log.processing.info(
+                "extracted \(frames.count, privacy: .public) frames (first=\(frames.first?.url.lastPathComponent ?? "—", privacy: .public), last=\(frames.last?.url.lastPathComponent ?? "—", privacy: .public))"
             )
 
             await MainActor.run { onStage(.writingManifest) }
@@ -124,7 +126,7 @@ struct ProcessingPipeline {
                 duration: duration,
                 into: workingDirectory
             )
-            NSLog("[Processing] manifest written")
+            Log.processing.info("manifest written")
 
             return ProcessedRecording(
                 audioURL: audioURL,
@@ -220,7 +222,7 @@ struct ProcessingPipeline {
                 guard let downsampled = Self.downsample(
                     cgImage, maxDimension: ProcessingConfig.maxFrameDimension
                 ) else {
-                    NSLog("[Processing] downsample failed at index %d", index)
+                    Log.processing.error("downsample failed at index \(index, privacy: .public)")
                     continue
                 }
 
@@ -229,17 +231,21 @@ struct ProcessingPipeline {
                 guard Self.encodeJPEG(
                     downsampled, quality: ProcessingConfig.jpegQuality, to: url
                 ) else {
-                    NSLog("[Processing] JPEG encode failed at index %d", index)
+                    Log.processing.error("JPEG encode failed at index \(index, privacy: .public)")
                     continue
                 }
 
                 frames.append(ExtractedFrame(url: url, timestamp: actualTime, index: index))
                 index += 1
             } catch {
-                NSLog(
-                    "[Processing] image generation failed at %.2fs: %@",
-                    CMTimeGetSeconds(item.requestedTime),
-                    String(describing: error)
+                // Timestamp is .public (a position into our own buffer,
+                // not user content). Error description is .private (may
+                // embed paths or AVFoundation internal state). Pre-format
+                // the Double rather than threading OSLogFloatFormatting
+                // through the interpolation — terser and SDK-stable.
+                let ts = String(format: "%.2fs", CMTimeGetSeconds(item.requestedTime))
+                Log.processing.error(
+                    "image generation failed at \(ts, privacy: .public): \(error.localizedDescription, privacy: .private)"
                 )
             }
         }

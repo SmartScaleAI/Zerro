@@ -25,6 +25,7 @@
 //
 
 import Foundation
+import os
 
 // MARK: - RecentPrompt
 
@@ -180,7 +181,9 @@ final class RecentPromptStore {
             // Corrupt JSON shouldn't break the app — log and start fresh.
             // We DON'T delete the corrupt file: if a future migration can
             // recover it, throwing it away would be worse.
-            NSLog("[RecentPromptStore] load failed: %@", String(describing: error))
+            // Error description marked .private — file errors typically
+            // embed the full path to the history file.
+            Log.history.error("load failed: \(error.localizedDescription, privacy: .private)")
             prompts = []
         }
     }
@@ -191,7 +194,7 @@ final class RecentPromptStore {
             let data = try encoder.encode(prompts)
             try data.write(to: fileURL, options: [.atomic])
         } catch {
-            NSLog("[RecentPromptStore] save failed: %@", String(describing: error))
+            Log.history.error("save failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -216,7 +219,7 @@ final class RecentPromptStore {
             // Application Support not reachable is exceptional; fall
             // back to the container tmp so the app still functions
             // (history just won't survive a relaunch).
-            NSLog("[RecentPromptStore] applicationSupport unreachable: %@", String(describing: error))
+            Log.history.error("applicationSupport unreachable: \(error.localizedDescription, privacy: .private)")
             return FileManager.default.temporaryDirectory
                 .appendingPathComponent("recent_prompts.json")
         }

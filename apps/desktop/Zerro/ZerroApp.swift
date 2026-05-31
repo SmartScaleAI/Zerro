@@ -7,6 +7,7 @@
 
 import AppKit
 import KeyboardShortcuts
+import os
 import SwiftUI
 
 @main
@@ -87,6 +88,11 @@ struct ZerroApp: App {
             // once across SwiftUI's re-invocations of App.init, so we
             // get the right one-shot semantics for free.
             CrashReporting.start()
+            // Phase 13A: anchor breadcrumb. Every subsequent breadcrumb
+            // (state transitions, pipeline stages, permission changes)
+            // accumulates AFTER this one in the Sentry crumb trail, so
+            // any crash report shows a clean "app launched → ..." lead.
+            Log.breadcrumb(category: .appLifecycle, message: "app launched")
             KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
                     state: state,
@@ -229,17 +235,20 @@ struct ZerroApp: App {
         pillController: PillWindowController?
     ) {
         guard let state, let preferences, let permissions, let onboarding, let areaSelector else {
-            NSLog("[Hotkey] dropped — one of state/preferences/permissions/onboarding/areaSelector was nil")
+            Log.hotkey.error("dropped — one of state/preferences/permissions/onboarding/areaSelector was nil")
             return
         }
 
-        NSLog("[Hotkey] fired — hasCompletedOnboarding=%@", onboarding.hasCompletedOnboarding ? "Y" : "N")
+        // All interpolated values in this function are .public — they're
+        // either enum case descriptions (state, permission status) or
+        // booleans, never user content.
+        Log.hotkey.notice("fired — hasCompletedOnboarding=\(onboarding.hasCompletedOnboarding ? "Y" : "N", privacy: .public)")
 
         // 0a. Active recording — stop it. Runs before any setup gate
         // because you must always be able to stop, even if a permission
         // was revoked mid-session.
         if state.isRecordingActive {
-            NSLog("[Hotkey] active recording — stopping (toggle)")
+            Log.hotkey.notice("active recording — stopping (toggle)")
             state.stopRecording()
             return
         }
@@ -249,13 +258,13 @@ struct ZerroApp: App {
         // reads as "the hotkey didn't fire" — the brief scale pulse
         // signals "registered, but the app is busy".
         if state.state == .processing {
-            NSLog("[Hotkey] processing in flight — flashing pill instead of starting")
+            Log.hotkey.notice("processing in flight — flashing pill instead of starting")
             pillController?.flashBusy()
             return
         }
 
         if !onboarding.hasCompletedOnboarding {
-            NSLog("[Hotkey] gating: onboarding incomplete — opening onboarding")
+            Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
             AppDelegate.openOnboarding()
             return
         }
@@ -264,25 +273,24 @@ struct ZerroApp: App {
         // the app was running. We only treat Screen Recording + Mic as
         // gating; Accessibility is informational per Checkpoint 3.
         permissions.refreshStatuses()
-        NSLog("[Hotkey] permission statuses — screen=%@ mic=%@ accessibility=%@",
-              String(describing: permissions.screenRecordingStatus),
-              String(describing: permissions.microphoneStatus),
-              String(describing: permissions.accessibilityStatus))
+        Log.hotkey.info(
+            "permission statuses — screen=\(String(describing: permissions.screenRecordingStatus), privacy: .public) mic=\(String(describing: permissions.microphoneStatus), privacy: .public) accessibility=\(String(describing: permissions.accessibilityStatus), privacy: .public)"
+        )
 
         if permissions.screenRecordingStatus != .granted {
-            NSLog("[Hotkey] gating: screen recording not granted — opening onboarding @ screenRecording")
+            Log.hotkey.notice("gating: screen recording not granted — opening onboarding @ screenRecording")
             onboarding.jump(to: .screenRecording)
             AppDelegate.openOnboarding()
             return
         }
         if permissions.microphoneStatus != .granted {
-            NSLog("[Hotkey] gating: microphone not granted — opening onboarding @ microphone")
+            Log.hotkey.notice("gating: microphone not granted — opening onboarding @ microphone")
             onboarding.jump(to: .microphone)
             AppDelegate.openOnboarding()
             return
         }
 
-        NSLog("[Hotkey] all gates passed — presenting area selector")
+        Log.hotkey.notice("all gates passed — presenting area selector")
 
         // hotkey → area selector → (on confirm) → startRecording(selection:mic:)
         // Mic device is read fresh from preferences at confirm time so a
@@ -351,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // captures `openWindow` at launch, but log loudly if it
             // ever happens — this exact silent-no-op was the bug that
             // made hotkey presses look like they did nothing.
-            NSLog("[Onboarding] openOnboarding() called but requestOpenOnboarding is nil — registrar didn't mount")
+            Log.onboarding.error("openOnboarding() called but requestOpenOnboarding is nil — registrar didn't mount")
         }
     }
 }

@@ -24,6 +24,7 @@
 //
 
 import Foundation
+import os
 import ServiceManagement
 
 @MainActor
@@ -59,9 +60,11 @@ final class LaunchAtLoginController {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            NSLog("[LaunchAtLogin] toggle to %@ failed: %@",
-                  newValue ? "on" : "off",
-                  String(describing: error))
+            // Error description marked .private — SMAppService errors
+            // can embed bundle paths and signing identity strings.
+            Log.launchAtLogin.error(
+                "toggle to \(newValue ? "on" : "off", privacy: .public) failed: \(error.localizedDescription, privacy: .private)"
+            )
         }
         refresh()
     }

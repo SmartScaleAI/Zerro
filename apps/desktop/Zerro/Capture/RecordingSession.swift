@@ -70,6 +70,7 @@ import AppKit
 import AVFoundation
 import CoreMedia
 import Foundation
+import os
 import ScreenCaptureKit
 
 @MainActor
@@ -421,7 +422,10 @@ final class RecordingSession: NSObject {
     /// error firing back-to-back).
     private func failSession(with error: Error) {
         guard lifecycleState == .running else { return }
-        NSLog("[RecordingSession] failSession: %@", String(describing: error))
+        // Error description marked .private — capture errors can embed
+        // file paths (writer output URL), display device IDs, or AVFoundation
+        // diagnostic strings that include user-derived metadata.
+        Log.capture.error("failSession: \(error.localizedDescription, privacy: .private)")
         lifecycleState = .finishing
         finalize(deletingFile: true, failureError: error)
     }
@@ -700,14 +704,15 @@ final class RecordingSession: NSObject {
             if let scDisplay = content.displays.first(where: { $0.displayID == displayID }) {
                 return ResolvedDisplay(scDisplay: scDisplay, nsScreen: screen)
             }
-            NSLog(
-                "[RecordingSession] selection screen '%@' found in NSScreen but not in SCShareableContent — falling back to main",
-                name
+            // Display name is .private — it's the user's monitor name
+            // (e.g. "Colin's MacBook Pro Display"), an identifier they
+            // chose or that their hardware vendor set.
+            Log.capture.notice(
+                "selection screen '\(name, privacy: .private)' found in NSScreen but not in SCShareableContent — falling back to main"
             )
         } else if let name = selection?.screenLocalizedName {
-            NSLog(
-                "[RecordingSession] selection screen '%@' no longer present — falling back to main",
-                name
+            Log.capture.notice(
+                "selection screen '\(name, privacy: .private)' no longer present — falling back to main"
             )
         }
         // Fallback: NSScreen.main paired with the first SCDisplay
@@ -754,9 +759,11 @@ final class RecordingSession: NSObject {
         if let device = AVCaptureDevice(uniqueID: uniqueID) {
             return device
         }
-        NSLog(
-            "[RecordingSession] persisted mic uniqueID '%@' not found — falling back to system default",
-            uniqueID
+        // uniqueID is .private — AVCaptureDevice unique IDs can contain
+        // serial numbers (especially for USB mics) that uniquely identify
+        // the user's hardware.
+        Log.capture.notice(
+            "persisted mic uniqueID '\(uniqueID, privacy: .private)' not found — falling back to system default"
         )
         return AVCaptureDevice.default(for: .audio)
     }
@@ -770,7 +777,7 @@ extension RecordingSession: SCStreamDelegate {
         // under us (permission revoked mid-session, display
         // disconnected, system pressure). Hop to MainActor so the
         // failSession guard sees coherent lifecycleState.
-        NSLog("[RecordingSession] SCStream didStopWithError: %@", String(describing: error))
+        Log.capture.error("SCStream didStopWithError: \(error.localizedDescription, privacy: .private)")
         Task { @MainActor [weak self] in
             self?.failSession(with: error)
         }

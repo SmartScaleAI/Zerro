@@ -34,6 +34,7 @@
 
 import AppKit
 import AVFoundation
+import os
 import SwiftUI
 
 @MainActor
@@ -63,7 +64,7 @@ final class AreaSelectorWindowController {
         onConfirm: @escaping (SelectionRect) -> Void,
         onCancel: @escaping () -> Void
     ) {
-        NSLog("[AreaSelector] present() called")
+        Log.ui.debug("AreaSelector present() called")
 
         // Guard against double-present (e.g. hotkey pressed twice).
         // Re-presenting on top of an existing overlay would leak

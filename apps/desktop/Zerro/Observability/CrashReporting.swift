@@ -91,7 +91,7 @@ enum CrashReporting {
         didStart = true
 
         guard let dsn = readDSN(), !dsn.isEmpty else {
-            NSLog("[CrashReporting] SENTRY_DSN missing or empty in Info.plist — crash reporting disabled this launch.")
+            Log.crashReporting.notice("SENTRY_DSN missing or empty in Info.plist — crash reporting disabled this launch.")
             return
         }
 
