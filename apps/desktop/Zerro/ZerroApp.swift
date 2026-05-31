@@ -78,6 +78,15 @@ struct ZerroApp: App {
         // app's lifetime, so weak references stay valid.
         if !Self.didRegisterGlobalShortcuts {
             Self.didRegisterGlobalShortcuts = true
+            // Phase 13 (Part B): bring up Sentry FIRST inside the
+            // one-shot block so the crash reporter is live before any
+            // launch-time work below (the working-dir sweep, the
+            // hotkey closure capture) can fault. CrashReporting.start
+            // is itself idempotent against re-entry, but this guard
+            // already ensures the file-system sweep below runs only
+            // once across SwiftUI's re-invocations of App.init, so we
+            // get the right one-shot semantics for free.
+            CrashReporting.start()
             KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
                     state: state,

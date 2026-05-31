@@ -47,6 +47,16 @@ enum DiagnosticsCollector {
         lines.append("")
         lines.append("Output:")
         lines.append("  Default mode: \(preferences.defaultOutputMode.displayName)")
+        // Phase 13 (Part B) — include the most recent Sentry event ID
+        // so a support email correlates to a captured crash / non-fatal
+        // event in the Sentry dashboard. Reads `nil` if no event has
+        // been sent this launch OR if the user has the crash-reporting
+        // toggle OFF (in which case `beforeSend` drops everything and
+        // never populates this). DEFERRED: wire into the structured
+        // diagnostic blob that the Phase 13 logging task is building.
+        lines.append("")
+        lines.append("Support:")
+        lines.append("  Crash report ID: \(CrashReporting.lastEventId ?? "(none this launch)")")
         return lines.joined(separator: "\n")
     }
 

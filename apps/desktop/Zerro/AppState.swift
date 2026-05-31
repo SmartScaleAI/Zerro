@@ -416,7 +416,19 @@ final class AppState {
                 guard let self, self.recordingSession === session else { return }
                 self.recordingSession = nil
                 self.activeSelection = nil
-                self.state = .failed(reason: Self.failureReason(from: error))
+                let reason = Self.failureReason(from: error)
+                // Phase 13B: report engineering-signal failures to
+                // Sentry. shouldCapture(_:) filters out user /
+                // environment failures so we don't ship noise.
+                if Self.shouldCapture(reason) {
+                    CrashReporting.capture(
+                        error,
+                        message: "Recording start failed",
+                        stage: "recording",
+                        context: ["errorCode": Self.errorCodeString(reason)]
+                    )
+                }
+                self.state = .failed(reason: reason)
             }
         }
     }
@@ -690,6 +702,18 @@ final class AppState {
                 } else {
                     reason = .processingFailed
                 }
+                // Phase 13B: report engineering-signal failures to
+                // Sentry. .diskFull and .recordingTooShort are gated
+                // out by shouldCapture; .processingFailed (a real
+                // pipeline bug) is the one we want to triage.
+                if Self.shouldCapture(reason) {
+                    CrashReporting.capture(
+                        error,
+                        message: "Processing pipeline failed",
+                        stage: "processing",
+                        context: ["errorCode": Self.errorCodeString(reason)]
+                    )
+                }
                 self.state = .failed(reason: reason)
             }
         }
@@ -750,7 +774,25 @@ final class AppState {
             } catch {
                 NSLog("[PromptGen] failed: %@", String(describing: error))
                 guard self.state == .processing else { return }
-                self.state = .failed(reason: Self.failureReason(from: error))
+                let reason = Self.failureReason(from: error)
+                // Phase 13B: report engineering-signal failures to
+                // Sentry. apiKeyMissing / apiAuth / networkOffline /
+                // rateLimited are gated out by shouldCapture; the
+                // remaining .providerError (decode failures, 5xx
+                // floods, empty content) is the bucket we want to
+                // triage. Distinguish transcription vs generation by
+                // the error TYPE so the dashboard's `stage` tag
+                // pinpoints which API call broke.
+                if Self.shouldCapture(reason) {
+                    let stage = (error is TranscriptionError) ? "transcription" : "promptGeneration"
+                    CrashReporting.capture(
+                        error,
+                        message: "Prompt generation failed",
+                        stage: stage,
+                        context: ["errorCode": Self.errorCodeString(reason)]
+                    )
+                }
+                self.state = .failed(reason: reason)
             }
         }
     }
@@ -809,6 +851,45 @@ final class AppState {
     private static func isNarrationEmpty(_ transcript: Transcript) -> Bool {
         let trimmed = transcript.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.count < minNarrationCharacters
+    }
+
+    // MARK: - Sentry capture gating (Phase 13B)
+
+    /// Whether a given mapped failure is worth reporting to Sentry as a
+    /// non-fatal event. Split from `failureReason` so the policy of
+    /// "what counts as an engineering signal" lives in one place.
+    ///
+    /// Captured: reasons that indicate Zerro misbehaved (capture stack
+    /// failed to start / interrupted mid-stream, local processing
+    /// pipeline blew up, provider returned malformed/decode-failing
+    /// content). These are the ones we'd want to triage.
+    ///
+    /// NOT captured: reasons that are user- or environment-driven and
+    /// already surfaced to the user with actionable copy (permission
+    /// revoked, disk full, recording too short, missing/invalid API
+    /// key, network offline, provider rate-limit). Reporting those
+    /// would be noise — they're not bugs in Zerro.
+    private static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
+        switch reason {
+        case .streamStartFailed, .writerStartFailed, .captureInterrupted,
+             .microphoneUnavailable,
+             .processingFailed,
+             .providerError:
+            return true
+        case .screenRecordingRevoked, .microphoneRevoked,
+             .recordingTooShort, .diskFull,
+             .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited:
+            return false
+        }
+    }
+
+    /// Safe stringification of `reason` for the Sentry `errorCode` tag.
+    /// Every `RecordingFailureReason` case is value-less, so
+    /// `String(describing:)` yields just the case name
+    /// ("processingFailed", "providerError", etc.) — a compile-time-
+    /// bounded value with zero user content.
+    private static func errorCodeString(_ reason: RecordingFailureReason) -> String {
+        String(describing: reason)
     }
 
     /// Maps a RecordingSession.SessionError (or anything else) into the

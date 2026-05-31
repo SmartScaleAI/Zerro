@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Zerro captures your narration alongside your screen so the AI can understand what you're describing.</string>
+	<string>Zerro captures your narration alongside your screen so the AI can understand what you&apos;re describing.</string>
+	<key>SENTRY_DSN</key>
+	<string>https://c6ea09df0e809a38afdf758784e7c0d2@o4511481234128896.ingest.us.sentry.io/4511481246973952</string>
 </dict>
 </plist>

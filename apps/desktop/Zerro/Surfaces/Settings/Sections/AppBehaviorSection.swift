@@ -33,9 +33,37 @@ struct AppBehaviorSection: View {
         SettingsSection("App Behavior") {
             LaunchAtLoginRow()
             SettingsRowDivider()
+            CrashReportingRow()
+            SettingsRowDivider()
             RerunOnboardingRow()
             SettingsRowDivider()
             ResetDefaultsRow()
+        }
+    }
+}
+
+// MARK: - Crash Reporting
+
+// Phase 13 (Part B) — the SINGLE documented exception to Zerro's
+// "no analytics / no telemetry" story. Anonymous, on by default,
+// one-click off. The toggle writes to the same UserDefaults key the
+// CrashReporting helper reads from `beforeSend` on every event, so
+// flipping it OFF stops all transmission immediately — no app
+// restart required. Default ON matches the helper's `isEnabled`
+// fallback ("key absent" → true).
+
+private struct CrashReportingRow: View {
+    @AppStorage(CrashReporting.isEnabledDefaultsKey) private var isEnabled: Bool = true
+
+    var body: some View {
+        SettingsRow(
+            label: "Send Anonymous Crash Reports",
+            description: "Helps fix crashes without you needing to report them. Recordings, transcripts, generated prompts, and your API key are never sent."
+        ) {
+            Toggle("Send Anonymous Crash Reports", isOn: $isEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Color.vfSuccessGreen)
         }
     }
 }
