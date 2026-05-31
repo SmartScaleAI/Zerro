@@ -18,7 +18,7 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "Do I need to be a developer to use Zerro?",
     answer:
-      "No. If you can show your screen and say what you want, you can use Zerro. It's just as useful for getting help with a spreadsheet, explaining a problem to an AI assistant, or drafting something as it is for coding.",
+      "No. If you can show your screen and say what you want, you can use Zerro. It's just as useful for getting help with a spreadsheet, explaining a problem to an AI assistant, or drafting something as it is for coding. Plenty of people never touch a coding agent at all — they use Explain mode to make sense of a confusing error, spreadsheet, or design in plain language, no code involved.",
   },
   {
     question: "How much does Zerro cost?",

@@ -171,8 +171,9 @@ const Hero = () => {
           </motion.span>
         </h1>
         <p className="max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
-          Record your screen, dictate what you want, and Zerro hands you a
-          structured prompt — ready to paste into your AI agent.
+          Record your screen, dictate what you want, and Zerro turns it into
+          exactly what you need — a structured prompt for your AI agent, or a
+          plain-language explanation of what&apos;s on screen.
         </p>
         <div className="flex flex-row flex-wrap items-center justify-center gap-3">
           <Button

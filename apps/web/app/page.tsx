@@ -22,24 +22,24 @@ export const metadata: Metadata = {
   // Absolute so the homepage title is fully controlled and lead-with-product,
   // rather than relying on the root template suffix.
   title: {
-    absolute: "Zerro — Voice dictation for your AI coding agent",
+    absolute: "Zerro — Turn your screen and voice into a prompt or an explanation",
   },
   description:
-    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get a structured Markdown prompt ready to paste into Cursor, Windsurf, or v0. Local-first, bring your own keys.",
+    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get either a structured prompt for your AI agent or a clear plain-language explanation of what's on screen. Local-first, bring your own keys.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Zerro — Voice dictation for your AI coding agent",
+    title: "Zerro — Turn your screen and voice into a prompt or an explanation",
     description:
-      "Record your screen, dictate what you want, and Zerro hands you a structured prompt for your AI agent. Native macOS, local-first, bring your own keys.",
+      "Record a region of your screen, dictate what you want, and get either a structured prompt for your AI agent or a clear plain-language explanation of what's on screen. Native macOS, local-first, bring your own keys.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro — Voice dictation for your AI coding agent",
+    title: "Zerro — Turn your screen and voice into a prompt or an explanation",
     description:
-      "Record your screen, dictate what you want, and get a structured prompt for your AI agent. Native macOS, local-first, BYOK.",
+      "Record your screen, dictate what you want, and get either a structured prompt for your AI agent or a plain-language explanation of what's on screen. Native macOS, local-first, BYOK.",
   },
 };
 

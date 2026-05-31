@@ -10,10 +10,10 @@ const tools = ["ChatGPT", "Claude", "Gemini", "Cursor", "Perplexity", "v0"];
 
 // "Use it for" — everyday, cross-audience examples.
 const uses = [
-  "Explain a bug to an AI assistant",
-  "Get help with a spreadsheet or design",
-  "Turn what's on screen into a clear request",
   "Hand a coding agent real context",
+  "Explain a bug to an AI assistant",
+  "Understand a confusing screen, error, or document",
+  "Explain what you're looking at to a teammate",
 ];
 
 const WhatIsZerro = () => {
