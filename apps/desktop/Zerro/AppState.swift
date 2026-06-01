@@ -55,7 +55,7 @@ public enum RecordingState: Equatable {
 // MARK: - RecordingFailureReason
 
 /// The shape of every way a recording can end badly. Each case carries
-/// the underlying details if there are any (for logging) and the
+/// the underlying details if there are any (for logging) and ther
 /// `userMessage` projection renders the single-line string the pill
 /// shows. Kept narrow — Phase 7 surfaces these as a flat message; a
 /// later phase can branch on the case for richer recovery affordances.
@@ -833,11 +833,12 @@ final class AppState {
                 )
 
                 // Phase 17: decide the effective mode BEFORE composing the
-                // prompt, so the single generation runs with it. The
-                // detector is a no-op stub in Phase 17 (DEFERRED Phase 18);
-                // the debug trigger forces a match so the pill is testable.
+                // prompt, so the single generation runs with it. Phase 18
+                // replaced the stub with local opposite-mode string
+                // matching; the debug trigger still forces a (high) match
+                // so the pill is testable without saying the magic words.
                 var detection = ModeSwitchDetector.detect(
-                    transcript: transcript.fullText,
+                    transcript: transcript,
                     selectedMode: self.recordingOutputMode
                 )
                 #if DEBUG
@@ -845,12 +846,32 @@ final class AppState {
                     self.debugForceModeSwitchPill = false
                     detection = ModeSwitchDetection(
                         didMatch: true,
-                        suggestedMode: self.recordingOutputMode.opposite
+                        suggestedMode: self.recordingOutputMode.opposite,
+                        matchedCue: nil,
+                        matchedTarget: nil,
+                        region: nil,
+                        confidence: .high
                     )
                 }
                 #endif
 
+                // Phase 18 telemetry: record EVERY match (high or low) as a
+                // local breadcrumb — cue/target/region/confidence, never
+                // any transcript text. Low-confidence (mid-recording)
+                // matches are logged here but deliberately fall through the
+                // gate below without interrupting. The Sentry crash-trail
+                // marker ("mode-switch confirm shown") and the user's
+                // confirm/cancel choice (resolveModeSwitch) cover the
+                // surfaced case; cancel-rate is read from those.
+                if detection.didMatch {
+                    Log.modeSwitch.info(
+                        "match cue=\(detection.matchedCue ?? "-", privacy: .public) target=\(detection.matchedTarget ?? "-", privacy: .public) region=\(detection.region?.rawValue ?? "-", privacy: .public) confidence=\(detection.confidence.rawValue, privacy: .public)"
+                    )
+                }
+
+                // Only HIGH-confidence matches surface the pill (Phase 18).
                 if detection.didMatch,
+                   detection.confidence == .high,
                    let suggested = detection.suggestedMode,
                    suggested != self.recordingOutputMode {
                     // Pause for the confirmation pill. Stash everything the
