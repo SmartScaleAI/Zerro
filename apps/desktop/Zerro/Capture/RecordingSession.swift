@@ -13,9 +13,12 @@
 //  Threading boundary — read this before touching the file
 //  -------------------------------------------------------
 //  • Public API (init/start/stop/cancel) is @MainActor.
-//  • SCStreamOutput delivers sample buffers on `videoQueue`
-//    (background, dedicated). ScreenCaptureKit requires the handler
-//    to be on a queue you supply; the main queue is wrong.
+//  • SCStreamOutput delivers VIDEO sample buffers on `videoQueue` and
+//    MICROPHONE sample buffers on `audioQueue` (both background,
+//    dedicated). ScreenCaptureKit requires the handler to be on a queue
+//    you supply; the main queue is wrong. As of Phase 18 the mic is
+//    captured through ScreenCaptureKit too (not a side AVCaptureSession)
+//    — see "Audio source" below.
 //  • AVAssetWriter is single-threaded — every writer mutation
 //    (`startSession`, input.append, markAsFinished, finishWriting)
 //    runs on `writerQueue` (background, serial). Sample buffers are
@@ -36,15 +39,29 @@
 //    3. writerQueue is serial — append/finish/markAsFinished can
 //       never interleave.
 //
-//  Audio session start dance
-//  -------------------------
+//  Audio source (Phase 18) — read this before touching capture setup
+//  -------------------------------------------------------------------
+//  The microphone is captured THROUGH ScreenCaptureKit
+//  (`config.captureMicrophone = true`, delivered as the `.microphone`
+//  output type), NOT via a separate AVCaptureSession. The reason is the
+//  clock domain: SCStream video and an AVCaptureSession mic are stamped
+//  on two independent clocks with no shared origin. The old design
+//  anchored the writer to the first VIDEO frame and dropped any audio
+//  whose PTS fell before that anchor — and on a STATIC screen (sparse
+//  video frames) the mic clock could sit behind the anchor and every
+//  mic buffer was silently discarded: silent track → empty transcript →
+//  a prompt generated from frames only. Capturing the mic through SCK
+//  puts video + mic on ONE clock, so the comparison below is always
+//  coherent. This is the macOS-native pattern modern recorders use.
+//
+//  Session start anchor
+//  --------------------
 //  AVAssetWriter has ONE session-start timestamp shared by both inputs.
-//  We anchor it to the first VIDEO sample buffer's PTS (video is the
-//  dominant track and defines the timebase). Any audio buffers that
-//  arrive before that first video buffer are dropped — the writer
-//  rejects appends with PTS < session start. This is typically a few
-//  tens of ms at session start and never affects the perceived audio
-//  inside the recording.
+//  We anchor it to the FIRST sample buffer of EITHER track (whichever
+//  arrives first) via `ensureSessionStarted` — never gated on one track
+//  specifically. A straggler from the other track with PTS < the anchor
+//  is dropped (at most one buffer, a few tens of ms), which is the
+//  canonical first-buffer-wins pattern for muxing into one writer.
 //
 //  Coordinate conversion (C3)
 //  --------------------------
@@ -131,9 +148,7 @@ final class RecordingSession: NSObject {
     // MARK: - MainActor-only state
 
     private var stream: SCStream?
-    private var streamOutput: VideoStreamOutput?
-    private var captureSession: AVCaptureSession?
-    private var audioOutputAdapter: AudioCaptureOutput?
+    private var streamOutput: StreamSampleOutput?
     private var lifecycleState: LifecycleState = .idle
 
     /// Wall-clock anchor for the elapsed publish task. Set in start()
@@ -144,11 +159,6 @@ final class RecordingSession: NSObject {
     /// gives the user a smooth stopwatch tick regardless.
     private var sessionStartWallClock: CFAbsoluteTime?
     private var elapsedPublishTask: Task<Void, Never>?
-
-    /// NotificationCenter token for AVCaptureSession runtime errors
-    /// (mic device pulled, format change, etc.). Registered in start(),
-    /// removed in finalize().
-    private var runtimeErrorObserver: NSObjectProtocol?
 
     private enum LifecycleState {
         case idle, running, finishing, finished
@@ -163,6 +173,15 @@ final class RecordingSession: NSObject {
     nonisolated(unsafe) private var videoInput: AVAssetWriterInput?
     nonisolated(unsafe) private var audioInput: AVAssetWriterInput?
     nonisolated(unsafe) private var sessionStartPTS: CMTime?
+
+    /// Diagnostic counters for the mic-append path (writerQueue-only, so
+    /// single-writer-safe like the rest of this block). Logged at
+    /// finalize so a silent recording is immediately distinguishable from
+    /// a dropped-buffer recording — the exact ambiguity that made the
+    /// pre-Phase-18 AVCaptureSession bug hard to spot. Counts only, never
+    /// content.
+    nonisolated(unsafe) private var audioAppendCount = 0
+    nonisolated(unsafe) private var audioDropCount = 0
 
     // MARK: - AudioQueue-only state (live waveform throttle)
     //
@@ -231,6 +250,21 @@ final class RecordingSession: NSObject {
         config.showsCursor = true
         config.queueDepth = 6
 
+        // Phase 18: capture the microphone THROUGH ScreenCaptureKit so
+        // narration shares the screen stream's clock domain (see the file
+        // header "Audio source"). `captureMicrophone` /
+        // `microphoneCaptureDeviceID` are macOS 15+; the deployment target
+        // is well above that, so no availability fence is needed. We do
+        // NOT set `capturesAudio` — system audio is not part of the
+        // narration signal and would only invite echo. Resolve the mic up
+        // front so a machine with no input device fails fast on the same
+        // `.noMicrophoneAvailable` path as before.
+        guard let micDeviceID = Self.resolveMicrophoneDeviceID(preferred: microphoneDeviceID) else {
+            throw SessionError.noMicrophoneAvailable
+        }
+        config.captureMicrophone = true
+        config.microphoneCaptureDeviceID = micDeviceID
+
         // Three capture shapes, in priority order:
         //   1. Window target whose SCWindow is still on screen — clean
         //      per-window capture via desktopIndependentWindow (no
@@ -280,11 +314,10 @@ final class RecordingSession: NSObject {
         writer.add(videoInput)
 
         // Audio input setup. AAC mono 44.1kHz / 64kbps — voice-grade,
-        // since narration is the only signal we care about. Mic native
-        // format (channels + sample rate) is converted by the writer
-        // via its internal AudioConverter — no manual downmix needed.
-        // C2: defaults to system audio device; C3 reads
-        // microphoneDeviceID from PreferencesStore.
+        // since narration is the only signal we care about. The mic's
+        // native PCM (from the SCK `.microphone` output) is converted to
+        // AAC by the writer's internal AudioConverter — no manual downmix
+        // or resample needed.
         let audioSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVNumberOfChannelsKey: 1,
@@ -298,38 +331,6 @@ final class RecordingSession: NSObject {
         }
         writer.add(audioInput)
 
-        // AVCaptureSession with the user's selected mic. Construction
-        // is synchronous; startRunning() below is the blocking call
-        // and we await it off the main queue. C3: resolves from
-        // PreferencesStore.microphoneDeviceID, falling back to system
-        // default if the persisted device is no longer connected.
-        guard let audioDevice = Self.resolveAudioDevice(uniqueID: microphoneDeviceID) else {
-            throw SessionError.noMicrophoneAvailable
-        }
-        let captureSession = AVCaptureSession()
-        captureSession.beginConfiguration()
-        let audioDeviceInput: AVCaptureDeviceInput
-        do {
-            audioDeviceInput = try AVCaptureDeviceInput(device: audioDevice)
-        } catch {
-            throw SessionError.audioInputSetupFailed(underlying: error)
-        }
-        guard captureSession.canAddInput(audioDeviceInput) else {
-            throw SessionError.audioInputSetupFailed(underlying: nil)
-        }
-        captureSession.addInput(audioDeviceInput)
-
-        let audioDataOutput = AVCaptureAudioDataOutput()
-        let audioOutputAdapter = AudioCaptureOutput { [weak self] sampleBuffer in
-            self?.handleAudioSampleBuffer(sampleBuffer)
-        }
-        audioDataOutput.setSampleBufferDelegate(audioOutputAdapter, queue: audioQueue)
-        guard captureSession.canAddOutput(audioDataOutput) else {
-            throw SessionError.audioInputSetupFailed(underlying: nil)
-        }
-        captureSession.addOutput(audioDataOutput)
-        captureSession.commitConfiguration()
-
         guard writer.startWriting() else {
             throw SessionError.writerFailedToStart(underlying: writer.error)
         }
@@ -342,45 +343,26 @@ final class RecordingSession: NSObject {
         self.videoInput = videoInput
         self.audioInput = audioInput
 
-        let videoStreamOutput = VideoStreamOutput { [weak self] sampleBuffer in
-            self?.handleVideoSampleBuffer(sampleBuffer)
+        // One output object routes both stream types by `outputType`;
+        // registered per-type with its own delivery queue so video lands
+        // on videoQueue and mic on audioQueue (matching the threading
+        // boundary in the file header). Both feed the same serial
+        // writerQueue downstream, which keeps the writer single-threaded.
+        let streamOutput = StreamSampleOutput { [weak self] sampleBuffer, outputType in
+            switch outputType {
+            case .screen:     self?.handleVideoSampleBuffer(sampleBuffer)
+            case .microphone: self?.handleAudioSampleBuffer(sampleBuffer)
+            default:          break
+            }
         }
-        self.streamOutput = videoStreamOutput
-        self.audioOutputAdapter = audioOutputAdapter
-        try stream.addStreamOutput(videoStreamOutput, type: .screen, sampleHandlerQueue: videoQueue)
+        self.streamOutput = streamOutput
+        try stream.addStreamOutput(streamOutput, type: .screen, sampleHandlerQueue: videoQueue)
+        try stream.addStreamOutput(streamOutput, type: .microphone, sampleHandlerQueue: audioQueue)
 
         try await stream.startCapture()
 
-        // AVCaptureSession.startRunning() blocks for ~100ms while the
-        // audio stack warms up. Hop off MainActor so the menu bar
-        // dropdown stays responsive while it spins up.
-        let sessionShim = UncheckedSendable(captureSession)
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInteractive).async {
-                sessionShim.value.startRunning()
-                continuation.resume()
-            }
-        }
-
         self.stream = stream
-        self.captureSession = captureSession
         self.lifecycleState = .running
-
-        // Mid-session AVCaptureSession failures (mic unplugged, format
-        // change refused, etc.) surface as a runtime-error notification
-        // — observe and route to failSession. Posted off MainActor so
-        // we hop explicitly. SCStream failures land in the delegate
-        // method below, same routing.
-        runtimeErrorObserver = NotificationCenter.default.addObserver(
-            forName: AVCaptureSession.runtimeErrorNotification,
-            object: captureSession,
-            queue: nil
-        ) { [weak self] note in
-            let error = note.userInfo?[AVCaptureSessionErrorKey] as? Error
-            Task { @MainActor [weak self] in
-                self?.failSession(with: error ?? SessionError.audioInputSetupFailed(underlying: nil))
-            }
-        }
 
         // Anchor the UI-facing elapsed clock on wall time and start
         // publishing at 10Hz. The wall-clock anchor (not video PTS)
@@ -438,7 +420,6 @@ final class RecordingSession: NSObject {
     /// `failureError` nil → existing success/cancel paths.
     private func finalize(deletingFile: Bool, failureError: Error? = nil) {
         let stream = self.stream
-        let captureSession = self.captureSession
         let outputURL = self.outputURL
         let writerQueue = self.writerQueue
 
@@ -449,32 +430,11 @@ final class RecordingSession: NSObject {
         elapsedPublishTask = nil
         sessionStartWallClock = nil
 
-        // Drop the runtime-error observer before pipeline teardown so
-        // the inevitable "session stopped" notifications don't loop
-        // back through failSession.
-        if let token = runtimeErrorObserver {
-            NotificationCenter.default.removeObserver(token)
-            runtimeErrorObserver = nil
-        }
-
         Task { @MainActor in
-            // Stop both capture pipelines first so no more sample buffers
-            // arrive mid-teardown. SCStream.stopCapture() awaits SCK's
-            // drain; AVCaptureSession.stopRunning() blocks briefly while
-            // the audio stack tears down — push off MainActor for the
-            // same reason as startRunning().
-            async let videoStop: Void = {
-                if let stream { try? await stream.stopCapture() }
-            }()
-            async let audioStop: Void = withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                guard let captureSession else { continuation.resume(); return }
-                let sessionShim = UncheckedSendable(captureSession)
-                DispatchQueue.global(qos: .userInteractive).async {
-                    sessionShim.value.stopRunning()
-                    continuation.resume()
-                }
-            }
-            _ = await (videoStop, audioStop)
+            // Stop the stream first so no more sample buffers (video OR
+            // mic — both now flow through SCK) arrive mid-teardown.
+            // stopCapture() awaits SCK's drain.
+            if let stream { try? await stream.stopCapture() }
 
             // Marshal writer teardown onto writerQueue so it sees any
             // in-flight appends complete first (serial queue ordering).
@@ -487,6 +447,13 @@ final class RecordingSession: NSObject {
                     }
                     return
                 }
+                // Mic-append health, counts only (.public). A healthy
+                // recording reads e.g. "appended=N dropped=0"; a near-zero
+                // append count points straight at the capture stack rather
+                // than at Whisper.
+                Log.capture.info(
+                    "mic buffers appended=\(self.audioAppendCount, privacy: .public) dropped=\(self.audioDropCount, privacy: .public)"
+                )
                 videoInput.markAsFinished()
                 self.audioInput?.markAsFinished()
                 let writerShim = UncheckedSendable(writer)
@@ -553,20 +520,24 @@ final class RecordingSession: NSObject {
         }
     }
 
-    /// Runs on writerQueue. Guards the first-sample session start and
-    /// publishes throttled elapsed time back to MainActor.
+    /// Runs on writerQueue (serial). Starts the writer's session on the
+    /// FIRST sample of either track and appends video. `startSession`
+    /// must run before any append; appends must have pts >= the anchor.
+    nonisolated private func ensureSessionStarted(at pts: CMTime) {
+        guard sessionStartPTS == nil, let writer = writer else { return }
+        writer.startSession(atSourceTime: pts)
+        sessionStartPTS = pts
+    }
+
+    /// Runs on writerQueue.
     nonisolated private func appendVideo(_ sampleBuffer: CMSampleBuffer) {
-        guard let writer = writer, let videoInput = videoInput else { return }
+        guard let videoInput = videoInput else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-
-        // First sample: start the writer's session at THIS pts.
-        // startSession must run before the first append; subsequent
-        // appends must have pts >= sessionStartPTS.
-        if sessionStartPTS == nil {
-            writer.startSession(atSourceTime: pts)
-            sessionStartPTS = pts
-        }
-
+        ensureSessionStarted(at: pts)
+        // Drop the rare straggler whose pts predates the anchor (e.g. the
+        // mic buffer won the race and started the session a hair later) —
+        // AVAssetWriter rejects pts < session start by entering .failed.
+        guard let start = sessionStartPTS, CMTimeCompare(pts, start) >= 0 else { return }
         guard videoInput.isReadyForMoreMediaData else { return }
         videoInput.append(sampleBuffer)
         // Elapsed publishing is NOT tied to sample buffer arrival —
@@ -661,18 +632,26 @@ final class RecordingSession: NSObject {
         return 0
     }
 
-    /// Runs on writerQueue. Drops samples that arrive before the
-    /// writer's session has been started by the first video buffer —
-    /// AVAssetWriter rejects appends with pts < sessionStartPTS, and
-    /// "rejected" surfaces as the writer entering .failed which would
-    /// kill the recording. Per the file header's session-start dance.
+    /// Runs on writerQueue. Phase 18: the mic now shares SCK's clock with
+    /// video, and the session is anchored on the first sample of EITHER
+    /// track — so audio is no longer gated on a video frame arriving
+    /// first (the bug that silently dropped narration on static-screen
+    /// recordings). Buffers with pts before the anchor are still dropped
+    /// (≤ one straggler), since AVAssetWriter rejects pts < session start.
     nonisolated private func appendAudio(_ sampleBuffer: CMSampleBuffer) {
         guard let audioInput = audioInput else { return }
-        guard let start = sessionStartPTS else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        if CMTimeCompare(pts, start) < 0 { return }
-        guard audioInput.isReadyForMoreMediaData else { return }
+        ensureSessionStarted(at: pts)
+        guard let start = sessionStartPTS, CMTimeCompare(pts, start) >= 0 else {
+            audioDropCount += 1
+            return
+        }
+        guard audioInput.isReadyForMoreMediaData else {
+            audioDropCount += 1
+            return
+        }
         audioInput.append(sampleBuffer)
+        audioAppendCount += 1
     }
 
     // MARK: - C3 helpers (display + audio device resolution)
@@ -745,27 +724,32 @@ final class RecordingSession: NSObject {
         )
     }
 
-    /// Resolves the user's stored mic preference to a live device.
-    /// Empty `uniqueID` is the "system default" sentinel
-    /// (PreferencesStore convention). If the persisted device has
-    /// since been disconnected, falls back to the system default and
-    /// logs — silently swapping the device is better than failing the
-    /// recording, and the Settings UI will reflect the real selection
-    /// next time the user opens it.
-    private static func resolveAudioDevice(uniqueID: String) -> AVCaptureDevice? {
-        if uniqueID.isEmpty {
-            return AVCaptureDevice.default(for: .audio)
+    /// Resolves the user's stored mic preference to a concrete device
+    /// uniqueID for `SCStreamConfiguration.microphoneCaptureDeviceID`.
+    /// Empty `preferred` is the "system default" sentinel
+    /// (PreferencesStore convention). If the persisted device has since
+    /// been disconnected, falls back to the system default and logs —
+    /// silently swapping the device is better than failing the recording,
+    /// and the Settings UI reflects the real selection next time it's
+    /// opened. Returns nil only when the machine has no audio input at
+    /// all, which `start()` maps to `.noMicrophoneAvailable`.
+    ///
+    /// We still resolve through AVCaptureDevice (rather than handing the
+    /// raw string to SCK) so a stale/unplugged preference degrades
+    /// gracefully to the default instead of capturing silence.
+    private static func resolveMicrophoneDeviceID(preferred: String) -> String? {
+        if !preferred.isEmpty {
+            if let device = AVCaptureDevice(uniqueID: preferred) {
+                return device.uniqueID
+            }
+            // preferred is .private — AVCaptureDevice unique IDs can contain
+            // serial numbers (especially for USB mics) that uniquely
+            // identify the user's hardware.
+            Log.capture.notice(
+                "persisted mic uniqueID '\(preferred, privacy: .private)' not found — falling back to system default"
+            )
         }
-        if let device = AVCaptureDevice(uniqueID: uniqueID) {
-            return device
-        }
-        // uniqueID is .private — AVCaptureDevice unique IDs can contain
-        // serial numbers (especially for USB mics) that uniquely identify
-        // the user's hardware.
-        Log.capture.notice(
-            "persisted mic uniqueID '\(uniqueID, privacy: .private)' not found — falling back to system default"
-        )
-        return AVCaptureDevice.default(for: .audio)
+        return AVCaptureDevice.default(for: .audio)?.uniqueID
     }
 }
 
@@ -784,17 +768,20 @@ extension RecordingSession: SCStreamDelegate {
     }
 }
 
-// MARK: - VideoStreamOutput
+// MARK: - StreamSampleOutput
 //
-// Thin SCStreamOutput conformer so RecordingSession itself doesn't
-// take on the conformance (keeps the session's surface focused on
-// lifecycle; this owns per-buffer fanout). All callbacks fire on the
-// queue passed to `addStreamOutput`.
+// Thin SCStreamOutput conformer so RecordingSession itself doesn't take
+// on the conformance (keeps the session's surface focused on lifecycle;
+// this owns per-buffer fanout). A single instance is registered for both
+// the `.screen` and `.microphone` output types — it forwards the
+// `outputType` so RecordingSession can route to the right handler. All
+// callbacks fire on the queue passed to `addStreamOutput` for that type
+// (videoQueue for screen, audioQueue for microphone).
 
-private final class VideoStreamOutput: NSObject, SCStreamOutput {
-    nonisolated let onSampleBuffer: @Sendable (CMSampleBuffer) -> Void
+private final class StreamSampleOutput: NSObject, SCStreamOutput {
+    nonisolated let onSampleBuffer: @Sendable (CMSampleBuffer, SCStreamOutputType) -> Void
 
-    nonisolated init(onSampleBuffer: @escaping @Sendable (CMSampleBuffer) -> Void) {
+    nonisolated init(onSampleBuffer: @escaping @Sendable (CMSampleBuffer, SCStreamOutputType) -> Void) {
         self.onSampleBuffer = onSampleBuffer
         super.init()
     }
@@ -804,46 +791,20 @@ private final class VideoStreamOutput: NSObject, SCStreamOutput {
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
-        guard outputType == .screen else { return }
-        onSampleBuffer(sampleBuffer)
-    }
-}
-
-// MARK: - AudioCaptureOutput
-//
-// Mirrors VideoStreamOutput for the AVCaptureSession audio pipeline.
-// Owns no state; just forwards delegate callbacks to a closure so
-// RecordingSession doesn't need to take on AVCaptureAudioDataOutput-
-// SampleBufferDelegate conformance directly. Callbacks fire on the
-// queue passed to setSampleBufferDelegate(_:queue:).
-
-private final class AudioCaptureOutput: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
-    nonisolated let onSampleBuffer: @Sendable (CMSampleBuffer) -> Void
-
-    nonisolated init(onSampleBuffer: @escaping @Sendable (CMSampleBuffer) -> Void) {
-        self.onSampleBuffer = onSampleBuffer
-        super.init()
-    }
-
-    nonisolated func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
-        onSampleBuffer(sampleBuffer)
+        onSampleBuffer(sampleBuffer, outputType)
     }
 }
 
 // MARK: - UncheckedSendable
 //
 // Generic shim for handing a non-Sendable reference (CMSampleBuffer,
-// AVCaptureSession, AVAssetWriter, AVAssetWriterInput) across an
-// isolation boundary when we can argue safety by other means:
+// AVAssetWriter, AVAssetWriterInput) across an isolation boundary when
+// we can argue safety by other means:
 //   • CMSampleBuffer: owned by exactly one queue at a time, never
-//     shared (videoQueue → writerQueue hop).
-//   • AVCaptureSession / AVAssetWriter: documented as thread-safe by
-//     Apple even though the Sendable conformance is absent. We hop
-//     onto known background queues for start/stop/append calls.
+//     shared (SCK delivery queue → writerQueue hop).
+//   • AVAssetWriter: documented as thread-safe by Apple even though the
+//     Sendable conformance is absent. We hop onto known background
+//     queues for start/stop/append calls.
 // Documents the promise rather than silently disabling the warning
 // at every call site with @preconcurrency import. nonisolated init
 // so it can be constructed from background queue contexts (sample
