@@ -30,7 +30,7 @@ const MorphingPill = () => {
   }, [stateIndex, currentState])
 
   return (
-    <div className="relative flex h-14 w-[480px] max-w-full items-center justify-center overflow-hidden rounded-full bg-neutral-900 px-5 shadow-[0_20px_60px_-10px_rgba(120,135,150,0.35),0_0_0_1px_rgba(255,255,255,0.08)]">
+    <div className="relative flex h-14 w-[480px] max-w-full items-center justify-center overflow-hidden rounded-full bg-neutral-900 px-4 shadow-[0_20px_60px_-10px_rgba(120,135,150,0.35),0_0_0_1px_rgba(255,255,255,0.08)] sm:px-5">
       <AnimatePresence mode="wait">
         {currentState === "recording" && (
           <motion.div
@@ -41,16 +41,23 @@ const MorphingPill = () => {
             transition={{ duration: 0.2 }}
             className="flex w-full items-center justify-between text-white"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <motion.div
-                className="h-2.5 w-2.5 rounded-full bg-red-500"
+                className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-500"
                 animate={{ opacity: [1, 0.35, 1] }}
                 transition={{ duration: 1.2, repeat: Infinity }}
               />
-              <span className="font-mono text-sm tracking-tight tabular-nums">
-                0:02 <span className="text-white/40">/ 3:00</span>
+              <span className="font-mono text-sm tracking-tight whitespace-nowrap tabular-nums">
+                0:02{" "}
+                {/* On mobile the waveform is hidden, so show a "Recording"
+                    label next to the running timer instead of the "/ 3:00"
+                    max-duration; desktop keeps "/ 3:00" alongside the waveform. */}
+                <span className="text-white/40 sm:hidden">Recording</span>
+                <span className="hidden text-white/40 sm:inline">/ 3:00</span>
               </span>
-              <div className="flex h-5 items-center gap-[3px]">
+              {/* Waveform is decorative and the widest flexible element — hide it
+                  on mobile so the timer + Cancel + Stop fit inside the pill. */}
+              <div className="hidden h-5 items-center gap-[3px] sm:flex">
                 {[
                   0.45, 0.55, 0.9, 1.0, 0.5, 0.6, 0.45, 0.55, 0.85, 1.0, 0.5,
                   0.95, 0.6, 1.0, 1.0, 0.55, 0.9, 0.6, 0.5, 0.85, 1.0, 0.55,
@@ -71,12 +78,12 @@ const MorphingPill = () => {
                 ))}
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex shrink-0 items-center gap-2 sm:gap-4">
               <button className="flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white/90">
                 <X className="h-4 w-4" />
-                Cancel
+                <span className="hidden sm:inline">Cancel</span>
               </button>
-              <button className="flex items-center gap-2 rounded-full bg-red-500 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500/90">
+              <button className="flex shrink-0 items-center gap-2 rounded-full bg-red-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500/90 sm:px-4">
                 <Square className="h-3 w-3 fill-current" />
                 Stop
               </button>

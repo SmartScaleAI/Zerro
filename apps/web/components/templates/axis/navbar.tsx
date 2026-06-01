@@ -84,7 +84,7 @@ const Navbar = () => {
             </span>
           </Link>
 
-          <section className="hidden flex-row items-center gap-4 lg:flex">
+          <section className="hidden flex-row items-center gap-7 lg:flex">
             <div className="flex flex-row gap-8">
               {links.map((link) => (
                 <Link
@@ -97,7 +97,7 @@ const Navbar = () => {
               ))}
             </div>
             <Button
-              className="relative gap-2 rounded-full hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
+              className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
               size="lg"
               nativeButton={false}
               render={<a href={DOWNLOAD_URL} download />}
@@ -110,7 +110,7 @@ const Navbar = () => {
 
           <section className="flex flex-row items-center gap-2 lg:hidden">
             <Button
-              className="relative gap-2 rounded-full hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
+              className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
               size="default"
               nativeButton={false}
               render={<a href={DOWNLOAD_URL} download />}

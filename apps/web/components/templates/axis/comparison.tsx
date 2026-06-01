@@ -1,22 +1,40 @@
-import { Check, Minus } from "lucide-react"
+import { Check } from "lucide-react"
 import { GradientField } from "@/components/ui/gradient-field"
+import { Button } from "@/components/ui/button"
+import { AnimatedBorder } from "@/components/ui/animated-border"
+import { AppleIcon } from "@/components/ui/apple-icon"
+import { DOWNLOAD_URL } from "@/lib/site-config"
 
 // Server Component — a factual comparison table. Rendered as real <table> markup
 // so it's machine-readable (crawlers + AI tools parse it directly) and needs no
 // client JS. Competitor cells are deliberately conservative and objective: input
 // type, output, where processing runs, keys, platform, pricing model — no
 // disparagement. Framed as Zerro's positioning.
+//
+// Visually it's styled like a pricing table: each product is a vertical lane with
+// dashed row separators, and the first lane (Zerro) reads as an elevated card that
+// rises above the header and drops below the last row to hold a CTA. That elevated
+// card is a decorative, aria-hidden sibling of the <table>, positioned over the
+// first product column — so the semantic table stays intact for crawlers/AI.
 
 type Cell = string | boolean
 
 type Row = {
   label: string
+  sub?: string
   zerro: Cell
   wispr: Cell
   loom: Cell
 }
 
 const COLUMNS = ["Zerro", "Wispr Flow", "Loom"] as const
+
+// Column template (must match the highlight card's horizontal band below):
+// label gutter 32%, then three equal product columns of 22.666% each. The first
+// product column therefore spans 32% → 54.666% (center 43.333%, width 22.666%).
+const COL_TEMPLATE = ["32%", "22.666%", "22.666%", "22.666%"] as const
+const HILITE_LEFT = "43.333%"
+const HILITE_WIDTH = "22.666%"
 
 const rows: Row[] = [
   {
@@ -57,6 +75,7 @@ const rows: Row[] = [
   },
   {
     label: "Pricing model",
+    sub: "Pay once, own it forever.",
     zerro: "One-time ($39)",
     wispr: "Subscription",
     loom: "Subscription",
@@ -76,11 +95,9 @@ function CellValue({ value, emphasize }: { value: Cell; emphasize?: boolean }) {
         aria-label="Yes"
       />
     ) : (
-      <Minus
-        className="mx-auto h-5 w-5 text-white/25"
-        strokeWidth={2}
-        aria-label="No"
-      />
+      <span className="text-white/25" aria-label="No">
+        &mdash;
+      </span>
     )
   }
   return (
@@ -110,34 +127,51 @@ const Comparison = () => {
         </p>
       </div>
 
-      {/* pt gives the gradient field room to rise above the table's top edge */}
-      <div className="relative pt-16">
-        {/* Ambient gradient blur spotlight behind the highlighted Zerro column —
-            the same multi-color GradientField used in the hero. The table panel
-            is opaque, so the glow can't sit *behind* it; instead it's layered
-            *inside* the panel as an overlay (z-0 within the panel, below the table
-            text at z-10). It's confined tightly to the Zerro column (first data
-            column, whose center sits ~45% from the left) and masked to a soft
-            ellipse no wider than the column, so the glow pools behind that one
-            column without bleeding color onto the neighbouring columns or the
-            panel edges. No blend mode — a contained pool reads cleaner than an
-            additive smear across the whole surface. */}
-        <div className="relative z-10 overflow-hidden rounded-2xl border border-white/10 bg-[#202022]/80 backdrop-blur-sm">
-          <GradientField
-            edgeFade="vertical"
-            solid={false}
-            className="-top-12 -bottom-12 left-[45%] z-0 w-[80%] -translate-x-1/2 opacity-100 blur-[80px]"
-            style={{
-              maskImage:
-                "radial-gradient(ellipse 60% 85% at 50% 45%, black 30%, transparent 80%)",
-              WebkitMaskImage:
-                "radial-gradient(ellipse 60% 85% at 50% 45%, black 30%, transparent 80%)",
-            }}
-          />
-          <table className="relative z-10 w-full border-collapse text-left">
+      {/* pt leaves room for the floating "Recommended" pill above the card;
+          pb leaves room for the CTA footer at the bottom of the card.
+          The scroll container is capped at the viewport width (minus the px-4
+          page gutter) with a *definite* max-width — a percentage like w-full
+          can't resolve during intrinsic sizing, so the 640px table would
+          otherwise widen the whole page. With a definite cap the table scrolls
+          inside this box on narrow screens instead. */}
+      <div className="relative max-w-[calc(100vw-2rem)] overflow-x-auto pt-10 pb-12 lg:max-w-none">
+        <div className="relative mx-auto w-full min-w-[640px]">
+          {/* Elevated Zerro lane — a decorative card behind the first product
+              column. Spans that column's horizontal band (43.333% center,
+              22.666% wide) and hugs the table vertically: its top sits flush
+              with the header row and its bottom wraps the CTA footer, with no
+              extra space above or below. aria-hidden: it carries no data — the
+              <table> below is the source of truth. */}
+          <div
+            aria-hidden="true"
+            className="absolute top-0 bottom-0 z-0 -translate-x-1/2 overflow-hidden rounded-3xl bg-white/[0.06] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
+            style={{ left: HILITE_LEFT, width: HILITE_WIDTH }}
+          >
+            {/* Ambient multi-color spotlight pooled inside the Zerro card — the
+                same GradientField used in the hero, masked to a soft ellipse so
+                it glows from within the card rather than smearing the edges. */}
+            <GradientField
+              edgeFade="vertical"
+              solid={false}
+              className="inset-0 opacity-100 blur-[80px]"
+              style={{
+                maskImage:
+                  "radial-gradient(ellipse 70% 60% at 50% 35%, black 30%, transparent 80%)",
+                WebkitMaskImage:
+                  "radial-gradient(ellipse 70% 60% at 50% 35%, black 30%, transparent 80%)",
+              }}
+            />
+          </div>
+
+          <table className="relative z-10 w-full table-fixed border-collapse text-left">
+            <colgroup>
+              {COL_TEMPLATE.map((w, i) => (
+                <col key={i} style={{ width: w }} />
+              ))}
+            </colgroup>
             <thead>
-              <tr className="border-b border-white/10">
-                <th className="px-5 py-4 text-sm font-medium text-white/50">
+              <tr className="border-b border-dashed border-white/10">
+                <th className="px-5 py-4">
                   <span className="sr-only">Feature</span>
                 </th>
                 {COLUMNS.map((col, i) => (
@@ -145,8 +179,8 @@ const Comparison = () => {
                     key={col}
                     className={
                       i === 0
-                        ? "border-x border-t-2 border-white/15 border-t-white/70 bg-white/[0.12] px-5 py-5 text-center text-sm font-semibold text-white"
-                        : "px-5 py-4 text-center text-sm font-medium text-white/50"
+                        ? "px-5 py-5 text-center text-sm font-semibold text-white"
+                        : "px-5 py-5 text-center text-sm font-medium text-white/50"
                     }
                     scope="col"
                   >
@@ -166,15 +200,20 @@ const Comparison = () => {
               {rows.map((row) => (
                 <tr
                   key={row.label}
-                  className="border-b border-white/10 last:border-b-0"
+                  className="border-b border-dashed border-white/10 last:border-b-0"
                 >
                   <th
                     scope="row"
-                    className="px-5 py-4 text-sm font-normal text-white/80"
+                    className="px-5 py-4 align-top text-sm font-normal text-white/80"
                   >
                     {row.label}
+                    {row.sub && (
+                      <span className="mt-1 block text-xs font-normal text-white/40">
+                        {row.sub}
+                      </span>
+                    )}
                   </th>
-                  <td className="border-x border-white/15 bg-white/[0.06] px-5 py-4 text-center">
+                  <td className="px-5 py-4 text-center">
                     <CellValue value={row.zerro} emphasize />
                   </td>
                   <td className="px-5 py-4 text-center">
@@ -187,10 +226,38 @@ const Comparison = () => {
               ))}
             </tbody>
           </table>
+
+          {/* CTA footer — sits at the bottom of the Zerro card, centered on the
+              first product column. In normal flow (not absolute) so the inner
+              wrapper grows to include it and the card hugs it with no gap below.
+              Mirrors the hero's primary download button. Outside the <table> so
+              it isn't a data cell. */}
+          <div
+            className="relative z-20 flex justify-center pt-2 pb-6"
+            style={{
+              marginLeft: HILITE_LEFT,
+              width: HILITE_WIDTH,
+              transform: "translateX(-50%)",
+            }}
+          >
+            <Button
+              className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
+              size="lg"
+              nativeButton={false}
+              render={<a href={DOWNLOAD_URL} download />}
+            >
+              <AnimatedBorder />
+              <AppleIcon className="h-4 w-4" />
+              {/* Shorten the label on mobile so it fits inside the Zerro column. */}
+              <span>
+                Download<span className="hidden lg:inline"> for macOS</span>
+              </span>
+            </Button>
+          </div>
         </div>
       </div>
 
-      <p className="mt-4 text-center text-xs text-muted-foreground">
+      <p className="text-center text-xs text-muted-foreground">
         Comparison reflects Zerro&apos;s positioning. Competitor capabilities
         change over time — check each product for current details.
       </p>
