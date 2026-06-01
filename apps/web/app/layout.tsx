@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { ThemeProvider } from "@/components/theme-provider";
 import { Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import {
@@ -80,7 +79,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="dark" suppressHydrationWarning>
       <body
         className={`${inter.variable} bg-background font-light w-full text-foreground antialiased`}
         style={{ fontFamily: sansFont }}
@@ -91,14 +90,7 @@ export default function RootLayout({
           className={`${inter.variable} min-h-screen w-full bg-background font-light text-foreground`}
           style={{ fontFamily: sansFont }}
         >
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="dark"
-            enableSystem
-            disableTransitionOnChange
-          >
-            {children}
-          </ThemeProvider>
+          {children}
         </div>
         <Analytics />
       </body>

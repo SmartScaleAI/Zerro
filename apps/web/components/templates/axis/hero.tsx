@@ -155,7 +155,7 @@ const Hero = () => {
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <section className="flex w-full max-w-4xl flex-col items-center gap-7 text-center">
-        <h1 className="text-4xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-7xl">
+        <h1 className="text-5xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-[85px]">
           Give your agent
           <br />
           <motion.span
@@ -170,7 +170,7 @@ const Hero = () => {
             eyes and ears.
           </motion.span>
         </h1>
-        <p className="max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
+        <p className="max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
           Record your screen, dictate what you want, and Zerro turns it into
           exactly what you need — a structured prompt for your AI agent, or a
           plain-language explanation of what&apos;s on screen.

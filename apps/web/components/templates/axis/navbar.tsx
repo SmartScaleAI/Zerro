@@ -14,7 +14,6 @@ import {
 import Image from "next/image"
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { ThemeToggle } from "./theme-switch"
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false)
@@ -97,7 +96,6 @@ const Navbar = () => {
                 </Link>
               ))}
             </div>
-            <ThemeToggle />
             <Button
               className="relative gap-2 rounded-full hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
               size="lg"
@@ -182,22 +180,6 @@ const Navbar = () => {
                     </Link>
                   </motion.div>
                 ))}
-
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.2, delay: 0.2 }}
-                  className="my-2 border-t border-border"
-                />
-
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.2, delay: 0.25 }}
-                  className="flex flex-row items-center justify-end gap-2 px-2"
-                >
-                  <ThemeToggle />
-                </motion.div>
               </div>
             </motion.div>
           )}
