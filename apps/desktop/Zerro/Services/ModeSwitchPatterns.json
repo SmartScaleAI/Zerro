@@ -1,0 +1,88 @@
+{
+  "_comment": "Phase 18 mode-switch matcher tuning data — NOT logic. These lists are read at launch by ModeSwitchPatterns.load and consumed by ModeSwitchDetector. They are meant to be tuned by editing this file (cheaper than a rebuild of the detection logic); the matching rules (cue + target proximity, opposite-mode-only, edge weighting) live in code. All entries are lowercase; matching lowercases the transcript first. Phrases may be multi-word. Keep targets specific enough that a bare format-noun never carries a match on its own — the detector additionally REQUIRES a switch cue nearby, but loose targets still widen the surface.",
+
+  "switchCues": [
+    "instead",
+    "actually",
+    "no wait",
+    "scratch that",
+    "on second thought",
+    "switch to",
+    "change it to",
+    "change this to",
+    "make it",
+    "give me",
+    "i want",
+    "i'd rather",
+    "rather",
+    "just",
+    "turn this into",
+    "turn it into",
+    "can you",
+    "could you",
+    "would you",
+    "can you just",
+    "first",
+    "but first",
+    "before",
+    "before that"
+  ],
+
+  "instructTargets": [
+    "instructions",
+    "an instruction",
+    "a prompt",
+    "the prompt",
+    "a task",
+    "step by step",
+    "steps",
+    "for cursor",
+    "for claude",
+    "for the agent",
+    "for an agent",
+    "tell it to",
+    "tell the agent",
+    "a to-do",
+    "actionable"
+  ],
+
+  "explainTargets": [
+    "an explanation",
+    "explain this",
+    "explain it",
+    "explain",
+    "describe this",
+    "describe it",
+    "describe",
+    "walk through",
+    "walk me through",
+    "what this is",
+    "what it does",
+    "a summary",
+    "summarize",
+    "break this down",
+    "break it down"
+  ],
+
+  "fillerTokens": [
+    "um",
+    "uh",
+    "er",
+    "ah",
+    "hmm",
+    "mhm",
+    "like",
+    "you know",
+    "i mean",
+    "sort of",
+    "kind of"
+  ],
+
+  "appNameVariants": {
+    "cursor": ["cursor ai", "cursor"],
+    "claude": ["claude code", "claude"],
+    "copilot": ["github copilot", "co-pilot", "copilot"],
+    "windsurf": ["windsurf"],
+    "chatgpt": ["chat gpt", "chatgpt"]
+  }
+}

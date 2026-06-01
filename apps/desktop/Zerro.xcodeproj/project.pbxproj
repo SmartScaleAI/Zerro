@@ -13,6 +13,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		18AA00000000000000000002 /* ZerroTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZerroTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF8546CF2FC74ACC000EB1A6 /* Zerro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zerro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF90F6FF2FC7C36A004BFBAD /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShortcuts.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -28,6 +29,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		18AA00000000000000000006 /* ZerroTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ZerroTests;
+			sourceTree = "<group>";
+		};
 		FF8546D12FC74ACC000EB1A6 /* Zerro */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -39,6 +45,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		18AA00000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FF8546CC2FC74ACC000EB1A6 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -56,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				FF8546D12FC74ACC000EB1A6 /* Zerro */,
+				18AA00000000000000000006 /* ZerroTests */,
 				FF8546D02FC74ACC000EB1A6 /* Products */,
 				FF90F6FE2FC7C363004BFBAD /* Shortcuts */,
 				FFD158EF2FCBA3050043FE79 /* Frameworks */,
@@ -66,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				FF8546CF2FC74ACC000EB1A6 /* Zerro.app */,
+				18AA00000000000000000002 /* ZerroTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -113,7 +128,40 @@
 			productReference = FF8546CF2FC74ACC000EB1A6 /* Zerro.app */;
 			productType = "com.apple.product-type.application";
 		};
+		18AA00000000000000000001 /* ZerroTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 18AA00000000000000000007 /* Build configuration list for PBXNativeTarget "ZerroTests" */;
+			buildPhases = (
+				18AA00000000000000000003 /* Sources */,
+				18AA00000000000000000004 /* Frameworks */,
+				18AA00000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				18AA0000000000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				18AA00000000000000000006 /* ZerroTests */,
+			);
+			name = ZerroTests;
+			packageProductDependencies = (
+			);
+			productName = ZerroTests;
+			productReference = 18AA00000000000000000002 /* ZerroTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		18AA0000000000000000000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FF8546C72FC74ACC000EB1A6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FF8546CE2FC74ACC000EB1A6;
+			remoteInfo = Zerro;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		FF8546C72FC74ACC000EB1A6 /* Project object */ = {
@@ -123,6 +171,10 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
+					18AA00000000000000000001 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = FF8546CE2FC74ACC000EB1A6;
+					};
 					FF8546CE2FC74ACC000EB1A6 = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -148,11 +200,19 @@
 			projectRoot = "";
 			targets = (
 				FF8546CE2FC74ACC000EB1A6 /* Zerro */,
+				18AA00000000000000000001 /* ZerroTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		18AA00000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FF8546CD2FC74ACC000EB1A6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -162,7 +222,22 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		18AA0000000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FF8546CE2FC74ACC000EB1A6 /* Zerro */;
+			targetProxy = 18AA0000000000000000000B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin PBXSourcesBuildPhase section */
+		18AA00000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FF8546CB2FC74ACC000EB1A6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -393,6 +468,60 @@
 			};
 			name = Release;
 		};
+		18AA00000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Manual;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = H6NWCRRAHV;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.ZerroTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Zerro.app/Contents/MacOS/Zerro";
+			};
+			name = Debug;
+		};
+		18AA00000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Manual;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = H6NWCRRAHV;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.ZerroTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Zerro.app/Contents/MacOS/Zerro";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -410,6 +539,15 @@
 			buildConfigurations = (
 				FF8546DB2FC74ACE000EB1A6 /* Debug */,
 				FF8546DC2FC74ACE000EB1A6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		18AA00000000000000000007 /* Build configuration list for PBXNativeTarget "ZerroTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				18AA00000000000000000008 /* Debug */,
+				18AA00000000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

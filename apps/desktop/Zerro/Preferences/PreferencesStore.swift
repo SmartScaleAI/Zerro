@@ -47,7 +47,10 @@ public enum OutputMode: String, Codable, CaseIterable, Equatable {
     /// The other mode. With exactly two modes this is the mode the Phase
     /// 17 confirmation pill suggests switching to. Earns a real
     /// implementation only if/when a third mode is ever added.
-    var opposite: OutputMode {
+    /// `nonisolated` so the Phase 18 detector can read it off the main
+    /// actor (the project default-isolates to MainActor); it's a pure
+    /// switch over `self`.
+    nonisolated var opposite: OutputMode {
         switch self {
         case .instruct: return .explain
         case .explain:  return .instruct

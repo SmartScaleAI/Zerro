@@ -4,3 +4,6 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# Build / release artifacts (regenerated on build & packaging)
+dist/
