@@ -1,0 +1,7 @@
+# Supabase CLI local state / cache — never commit.
+.branches
+.temp
+.env
+
+# Local-only seed/env overrides.
+.env.local

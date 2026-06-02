@@ -1,0 +1,32 @@
+# Supabase local config. `project_id` is the LOCAL project name; the deployed
+# project is selected by `supabase link --project-ref <ref>`.
+project_id = "zerro-billing"
+
+# -----------------------------------------------------------------------------
+# Edge Function gateway JWT settings.
+#
+# verify_jwt = false means the Supabase API gateway does NOT require a
+# Supabase-issued JWT to reach the function. This is correct for all three
+# Phase D1 functions, but for DIFFERENT reasons — read carefully before changing:
+#
+#   * lemonsqueezy-webhook — LemonSqueezy sends no Supabase JWT. Security is the
+#     X-Signature HMAC check, done in code.
+#   * session — the credential is the LICENSE KEY, not a Supabase JWT. Security
+#     is the per-key/per-IP rate limit + key-hash lookup, done in code.
+#   * entitlement — verifies OUR session JWT (HS256, SESSION_JWT_SECRET) IN CODE.
+#     If the gateway also tried to verify a JWT it would reject the app's token
+#     before our code runs. So the gateway check is OFF and the in-code check is
+#     the real gate.
+#
+# The CLI equivalent is `--no-verify-jwt` on each `supabase functions deploy`
+# (see README-backend.md). Keep these in sync.
+# -----------------------------------------------------------------------------
+
+[functions.lemonsqueezy-webhook]
+verify_jwt = false
+
+[functions.session]
+verify_jwt = false
+
+[functions.entitlement]
+verify_jwt = false
