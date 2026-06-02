@@ -102,6 +102,33 @@ echo "== 5. entitlement: bad token → 401 =="
 code="$(curl -s -o /dev/null -w "%{http_code}" "$BASE/entitlement" -H "Authorization: Bearer not.a.token")"
 [ "$code" = "401" ] && ok "invalid token → 401" || bad "invalid token got $code (want 401)"
 
+echo "== D2 generate: money-safety gates that reject BEFORE any OpenAI spend =="
+# We deliberately exercise ONLY the free gates here (auth + input fuse + status).
+# The happy path spends real OpenAI money and needs real audio/frames, so it is
+# covered by the stubbed Deno tests (functions/generate/handler_test.ts), NOT by
+# this live battery. gen_post posts a JSON generate body with an optional token.
+gen_post() { # <token|-> <json>  -> echoes HTTP code
+  local tok="$1" body="$2"; local auth=()
+  [ "$tok" != "-" ] && auth=(-H "Authorization: Bearer $tok")
+  curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/generate" \
+    "${auth[@]}" -H "Content-Type: application/json" -d "$body"
+}
+# "eA==" is base64 "x" — enough to pass the non-empty checks; these bodies are
+# rejected by the fuse/auth BEFORE transcription, so the bytes are never used.
+OK_FRAME='{"timestamp":0,"mime":"image/jpeg","data":"eA=="}'
+WRONG_AUDIO_MIME="{\"mode\":\"instruct\",\"audio\":{\"mime\":\"audio/wav\",\"data\":\"eA==\"},\"frames\":[${OK_FRAME}]}"
+WRONG_FRAME_MIME='{"mode":"instruct","audio":{"mime":"audio/m4a","data":"eA=="},"frames":[{"timestamp":0,"mime":"image/png","data":"eA=="}]}'
+
+code="$(gen_post - "$WRONG_AUDIO_MIME")"
+[ "$code" = "401" ] && ok "generate: missing token → 401" || bad "generate no-token got $code (want 401)"
+code="$(gen_post "not.a.token" "$WRONG_AUDIO_MIME")"
+[ "$code" = "401" ] && ok "generate: invalid token → 401" || bad "generate bad-token got $code (want 401)"
+# Active token (minted above) + bad MIME → 415, rejected before OpenAI.
+code="$(gen_post "$TOKEN" "$WRONG_AUDIO_MIME")"
+[ "$code" = "415" ] && ok "generate: wrong audio mime → 415 (no spend)" || bad "generate audio-mime got $code (want 415)"
+code="$(gen_post "$TOKEN" "$WRONG_FRAME_MIME")"
+[ "$code" = "415" ] && ok "generate: wrong frame mime → 415 (no spend)" || bad "generate frame-mime got $code (want 415)"
+
 echo "== 3. payment_failed → past_due, credits/period unchanged =="
 PF_BODY="$(invoice_payload "inv_${STAMP}_fail" renewal 2026-06-15T00:00:00Z)"
 code="$(post_webhook subscription_payment_failed "$PF_BODY")"
@@ -122,6 +149,13 @@ code="$(post_webhook subscription_cancelled "$CN_BODY")"
 [ "$code" = "200" ] && ok "cancelled → 200" || bad "cancelled got $code"
 code="$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/session" -H "Content-Type: application/json" -d "$SREQ")"
 [ "$code" = "403" ] && ok "cancelled key → session 403" || bad "cancelled key session got $code (want 403)"
+
+echo "== D2 generate: cancelled subscriber → 403 (server re-checks status) =="
+# TOKEN was minted while active and is still cryptographically valid, but the
+# subscription is now cancelled — generate must re-check status and refuse. This
+# rejects before any OpenAI call, so it costs nothing.
+code="$(gen_post "$TOKEN" "$WRONG_FRAME_MIME")"
+[ "$code" = "403" ] && ok "generate: cancelled subscriber → 403" || bad "generate cancelled got $code (want 403)"
 
 echo
 echo "==================  $PASS passed, $FAIL failed  =================="
