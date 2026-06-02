@@ -100,6 +100,7 @@ private struct SettingsRootView: View {
             // padding 24pt per the design rhythm.
             VStack(alignment: .leading, spacing: 28) {
                 APIAuthSection()
+                BillingSection()
                 CaptureSection()
                 OutputModeSection()
                 HistorySection(onOpenRecentPrompts: { route = .recentPrompts })
@@ -181,6 +182,10 @@ private struct BackChevron: View {
         .environment(PermissionsManager())
         .environment(OnboardingState())
         .environment(LaunchAtLoginController())
+        // Phase C: the Billing section reads the entitlement from the
+        // environment. In-memory deps so the preview never touches the real
+        // Keychain or network.
+        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory()))
         .environment(store)
         .frame(width: 760, height: 820)
 }

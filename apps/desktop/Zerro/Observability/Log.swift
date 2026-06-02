@@ -134,6 +134,17 @@ enum Log {
     /// these lines without dragging in pipeline noise.
     nonisolated static let cost = Logger(subsystem: subsystem, category: "cost")
 
+    /// Billing / entitlement: BYOK license activation & validation against
+    /// LemonSqueezy (Phase C), and entitlement transitions driven by it.
+    /// SECRET-HANDLING CONTRACT for this category: the raw license key is
+    /// NEVER interpolated into a log line — not even `.private`. Instance
+    /// IDs, validity booleans, and the License API's key STATUS strings
+    /// (`active`/`expired`/`disabled`) carry no user content and are logged
+    /// `.public`; anything that could embed the key (e.g. a network
+    /// error description) stays `.private`. (Trial-clock transitions keep
+    /// using `Log.state`, established in Phase B.)
+    nonisolated static let billing = Logger(subsystem: subsystem, category: "billing")
+
     /// Working-directory sweep / orphan cleanup.
     nonisolated static let cleanup = Logger(subsystem: subsystem, category: "cleanup")
 

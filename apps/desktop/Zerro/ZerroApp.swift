@@ -131,6 +131,17 @@ struct ZerroApp: App {
             // new artifact is created — anything alive in the current
             // run is constructed after this returns.
             WorkingDirectory.sweep()
+
+            // Phase C: throttled background re-validation of a cached BYOK
+            // license. No-ops unless a license is present AND the ~weekly
+            // throttle window has elapsed, so it's offline-first and never
+            // blocks launch (the synchronous `computeState` already decided
+            // `.byok`). Catches refunds/revocations; fails open on any network
+            // hiccup. Captures the long-lived store weakly (it lives in @State
+            // for the app's lifetime).
+            Task { @MainActor [weak ent] in
+                await ent?.revalidateLicenseIfNeeded()
+            }
         }
     }
 

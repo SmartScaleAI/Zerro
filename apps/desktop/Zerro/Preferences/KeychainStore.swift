@@ -195,6 +195,38 @@ extension KeychainStore {
     /// the system clock backward can't rewind the trial. See `TrialManager`.
     static let trialMaxDateSeen = KeychainStore(service: defaultService, account: "trial_max_date_seen")
 
+    // MARK: - BYOK license slots (Phase C)
+    //
+    // The one-time LemonSqueezy license the user buys/enters. Stored in the
+    // Keychain — NOT UserDefaults / @AppStorage — for two reasons: the raw
+    // key is a SECRET, and (like the trial slots) it should SURVIVE an app
+    // uninstall/reinstall so a paying user never has to re-activate after a
+    // reinstall of the same signed build. Same per-signing-identity scoping
+    // caveat as the trial slots applies (see the file header).
+
+    /// The raw license key the user bought/entered. SECRET — never logged,
+    /// even `.private`. Read at activation/validation time; its presence (with
+    /// `byokInstanceID`) is what makes the entitlement `.byok` synchronously
+    /// at startup, before any network re-validation.
+    static let byokLicenseKey = KeychainStore(service: defaultService, account: "byok_license_key")
+
+    /// The `instance.id` LemonSqueezy returns from a successful activation.
+    /// REQUIRED to validate (re-check) and to deactivate (free a machine
+    /// slot), so it's persisted beside the key. Not a secret in the same way
+    /// the key is, but kept in the Keychain for the same reinstall-survival
+    /// reason and so the two values can never drift apart across stores.
+    static let byokInstanceID = KeychainStore(service: defaultService, account: "byok_instance_id")
+
+    /// Epoch-seconds string (same encoding as the trial slots) of the last
+    /// SUCCESSFUL online validation. Drives the throttle on periodic
+    /// re-validation (see `LicenseService.revalidationInterval`): once
+    /// activated, the app trusts the cached license offline and only re-hits
+    /// LemonSqueezy when this stamp is older than the threshold. Not a secret
+    /// — it could live in UserDefaults — but kept beside the key so all three
+    /// license values share one store and one lifecycle (written together on
+    /// activate/validate, deleted together on deactivate/revocation).
+    static let byokLastValidated = KeychainStore(service: defaultService, account: "byok_last_validated")
+
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
     /// / `failure`) of the trial slot reads — never the values — so the

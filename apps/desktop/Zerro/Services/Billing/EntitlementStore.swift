@@ -46,40 +46,64 @@ final class EntitlementStore {
     /// reads the real Keychain slots.
     private let trialManager: TrialManager
 
+    /// The BYOK license layer (Phase C). Owns the license Keychain slots and
+    /// the three LemonSqueezy calls; consulted SYNCHRONOUSLY (no network) for
+    /// startup precedence and ASYNCHRONOUSLY for throttled re-validation.
+    /// Injectable for tests/previews (in-memory slots + stubbed transport).
+    private let licenseService: LicenseService
+
     // MARK: - Init
 
-    /// `nil` constructs the default real-Keychain `TrialManager` inside the
-    /// (MainActor) body — a `TrialManager()` default-argument expression
-    /// would be evaluated nonisolated and trip MainActor isolation. Tests
-    /// and previews inject a manager over in-memory slots.
-    init(trialManager: TrialManager? = nil) {
+    /// `nil` constructs the default real-Keychain dependencies inside the
+    /// (MainActor) body — a `TrialManager()` / `LicenseService()` default-
+    /// argument expression would be evaluated nonisolated and trip MainActor
+    /// isolation. Tests and previews inject fakes over in-memory slots.
+    init(trialManager: TrialManager? = nil, licenseService: LicenseService? = nil) {
         let manager = trialManager ?? TrialManager()
+        let license = licenseService ?? LicenseService()
         self.trialManager = manager
-        // Phase B: the initial state is COMPUTED from the trial clock, not
-        // hard-coded. We compute from the resolved `manager` (a local, so
-        // this runs without touching `self`). Phase C will layer BYOK-license
-        // detection and Phase D+ the backend's managed entitlement on top —
-        // see the precedence marker in `computeState`.
-        self.state = Self.computeState(using: manager)
+        self.licenseService = license
+        // Phase B/C: the initial state is COMPUTED, not hard-coded — from the
+        // resolved locals (so this runs without touching `self`). Phase C
+        // layers BYOK-license precedence on top of the trial clock; Phase D+
+        // adds the backend's managed entitlement — see `computeState`.
+        self.state = Self.computeState(trialManager: manager, licenseService: license)
     }
 
     // MARK: - State computation
 
-    /// Derives the current `EntitlementState` from its real sources. In
-    /// Phase B that's the trial clock alone; the precedence marker below is
-    /// where Phases C/D slot their higher-priority sources in.
+    /// Derives the current `EntitlementState` from its real sources, in
+    /// precedence order. The DEBUG override (in `refresh`) sits above all of
+    /// this; Managed (Phase D) will sit above BYOK; BYOK (Phase C) sits above
+    /// the trial clock (Phase B).
     ///
-    /// `static` (takes the manager explicitly) so `init` can call it before
-    /// `self` is fully initialized AND `refresh()` can reuse it.
-    private static func computeState(using trialManager: TrialManager) -> EntitlementState {
+    /// `static` (takes the dependencies explicitly) so `init` can call it
+    /// before `self` is fully initialized AND `refresh()` can reuse it.
+    private static func computeState(
+        trialManager: TrialManager,
+        licenseService: LicenseService
+    ) -> EntitlementState {
         // First launch establishes the trial start (idempotent thereafter).
         trialManager.startTrialIfNeeded()
 
-        // DEFERRED Phase C/D: BYOK/Managed entitlement takes precedence over
-        // the trial clock here. When a valid `.byok` license or a backend
-        // `.managed` entitlement is detected, return it BEFORE consulting the
-        // clock below — a paid user is never downgraded to a trial/expired
-        // state. Phase B has no such source yet, so the clock is the only one.
+        // DEFERRED Phase D: Managed entitlement takes precedence here too —
+        // when a backend `.managed` entitlement is present, return it BEFORE
+        // the BYOK/trial checks below. No such source exists yet.
+
+        // Phase C: a present (or, fail-open, indeterminate) cached BYOK license
+        // OUTRANKS the trial clock — a licensed user is `.byok` regardless of
+        // trial days. This is a SYNCHRONOUS Keychain read only; we never block
+        // startup on a network call. A later background `validate()` may
+        // downgrade a refunded/revoked license (see `revalidateLicenseIfNeeded`),
+        // but synchronously a present license means `.byok`.
+        //
+        // FAIL-OPEN: `grantsBYOK` is true for `.present` AND `.indeterminate`
+        // (a genuine Keychain read error), so a flaky read can never drop a
+        // licensed-past-trial user to `.expired`. Only a DEFINITIVE `.absent`
+        // falls through to the clock.
+        if licenseService.currentLicenseState().grantsBYOK {
+            return .byok
+        }
 
         switch trialManager.evaluate() {
         case .active(let daysRemaining):
@@ -148,7 +172,86 @@ final class EntitlementStore {
             return
         }
         #endif
-        state = Self.computeState(using: trialManager)
+        state = Self.computeState(trialManager: trialManager, licenseService: licenseService)
+    }
+
+    // MARK: - BYOK license (Phase C)
+
+    /// Activates `licenseKey` online (paywall / Settings entry point). On
+    /// success the `LicenseService` has written the credentials to the
+    /// Keychain, so we transition straight to `.byok` (a present license is
+    /// `.byok` per `computeState` anyway) WITHOUT touching the trial clock —
+    /// a valid license simply outranks it. Rethrows the `LicenseError` so the
+    /// UI can branch (at-activation-limit, key invalid, network, …).
+    @discardableResult
+    func activate(licenseKey: String) async throws -> ActivationResult {
+        let result = try await licenseService.activate(licenseKey: licenseKey)
+        #if DEBUG
+        // A successful real activation releases any pinned dev override — the
+        // user's actual entitlement should now win.
+        devOverrideActive = false
+        #endif
+        state = .byok
+        Log.billing.notice("entitlement \u{2192} byok via activation (instance=\(result.instanceID, privacy: .public))")
+        return result
+    }
+
+    /// Deactivates THIS device's license: frees the LemonSqueezy machine slot,
+    /// clears the local credentials, and recomputes the entitlement (which
+    /// now falls through to the trial clock → `.trial`/`.expired`). Used by the
+    /// Settings "Deactivate this device" button. Rethrows on failure; on a
+    /// network failure the local license is LEFT INTACT (we didn't free the
+    /// slot, so we mustn't drop the user's access).
+    func deactivateThisDevice() async throws {
+        if let instanceID = licenseService.currentInstanceID() {
+            try await licenseService.deactivate(instanceID: instanceID)
+        }
+        // Only reached if the network deactivation succeeded (or there was no
+        // instance on file to free): clear local credentials and recompute.
+        licenseService.clearLicense()
+        refresh()
+        Log.billing.notice("entitlement \u{2192} deactivated this device; recomputed to \(String(describing: self.state), privacy: .public)")
+    }
+
+    /// Background, THROTTLED re-validation. Called at launch (see `ZerroApp`).
+    /// Does nothing unless a license is actually present and the throttle
+    /// window (`LicenseService.revalidationInterval`) has elapsed — so the app
+    /// is offline-first and re-hits LemonSqueezy at most ~weekly. The verdict:
+    ///   • DEFINITIVE revocation (`valid:false` disabled/expired) → clear the
+    ///     license and drop to the trial/expired computation (refund handling).
+    ///   • valid / non-definitive / network failure → stay `.byok` (FAIL OPEN).
+    func revalidateLicenseIfNeeded() async {
+        guard licenseService.currentLicenseState().presence == .present else {
+            // Absent → nothing to validate. Indeterminate → a transient
+            // Keychain read failure; skip and retry next launch (we already
+            // fail-open to `.byok` in `computeState`, so access isn't blocked).
+            return
+        }
+        guard licenseService.shouldRevalidate() else {
+            Log.billing.info("license revalidation skipped — within \(Int(LicenseService.revalidationInterval), privacy: .public)s throttle window")
+            return
+        }
+        await performRevalidation()
+    }
+
+    /// The validate-and-apply core, with NO throttle guard. Shared by the
+    /// throttled launch path and (DEBUG) the force-revalidate dev control.
+    private func performRevalidation() async {
+        do {
+            let result = try await licenseService.validate()
+            if result.isDefinitiveRevocation {
+                Log.billing.notice("license revoked (status=\(result.status?.rawValue ?? "unknown", privacy: .public)) — clearing, dropping to trial/expired")
+                licenseService.clearLicense()
+                refresh()
+            }
+            // valid / non-definitive negative → stay `.byok`. `validate()`
+            // already refreshed the throttle stamp on a `valid` result.
+        } catch {
+            // Network/inconclusive → FAIL OPEN. Keep the license, retry next
+            // launch. A paying user is never locked out by a flaky network —
+            // only a definitive LemonSqueezy negative de-activates them.
+            Log.billing.error("license revalidation inconclusive — failing open, keeping .byok")
+        }
     }
 
     // MARK: - Dev override (DEBUG only)
@@ -223,9 +326,19 @@ final class EntitlementStore {
     /// previews so Release builds — which still compile `#Preview` bodies —
     /// don't see this symbol.)
     static func preview(_ state: EntitlementState) -> EntitlementStore {
-        let store = EntitlementStore(trialManager: .inMemory())
+        let store = EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory())
         store.devSetState(state)
         return store
+    }
+
+    /// DEBUG: force a license re-validation NOW, ignoring the throttle, so the
+    /// refund/revoke and fail-open paths can be exercised from the Billing
+    /// section without waiting out `revalidationInterval`. Requires a real
+    /// (test-mode) license to already be activated.
+    func devRevalidateLicenseNow() async {
+        Log.billing.notice("DEV: forcing license revalidation (ignoring throttle)")
+        devOverrideActive = false
+        await performRevalidation()
     }
 
     /// The full set of states the dev panel can force, paired with short
