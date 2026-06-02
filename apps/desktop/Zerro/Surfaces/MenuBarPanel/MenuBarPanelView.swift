@@ -48,6 +48,17 @@ struct MenuBarPanelView: View {
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
+    /// Phase A: force any entitlement state from the menu-bar debug block.
+    /// This is the always-reachable driver — the default dev state is
+    /// `.trial`, so the paywall won't open on its own; forcing `.expired`
+    /// here and pressing ⌘⇧R is how you open it the first time.
+    @Environment(EntitlementStore.self) private var entitlements
+    /// Drives the Entitlement picker side panel (a trailing popover),
+    /// opened on hover via `entitlementRowHovered` / `entitlementPanelHovered`
+    /// — same hover-driven submenu shape as Recent Prompts / Microphone.
+    @State private var showEntitlementPicker = false
+    @State private var entitlementRowHovered = false
+    @State private var entitlementPanelHovered = false
     /// Drives the debug "Poll continuously" toggle.
     @State private var isPolling = false
     #endif
@@ -80,6 +91,12 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
+            // Phase A library-stays-readable rule: "Copy last prompt" and
+            // "Recent Prompts" read RecentPromptStore directly and never
+            // consult EntitlementStore.canGenerate — reading/copying past
+            // prompts stays open in every entitlement state, `.expired`
+            // included. Only the recording START path (handleHotkey) gates;
+            // do not add an entitlement check to these rows.
             CopyLastPromptRow()
             MenuRow(
                 label: "Recent Prompts",
@@ -191,6 +208,39 @@ struct MenuBarPanelView: View {
             MenuRow(label: "Open Onboarding\u{2026}") {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
+            }
+            // Phase A: entitlement state forcing, collapsed into a single
+            // hover-driven submenu (same shape as Recent Prompts /
+            // Microphone) to keep the debug block compact. Force "Expired"
+            // in the side panel, then ⌘⇧R (or Start Recording) to drive the
+            // paywall gate; the paywall window's own dev panel can flip
+            // between states once it's open.
+            MenuRow(
+                label: "Entitlement",
+                trailing: .submenu,
+                forceSelected: showEntitlementPicker
+            ) {
+                showEntitlementPicker = true
+            }
+            .onHover { hovering in
+                entitlementRowHovered = hovering
+                updatePanelVisibility(
+                    hovered: entitlementRowHovered || entitlementPanelHovered,
+                    isStillHovered: { entitlementRowHovered || entitlementPanelHovered },
+                    setVisible: { showEntitlementPicker = $0 }
+                )
+            }
+            .popover(isPresented: $showEntitlementPicker, arrowEdge: .trailing) {
+                EntitlementDebugPicker()
+                    .environment(entitlements)
+                    .onHover { hovering in
+                        entitlementPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: entitlementRowHovered || entitlementPanelHovered,
+                            isStillHovered: { entitlementRowHovered || entitlementPanelHovered },
+                            setVisible: { showEntitlementPicker = $0 }
+                        )
+                    }
             }
             MenuRow(label: "Reset Onboarding") {
                 // Clear both persisted flags in-process; no relaunch
@@ -812,6 +862,75 @@ private struct MicrophonePickerRow: View {
     }
 }
 
+#if DEBUG
+// MARK: - EntitlementDebugPicker
+//
+// Phase A debug surface, presented as the Entitlement row's trailing
+// popover — the same hover-driven submenu shape as Recent Prompts and the
+// Microphone picker. One row per forceable `EntitlementState` (sourced
+// from `EntitlementStore.devStates` so this and the paywall dev panel stay
+// in sync), the active one checkmarked. Selecting a state sets the shared
+// store and dismisses the panel.
+
+private struct EntitlementDebugPicker: View {
+    @Environment(EntitlementStore.self) private var entitlements
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(EntitlementStore.devStates, id: \.label) { item in
+                EntitlementDebugRow(
+                    name: item.label,
+                    isSelected: entitlements.devMatches(item.state)
+                ) {
+                    entitlements.devSetState(item.state)
+                    dismiss()
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(width: 220)
+    }
+}
+
+private struct EntitlementDebugRow: View {
+    let name: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: VFSpacing.sm) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .opacity(isSelected ? 1 : 0)
+                    .frame(width: 12)
+                Text(name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+#endif
+
 // MARK: - Previews
 //
 // Both previews wrap the panel(s) in a vibrancy material + hairline +
@@ -854,6 +973,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
         MenuBarPanelView()
             .environment(AppState())
             .environment(previewRecentPromptStore())
+            .environment(EntitlementStore())
             .environmentObject(UpdaterViewModel())
     }
     .padding(40)
@@ -866,6 +986,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
             MenuBarPanelView(highlightRecentPrompts: true)
                 .environment(AppState())
                 .environment(previewRecentPromptStore())
+                .environment(EntitlementStore())
                 .environmentObject(UpdaterViewModel())
         }
 

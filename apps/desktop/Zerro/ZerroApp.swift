@@ -18,6 +18,11 @@ struct ZerroApp: App {
     @State private var preferences: PreferencesStore
     @State private var permissions: PermissionsManager
     @State private var onboarding: OnboardingState
+    /// Phase A (billing): the entitlement source of truth. Long-lived like
+    /// the other services — constructed in init, kept in @State for the
+    /// app's lifetime, injected into the menu-bar content, Settings, and
+    /// the Paywall window. The recording-start gate reads `canGenerate`.
+    @State private var entitlements: EntitlementStore
     @State private var recentPrompts: RecentPromptStore
     @State private var launchAtLogin: LaunchAtLoginController
     @State private var pillController: PillWindowController
@@ -50,6 +55,7 @@ struct ZerroApp: App {
         let prefs = PreferencesStore()
         let perms = PermissionsManager()
         let onb = OnboardingState()
+        let ent = EntitlementStore()
         let history = RecentPromptStore()
         let launch = LaunchAtLoginController()
         let selectorCtrl = AreaSelectorWindowController()
@@ -68,6 +74,7 @@ struct ZerroApp: App {
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
+        _entitlements = State(initialValue: ent)
         _recentPrompts = State(initialValue: history)
         _launchAtLogin = State(initialValue: launch)
         _pillController = State(initialValue: pillCtrl)
@@ -100,12 +107,13 @@ struct ZerroApp: App {
             // accumulates AFTER this one in the Sentry crumb trail, so
             // any crash report shows a clean "app launched → ..." lead.
             Log.breadcrumb(category: .appLifecycle, message: "app launched")
-            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak selectorCtrl, weak pillCtrl] in
+            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
                     state: state,
                     preferences: prefs,
                     permissions: perms,
                     onboarding: onb,
+                    entitlements: ent,
                     areaSelector: selectorCtrl,
                     pillController: pillCtrl
                 )
@@ -136,6 +144,7 @@ struct ZerroApp: App {
                         preferences: preferences,
                         permissions: permissions,
                         onboarding: onboarding,
+                        entitlements: entitlements,
                         areaSelector: areaSelectorController,
                         pillController: pillController
                     )
@@ -145,6 +154,7 @@ struct ZerroApp: App {
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
+                .environment(entitlements)
                 .environment(recentPrompts)
                 .environmentObject(updater)
         } label: {
@@ -161,6 +171,10 @@ struct ZerroApp: App {
             // never reset on later launches when `hasCompletedOnboarding`
             // suppresses auto-presentation.
             OnboardingOpenerRegistrar()
+            // Phase A: same registrar pattern for the paywall window, so
+            // the hotkey gate can bring it forward in this .accessory-policy
+            // app once the user has dismissed it (or before it's ever shown).
+            PaywallOpenerRegistrar()
             MenuBarIconView(isRecording: appState.isRecordingActive)
         }
         .menuBarExtraStyle(.window)
@@ -186,6 +200,10 @@ struct ZerroApp: App {
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
+                // Phase A: makes the entitlement readable from Settings (a
+                // Billing section lands in Phase C; injected now so it's
+                // available without re-plumbing the scene later).
+                .environment(entitlements)
                 .environment(recentPrompts)
                 .environment(launchAtLogin)
         }
@@ -223,6 +241,19 @@ struct ZerroApp: App {
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(onboarding.hasCompletedOnboarding ? .automatic : .presented)
+
+        // Phase A: single-instance paywall window. Mirrors the onboarding
+        // window's modifiers, but `.defaultLaunchBehavior(.suppressed)`
+        // guarantees it NEVER auto-presents at launch — it is brought
+        // forward only by the recording-start gate via
+        // `AppDelegate.openPaywall()` when the user is `.expired`.
+        Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
+            PaywallView()
+                .environment(entitlements)
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
     }
 
     // MARK: - Hotkey gating
@@ -242,6 +273,11 @@ struct ZerroApp: App {
     ///      step so the System Settings deep link is immediately
     ///      reachable. DEFERRED: replace with a brief non-blocking
     ///      notification once UNUserNotification permission infra exists.
+    ///   2.5 (Phase A) Permissions pass but the user isn't entitled
+    ///      (`EntitlementStore.canGenerate == false`, i.e. `.expired`) —
+    ///      bring the paywall forward and stop before capture, exactly
+    ///      like the gates above. Only the START path gates; 0a/0b (stop /
+    ///      processing) above are never entitlement-gated.
     ///   3. All gates satisfied — present the area-selector overlay.
     ///      Recording does NOT start here; it starts on confirm via
     ///      the selector's callback (Phase 6 wiring). From a visible
@@ -253,6 +289,7 @@ struct ZerroApp: App {
         preferences: PreferencesStore?,
         permissions: PermissionsManager?,
         onboarding: OnboardingState?,
+        entitlements: EntitlementStore?,
         areaSelector: AreaSelectorWindowController?,
         pillController: PillWindowController?
     ) {
@@ -321,6 +358,19 @@ struct ZerroApp: App {
             return
         }
 
+        // Phase A entitlement gate. Stops the START path (and only the
+        // start path — 0a/0b above always run) before any capture when the
+        // user isn't entitled (`.expired`). A nil `entitlements` is treated
+        // as FAIL-OPEN: we proceed rather than trap a user behind a paywall
+        // because of a wiring/lifetime gap — matching the fail-open contract
+        // documented on EntitlementStore.refresh(). The state name is
+        // .public (an enum description, no user content).
+        if let entitlements, !entitlements.canGenerate {
+            Log.hotkey.notice("gating: not entitled — opening paywall")
+            AppDelegate.openPaywall()
+            return
+        }
+
         Log.hotkey.notice("all gates passed — presenting area selector")
 
         // hotkey → area selector → (on confirm) → startRecording(selection:mic:)
@@ -375,6 +425,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// revoked.
     nonisolated(unsafe) static var requestOpenOnboarding: (() -> Void)?
 
+    /// Set by `PaywallOpenerRegistrar` (mounted in the always-present
+    /// MenuBarExtra label). Used by `openPaywall` to bring the paywall
+    /// window forward from the hotkey gate. Mirrors `requestOpenOnboarding`.
+    nonisolated(unsafe) static var requestOpenPaywall: (() -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The Window scene's .defaultLaunchBehavior(.presented) already
         // instantiates the onboarding window when needed. We just need
@@ -398,6 +453,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.onboarding.error("openOnboarding() called but requestOpenOnboarding is nil — registrar didn't mount")
         }
     }
+
+    /// Brings the paywall window forward. Mirrors `openOnboarding()`:
+    /// activate the app (so the window surfaces in front in this
+    /// .accessory-policy app), then invoke the captured opener. Called
+    /// from the hotkey entitlement gate.
+    @MainActor
+    static func openPaywall() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let opener = requestOpenPaywall {
+            opener()
+        } else {
+            // Same failure mode as openOnboarding's nil branch — should be
+            // impossible once PaywallOpenerRegistrar mounts at launch, but
+            // log loudly so a silent no-op (the user pressing record and
+            // nothing happening) is diagnosable.
+            Log.ui.error("openPaywall() called but requestOpenPaywall is nil — registrar didn't mount")
+        }
+    }
 }
 
 // MARK: - OnboardingOpenerRegistrar
@@ -418,6 +491,29 @@ private struct OnboardingOpenerRegistrar: View {
             .onAppear {
                 AppDelegate.requestOpenOnboarding = {
                     openWindow(id: OnboardingScene.windowID)
+                }
+            }
+    }
+}
+
+// MARK: - PaywallOpenerRegistrar
+//
+// Phase A twin of OnboardingOpenerRegistrar. Captures `openWindow` into
+// AppDelegate.requestOpenPaywall at launch so the hotkey gate can bring
+// the paywall forward even though the Window scene's content (and its
+// onAppear) only mounts when the window is actually on screen — and the
+// paywall's scene is `.suppressed`, so it's never on screen at launch.
+// Mounted in the MenuBarExtra label, the one always-present View.
+
+private struct PaywallOpenerRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.requestOpenPaywall = {
+                    openWindow(id: PaywallScene.windowID)
                 }
             }
     }

@@ -33,6 +33,14 @@ struct HistorySection: View {
     var onOpenRecentPrompts: () -> Void = {}
 
     var body: some View {
+        // Phase A library-stays-readable rule: the prompt history must stay
+        // viewable and copyable in EVERY entitlement state, `.expired`
+        // included. This surface is reached through Settings, NOT through
+        // `handleHotkey` / the recording gate, and it reads only
+        // RecentPromptStore — never EntitlementStore.canGenerate — so an
+        // expired user keeps full access to what they already produced.
+        // The rule is enforced by intentionally NOT adding any entitlement
+        // check here; do not gate this path.
         SettingsSection("History") {
             SettingsNavigationRow(
                 label: "Recent Prompts",
