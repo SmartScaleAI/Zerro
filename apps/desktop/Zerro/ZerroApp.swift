@@ -55,7 +55,12 @@ struct ZerroApp: App {
         let prefs = PreferencesStore()
         let perms = PermissionsManager()
         let onb = OnboardingState()
-        let ent = EntitlementStore()
+        // Phase E (billing): one shared session-token manager backs BOTH the
+        // entitlement layer (license→session probe + display refresh) and the
+        // Managed generation proxy, so they share one cached token.
+        let sessionTokens = SessionTokenManager()
+        let managedProxy = ManagedProxyClient(sessionTokens: sessionTokens)
+        let ent = EntitlementStore(sessionTokens: sessionTokens)
         let history = RecentPromptStore()
         let launch = LaunchAtLoginController()
         let selectorCtrl = AreaSelectorWindowController()
@@ -70,6 +75,11 @@ struct ZerroApp: App {
         // generation; the menu-bar surfaces + Settings tab read from it
         // via the SwiftUI environment.
         state.recentPromptStore = history
+        // Phase E: the generation pipeline's routing branch reads these to
+        // decide local-BYOK vs Managed-proxy. Same lifetime + weak/owned
+        // contract as the refs above.
+        state.entitlements = ent
+        state.managedProxyClient = managedProxy
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
@@ -141,6 +151,14 @@ struct ZerroApp: App {
             // for the app's lifetime).
             Task { @MainActor [weak ent] in
                 await ent?.revalidateLicenseIfNeeded()
+            }
+
+            // Phase E: refresh the Managed credit/status snapshot at launch so
+            // the menu-bar credits line + any past-due nudge are current. No-ops
+            // unless the user is `.managed`; fails open (keeps the cached
+            // snapshot) on any network hiccup, so it never blocks launch.
+            Task { @MainActor [weak ent] in
+                await ent?.refreshManagedEntitlement()
             }
         }
     }

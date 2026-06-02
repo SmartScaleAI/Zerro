@@ -49,7 +49,6 @@ import {
   creditsForTier,
   LS_VARIANT_PRO,
   LS_VARIANT_STARTER,
-  type Tier,
 } from "../_shared/config.ts";
 import type {
   LsLicenseKeyAttributes,
@@ -57,6 +56,7 @@ import type {
   LsSubscriptionInvoiceAttributes,
   LsWebhook,
 } from "../_shared/types.ts";
+import { resolveTier, type TierVariantConfig } from "./tier.ts";
 
 type DB = ReturnType<typeof serviceClient>;
 type Status = "active" | "past_due" | "cancelled" | "expired";
@@ -66,25 +66,15 @@ function logAction(event: string, subscriptionId: string | null, action: string)
   console.log(JSON.stringify({ fn: "lemonsqueezy-webhook", event, subscriptionId, action }));
 }
 
-/** Resolve a LemonSqueezy variant id (+ optional custom_data) to our tier. */
-function resolveTier(
-  attrs: LsSubscriptionAttributes,
-  customData: Record<string, unknown> | null | undefined,
-): Tier {
-  const variant = attrs.variant_id !== undefined ? String(attrs.variant_id) : "";
-  if (LS_VARIANT_PRO && variant === LS_VARIANT_PRO) return "pro";
-  if (LS_VARIANT_STARTER && variant === LS_VARIANT_STARTER) return "starter";
-  const custom = customData?.tier;
-  if (custom === "pro" || custom === "starter") return custom;
-  console.warn(
-    JSON.stringify({
-      fn: "lemonsqueezy-webhook",
-      warn: "unmapped_variant_defaulting_to_starter",
-      variant_id: attrs.variant_id ?? null,
-    }),
-  );
-  return "starter";
-}
+/**
+ * The variant→tier config, sourced from the comma-separated `LS_VARIANT_*`
+ * secrets (each product has a monthly AND yearly variant). Passed explicitly to
+ * `resolveTier` (in `tier.ts`) so that pure mapping stays unit-testable.
+ */
+const TIER_CONFIG: TierVariantConfig = {
+  starterVariantIds: LS_VARIANT_STARTER,
+  proVariantIds: LS_VARIANT_PRO,
+};
 
 /**
  * True if `incoming` is STRICTLY older than what we already applied. Equal
@@ -212,7 +202,7 @@ async function handleSubscriptionUpsert(
 ) {
   const attrs = payload.data.attributes as LsSubscriptionAttributes;
   const lsSubId = payload.data.id;
-  const tier = resolveTier(attrs, payload.meta?.custom_data);
+  const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
   const creditsLimit = creditsForTier(tier);
   const renewsAt = attrs.renews_at ?? null;
 
@@ -261,7 +251,7 @@ async function handleSubscriptionUpsert(
 async function handleSubscriptionUpdated(db: DB, payload: LsWebhook) {
   const attrs = payload.data.attributes as LsSubscriptionAttributes;
   const lsSubId = payload.data.id;
-  const tier = resolveTier(attrs, payload.meta?.custom_data);
+  const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
   const creditsLimit = creditsForTier(tier);
 
   const { data: existing } = await db

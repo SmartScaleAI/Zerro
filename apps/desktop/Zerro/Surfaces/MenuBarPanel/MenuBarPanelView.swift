@@ -18,6 +18,13 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
+/// A quiet Managed status nudge shown below the menu-bar header (Phase E).
+/// `actionable` past-due nudges open the customer portal on click.
+private struct ManagedNudge {
+    let text: String
+    let actionable: Bool
+}
+
 struct MenuBarPanelView: View {
     /// When `true`, the Recent Prompts row renders in its selected state.
     /// Used by the submenu-flyout `#Preview` to show the parent row
@@ -59,6 +66,12 @@ struct MenuBarPanelView: View {
     @State private var showEntitlementPicker = false
     @State private var entitlementRowHovered = false
     @State private var entitlementPanelHovered = false
+    /// Drives the Trial-clock dev-controls side panel — same hover-driven
+    /// submenu shape as the Entitlement picker, collapsing the four "Trial: …"
+    /// rows into one.
+    @State private var showTrialPicker = false
+    @State private var trialRowHovered = false
+    @State private var trialPanelHovered = false
     /// Drives the debug "Poll continuously" toggle.
     @State private var isPolling = false
     #endif
@@ -85,6 +98,13 @@ struct MenuBarPanelView: View {
             // `daysRemaining` straight off the `.trial` associated value.
             if case .trial(let daysRemaining, _) = entitlements.state {
                 trialStatusLine(daysRemaining: daysRemaining)
+            }
+
+            // Phase E: quiet Managed nudge — past-due ("update your card", §9.1)
+            // and/or out-of-credits ("resets {date}"). Non-blocking; generation
+            // keeps working on remaining credits while past-due.
+            if let nudge = managedNudge {
+                managedStatusLine(nudge)
             }
 
             // Phase 17: transient indicator that the LAST result ran with a
@@ -249,22 +269,39 @@ struct MenuBarPanelView: View {
                         )
                     }
             }
-            // Phase B: trial-CLOCK dev controls. Orthogonal to the
-            // Entitlement picker above — that FORCES a state directly (and
-            // pins it); these manipulate the underlying Keychain clock and
-            // then `refresh()`, so you watch the real `evaluate()` derive the
-            // state. Each releases any pinned override first.
-            MenuRow(label: "Trial: Reset to 7 Days") {
-                entitlements.devResetTrial()
+            // Phase B: trial-CLOCK dev controls, collapsed into a single
+            // hover-driven submenu (same shape as the Entitlement picker
+            // above) to keep the debug block compact. Orthogonal to that
+            // picker — it FORCES a state directly (and pins it); these
+            // manipulate the underlying Keychain clock and then `refresh()`,
+            // so you watch the real `evaluate()` derive the state. Each
+            // releases any pinned override first.
+            MenuRow(
+                label: "Trial",
+                trailing: .submenu,
+                forceSelected: showTrialPicker
+            ) {
+                showTrialPicker = true
             }
-            MenuRow(label: "Trial: Advance 1 Day") {
-                entitlements.devAdvanceTrialOneDay()
+            .onHover { hovering in
+                trialRowHovered = hovering
+                updatePanelVisibility(
+                    hovered: trialRowHovered || trialPanelHovered,
+                    isStillHovered: { trialRowHovered || trialPanelHovered },
+                    setVisible: { showTrialPicker = $0 }
+                )
             }
-            MenuRow(label: "Trial: Expire Now") {
-                entitlements.devExpireTrial()
-            }
-            MenuRow(label: "Trial: Clear Keychain") {
-                entitlements.devClearTrialKeychain()
+            .popover(isPresented: $showTrialPicker, arrowEdge: .trailing) {
+                TrialDebugPicker()
+                    .environment(entitlements)
+                    .onHover { hovering in
+                        trialPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: trialRowHovered || trialPanelHovered,
+                            isStillHovered: { trialRowHovered || trialPanelHovered },
+                            setVisible: { showTrialPicker = $0 }
+                        )
+                    }
             }
             MenuRow(label: "Reset Onboarding") {
                 // Clear both persisted flags in-process; no relaunch
@@ -419,9 +456,15 @@ struct MenuBarPanelView: View {
             return "Ready"
         case .byok:
             return "Ready"
-        case .managed(_, let creditsRemaining, _):
-            // Credits are display-only; the server is the spend authority (Phase E).
-            return "Ready \u{00B7} \(creditsRemaining) credits left"
+        case .managed:
+            // Credits are display-only (the server is the spend authority,
+            // Phase E) and read from the live snapshot — so the count is
+            // omitted until the first `/entitlement` refresh lands, rather than
+            // flashing a placeholder.
+            guard let snapshot = entitlements.managedSnapshot else { return "Ready" }
+            if snapshot.isOutOfCredits { return "Out of credits" }
+            let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
+            return "Ready \u{00B7} \(credits)"
         case .expired:
             return "Trial ended"
         }
@@ -442,6 +485,44 @@ struct MenuBarPanelView: View {
     /// styling like the Phase 5 onboarding affordances: small, dimmed, no
     /// badge / no alert color even on the last day (an urgent treatment is
     /// out of scope for Phase B). "1 day left" is singularized.
+    /// A Managed nudge to surface below the header, if any. Past-due takes
+    /// precedence (it's the actionable one); out-of-credits is shown otherwise.
+    /// `nil` for a healthy Managed plan or any non-Managed state.
+    private var managedNudge: ManagedNudge? {
+        guard case .managed = entitlements.state, let snapshot = entitlements.managedSnapshot else { return nil }
+        if snapshot.isPastDue {
+            return ManagedNudge(text: "Payment issue \u{2014} update your card", actionable: true)
+        }
+        if snapshot.isOutOfCredits {
+            let reset = BillingDateFormat.resetDate(snapshot.resetDate)
+            return ManagedNudge(
+                text: reset.map { "Out of credits \u{2014} resets \($0)" } ?? "Out of credits this month",
+                actionable: false
+            )
+        }
+        return nil
+    }
+
+    /// Phase E — quiet Managed status line (past-due / out-of-credits). Matches
+    /// the trial line's understated treatment; the past-due variant opens the
+    /// customer portal on click.
+    private func managedStatusLine(_ nudge: ManagedNudge) -> some View {
+        HStack(spacing: 0) {
+            Text(nudge.text)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfWarningAmber)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard nudge.actionable, let url = BillingLinks.customerPortalURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func trialStatusLine(daysRemaining days: Int) -> some View {
         HStack(spacing: 0) {
             Text(days == 1 ? "Trial \u{2014} 1 day left" : "Trial \u{2014} \(days) days left")
@@ -961,6 +1042,15 @@ private struct EntitlementDebugPicker: View {
                     dismiss()
                 }
             }
+            // Phase E: overlay a `past_due` snapshot on the current Managed
+            // state so the "update your card" nudge (§9.1) is testable.
+            EntitlementDebugRow(
+                name: "Managed · Past due",
+                isSelected: entitlements.managedSnapshot?.isPastDue == true
+            ) {
+                entitlements.devForceManagedPastDue()
+                dismiss()
+            }
         }
         .padding(.vertical, 4)
         .frame(width: 220)
@@ -1001,6 +1091,40 @@ private struct EntitlementDebugRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - TrialDebugPicker
+//
+// Phase B trial-clock dev controls, presented as the Trial row's trailing
+// popover — same hover-driven submenu shape as the Entitlement picker. These
+// are ACTIONS (not a forceable state), so the rows reuse `EntitlementDebugRow`
+// with no selection checkmark; each runs its clock manipulation and dismisses.
+
+private struct TrialDebugPicker: View {
+    @Environment(EntitlementStore.self) private var entitlements
+    @Environment(\.dismiss) private var dismiss
+
+    private var actions: [(label: String, run: () -> Void)] {
+        [
+            ("Reset to 7 Days", { entitlements.devResetTrial() }),
+            ("Advance 1 Day", { entitlements.devAdvanceTrialOneDay() }),
+            ("Expire Now", { entitlements.devExpireTrial() }),
+            ("Clear Keychain", { entitlements.devClearTrialKeychain() }),
+        ]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(actions, id: \.label) { action in
+                EntitlementDebugRow(name: action.label, isSelected: false) {
+                    action.run()
+                    dismiss()
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(width: 220)
     }
 }
 #endif

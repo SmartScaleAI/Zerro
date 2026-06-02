@@ -36,6 +36,13 @@ struct BillingSection: View {
     var body: some View {
         SettingsSection("Billing & License") {
             CurrentPlanRow()
+            // Phase E: a quiet, non-blocking past-due nudge (§9.1) — only while
+            // the Managed subscription is in LemonSqueezy's dunning window.
+            // Generation still works on remaining credits; this is visibility.
+            if entitlements.managedSnapshot?.isPastDue == true {
+                SettingsRowDivider()
+                PastDueRow()
+            }
             SettingsRowDivider()
             LicenseKeyRow(model: model)
             SettingsRowDivider()
@@ -101,7 +108,10 @@ final class BillingLicenseModel {
     /// state (called on `.onChange`). Doesn't clobber an in-flight request.
     func syncToEntitlement(_ state: EntitlementState) {
         guard phase != .working else { return }
-        if state == .byok {
+        // Both `.byok` and `.managed` are backed by an activated license key on
+        // file, so both render `.licensed`.
+        let isLicensed: Bool = { if case .managed = state { return true }; return state == .byok }()
+        if isLicensed {
             phase = .licensed
             // Re-fill from the Keychain in case activation happened elsewhere.
             if trimmedKey.isEmpty, let stored = keychain.read() { licenseKey = stored }
@@ -175,8 +185,22 @@ private struct CurrentPlanRow: View {
         case .byok:
             return "Lifetime license \u{2014} you fund generation with your own OpenAI key."
         case .managed:
+            return managedDescription
+        }
+    }
+
+    /// Managed copy reads the live snapshot (credits + reset). Falls back to a
+    /// neutral line before the first `/entitlement` refresh lands.
+    private var managedDescription: String {
+        guard let snapshot = entitlements.managedSnapshot else {
             return "Managed plan \u{2014} generation runs on Zerro-hosted credits."
         }
+        let resetClause = BillingDateFormat.resetClause(snapshot.resetDate)
+        if snapshot.isOutOfCredits {
+            return "Out of credits this month\(resetClause). Your library stays open."
+        }
+        let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
+        return "\(credits) this month\(resetClause)."
     }
 
     @ViewBuilder
@@ -192,8 +216,65 @@ private struct CurrentPlanRow: View {
         case .byok:
             PlanPill(text: "Licensed", tint: Color.vfSuccessGreen)
         case .managed(let tier, _, _):
-            PlanPill(text: "Managed \u{00B7} \(tier.rawValue.capitalized)", tint: Color.vfSuccessGreen)
+            // Past-due tints amber (a soft warning, not a block); active is green.
+            let pastDue = entitlements.managedSnapshot?.isPastDue == true
+            PlanPill(
+                text: pastDue
+                    ? "Managed \u{00B7} \(tier.rawValue.capitalized) \u{00B7} Past due"
+                    : "Managed \u{00B7} \(tier.rawValue.capitalized)",
+                tint: pastDue ? Color.vfWarningAmber : Color.vfSuccessGreen
+            )
         }
+    }
+}
+
+// MARK: - Past-due nudge row
+
+/// A quiet, non-blocking "Payment issue — update your card" row (§9.1), shown
+/// only while the Managed subscription is `past_due`. Links to the LemonSqueezy
+/// customer portal. Generation still works on remaining credits — this is
+/// visibility, never a gate.
+private struct PastDueRow: View {
+    var body: some View {
+        SettingsRow(
+            label: "Payment Issue",
+            description: "A recent payment didn\u{2019}t go through. Update your card to keep your plan \u{2014} you can keep generating on remaining credits in the meantime."
+        ) {
+            Button("Update card") {
+                guard let url = BillingLinks.customerPortalURL else {
+                    Log.billing.notice("settings: customer portal URL not configured yet (placeholder)")
+                    return
+                }
+                NSWorkspace.shared.open(url)
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
+        }
+    }
+}
+
+// MARK: - Date formatting
+
+/// Shared formatting for the credit-reset date, so the menu-bar and Billing
+/// surfaces phrase "resets {date}" identically.
+enum BillingDateFormat {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
+    /// "{Month Day}" for a real reset date, or empty for an absent/placeholder
+    /// one (`.distantFuture` is the no-snapshot placeholder).
+    static func resetDate(_ date: Date?) -> String? {
+        guard let date, date != .distantFuture else { return nil }
+        return formatter.string(from: date)
+    }
+
+    /// " — resets {date}" clause, or "" when there's no real reset date.
+    static func resetClause(_ date: Date?) -> String {
+        guard let formatted = resetDate(date) else { return "" }
+        return " \u{2014} resets \(formatted)"
     }
 }
 
@@ -238,7 +319,7 @@ private struct LicenseKeyRow: View {
                 }
 
                 HStack(spacing: VFSpacing.sm) {
-                    if entitlements.state == .byok {
+                    if isLicensed {
                         Button("Deactivate this device") { model.deactivate(using: entitlements) }
                             .buttonStyle(SettingsDestructiveButtonStyle())
                             .disabled(model.isWorking)
@@ -259,8 +340,15 @@ private struct LicenseKeyRow: View {
         }
     }
 
+    /// `.byok` and `.managed` are both license-backed → the row shows the
+    /// licensed affordances (re-activate / deactivate this device).
+    private var isLicensed: Bool {
+        if case .managed = entitlements.state { return true }
+        return entitlements.state == .byok
+    }
+
     private var activateLabel: String {
-        entitlements.state == .byok ? "Re-activate" : "Activate"
+        isLicensed ? "Re-activate" : "Activate"
     }
 
     private var fieldCapsule: some View {
@@ -306,16 +394,43 @@ private struct ManageRow: View {
 
     var body: some View {
         SettingsRow(
-            label: entitlements.state == .byok ? "Manage License" : "Buy a License",
-            description: entitlements.state == .byok
-                ? "Manage your devices and order in the LemonSqueezy portal."
-                : "Get a lifetime license, then activate it above."
+            label: label,
+            description: description
         ) {
-            Button(entitlements.state == .byok ? "Manage devices" : "Get a license") {
-                open(entitlements.state == .byok ? BillingLinks.customerPortalURL : BillingLinks.byokCheckoutURL)
-            }
-            .buttonStyle(SettingsSecondaryButtonStyle())
+            Button(buttonTitle) { open(buttonURL) }
+                .buttonStyle(SettingsSecondaryButtonStyle())
         }
+    }
+
+    private var isManaged: Bool {
+        if case .managed = entitlements.state { return true }
+        return false
+    }
+
+    private var label: String {
+        if isManaged { return "Manage Subscription" }
+        return entitlements.state == .byok ? "Manage License" : "Buy a License"
+    }
+
+    private var description: String {
+        if isManaged {
+            // Note: v1 uses the my-orders portal; a per-subscription signed
+            // portal URL from the LS API is the cleaner version (DEFERRED).
+            return "Update your card, change plan, or cancel in the LemonSqueezy portal."
+        }
+        return entitlements.state == .byok
+            ? "Manage your devices and order in the LemonSqueezy portal."
+            : "Get a lifetime license, then activate it above."
+    }
+
+    private var buttonTitle: String {
+        if isManaged { return "Manage subscription" }
+        return entitlements.state == .byok ? "Manage devices" : "Get a license"
+    }
+
+    private var buttonURL: URL? {
+        if isManaged { return BillingLinks.customerPortalURL }
+        return entitlements.state == .byok ? BillingLinks.customerPortalURL : BillingLinks.byokCheckoutURL
     }
 
     private func open(_ url: URL?) {

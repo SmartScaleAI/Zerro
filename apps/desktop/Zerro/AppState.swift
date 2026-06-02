@@ -108,6 +108,18 @@ public enum RecordingFailureReason: Equatable {
     /// JSON shape changed"; what matters is "try again later".
     case providerError
 
+    // Phase E — Managed proxy failures
+    /// Managed: the month's credits are spent (`generate` returned 402).
+    /// Non-punitive — the user keeps library access and the menu-bar / Billing
+    /// surfaces show "resets {date}" + an upgrade CTA. NOT retryable (another
+    /// attempt fails identically until credits reset or the plan upgrades).
+    case outOfCredits
+    /// Managed: the subscription is no longer active (cancelled/expired, or the
+    /// session resolved to nothing — `generate` returned 403/404). Routes the
+    /// user back toward the paywall on their next record attempt; the
+    /// entitlement layer drops them out of `.managed` on the next refresh.
+    case subscriptionInactive
+
     /// Whether the failure is worth re-running the API stage against the
     /// already-processed artifacts. True only for transient API-side
     /// failures — the local audio/frames/manifest on disk are still good,
@@ -125,7 +137,8 @@ public enum RecordingFailureReason: Equatable {
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneUnavailable,
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .processingFailed, .recordingTooShort, .diskFull,
-             .apiKeyMissing, .apiAuth:
+             .apiKeyMissing, .apiAuth,
+             .outOfCredits, .subscriptionInactive:
             return false
         }
     }
@@ -160,6 +173,10 @@ public enum RecordingFailureReason: Equatable {
             return "Hit OpenAI\u{2019}s rate limit \u{2014} try again in a minute."
         case .providerError:
             return "OpenAI returned an error \u{2014} try again."
+        case .outOfCredits:
+            return "You\u{2019}re out of credits this month. Your library stays open \u{2014} credits reset on your renewal date."
+        case .subscriptionInactive:
+            return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
         }
     }
 }
@@ -265,6 +282,16 @@ final class AppState {
     // from the SwiftUI environment.
 
     @ObservationIgnored weak var recentPromptStore: RecentPromptStore?
+
+    // Phase E (billing): the entitlement source of truth and the Managed proxy
+    // client, wired by `ZerroApp.init` (same lifetime + weak-ref contract as
+    // `permissions` / `recentPromptStore`). The generation pipeline reads
+    // `entitlements.routesThroughManagedProxy` to pick its single branch point:
+    // `.managed` → upload audio+frames to the proxy (no local transcription);
+    // everything else → the direct BYOK OpenAI path. A `nil` entitlements (not
+    // yet wired, or in a unit test) keeps the existing local path — fail-safe.
+    @ObservationIgnored weak var entitlements: EntitlementStore?
+    @ObservationIgnored var managedProxyClient: ManagedProxyClient?
 
     // MARK: Internal
 
@@ -806,7 +833,124 @@ final class AppState {
     /// `resolveModeSwitch(switchTo:)`. Otherwise generation runs straight
     /// through with the recording's selected mode. The `.processing → .done`
     /// transition fires from `runGeneration`.
+    /// Phase E — the SINGLE routing branch point between the two generation
+    /// architectures. A `.managed` user uploads the recording's audio + frames
+    /// to the proxy, which transcribes + composes server-side; everyone else
+    /// (BYOK / trial-on-own-key) runs the existing fully-local path (Whisper +
+    /// interleaving + direct OpenAI). Reading the decision off
+    /// `EntitlementStore.routesThroughManagedProxy` here — rather than inline in
+    /// the pipeline — keeps the two paths from entangling, and crucially keeps
+    /// the Managed path from DOUBLE-TRANSCRIBING (the server does Whisper).
+    ///
+    /// Fail-safe: if entitlements/proxy aren't wired (unit tests, or a managed
+    /// state without a proxy), fall back to the local path rather than failing.
     private func runPromptGeneration(processed: ProcessedRecording) {
+        if entitlements?.routesThroughManagedProxy == true, let proxy = managedProxyClient {
+            runManagedGeneration(processed: processed, proxy: proxy)
+        } else {
+            runLocalPromptGeneration(processed: processed)
+        }
+    }
+
+    /// Phase E — the Managed generation path. Uploads audio + frames + the
+    /// effective mode (NEVER a transcript or system prompt — the server owns
+    /// those, §6.1) to the proxy and lands the returned prompt on the same
+    /// `.done` tail the local path uses (pill + clipboard + history unchanged).
+    /// Does NOT run local Whisper or mode-switch detection — both need a
+    /// transcript the client never has on this path.
+    private func runManagedGeneration(processed: ProcessedRecording, proxy: ManagedProxyClient) {
+        let mode = recordingOutputMode
+        let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
+        let durationSeconds = CMTimeGetSeconds(processed.duration)
+        processingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                // One server round-trip covers upload → STT → generation; the
+                // "Writing your prompt…" label is the honest single stage.
+                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                Log.breadcrumb(category: .pipelineStage, message: "managed generation started")
+                let managed = try await proxy.generate(
+                    audioURL: audioURL,
+                    frames: processed.frames,
+                    mode: mode,
+                    durationSeconds: durationSeconds.isFinite ? durationSeconds : nil
+                )
+                let result = managed.result
+                Log.promptGen.info(
+                    "managed OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
+                )
+
+                guard self.state == .processing else { return }
+                self.generatedPrompt = result.prompt
+                // The Managed path has no client transcript, so the no-narration
+                // note (a BYOK affordance) doesn't apply — never flag it here.
+                self.resultHadNoNarration = false
+                self.recentPromptStore?.add(prompt: result.prompt)
+                self.state = .done
+                Log.breadcrumb(category: .pipelineStage, message: "managed generation completed")
+
+                // Reflect the spent credit immediately, then refresh the
+                // authoritative snapshot (reset date / status) in the background.
+                if let remaining = managed.creditsRemaining {
+                    self.entitlements?.applyCreditsRemaining(remaining)
+                }
+                if let entitlements = self.entitlements {
+                    Task { await entitlements.refreshManagedEntitlement() }
+                }
+            } catch {
+                guard self.state == .processing else { return }
+                let reason = Self.managedFailureReason(from: error)
+                Log.promptGen.error("managed generation failed: \(String(describing: reason), privacy: .public)")
+                if Self.shouldCapture(reason) {
+                    CrashReporting.capture(
+                        error,
+                        message: "Managed generation failed",
+                        stage: "managedGeneration",
+                        context: ["errorCode": Self.errorCodeString(reason)]
+                    )
+                }
+                self.state = .failed(reason: reason)
+                // A definitive not-entitled means the subscription lapsed mid-use
+                // — recompute the entitlement so the app drops out of `.managed`.
+                if reason == .subscriptionInactive, let entitlements = self.entitlements {
+                    Task { await entitlements.refreshManagedEntitlement() }
+                }
+            }
+        }
+    }
+
+    /// Maps a `ManagedGenerationError` to the user-facing failure taxonomy.
+    /// Anything that isn't a managed error falls back to the shared
+    /// `failureReason(from:)` (covers offline/disk/etc. raised before the
+    /// request).
+    private static func managedFailureReason(from error: Error) -> RecordingFailureReason {
+        guard let managed = error as? ManagedGenerationError else {
+            return failureReason(from: error)
+        }
+        switch managed {
+        case .outOfCredits:
+            return .outOfCredits
+        case .notEntitled:
+            return .subscriptionInactive
+        case .rateLimited:
+            return .rateLimited
+        case .providerUnavailable, .malformedResponse, .inputRejected, .authFailed:
+            // Server-side / transient-ish — the retryable provider path. (A real
+            // recording can't trip the input fuse; treat a stray one as provider.)
+            return .providerError
+        case .network(let desc):
+            // Reuse the offline-class heuristic so a true offline shows the
+            // connectivity copy, everything else the generic provider copy.
+            return desc.isEmpty ? .providerError : .networkOffline
+        case .artifactUnreadable:
+            return .processingFailed
+        }
+    }
+
+    /// The BYOK/local generation path (Phase 9 + 17): Whisper transcribe →
+    /// Interleaver → mode-switch check → GPT-4o generate. (Renamed from
+    /// `runPromptGeneration` in Phase E, which is now the routing branch above.)
+    private func runLocalPromptGeneration(processed: ProcessedRecording) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -1101,7 +1245,8 @@ final class AppState {
             return true
         case .screenRecordingRevoked, .microphoneRevoked,
              .recordingTooShort, .diskFull,
-             .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited:
+             .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
+             .outOfCredits, .subscriptionInactive:
             return false
         }
     }

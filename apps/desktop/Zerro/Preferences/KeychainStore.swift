@@ -227,6 +227,23 @@ extension KeychainStore {
     /// activate/validate, deleted together on deactivate/revocation).
     static let byokLastValidated = KeychainStore(service: defaultService, account: "byok_last_validated")
 
+    // MARK: - License product disambiguation (Phase E)
+    //
+    // A BYOK one-time license and a Managed subscription license look identical
+    // locally — both are LemonSqueezy keys activated through the SAME path and
+    // stored in `byokLicenseKey`. This slot records WHICH product the on-file
+    // key belongs to, resolved at activation by probing `/session` (a Managed
+    // key returns a tier; a BYOK key comes back `not_entitled`). Kept in the
+    // Keychain beside the license — and cleared with it — so it survives a
+    // reinstall and never drifts apart from the key it describes. Values are the
+    // raw strings of `LicenseProductKind` ("byok" / "managed"); absent means
+    // "not yet resolved" and triggers a background re-probe at launch.
+
+    /// Which product the on-file license unlocks — "byok" or "managed". Read
+    /// SYNCHRONOUSLY at startup so `EntitlementStore.computeState` can pick the
+    /// right precedence branch without a network call.
+    static let licenseProductKind = KeychainStore(service: defaultService, account: "license_product_kind")
+
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
     /// / `failure`) of the trial slot reads — never the values — so the

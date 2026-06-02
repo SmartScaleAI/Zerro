@@ -14,24 +14,26 @@
 //  `vfCardBackground`, and spacing tokens — so the two surfaces read as one
 //  app. Copy is non-punitive (the trial ended, here's how to keep going).
 //
-//  Phase C wiring (BYOK):
-//    • "Get a license"        → opens the LemonSqueezy hosted checkout in the
-//                               default browser (NSWorkspace). URL is a
-//                               `// TODO:` placeholder until the LS account is
-//                               approved (see `BillingLinks`).
-//    • "Enter existing license" → reveals a license-key field + Activate
-//                               button → `EntitlementStore.activate(...)`,
-//                               with activating / activated / error states
-//                               mirroring APIAuthSection's verification pill.
-//                               On success the paywall dismisses (the gate now
-//                               passes; `.byok` already grants `canGenerate`).
-//    • At-activation-limit    → clear message + a "Manage devices" link to the
-//                               LS customer portal. Full in-app deactivate-
-//                               another-device is DEFERRED (the service method
-//                               is wired for Settings' "Deactivate this
-//                               device" today).
-//  Managed Starter / Pro stay INERT — `// DEFERRED Phase E`. Prices are `$X`
-//  placeholders (see `Price`).
+//  Three buy paths (billing-plan §8):
+//    • BYOK — pay once, fund generation with your own OpenAI key. "Get a
+//      license" opens the LemonSqueezy hosted checkout (NSWorkspace). Fully
+//      LOCAL: recordings never leave the Mac.
+//    • Starter / Pro — Zerro-hosted credit subscriptions (Phase E). A
+//      monthly/yearly toggle picks the LemonSqueezy subscription checkout for
+//      that tier+period. Managed sends the recording to Zerro's server for
+//      processing — surfaced honestly in the privacy note below.
+//    • Activate — one shared "enter your key" field (reusing the Phase C
+//      `LicenseService.activate` path) handles BOTH a BYOK license and a
+//      subscription key: `EntitlementStore.activate` probes the backend to
+//      resolve which, then sets `.byok` or `.managed`. On success the paywall
+//      dismisses (the gate now passes).
+//
+//  Checkout URLs + prices are `// TODO:` placeholders until the LS account /
+//  products are live (see `BillingLinks` / `Price`); each resolves-to-nil and
+//  no-ops cleanly when unset.
+//
+//  // DEFERRED: auto-pull the subscription license post-checkout (so the user
+//  doesn't have to paste a key). v1 reuses the Phase C enter-key path.
 //
 
 import AppKit
@@ -39,7 +41,6 @@ import os
 import SwiftUI
 
 struct PaywallView: View {
-    @Environment(EntitlementStore.self) private var entitlements
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
@@ -89,60 +90,71 @@ struct PaywallView: View {
     private var optionStack: some View {
         VStack(spacing: VFSpacing.md) {
             // BYOK — one-time license, the user funds generation with their
-            // own OpenAI key. Interactive in Phase C (buy or activate).
-            BYOKOptionCard(
-                onActivated: { dismissWindow(id: PaywallScene.windowID) }
-            )
+            // own OpenAI key. Fully local.
+            BuyOnceCard()
 
             // Managed Starter — Zerro-hosted credits, smaller monthly allotment.
-            PaywallOptionCard(
+            // Monthly vs yearly is chosen on the LemonSqueezy checkout page.
+            SubscriptionOptionCard(
+                tier: .starter,
                 title: "Starter",
-                subtitle: "We handle the AI. A monthly pool of credits, no API key to manage.",
-                price: Price.starter,
-                primaryLabel: "Subscribe to Starter",
-                primaryAction: {
-                    // DEFERRED Phase E: LemonSqueezy subscription checkout
-                    Log.ui.notice("paywall: 'Subscribe to Starter' tapped (Phase E no-op)")
-                }
+                subtitle: "We handle the AI. A monthly pool of credits, no API key to manage."
             )
 
             // Managed Pro — Zerro-hosted credits, larger monthly allotment.
-            PaywallOptionCard(
+            SubscriptionOptionCard(
+                tier: .pro,
                 title: "Pro",
-                subtitle: "Everything in Starter with a larger monthly credit pool for heavy use.",
-                price: Price.pro,
-                primaryLabel: "Subscribe to Pro",
-                primaryAction: {
-                    // DEFERRED Phase E: LemonSqueezy subscription checkout
-                    Log.ui.notice("paywall: 'Subscribe to Pro' tapped (Phase E no-op)")
-                }
+                subtitle: "Everything in Starter with a larger monthly credit pool for heavy use."
+            )
+
+            // Honest privacy note (§14.5): Managed transits the server; BYOK
+            // stays local. Don't let the local-first claim cover Managed.
+            ManagedPrivacyNote()
+
+            // One shared activation path for an already-purchased key (BYOK or
+            // subscription). On success the paywall dismisses.
+            ActivateLicenseCard(
+                onActivated: { dismissWindow(id: PaywallScene.windowID) }
             )
         }
     }
 }
 
-// MARK: - Price placeholders
+// MARK: - Price labels
 
-/// Placeholder price strings. Real numbers aren't locked yet, so these stay
-/// as `$X` / `$X/mo` literals — grep `TODO: set prices` to find the one place
-/// to update once pricing is decided.
+/// DISPLAY-ONLY price labels for the paywall cards. LemonSqueezy is the actual
+/// source of truth for what the customer is charged — these strings are just
+/// the labels we render, and MUST be kept in sync with the LemonSqueezy product
+/// prices by hand (the app never sets the charge). The cards currently show the
+/// monthly price; the yearly option is presented on the LemonSqueezy checkout
+/// page (no in-app period toggle), and `*Yearly` are kept here as the canonical
+/// record of those numbers. One place, no scattered literals.
 private enum Price {
-    // TODO: set prices
-    static let byok = "$X"
-    // TODO: set prices
-    static let starter = "$X/mo"
-    // TODO: set prices
-    static let pro = "$X/mo"
+    static let byok = "$39 one-time"
+    static let starterMonthly = "$12/mo"
+    static let starterYearly = "$120/yr"
+    static let proMonthly = "$29/mo"
+    static let proYearly = "$290/yr"
+
+    /// The price label shown on a subscription card (the monthly figure).
+    static func subscription(tier: ManagedTier) -> String {
+        switch tier {
+        case .starter: return starterMonthly
+        case .pro:     return proMonthly
+        }
+    }
 }
 
-// MARK: - BYOK activation model
+// MARK: - Activation model
 
-/// Drives the paywall's "Enter existing license" flow. Mirrors
-/// `APIKeyFieldModel`'s shape: a small `@Observable` field model with an
-/// explicit phase the pill renders against.
+/// Drives the shared "enter your key" flow. Mirrors `APIKeyFieldModel`'s shape:
+/// a small `@Observable` field model with an explicit phase the pill renders
+/// against. Works for BOTH a BYOK license and a subscription key — the store's
+/// `activate` probes the backend to resolve which.
 @MainActor
 @Observable
-final class BYOKActivationModel {
+final class PaywallActivationModel {
     /// The activation lifecycle the UI renders. `failed` carries the
     /// user-facing copy plus whether to offer the "Manage devices" portal
     /// link (only meaningful for the at-activation-limit case).
@@ -153,8 +165,9 @@ final class BYOKActivationModel {
         case failed(message: String, showManageDevices: Bool)
     }
 
-    /// License keys aren't as sensitive as API keys, so the field is shown in
-    /// plain text with a paste affordance — friendlier than a masked field.
+    /// License/subscription keys aren't as sensitive as API keys, so the field
+    /// is shown in plain text with a paste affordance — friendlier than a
+    /// masked field.
     var licenseKey: String = ""
     var phase: Phase = .idle
 
@@ -171,7 +184,8 @@ final class BYOKActivationModel {
 
     /// Runs activation through the shared `EntitlementStore`. On success calls
     /// `onSuccess` (the paywall dismisses); on a `LicenseError` renders the
-    /// typed copy.
+    /// typed copy. No product hint — the backend probe in `activate` decides
+    /// BYOK vs Managed.
     func activate(using entitlements: EntitlementStore, onSuccess: @escaping () -> Void) {
         let key = trimmedKey
         guard !key.isEmpty else {
@@ -196,33 +210,24 @@ final class BYOKActivationModel {
     }
 }
 
-// MARK: - BYOK option card
+// MARK: - Buy-once (BYOK) card
 
-/// The BYOK purchase card: a buy affordance and an inline "activate an
-/// existing license" flow. Self-contained so the activation field state lives
-/// with the card rather than leaking into `PaywallView`.
-private struct BYOKOptionCard: View {
-    @Environment(EntitlementStore.self) private var entitlements
-    /// Called when activation succeeds — the paywall dismisses.
-    let onActivated: () -> Void
-
-    @State private var model = BYOKActivationModel()
-    @State private var isEnteringLicense = false
-    @FocusState private var fieldFocused: Bool
-
+/// The BYOK purchase card: pay once, fund with your own OpenAI key. Activation
+/// of the resulting key happens through the shared `ActivateLicenseCard` below.
+private struct BuyOnceCard: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+        OptionCardChrome {
             HStack(alignment: .firstTextBaseline) {
                 Text("Bring your own key")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
                 Spacer(minLength: VFSpacing.sm)
-                Text(Price.byokDisplay)
+                Text(Price.byok)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.vfTextPrimary)
             }
 
-            Text("Pay once. Use your own OpenAI API key — no monthly fee.")
+            Text("Pay once. Use your own OpenAI API key — no monthly fee. Recordings stay fully on your Mac.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
@@ -230,25 +235,105 @@ private struct BYOKOptionCard: View {
 
             OnboardingPrimaryButton("Get a license", action: openCheckout)
                 .padding(.top, VFSpacing.xs)
+        }
+    }
 
-            if isEnteringLicense {
+    private func openCheckout() {
+        guard let url = BillingLinks.byokCheckoutURL else {
+            Log.billing.notice("paywall: BYOK checkout URL not configured yet (placeholder)")
+            return
+        }
+        Log.billing.notice("paywall: opening BYOK checkout in browser")
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Subscription (Managed) card
+
+/// One managed subscription option (Starter / Pro). Opens the LemonSqueezy
+/// subscription checkout for the tier in the browser (same pattern as BYOK) —
+/// monthly vs yearly is chosen on the checkout page. The user activates the
+/// issued key afterward via the shared `ActivateLicenseCard`.
+private struct SubscriptionOptionCard: View {
+    let tier: ManagedTier
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        OptionCardChrome {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                Spacer(minLength: VFSpacing.sm)
+                Text(Price.subscription(tier: tier))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.vfTextPrimary)
+            }
+
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            OnboardingPrimaryButton("Subscribe to \(title)", action: openCheckout)
+                .padding(.top, VFSpacing.xs)
+        }
+    }
+
+    private func openCheckout() {
+        guard let url = BillingLinks.subscriptionCheckoutURL(tier: tier) else {
+            Log.billing.notice("paywall: \(tier.rawValue, privacy: .public) checkout URL not configured yet (placeholder)")
+            return
+        }
+        Log.billing.notice("paywall: opening \(tier.rawValue, privacy: .public) subscription checkout")
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Privacy note
+
+/// Honest one-liner on where recordings go (§14.5). Understated secondary text.
+private struct ManagedPrivacyNote: View {
+    var body: some View {
+        Text("Starter & Pro send your recording to Zerro\u{2019}s server to generate the prompt. Bring-your-own-key stays fully on your Mac.")
+            .font(.system(size: 11))
+            .foregroundStyle(Color.vfTextTertiary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Activate-license card (shared)
+
+/// The shared "already purchased? enter your key" flow. Accepts BOTH a BYOK
+/// license and a subscription key — `EntitlementStore.activate` resolves which
+/// via a backend probe. Self-contained so the field state lives with the card.
+private struct ActivateLicenseCard: View {
+    @Environment(EntitlementStore.self) private var entitlements
+    /// Called when activation succeeds — the paywall dismisses.
+    let onActivated: () -> Void
+
+    @State private var model = PaywallActivationModel()
+    @State private var isEntering = false
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        OptionCardChrome(alignment: .leading) {
+            if isEntering {
+                Text("Enter your license or subscription key")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
                 activationField
             } else {
-                OnboardingSecondaryButton("Enter existing license") {
-                    isEnteringLicense = true
+                OnboardingSecondaryButton("Already have a key? Activate it") {
+                    isEntering = true
                     fieldFocused = true
                 }
             }
         }
-        .padding(VFSpacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .strokeBorder(Color.vfHairline, lineWidth: 1)
-        )
     }
 
     // MARK: Activation field
@@ -257,7 +342,7 @@ private struct BYOKOptionCard: View {
     private var activationField: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
             HStack(spacing: VFSpacing.sm) {
-                TextField("License key", text: $model.licenseKey)
+                TextField("License or subscription key", text: $model.licenseKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -312,21 +397,33 @@ private struct BYOKOptionCard: View {
         return false
     }
 
-    // MARK: Actions
-
     private func runActivation() {
         model.activate(using: entitlements, onSuccess: onActivated)
     }
+}
 
-    private func openCheckout() {
-        guard let url = BillingLinks.byokCheckoutURL else {
-            // Placeholder not yet filled (LS account in review). Log loudly
-            // rather than opening a dead link.
-            Log.billing.notice("paywall: BYOK checkout URL not configured yet (placeholder)")
-            return
+// MARK: - Option card chrome
+
+/// The shared card chrome (background fill + hairline border + padding) every
+/// paywall option uses, so the cards read as one set.
+private struct OptionCardChrome<Content: View>: View {
+    var alignment: HorizontalAlignment = .leading
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: VFSpacing.sm) {
+            content
         }
-        Log.billing.notice("paywall: opening BYOK checkout in browser")
-        NSWorkspace.shared.open(url)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(VFSpacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                .strokeBorder(Color.vfHairline, lineWidth: 1)
+        )
     }
 }
 
@@ -354,59 +451,6 @@ private struct ManageDevicesLink: View {
             return
         }
         NSWorkspace.shared.open(url)
-    }
-}
-
-// MARK: - Price display helper
-
-private extension Price {
-    /// The BYOK price as shown on the card. Kept beside the other price
-    /// placeholders so pricing is updated in one file.
-    static var byokDisplay: String { byok }
-}
-
-// MARK: - Option card
-
-/// One inert purchase option (Starter / Pro): title, one-line value, a price
-/// chip, and a primary action. Built from the shared onboarding button styles
-/// so it matches the rest of the app's chrome.
-private struct PaywallOptionCard: View {
-    let title: String
-    let subtitle: String
-    let price: String
-    let primaryLabel: String
-    let primaryAction: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.sm) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.vfTextPrimary)
-                Spacer(minLength: VFSpacing.sm)
-                Text(price)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.vfTextPrimary)
-            }
-
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-
-            OnboardingPrimaryButton(primaryLabel, action: primaryAction)
-                .padding(.top, VFSpacing.xs)
-        }
-        .padding(VFSpacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .strokeBorder(Color.vfHairline, lineWidth: 1)
-        )
     }
 }
 
