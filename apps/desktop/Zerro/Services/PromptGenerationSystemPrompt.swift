@@ -32,7 +32,7 @@ enum PromptGenerationSystemPrompt {
     /// `zerro-prompt-system.md`.
     static let base: String = """
     You convert a screen recording into clean text output. Your input is:
-    - A sequence of JPEG frames sampled from the recording, each labeled [Frame @ MM:SS].
+    - A sequence of JPEG frames sampled from the recording, interleaved in time order with the narration. Each frame is marked with its timestamp [M:SS] and immediately precedes the speech spoken just after it.
     - A timestamped transcript of the user speaking while recording.
 
     The transcript is raw speech: it contains filler words, false starts, self-corrections, and informal phrasing. Treat it as intent, not literal text. When the user corrects themselves, follow the corrected version and ignore the abandoned one.
