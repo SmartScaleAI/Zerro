@@ -107,6 +107,12 @@ struct ZerroApp: App {
             // accumulates AFTER this one in the Sentry crumb trail, so
             // any crash report shows a clean "app launched → ..." lead.
             Log.breadcrumb(category: .appLifecycle, message: "app launched")
+            #if DEBUG
+            // Phase B: log the trial Keychain slot disposition at launch
+            // (found/absent/failure, no values) so the reinstall-persistence
+            // test is observable without a debugger. See KeychainStore header.
+            KeychainStore.debugLogTrialSlotDisposition()
+            #endif
             KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
                     state: state,
@@ -357,6 +363,15 @@ struct ZerroApp: App {
             AppDelegate.openOnboarding()
             return
         }
+
+        // Phase B freshness point: re-evaluate the trial clock at the
+        // moment of a record attempt, mirroring the `permissions.refreshStatuses()`
+        // re-read above. A long-running app must not honor a stale "still in
+        // trial" computed hours ago — a trial that lapsed while the app sat
+        // idle is caught HERE. `refresh()` is a couple of Keychain reads +
+        // arithmetic (cheap per attempt) and preserves the fail-open contract,
+        // so it can never turn a transient read error into a lockout.
+        entitlements?.refresh()
 
         // Phase A entitlement gate. Stops the START path (and only the
         // start path — 0a/0b above always run) before any capture when the

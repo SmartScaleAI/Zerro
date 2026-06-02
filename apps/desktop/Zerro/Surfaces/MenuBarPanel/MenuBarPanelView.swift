@@ -33,6 +33,11 @@ struct MenuBarPanelView: View {
     @Environment(AppState.self) private var appState
     @Environment(PreferencesStore.self) private var preferences
     @Environment(RecentPromptStore.self) private var recentPrompts
+    /// Phase B: read the entitlement so the dropdown can show a quiet
+    /// "Trial — N days left" line while `.trial` (hidden in every other
+    /// state). Always available in production now — the DEBUG entitlement
+    /// picker below reads this same injected store.
+    @Environment(EntitlementStore.self) private var entitlements
 
     /// Drives the Recent Prompts side panel (a trailing popover). Opened on
     /// hover via `recentRowHovered` / `recentPanelHovered`.
@@ -48,11 +53,6 @@ struct MenuBarPanelView: View {
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
-    /// Phase A: force any entitlement state from the menu-bar debug block.
-    /// This is the always-reachable driver — the default dev state is
-    /// `.trial`, so the paywall won't open on its own; forcing `.expired`
-    /// here and pressing ⌘⇧R is how you open it the first time.
-    @Environment(EntitlementStore.self) private var entitlements
     /// Drives the Entitlement picker side panel (a trailing popover),
     /// opened on hover via `entitlementRowHovered` / `entitlementPanelHovered`
     /// — same hover-driven submenu shape as Recent Prompts / Microphone.
@@ -79,6 +79,13 @@ struct MenuBarPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+
+            // Phase B: quiet trial countdown. Shown ONLY while `.trial`;
+            // hidden entirely on `.byok` / `.managed` / `.expired`. Reads
+            // `daysRemaining` straight off the `.trial` associated value.
+            if case .trial(let daysRemaining, _) = entitlements.state {
+                trialStatusLine(daysRemaining: daysRemaining)
+            }
 
             // Phase 17: transient indicator that the LAST result ran with a
             // pill-override mode rather than the selected one. Present only
@@ -242,6 +249,23 @@ struct MenuBarPanelView: View {
                         )
                     }
             }
+            // Phase B: trial-CLOCK dev controls. Orthogonal to the
+            // Entitlement picker above — that FORCES a state directly (and
+            // pins it); these manipulate the underlying Keychain clock and
+            // then `refresh()`, so you watch the real `evaluate()` derive the
+            // state. Each releases any pinned override first.
+            MenuRow(label: "Trial: Reset to 7 Days") {
+                entitlements.devResetTrial()
+            }
+            MenuRow(label: "Trial: Advance 1 Day") {
+                entitlements.devAdvanceTrialOneDay()
+            }
+            MenuRow(label: "Trial: Expire Now") {
+                entitlements.devExpireTrial()
+            }
+            MenuRow(label: "Trial: Clear Keychain") {
+                entitlements.devClearTrialKeychain()
+            }
             MenuRow(label: "Reset Onboarding") {
                 // Clear both persisted flags in-process; no relaunch
                 // needed. Opens the window immediately so the next
@@ -366,9 +390,9 @@ struct MenuBarPanelView: View {
                     .fixedSize()
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(Color.vfSuccessGreen)
+                        .fill(headerStatusColor)
                         .frame(width: 5, height: 5)
-                    Text("Ready \u{00B7} 24 credits left")
+                    Text(headerStatusText)
                         .font(.system(size: 11))
                         .foregroundStyle(Color.vfTextSecondary)
                         .fixedSize()
@@ -378,6 +402,56 @@ struct MenuBarPanelView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+
+    /// Phase B — header subtitle, driven by the live `EntitlementState`
+    /// (replacing the Phase A "24 credits left" placeholder, which was
+    /// fake for every state but Managed).
+    ///
+    /// `.trial` deliberately reads just "Ready": the dedicated trial line
+    /// directly below the header carries the "N days left" countdown, so
+    /// showing it here too would be redundant. Managed is the ONLY state
+    /// with a real credit count (BYOK funds via the user's own key; trial
+    /// credits don't exist until Phase F).
+    private var headerStatusText: String {
+        switch entitlements.state {
+        case .trial:
+            return "Ready"
+        case .byok:
+            return "Ready"
+        case .managed(_, let creditsRemaining, _):
+            // Credits are display-only; the server is the spend authority (Phase E).
+            return "Ready \u{00B7} \(creditsRemaining) credits left"
+        case .expired:
+            return "Trial ended"
+        }
+    }
+
+    /// Status dot: green while usable, dimmed once the trial has ended so
+    /// the header reads as "inactive" without being alarming (no red).
+    private var headerStatusColor: Color {
+        switch entitlements.state {
+        case .expired:
+            return Color.vfTextTertiary
+        case .trial, .byok, .managed:
+            return Color.vfSuccessGreen
+        }
+    }
+
+    /// Phase B — quiet trial countdown line. Understated, secondary-text
+    /// styling like the Phase 5 onboarding affordances: small, dimmed, no
+    /// badge / no alert color even on the last day (an urgent treatment is
+    /// out of scope for Phase B). "1 day left" is singularized.
+    private func trialStatusLine(daysRemaining days: Int) -> some View {
+        HStack(spacing: 0) {
+            Text(days == 1 ? "Trial \u{2014} 1 day left" : "Trial \u{2014} \(days) days left")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextSecondary)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
     }
 
     /// Phase 17 — transient "this result was switched" note. Echoes the
@@ -968,12 +1042,14 @@ private func previewRecentPromptStore() -> RecentPromptStore {
     return store
 }
 
-#Preview("Dropdown") {
+#Preview("Dropdown \u{00B7} Trial") {
     MenuPanelChrome {
         MenuBarPanelView()
             .environment(AppState())
             .environment(previewRecentPromptStore())
-            .environment(EntitlementStore())
+            // In-memory trial clock started 2 days ago → "Trial — 5 days
+            // left". Avoids the real Keychain so the preview is deterministic.
+            .environment(EntitlementStore(trialManager: .inMemory(startedDaysAgo: 2)))
             .environmentObject(UpdaterViewModel())
     }
     .padding(40)
@@ -986,7 +1062,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
             MenuBarPanelView(highlightRecentPrompts: true)
                 .environment(AppState())
                 .environment(previewRecentPromptStore())
-                .environment(EntitlementStore())
+                .environment(EntitlementStore(trialManager: .inMemory(startedDaysAgo: 2)))
                 .environmentObject(UpdaterViewModel())
         }
 
@@ -1003,3 +1079,61 @@ private func previewRecentPromptStore() -> RecentPromptStore {
     .padding(40)
     .background(Color.vfPanelBackground)
 }
+
+#if DEBUG
+// Confirms the trial line is HIDDEN outside `.trial`. `EntitlementStore.preview`
+// pins the state via the dev override (DEBUG-only), so this block is
+// `#if DEBUG`-guarded — `#Preview` bodies otherwise compile in Release too.
+#Preview("Dropdown \u{00B7} Expired (no trial line)") {
+    MenuPanelChrome {
+        MenuBarPanelView()
+            .environment(AppState())
+            .environment(previewRecentPromptStore())
+            .environment(EntitlementStore.preview(.expired))
+            .environmentObject(UpdaterViewModel())
+    }
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+
+#Preview("Dropdown \u{00B7} Trial last day") {
+    MenuPanelChrome {
+        MenuBarPanelView()
+            .environment(AppState())
+            .environment(previewRecentPromptStore())
+            // Forced last-day state to verify the singular "1 day left" copy.
+            .environment(EntitlementStore.preview(.trial(daysRemaining: 1, trialCreditsRemaining: nil)))
+            .environmentObject(UpdaterViewModel())
+    }
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+
+// Header subtitle reconciliation: Managed is the only state with a real
+// credit count; BYOK shows just "Ready" (no credits concept).
+#Preview("Dropdown \u{00B7} Managed (credits)") {
+    MenuPanelChrome {
+        MenuBarPanelView()
+            .environment(AppState())
+            .environment(previewRecentPromptStore())
+            .environment(EntitlementStore.preview(
+                .managed(tier: .pro, creditsRemaining: 142, resetDate: .now)
+            ))
+            .environmentObject(UpdaterViewModel())
+    }
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+
+#Preview("Dropdown \u{00B7} BYOK (no credits)") {
+    MenuPanelChrome {
+        MenuBarPanelView()
+            .environment(AppState())
+            .environment(previewRecentPromptStore())
+            .environment(EntitlementStore.preview(.byok))
+            .environmentObject(UpdaterViewModel())
+    }
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+#endif
