@@ -40,7 +40,10 @@ Deno.serve(async (req: Request) => {
   const claims = await verifySessionToken(token, jwtSecret);
   if (!claims) return json({ error: "invalid_token" }, 401);
 
-  // Phase F will branch on claims.kind === 'trial' to read trial_grants.
+  // Subscriptions only. A trial token's credit balance is returned inline by
+  // `trial-start` (on verify) and by every `generate` response — the app never
+  // needs to call /entitlement with a trial token, so this endpoint stays
+  // subscription-only rather than growing an email-keyed read path (Phase F).
   if (claims.kind !== "subscription") {
     return json({ error: "unsupported_token_kind" }, 401);
   }

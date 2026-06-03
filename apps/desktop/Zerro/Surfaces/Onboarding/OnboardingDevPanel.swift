@@ -78,9 +78,7 @@ struct OnboardingDevPanel: View {
             permissionPinRow(label: "MIC", binding: bindMic)
         case .accessibility:
             permissionPinRow(label: "ACCESS", binding: bindAccess)
-        case .apiKey:
-            apiKeyPinRow
-        case .welcome, .allSet:
+        case .welcome, .email, .allSet:
             HStack {
                 Text("\u{2014}").font(.system(size: 11)).foregroundStyle(Color.vfTextTertiary)
                 Text("No sub-states for this step")
@@ -120,36 +118,6 @@ struct OnboardingDevPanel: View {
         }
     }
 
-    private var apiKeyPinRow: some View {
-        HStack(spacing: VFSpacing.sm) {
-            Text("KEY")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.6)
-                .foregroundStyle(Color.vfTextSecondary)
-                .frame(width: 58, alignment: .leading)
-
-            DevPill(
-                label: "Live",
-                isSelected: bindAPIKey.wrappedValue == nil
-            ) { bindAPIKey.wrappedValue = nil }
-
-            DevPill(
-                label: "Untouched",
-                isSelected: bindAPIKey.wrappedValue == .untouched
-            ) { bindAPIKey.wrappedValue = .untouched }
-
-            DevPill(
-                label: "Valid",
-                isSelected: bindAPIKey.wrappedValue == .valid
-            ) { bindAPIKey.wrappedValue = .valid }
-
-            DevPill(
-                label: "Invalid",
-                isSelected: bindAPIKey.wrappedValue == .invalid
-            ) { bindAPIKey.wrappedValue = .invalid }
-        }
-    }
-
     // Bindings cross the @Bindable boundary by hand because the dev
     // panel only mutates these fields when DEBUG is compiled in, and
     // @Bindable wrappers add ceremony for production code that never
@@ -173,13 +141,6 @@ struct OnboardingDevPanel: View {
         Binding(
             get: { onboarding.pinnedAccessSubState },
             set: { onboarding.pinnedAccessSubState = $0 }
-        )
-    }
-
-    private var bindAPIKey: Binding<APIKeyValidationState?> {
-        Binding(
-            get: { onboarding.pinnedAPIKeySubState },
-            set: { onboarding.pinnedAPIKeySubState = $0 }
         )
     }
 }

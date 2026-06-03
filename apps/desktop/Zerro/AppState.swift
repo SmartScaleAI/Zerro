@@ -120,6 +120,17 @@ public enum RecordingFailureReason: Equatable {
     /// entitlement layer drops them out of `.managed` on the next refresh.
     case subscriptionInactive
 
+    // Phase F — trial server-funded credits
+    /// Trial: the user (mid-trial, no own OpenAI key) tried to generate but
+    /// hasn't verified an email yet, OR the trial token was rejected/expired and
+    /// needs re-verifying. Non-punitive — the recording is discarded and the
+    /// capture sheet is the way forward; the next record attempt re-offers it.
+    case trialVerificationRequired
+    /// Trial: the server-funded trial credits are spent (`generate` returned
+    /// 402). The trial is over (one of the two expiry conditions) — the next
+    /// record attempt routes to the paywall. Non-punitive, non-retryable.
+    case trialCreditsExhausted
+
     /// Whether the failure is worth re-running the API stage against the
     /// already-processed artifacts. True only for transient API-side
     /// failures — the local audio/frames/manifest on disk are still good,
@@ -138,7 +149,8 @@ public enum RecordingFailureReason: Equatable {
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .processingFailed, .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth,
-             .outOfCredits, .subscriptionInactive:
+             .outOfCredits, .subscriptionInactive,
+             .trialVerificationRequired, .trialCreditsExhausted:
             return false
         }
     }
@@ -177,6 +189,10 @@ public enum RecordingFailureReason: Equatable {
             return "You\u{2019}re out of credits this month. Your library stays open \u{2014} credits reset on your renewal date."
         case .subscriptionInactive:
             return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
+        case .trialVerificationRequired:
+            return "Verify your email to use your free trial generations."
+        case .trialCreditsExhausted:
+            return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own OpenAI key to keep going."
         }
     }
 }
@@ -292,6 +308,25 @@ final class AppState {
     // yet wired, or in a unit test) keeps the existing local path — fail-safe.
     @ObservationIgnored weak var entitlements: EntitlementStore?
     @ObservationIgnored var managedProxyClient: ManagedProxyClient?
+
+    // Phase F (billing): the server-funded trial-credits layer, wired by
+    // `ZerroApp.init`. Used as the proxy's token provider for a trial generation
+    // and read for trial-credit display. Weak — owned by ZerroApp @State for the
+    // app's lifetime (same contract as `entitlements`). A `nil` trialCredits
+    // means the trial proxy path is unavailable and generation falls back to
+    // local (fail-safe), exactly like a `nil` entitlements.
+    @ObservationIgnored weak var trialCredits: TrialCreditsManager?
+
+    /// Whether the user has their own OpenAI key on file — decides whether a
+    /// trial user funds generation locally (their key) or via server credits.
+    /// A closure so tests can drive the routing without touching the Keychain;
+    /// production reads the real `KeychainStore.openAIAPIKey` slot.
+    @ObservationIgnored var hasOwnAPIKeyProvider: () -> Bool = {
+        if case .found(let key) = KeychainStore.openAIAPIKey.readResult() {
+            return !key.isEmpty
+        }
+        return false
+    }
 
     // MARK: Internal
 
@@ -845,78 +880,169 @@ final class AppState {
     /// Fail-safe: if entitlements/proxy aren't wired (unit tests, or a managed
     /// state without a proxy), fall back to the local path rather than failing.
     private func runPromptGeneration(processed: ProcessedRecording) {
-        if entitlements?.routesThroughManagedProxy == true, let proxy = managedProxyClient {
-            runManagedGeneration(processed: processed, proxy: proxy)
-        } else {
+        // Phase F made this a four-way decision (was Managed-vs-local in Phase E).
+        // The policy lives in `EntitlementStore.generationRoute`; this is just the
+        // mechanism. A nil entitlements falls back to local (fail-safe).
+        let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
+        switch route {
+        case .managedProxy:
+            if let proxy = managedProxyClient {
+                // Managed subscription → proxy with the subscription session token
+                // (the proxy's default provider).
+                runProxyGeneration(processed: processed, proxy: proxy, tokenProvider: nil, isTrial: false)
+            } else {
+                runLocalPromptGeneration(processed: processed)
+            }
+        case .trialProxy:
+            if let proxy = managedProxyClient, let trial = trialCredits {
+                // Trial with a live token → SAME proxy, trial token.
+                runProxyGeneration(processed: processed, proxy: proxy, tokenProvider: trial, isTrial: true)
+            } else {
+                runLocalPromptGeneration(processed: processed)
+            }
+        case .trialNeedsEmail:
+            // Trial, no own key, not verified yet. Email verification is now a
+            // REQUIRED onboarding step (Phase F revised), so for a normally
+            // onboarded user this never happens. It's reachable only by an
+            // existing user (onboarded before the email step) or one who took the
+            // infra-failure fallback — surface a gentle, non-abrupt failure that
+            // points them to the Settings/Billing "verify email" affordance. NO
+            // mid-task popup.
+            state = .failed(reason: .trialVerificationRequired)
+        case .local:
             runLocalPromptGeneration(processed: processed)
         }
     }
 
-    /// Phase E — the Managed generation path. Uploads audio + frames + the
-    /// effective mode (NEVER a transcript or system prompt — the server owns
-    /// those, §6.1) to the proxy and lands the returned prompt on the same
-    /// `.done` tail the local path uses (pill + clipboard + history unchanged).
-    /// Does NOT run local Whisper or mode-switch detection — both need a
-    /// transcript the client never has on this path.
-    private func runManagedGeneration(processed: ProcessedRecording, proxy: ManagedProxyClient) {
+    /// Phase E/F — the proxy generation path (Managed subscription OR trial).
+    /// Uploads audio + frames + the effective mode (NEVER a transcript or system
+    /// prompt — the server owns those, §6.1) to the proxy and lands the returned
+    /// prompt on the same `.done` tail the local path uses (pill + clipboard +
+    /// history unchanged). Does NOT run local Whisper or mode-switch detection —
+    /// both need a transcript the client never has on this path.
+    ///
+    /// `tokenProvider` nil = the Managed subscription token (proxy default);
+    /// non-nil = the trial token (`isTrial == true`). The two differ only in how
+    /// the post-success credit balance is applied and how failures are mapped;
+    /// the upload + result tail are identical.
+    private func runProxyGeneration(
+        processed: ProcessedRecording,
+        proxy: ManagedProxyClient,
+        tokenProvider: ProxyTokenProviding?,
+        isTrial: Bool
+    ) {
         let mode = recordingOutputMode
         let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
         let durationSeconds = CMTimeGetSeconds(processed.duration)
+        let label = isTrial ? "trial" : "managed"
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 // One server round-trip covers upload → STT → generation; the
                 // "Writing your prompt…" label is the honest single stage.
                 self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
-                Log.breadcrumb(category: .pipelineStage, message: "managed generation started")
+                Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
                 let managed = try await proxy.generate(
                     audioURL: audioURL,
                     frames: processed.frames,
                     mode: mode,
-                    durationSeconds: durationSeconds.isFinite ? durationSeconds : nil
+                    durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
+                    tokenProvider: tokenProvider
                 )
                 let result = managed.result
                 Log.promptGen.info(
-                    "managed OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
+                    "\(label, privacy: .public) OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
                 )
 
                 guard self.state == .processing else { return }
                 self.generatedPrompt = result.prompt
-                // The Managed path has no client transcript, so the no-narration
+                // The proxy path has no client transcript, so the no-narration
                 // note (a BYOK affordance) doesn't apply — never flag it here.
                 self.resultHadNoNarration = false
                 self.recentPromptStore?.add(prompt: result.prompt)
                 self.state = .done
-                Log.breadcrumb(category: .pipelineStage, message: "managed generation completed")
+                Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
 
-                // Reflect the spent credit immediately, then refresh the
-                // authoritative snapshot (reset date / status) in the background.
+                // Reflect the spent credit immediately. For a subscription, also
+                // refresh the authoritative /entitlement snapshot in the
+                // background; for a trial, applying the balance recomputes the
+                // entitlement (and flips it to `.expired` once credits hit zero,
+                // for the NEXT record attempt — the current result is unaffected).
                 if let remaining = managed.creditsRemaining {
-                    self.entitlements?.applyCreditsRemaining(remaining)
+                    if isTrial {
+                        self.entitlements?.applyTrialCreditsRemaining(remaining)
+                    } else {
+                        self.entitlements?.applyCreditsRemaining(remaining)
+                    }
                 }
-                if let entitlements = self.entitlements {
+                if !isTrial, let entitlements = self.entitlements {
                     Task { await entitlements.refreshManagedEntitlement() }
                 }
             } catch {
                 guard self.state == .processing else { return }
-                let reason = Self.managedFailureReason(from: error)
-                Log.promptGen.error("managed generation failed: \(String(describing: reason), privacy: .public)")
+                let reason = isTrial
+                    ? self.trialFailureReason(from: error)
+                    : Self.managedFailureReason(from: error)
+                Log.promptGen.error("\(label, privacy: .public) generation failed: \(String(describing: reason), privacy: .public)")
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
-                        message: "Managed generation failed",
-                        stage: "managedGeneration",
+                        message: "Proxy generation failed",
+                        stage: "proxyGeneration",
                         context: ["errorCode": Self.errorCodeString(reason)]
                     )
                 }
                 self.state = .failed(reason: reason)
-                // A definitive not-entitled means the subscription lapsed mid-use
-                // — recompute the entitlement so the app drops out of `.managed`.
-                if reason == .subscriptionInactive, let entitlements = self.entitlements {
+                // A definitive Managed not-entitled means the subscription lapsed
+                // mid-use — recompute so the app drops out of `.managed`.
+                if !isTrial, reason == .subscriptionInactive, let entitlements = self.entitlements {
                     Task { await entitlements.refreshManagedEntitlement() }
                 }
             }
         }
+    }
+
+    /// Maps a trial `/generate` failure to the user-facing taxonomy and performs
+    /// the trial-side state side effects (credit-exhaustion → `.expired` next
+    /// attempt; a rejected token → re-verify). Non-trial errors fall back to the
+    /// shared `failureReason(from:)`.
+    private func trialFailureReason(from error: Error) -> RecordingFailureReason {
+        guard let managed = error as? ManagedGenerationError else {
+            return Self.failureReason(from: error)
+        }
+        switch managed {
+        case .outOfCredits:
+            // Trial credits spent → the trial is over. Zero the balance so the
+            // entitlement recomputes to `.expired` (→ paywall on the next record).
+            entitlements?.applyTrialCreditsRemaining(0)
+            return .trialCreditsExhausted
+        case .notEntitled, .authFailed:
+            // Grant gone / token rejected → drop the trial token so the next
+            // attempt re-triggers the email capture.
+            entitlements?.resetTrialToken()
+            return .trialVerificationRequired
+        case .rateLimited:
+            return .rateLimited
+        case .providerUnavailable, .malformedResponse, .inputRejected:
+            return .providerError
+        case .network(let desc):
+            return desc.isEmpty ? .providerError : .networkOffline
+        case .artifactUnreadable:
+            return .processingFailed
+        }
+    }
+
+    // MARK: - Trial email verification (Phase F)
+
+    /// Called after a successful email verification (the required onboarding step,
+    /// or the Settings/Billing "verify email" affordance for existing /
+    /// infra-fallback users). The trial token + email + credits are already
+    /// stored by `TrialCreditsManager`; this just recomputes the entitlement so
+    /// the new trial credits are reflected in the menu-bar line / Billing readout
+    /// and the gate. There is no longer any mid-recording capture to resume —
+    /// verification happens up front in onboarding, not after a recording.
+    func handleTrialVerified() {
+        entitlements?.refresh()
     }
 
     /// Maps a `ManagedGenerationError` to the user-facing failure taxonomy.
@@ -1246,7 +1372,8 @@ final class AppState {
         case .screenRecordingRevoked, .microphoneRevoked,
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
-             .outOfCredits, .subscriptionInactive:
+             .outOfCredits, .subscriptionInactive,
+             .trialVerificationRequired, .trialCreditsExhausted:
             return false
         }
     }

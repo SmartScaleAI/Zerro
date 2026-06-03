@@ -36,6 +36,15 @@ struct BillingSection: View {
     var body: some View {
         SettingsSection("Billing & License") {
             CurrentPlanRow()
+            // Phase F: persistent "verify your email to start your free trial"
+            // affordance for trial users who haven't verified yet (existing
+            // users from before the required onboarding step, or anyone who took
+            // the infra-failure fallback). Opens the standalone verification
+            // window. Hidden once verified (or on any non-trial state).
+            if entitlements.needsTrialEmailVerification {
+                SettingsRowDivider()
+                TrialVerifyRow()
+            }
             // Phase E: a quiet, non-blocking past-due nudge (§9.1) — only while
             // the Managed subscription is in LemonSqueezy's dunning window.
             // Generation still works on remaining credits; this is visibility.
@@ -224,6 +233,26 @@ private struct CurrentPlanRow: View {
                     : "Managed \u{00B7} \(tier.rawValue.capitalized)",
                 tint: pastDue ? Color.vfWarningAmber : Color.vfSuccessGreen
             )
+        }
+    }
+}
+
+// MARK: - Trial email-verification row (Phase F)
+
+/// Shown only while `EntitlementStore.needsTrialEmailVerification` — a trial user
+/// who hasn't claimed their server-funded credits yet. Opens the standalone
+/// `TrialEmailCaptureView` window (via the AppDelegate opener, same path the
+/// menu-bar banner uses). Non-blocking: BYOK / subscribe still work without it.
+private struct TrialVerifyRow: View {
+    var body: some View {
+        SettingsRow(
+            label: "Free Trial Credits",
+            description: "Verify your email to start your free trial \u{2014} server-funded generations, no API key needed."
+        ) {
+            Button("Verify email") {
+                AppDelegate.openTrialEmailCapture()
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
         }
     }
 }

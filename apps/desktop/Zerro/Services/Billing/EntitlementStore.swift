@@ -81,6 +81,12 @@ final class EntitlementStore {
     /// precedence branch without a network call. See `KeychainStore.licenseProductKind`.
     private let productKindSlot: KeychainSlot
 
+    /// The Phase F trial-credits layer. Supplies `trialCreditsRemaining` for the
+    /// `.trial` display and the in-memory trial-token presence that decides
+    /// whether a trial generation can route through the proxy. Optional so tests/
+    /// previews that don't exercise trial credits omit it. See [[TrialCreditsManager]].
+    private let trialCredits: TrialCreditsManager?
+
     /// Backs the display-only Managed entitlement cache (credits/tier/reset/
     /// status). Persisted (non-secret) so the menu-bar credits line is correct
     /// at launch before the async `/entitlement` refresh lands. Injectable so
@@ -109,6 +115,7 @@ final class EntitlementStore {
         licenseService: LicenseService? = nil,
         sessionTokens: SessionTokenManager? = nil,
         productKindSlot: KeychainSlot? = nil,
+        trialCredits: TrialCreditsManager? = nil,
         defaults: UserDefaults = .standard
     ) {
         let manager = trialManager ?? TrialManager()
@@ -119,20 +126,22 @@ final class EntitlementStore {
         self.licenseService = license
         self.sessionTokens = tokens
         self.productKindSlot = kindSlot
+        self.trialCredits = trialCredits
         self.defaults = defaults
         // Seed the Managed display snapshot from the local cache so a Managed
         // user's credits line is correct at launch (refreshed async shortly
         // after). Decoded from the resolved local (no `self` access yet).
         let cached = Self.loadCachedSnapshot(from: defaults)
         self.managedSnapshot = cached
-        // Phase B/C/E: the initial state is COMPUTED, not hard-coded — from the
+        // Phase B/C/E/F: the initial state is COMPUTED, not hard-coded — from the
         // resolved locals (so this runs without touching `self`). Precedence:
-        // Managed (Phase E) > BYOK (Phase C) > trial (Phase B) > expired.
+        // Managed (Phase E) > BYOK (Phase C) > trial (Phase B/F) > expired.
         self.state = Self.computeState(
             trialManager: manager,
             licenseService: license,
             productKind: Self.readProductKind(from: kindSlot),
-            cachedSnapshot: cached
+            cachedSnapshot: cached,
+            trialCreditsRemaining: trialCredits?.creditsRemaining
         )
     }
 
@@ -148,7 +157,8 @@ final class EntitlementStore {
         trialManager: TrialManager,
         licenseService: LicenseService,
         productKind: LicenseProductKind?,
-        cachedSnapshot: ManagedEntitlementSnapshot?
+        cachedSnapshot: ManagedEntitlementSnapshot?,
+        trialCreditsRemaining: Int?
     ) -> EntitlementState {
         // First launch establishes the trial start (idempotent thereafter).
         trialManager.startTrialIfNeeded()
@@ -178,9 +188,17 @@ final class EntitlementStore {
 
         switch trialManager.evaluate() {
         case .active(let daysRemaining):
-            // `trialCreditsRemaining` stays nil — server-funded trial credits
-            // are Phase F. The clock gates Layer 1 only.
-            return .trial(daysRemaining: daysRemaining, trialCreditsRemaining: nil)
+            // Phase F dual expiry (§3.3): the trial ends on WHICHEVER comes first
+            // — the local clock (this `.active` branch means it hasn't) OR the
+            // server-funded credits being exhausted. `trialCreditsRemaining` is
+            // nil until the user verifies an email; once it exists and hits zero,
+            // the trial is over → `.expired` → paywall, exactly like a lapsed
+            // clock. A nil (never-verified) balance keeps the trial open on the
+            // clock alone, and the first generation triggers the email capture.
+            if let credits = trialCreditsRemaining, credits <= 0 {
+                return .expired
+            }
+            return .trial(daysRemaining: daysRemaining, trialCreditsRemaining: trialCreditsRemaining)
         case .expired:
             return .expired
         }
@@ -263,7 +281,8 @@ final class EntitlementStore {
             trialManager: trialManager,
             licenseService: licenseService,
             productKind: readProductKind(),
-            cachedSnapshot: managedSnapshot
+            cachedSnapshot: managedSnapshot,
+            trialCreditsRemaining: trialCredits?.creditsRemaining
         )
     }
 
@@ -357,13 +376,90 @@ final class EntitlementStore {
 
     // MARK: - Managed entitlement (Phase E)
 
-    /// True when generation must route through the Managed proxy
-    /// (`ManagedProxyClient`) rather than the direct BYOK OpenAI path. The
-    /// single branch point AppState reads. Only `.managed` routes through the
-    /// proxy; `.byok` stays fully local.
+    /// True when generation must route through the proxy (`ManagedProxyClient`)
+    /// rather than the direct BYOK OpenAI path. `.managed` always does; a
+    /// `.trial` user does ONCE they've verified an email and hold a trial token
+    /// (Phase F) — before that there's nothing to authorize, so a trial without a
+    /// token routes to the email-capture flow instead (see `generationRoute`).
+    /// `.byok` stays fully local.
     var routesThroughManagedProxy: Bool {
-        if case .managed = state { return true }
-        return false
+        switch state {
+        case .managed:
+            return true
+        case .trial:
+            return trialCredits?.hasActiveTrialToken == true
+        case .byok, .expired:
+            return false
+        }
+    }
+
+    /// How the generation pipeline should run for the current entitlement. The
+    /// single decision AppState reads at generation time. Splitting it out keeps
+    /// the policy (which path) here and the mechanism (run it) in AppState.
+    ///
+    /// `hasOwnAPIKey` is whether the user has their own OpenAI key on file: a
+    /// trial user WITH a key funds generation locally (their dime, the existing
+    /// path); only a trial user WITHOUT a key needs server-funded credits.
+    enum GenerationRoute: Equatable {
+        /// Direct OpenAI with the user's own key (BYOK, or trial-on-own-key).
+        case local
+        /// Managed subscription → proxy with the subscription session token.
+        case managedProxy
+        /// Trial with credits + a live trial token → proxy with the trial token.
+        case trialProxy
+        /// Trial, no own key, no trial token yet → present the email-capture sheet.
+        case trialNeedsEmail
+    }
+
+    func generationRoute(hasOwnAPIKey: Bool) -> GenerationRoute {
+        switch state {
+        case .managed:
+            return .managedProxy
+        case .byok:
+            return .local
+        case .expired:
+            // The record-start gate already blocks `.expired`; defensive default.
+            return .local
+        case .trial:
+            if hasOwnAPIKey { return .local }
+            if trialCredits?.hasActiveTrialToken == true { return .trialProxy }
+            return .trialNeedsEmail
+        }
+    }
+
+    /// True when the user is on the trial but has no USABLE trial token — so the
+    /// persistent "verify your email to start your free trial" affordance
+    /// (Settings/Billing row + menu-bar banner) should show. Keyed on the live
+    /// token, NOT on "have they ever verified", so it correctly surfaces in all
+    /// the cases where the user can't generate and must (re-)verify:
+    ///   • never verified (existing users from before the required email step, or
+    ///     anyone who took the onboarding infra-failure fallback);
+    ///   • a verified token that expired (TTL elapsed) or was lost and could not
+    ///     be reloaded — re-verifying re-mints one (the server grant, and its
+    ///     remaining balance, are unchanged).
+    /// Flips false the moment a valid token is in hand.
+    var needsTrialEmailVerification: Bool {
+        guard case .trial = state, let trialCredits else { return false }
+        return !trialCredits.hasActiveTrialToken
+    }
+
+    /// Reflect a just-completed trial generation's `credits_remaining` and
+    /// recompute (so the menu-bar line updates and, when credits hit zero, the
+    /// state flips to `.expired` for the NEXT record attempt — the current
+    /// result the user is viewing is unaffected; only `EntitlementStore.state`
+    /// changes, not the recording UI). No-op without a trial layer.
+    func applyTrialCreditsRemaining(_ remaining: Int) {
+        guard let trialCredits else { return }
+        trialCredits.applyCreditsRemaining(remaining)
+        refresh()
+    }
+
+    /// Drop the trial token + cached credits (definitive trial revocation / a
+    /// rejected trial token) and recompute. The next generation re-triggers the
+    /// email capture. No-op without a trial layer.
+    func resetTrialToken() {
+        trialCredits?.clear()
+        refresh()
     }
 
     /// Refreshes the DISPLAY-ONLY Managed snapshot from `/entitlement`. Cheap;
@@ -615,6 +711,17 @@ final class EntitlementStore {
     func devAdvanceTrialOneDay() {
         devOverrideActive = false
         trialManager.devAdvanceOneDay()
+        refresh()
+    }
+
+    /// Clears ALL locally-cached trial email-verification state (in-memory token,
+    /// cached credits, remembered email) so the onboarding email step returns to
+    /// its unverified first-run state — used by "Reset Onboarding" and the
+    /// dedicated "Reset Trial Email / Verification" dev control. The server grant
+    /// is the source of truth; re-verifying the same email resumes it (no refarm).
+    func devResetTrialVerification() {
+        devOverrideActive = false
+        trialCredits?.forgetVerification()
         refresh()
     }
 

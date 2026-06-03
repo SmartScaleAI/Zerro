@@ -11,6 +11,12 @@ const SECRET = "test_session_jwt_secret";
 const NOW = 1_000_000;
 
 // ---- In-memory BillingStore -------------------------------------------------
+interface TrialGrant {
+  verified: boolean;
+  limit: number;
+  used: number;
+}
+
 class InMemoryStore implements BillingStore {
   subs = new Map<string, SubRow>();
   used = new Map<string, number>(); // subId → credits_used (latest period)
@@ -19,9 +25,18 @@ class InMemoryStore implements BillingStore {
   rateOk = true;
   forceConsumeNull = false;
 
+  // Trial path (Phase F).
+  trialGrants = new Map<string, TrialGrant>();
+  trialSlots = new Set<string>();
+  forceTrialConsumeNull = false;
+
   seed(sub: SubRow, usedCredits = 0) {
     this.subs.set(sub.id, sub);
     this.used.set(sub.id, usedCredits);
+  }
+
+  seedTrial(id: string, grant: Partial<TrialGrant> = {}) {
+    this.trialGrants.set(id, { verified: true, limit: 15, used: 0, ...grant });
   }
 
   loadSubscription(id: string) {
@@ -54,6 +69,38 @@ class InMemoryStore implements BillingStore {
   }
   logGeneration(row: GenerationLogRow) {
     this.log.push(row);
+    return Promise.resolve();
+  }
+
+  // ---- Trial path (Phase F) -------------------------------------------------
+  loadTrialGrant(id: string) {
+    const g = this.trialGrants.get(id);
+    if (!g) return Promise.resolve(null);
+    return Promise.resolve({
+      id,
+      verified_at: g.verified ? "2026-06-02T00:00:00.000Z" : null,
+      trial_credits_limit: g.limit,
+      trial_credits_used: g.used,
+    });
+  }
+  trialCreditsRemaining(id: string) {
+    const g = this.trialGrants.get(id);
+    return Promise.resolve(g ? Math.max(0, g.limit - g.used) : 0);
+  }
+  consumeTrialCredit(id: string) {
+    if (this.forceTrialConsumeNull) return Promise.resolve(null);
+    const g = this.trialGrants.get(id);
+    if (!g || !g.verified || g.used >= g.limit) return Promise.resolve(null);
+    g.used += 1;
+    return Promise.resolve(g.limit - g.used);
+  }
+  acquireTrialSlot(id: string) {
+    if (this.trialSlots.has(id)) return Promise.resolve(false);
+    this.trialSlots.add(id);
+    return Promise.resolve(true);
+  }
+  releaseTrialSlot(id: string) {
+    this.trialSlots.delete(id);
     return Promise.resolve();
   }
 }
@@ -90,8 +137,21 @@ async function mintToken(
   tier: "starter" | "pro" = "starter",
   kind: "subscription" | "trial" = "subscription",
 ) {
-  const { token } = await signSessionToken({ sub, tier, kind }, SECRET, 1800, NOW);
+  // Trial tokens carry no tier (matches the real trial-start mint).
+  const claims = kind === "trial" ? { sub, kind } : { sub, tier, kind };
+  const { token } = await signSessionToken(claims, SECRET, 1800, NOW);
   return token;
+}
+
+async function mintTrialToken(grantId = "grant-1") {
+  const { token } = await signSessionToken({ sub: grantId, kind: "trial" }, SECRET, 1800, NOW);
+  return token;
+}
+
+function trialStore(usedCredits = 0, limit = 15): InMemoryStore {
+  const s = new InMemoryStore();
+  s.seedTrial("grant-1", { verified: true, limit, used: usedCredits });
+  return s;
 }
 
 function makeBody(over: Record<string, unknown> = {}) {
@@ -308,13 +368,100 @@ Deno.test("expired token → 401", async () => {
   assertEquals(openai.transcribeCalls, 0);
 });
 
-Deno.test("trial-kind token → 401 (Phase F)", async () => {
-  const store = activeStore(0);
+// ---- trial branch (Phase F) -------------------------------------------------
+Deno.test("trial token: charges exactly one trial credit, logs cost with null sub", async () => {
+  const store = trialStore(0, 15);
   const openai = new StubOpenAI();
-  const token = await mintToken("sub-1", "starter", "trial");
-  const res = await handleGenerate(makeReq(token, makeBody()), deps(store, openai));
-  assertEquals(res.status, 401);
-  assertEquals((await res.json()).error, "unsupported_token_kind");
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.prompt, "GENERATED PROMPT");
+  assertEquals(json.credits_remaining, 14); // 15 → 14, decremented once
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
+
+  // Logged with subscription_id = null (no FK for a trial generation), tokens +
+  // cost present, slot released.
+  assertEquals(store.log.length, 1);
+  assertEquals(store.log[0].subscriptionId, null);
+  assertEquals(store.log[0].success, true);
+  assert((store.log[0].estCostUsd ?? 0) > 0);
+  assertEquals(store.trialSlots.size, 0);
+});
+
+Deno.test("trial token: zero trial credits → 402, no OpenAI call, no charge", async () => {
+  const store = trialStore(15, 15); // used == limit
+  const openai = new StubOpenAI();
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 402);
+  assertEquals((await res.json()).error, "out_of_credits");
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15); // unchanged
+  assertEquals(store.log.length, 0);
+  assertEquals(store.trialSlots.size, 0);
+});
+
+Deno.test("trial token: unknown grant → 404", async () => {
+  const store = new InMemoryStore(); // grant-1 not seeded
+  const openai = new StubOpenAI();
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 404);
+  assertEquals(openai.transcribeCalls, 0);
+});
+
+Deno.test("trial token: unverified grant → 403, no OpenAI call", async () => {
+  const store = new InMemoryStore();
+  store.seedTrial("grant-1", { verified: false, limit: 15, used: 0 });
+  const openai = new StubOpenAI();
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 403);
+  assertEquals(openai.transcribeCalls, 0);
+});
+
+Deno.test("trial token: OpenAI chat failure never charges a trial credit", async () => {
+  const store = trialStore(0, 15);
+  const openai = new StubOpenAI();
+  openai.failChat = new OpenAIError("server", true, 500);
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 503);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0); // not charged
+  assertEquals(store.log[0].success, false);
+  assertEquals(store.trialSlots.size, 0);
+});
+
+Deno.test("trial token: concurrent second request → 429 (concurrency cap), cap not exceeded", async () => {
+  const store = trialStore(14, 15); // exactly 1 trial credit left
+  const openai = new StubOpenAI();
+  openai.hang = true; // first request parks inside transcribe, holding the slot
+
+  const p1 = handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  await new Promise((r) => setTimeout(r, 0)); // let p1 reach the hung transcribe
+
+  const r2 = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(r2.status, 429);
+  assertEquals((await r2.json()).error, "generation_in_progress");
+
+  openai.releaseHang();
+  const r1 = await p1;
+  assertEquals(r1.status, 200);
+  assertEquals((await r1.json()).credits_remaining, 0);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15); // charged exactly once
+  assertEquals(store.trialSlots.size, 0);
+});
+
+Deno.test("trial token: cannot exceed the cap across sequential requests", async () => {
+  // 2 credits left; three sequential generations → exactly two succeed, third 402.
+  const store = trialStore(13, 15);
+  const openai = new StubOpenAI();
+  const a = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  const b = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  const c = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(a.status, 200);
+  assertEquals(b.status, 200);
+  assertEquals(c.status, 402);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15);
 });
 
 // ---- subscriber status ------------------------------------------------------

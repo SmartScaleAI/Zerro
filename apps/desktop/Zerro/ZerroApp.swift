@@ -23,6 +23,11 @@ struct ZerroApp: App {
     /// app's lifetime, injected into the menu-bar content, Settings, and
     /// the Paywall window. The recording-start gate reads `canGenerate`.
     @State private var entitlements: EntitlementStore
+    /// Phase F (billing): the server-funded trial-credits layer. Long-lived like
+    /// the other services; shared between the entitlement layer (trial-credit
+    /// display + token presence) and AppState (proxy token provider for a trial
+    /// generation), and injected into the trial email-capture window.
+    @State private var trialCredits: TrialCreditsManager
     @State private var recentPrompts: RecentPromptStore
     @State private var launchAtLogin: LaunchAtLoginController
     @State private var pillController: PillWindowController
@@ -60,7 +65,10 @@ struct ZerroApp: App {
         // Managed generation proxy, so they share one cached token.
         let sessionTokens = SessionTokenManager()
         let managedProxy = ManagedProxyClient(sessionTokens: sessionTokens)
-        let ent = EntitlementStore(sessionTokens: sessionTokens)
+        // Phase F: the trial-credits layer is shared by the entitlement store and
+        // AppState (it's the proxy token provider for a trial generation).
+        let trial = TrialCreditsManager()
+        let ent = EntitlementStore(sessionTokens: sessionTokens, trialCredits: trial)
         let history = RecentPromptStore()
         let launch = LaunchAtLoginController()
         let selectorCtrl = AreaSelectorWindowController()
@@ -80,11 +88,14 @@ struct ZerroApp: App {
         // contract as the refs above.
         state.entitlements = ent
         state.managedProxyClient = managedProxy
+        // Phase F: the trial token provider + trial-credit bookkeeping.
+        state.trialCredits = trial
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
         _entitlements = State(initialValue: ent)
+        _trialCredits = State(initialValue: trial)
         _recentPrompts = State(initialValue: history)
         _launchAtLogin = State(initialValue: launch)
         _pillController = State(initialValue: pillCtrl)
@@ -210,6 +221,9 @@ struct ZerroApp: App {
             // the hotkey gate can bring it forward in this .accessory-policy
             // app once the user has dismissed it (or before it's ever shown).
             PaywallOpenerRegistrar()
+            // Phase F: same pattern for the trial email-capture window, opened by
+            // AppState at the first server-funded generation.
+            TrialEmailOpenerRegistrar()
             MenuBarIconView(isRecording: appState.isRecordingActive)
         }
         .menuBarExtraStyle(.window)
@@ -272,6 +286,11 @@ struct ZerroApp: App {
             OnboardingWindowView()
                 .environment(permissions)
                 .environment(onboarding)
+                // Phase F: the required email-verification step needs the trial
+                // layer (to request/verify the code + grant credits) and the
+                // entitlement store (to refresh once credits are granted).
+                .environment(trialCredits)
+                .environment(entitlements)
         }
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
@@ -284,6 +303,20 @@ struct ZerroApp: App {
         // `AppDelegate.openPaywall()` when the user is `.expired`.
         Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
             PaywallView()
+                .environment(entitlements)
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+
+        // Phase F: the trial email-capture window. Like the paywall it NEVER
+        // auto-presents (`.suppressed`); AppState brings it forward via
+        // `AppDelegate.openTrialEmailCapture()` at the first server-funded
+        // generation, and dismisses on verify/cancel.
+        Window("Zerro \u{2014} Free Trial", id: TrialEmailScene.windowID) {
+            TrialEmailCaptureView()
+                .environment(appState)
+                .environment(trialCredits)
                 .environment(entitlements)
         }
         .windowResizability(.contentSize)
@@ -474,6 +507,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window forward from the hotkey gate. Mirrors `requestOpenOnboarding`.
     nonisolated(unsafe) static var requestOpenPaywall: (() -> Void)?
 
+    /// Set by `TrialEmailOpenerRegistrar`. Used by `openTrialEmailCapture` to
+    /// bring the trial email-capture window forward when AppState pauses a trial
+    /// user's first server-funded generation (Phase F). Mirrors the two above.
+    nonisolated(unsafe) static var requestOpenTrialEmail: (() -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The Window scene's .defaultLaunchBehavior(.presented) already
         // instantiates the onboarding window when needed. We just need
@@ -513,6 +551,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // log loudly so a silent no-op (the user pressing record and
             // nothing happening) is diagnosable.
             Log.ui.error("openPaywall() called but requestOpenPaywall is nil — registrar didn't mount")
+        }
+    }
+
+    /// Brings the trial email-capture window forward (Phase F). Mirrors
+    /// `openPaywall()`. Called by AppState when a trial user's first server-funded
+    /// generation needs an email verified.
+    @MainActor
+    static func openTrialEmailCapture() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let opener = requestOpenTrialEmail {
+            opener()
+        } else {
+            Log.ui.error("openTrialEmailCapture() called but requestOpenTrialEmail is nil — registrar didn't mount")
         }
     }
 }
@@ -558,6 +609,27 @@ private struct PaywallOpenerRegistrar: View {
             .onAppear {
                 AppDelegate.requestOpenPaywall = {
                     openWindow(id: PaywallScene.windowID)
+                }
+            }
+    }
+}
+
+// MARK: - TrialEmailOpenerRegistrar
+//
+// Phase F twin of PaywallOpenerRegistrar. Captures `openWindow` into
+// AppDelegate.requestOpenTrialEmail at launch so AppState can bring the
+// (suppressed-at-launch) trial email-capture window forward when a trial user's
+// first server-funded generation needs email verification.
+
+private struct TrialEmailOpenerRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.requestOpenTrialEmail = {
+                    openWindow(id: TrialEmailScene.windowID)
                 }
             }
     }

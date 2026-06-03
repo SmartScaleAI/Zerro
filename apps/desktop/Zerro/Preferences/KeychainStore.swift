@@ -244,6 +244,31 @@ extension KeychainStore {
     /// right precedence branch without a network call.
     static let licenseProductKind = KeychainStore(service: defaultService, account: "license_product_kind")
 
+    // MARK: - Trial credits (Phase F)
+    //
+    // The email a trial user verified for server-funded credits. NOT the spend
+    // credential — that's the short-lived in-memory trial token (see
+    // `TrialCreditsManager`, never persisted). This is remembered only so the
+    // email-capture sheet can PRE-FILL it on a later launch / reinstall (the
+    // trial cap is enforced server-side against the verified email regardless).
+    // Kept in the Keychain (not UserDefaults) so it survives a reinstall, matching
+    // the other billing slots.
+
+    /// The last email a trial user successfully verified, for re-display only.
+    static let trialEmail = KeychainStore(service: defaultService, account: "trial_email")
+
+    /// The short-lived trial session token + its expiry (encoded `token|epoch`).
+    /// PERSISTED (not just in-memory) because, unlike the Managed session token —
+    /// which is silently re-derivable from the stored license key — the trial
+    /// token's only credential is the emailed code, so it can't be re-minted
+    /// without user action. It MUST survive an app relaunch within its TTL, in
+    /// particular the SIGKILL macOS issues when Screen Recording is granted
+    /// DURING onboarding (the email step precedes the screen-recording step), or
+    /// the just-granted trial would read as unverified the moment the user
+    /// records. Low-sensitivity (a ≤30-min bearer for capped trial credits); the
+    /// abuse bound is the server-side per-email grant cap, not this token.
+    static let trialToken = KeychainStore(service: defaultService, account: "trial_token")
+
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
     /// / `failure`) of the trial slot reads — never the values — so the

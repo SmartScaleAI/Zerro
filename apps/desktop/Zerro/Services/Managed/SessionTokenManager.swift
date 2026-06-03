@@ -67,7 +67,7 @@ enum ManagedSessionError: Error, Equatable {
 // MARK: - SessionTokenManager
 
 @MainActor
-final class SessionTokenManager {
+final class SessionTokenManager: ProxyTokenProviding {
 
     /// How long before a token's real expiry we treat it as needing refresh,
     /// so an in-flight `/generate` never races the boundary. Named, not inline.

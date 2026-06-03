@@ -455,8 +455,8 @@ final class PermissionsManager {
     /// (SecurityAgent for Keychain access, System Settings deep-links)
     /// can re-grab focus and bring our windows back to the front.
     /// Currently called by: the permission-grant transition detector
-    /// (internal) and `APIKeyStepView.loadFromKeychain` (external, for
-    /// the SecurityAgent popup on ad-hoc-signed dev builds).
+    /// (internal) and the Settings API-key field's Keychain read (external,
+    /// for the SecurityAgent popup on ad-hoc-signed dev builds).
     func reactivateApp() {
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in

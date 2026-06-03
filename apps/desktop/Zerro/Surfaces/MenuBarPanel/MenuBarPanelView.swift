@@ -96,8 +96,16 @@ struct MenuBarPanelView: View {
             // Phase B: quiet trial countdown. Shown ONLY while `.trial`;
             // hidden entirely on `.byok` / `.managed` / `.expired`. Reads
             // `daysRemaining` straight off the `.trial` associated value.
-            if case .trial(let daysRemaining, _) = entitlements.state {
-                trialStatusLine(daysRemaining: daysRemaining)
+            if case .trial(let daysRemaining, let creditsRemaining) = entitlements.state {
+                trialStatusLine(daysRemaining: daysRemaining, creditsRemaining: creditsRemaining)
+            }
+
+            // Phase F: a tappable banner for a trial user who hasn't claimed
+            // their free server-funded credits yet (existing users, or those who
+            // took the onboarding infra-failure fallback). Opens the standalone
+            // verification window.
+            if entitlements.needsTrialEmailVerification {
+                trialVerifyBanner()
             }
 
             // Phase E: quiet Managed nudge — past-due ("update your card", §9.1)
@@ -316,6 +324,12 @@ struct MenuBarPanelView: View {
                 onboarding.hasCompletedOnboarding = false
                 onboarding.currentStep = .welcome
                 permissions.resetRequestFlags()
+                // Phase F: also clear locally-cached trial email-verification
+                // state (token + credits + remembered email) so the email step
+                // returns to its unverified first-run state — otherwise it would
+                // read "Email verified" from the local cache even after the
+                // server grant was deleted.
+                entitlements.devResetTrialVerification()
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
             }
@@ -523,9 +537,29 @@ struct MenuBarPanelView: View {
         }
     }
 
-    private func trialStatusLine(daysRemaining days: Int) -> some View {
+    /// Phase F — tappable "verify your email to start your free trial" banner.
+    /// Understated amber treatment like the managed nudge; opens the standalone
+    /// verification window and closes the dropdown.
+    private func trialVerifyBanner() -> some View {
         HStack(spacing: 0) {
-            Text(days == 1 ? "Trial \u{2014} 1 day left" : "Trial \u{2014} \(days) days left")
+            Text("Verify your email to start your free trial")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfBrandAccent)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            MenuBarExtraDismiss.dismiss()
+            AppDelegate.openTrialEmailCapture()
+        }
+    }
+
+    private func trialStatusLine(daysRemaining days: Int, creditsRemaining credits: Int?) -> some View {
+        HStack(spacing: 0) {
+            Text(Self.trialLineText(days: days, credits: credits))
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfTextSecondary)
                 .fixedSize()
@@ -533,6 +567,18 @@ struct MenuBarPanelView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 2)
+    }
+
+    /// Phase F: once a trial user has verified an email and has server-funded
+    /// credits (`credits != nil`), the line shows the credit count — the more
+    /// relevant limit (the trial now ends on whichever runs out first, credits or
+    /// the clock). Before verifying, it shows the day countdown as before.
+    private static func trialLineText(days: Int, credits: Int?) -> String {
+        if let credits {
+            let creditsText = credits == 1 ? "1 trial credit left" : "\(credits) trial credits left"
+            return "Trial \u{2014} \(creditsText)"
+        }
+        return days == 1 ? "Trial \u{2014} 1 day left" : "Trial \u{2014} \(days) days left"
     }
 
     /// Phase 17 — transient "this result was switched" note. Echoes the
@@ -1111,6 +1157,10 @@ private struct TrialDebugPicker: View {
             ("Advance 1 Day", { entitlements.devAdvanceTrialOneDay() }),
             ("Expire Now", { entitlements.devExpireTrial() }),
             ("Clear Keychain", { entitlements.devClearTrialKeychain() }),
+            // Phase F: wipe local email-verification cache (token + credits +
+            // remembered email) so the onboarding email step re-verifies against
+            // the server instead of reading a stale local "verified" flag.
+            ("Reset Email Verification", { entitlements.devResetTrialVerification() }),
         ]
     }
 

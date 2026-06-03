@@ -3,9 +3,13 @@
 // key) on every `generate` call, so the long-lived key isn't on every request.
 //
 // HS256, signed with the server-only SESSION_JWT_SECRET. Claims are kept small:
-//   sub   — subscription id (the subscriber identity)
-//   tier  — 'starter' | 'pro'
-//   kind  — 'subscription' (Phase F adds 'trial'); lets `generate` branch
+//   sub   — the subject identity. For kind='subscription' it's the subscription
+//           id; for kind='trial' (Phase F) it's the trial_grants row id (an
+//           opaque uuid — the raw email never travels in the token).
+//   tier  — 'starter' | 'pro' (subscription only; OMITTED on trial tokens,
+//           which have no tier concept)
+//   kind  — 'subscription' | 'trial'; lets `generate` branch onto the right
+//           credit ledger (usage_periods vs trial_grants)
 //   iat   — issued-at (epoch seconds)
 //   exp   — expiry (epoch seconds); short lifetime bounds replay (§14.3)
 //
@@ -19,7 +23,8 @@ import type { Tier } from "./config.ts";
 
 export interface SessionClaims {
   sub: string;
-  tier: Tier;
+  /** Subscription tier — present only on kind='subscription' tokens. */
+  tier?: Tier;
   kind: "subscription" | "trial";
   iat: number;
   exp: number;
@@ -29,19 +34,22 @@ const HEADER = { alg: "HS256", typ: "JWT" } as const;
 
 /** Sign a session token. `nowSeconds` is injectable for deterministic tests. */
 export async function signSessionToken(
-  claims: { sub: string; tier: Tier; kind?: "subscription" | "trial" },
+  claims: { sub: string; tier?: Tier; kind?: "subscription" | "trial" },
   secret: string,
   ttlSeconds: number,
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): Promise<{ token: string; exp: number }> {
   const exp = nowSeconds + ttlSeconds;
+  const kind = claims.kind ?? "subscription";
   const payload: SessionClaims = {
     sub: claims.sub,
-    tier: claims.tier,
-    kind: claims.kind ?? "subscription",
+    kind,
     iat: nowSeconds,
     exp,
   };
+  // Only carry a tier when one is given (subscription tokens). Trial tokens
+  // have no tier; omitting the field keeps the claim set honest.
+  if (claims.tier !== undefined) payload.tier = claims.tier;
   const signingInput = `${base64UrlEncode(JSON.stringify(HEADER))}.${
     base64UrlEncode(JSON.stringify(payload))
   }`;

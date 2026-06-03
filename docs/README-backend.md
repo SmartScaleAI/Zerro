@@ -6,13 +6,19 @@ paid; Postgres here is a fast local mirror kept current by LemonSqueezy
 webhooks, so the runtime can authorize a generation without calling LemonSqueezy
 on every request.
 
-**Scope (D1 + D2):** D1 built the data layer + the `lemonsqueezy-webhook`
+**Scope (D1 + D2 + F):** D1 built the data layer + the `lemonsqueezy-webhook`
 receiver + the `session` / `entitlement` read endpoints. **D2 adds the
 `generate` proxy** — the server-side counterpart that holds the OpenAI key,
 transcribes audio + composes the prompt server-side, enforces input limits +
 credits, and returns the generated prompt. `generate` is the only function that
 touches OpenAI; it can never be bypassed to spend money without a valid
-subscriber **and** an available credit.
+identity **and** an available credit. **Phase F adds `trial-start`** — an
+email-gated, server-funded **trial** path: a trial user (no OpenAI key of their
+own) verifies an email with a 6-digit code and receives a capped credit grant
+(default 15) keyed to that email, then their generations route through the SAME
+`generate` proxy on a `kind:"trial"` token (decrementing `trial_grants` instead
+of a subscription period). The cap is enforced server-side per verified email,
+so delete+reinstall can't farm fresh credits.
 
 Design of record: `Documents/zerro-billing-plan.md` (§6.2, §6.3, §9/§9.1, §14)
 and `Documents/zerro-billing-implementation-plan.md` (Phase D).
@@ -35,18 +41,24 @@ supabase/
     session/                          # license key → short-lived JWT
     entitlement/                      # token → display-only snapshot
     generate/                         # D2: session JWT → transcribe + prompt + chat (OpenAI proxy)
-                                      #   handler.ts (flow), openai.ts (injectable client),
+                                      #   handler.ts (flow + Phase F trial branch), openai.ts,
                                       #   prompt.ts / interleave.ts (ported, KEEP IN SYNC),
                                       #   limits.ts, cost.ts, config.ts, store.ts (+ handler_test.ts)
+    trial-start/                      # F: email + 6-digit code → trial grant + trial token
+                                      #   handler.ts (request/verify), email.ts (normalize +
+                                      #   disposable block + code gen), resend.ts, store.ts,
+                                      #   config.ts (+ handler_test.ts, email_test.ts)
   test/run-curl-tests.sh              # post-deploy verification battery
 README-backend.md                     # this file
 ```
 
-**Tables:** `subscriptions`, `usage_periods`, `trial_grants` (Phase F),
-`webhook_events` (idempotency), `pending_license_keys` (reconciliation buffer
-for LS's separate license-key event), `generation_log` (D2 writes it),
-`rate_limits` (basic limiter), `generation_slots` (D2 concurrency cap). License
-keys are stored only as a **SHA-256 hash** — never raw.
+**Tables:** `subscriptions`, `usage_periods`, `trial_grants` (Phase F grant),
+`trial_codes` (F: hashed verification codes), `webhook_events` (idempotency),
+`pending_license_keys` (reconciliation buffer for LS's separate license-key
+event), `generation_log` (D2/F writes it), `rate_limits` (basic limiter),
+`generation_slots` (D2 concurrency cap), `trial_generation_slots` (F trial
+concurrency cap). License keys **and** verification codes are stored only as a
+**SHA-256 hash** — never raw.
 
 **Atomic credit primitive:** `consume_credit(subscription_id)` — a single
 conditional `UPDATE … WHERE credits_used < credits_limit RETURNING …` on the
@@ -84,6 +96,13 @@ the runtime — do NOT set them yourself.**
 | `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case OpenAI round-trip). |
 | `GENERATE_RATE_LIMIT_PER_SUB` / `_WINDOW_SECONDS` | optional | Per-subscriber `generate` rate limit (defaults `20` per `60`s). |
 | `GENERATE_OPENAI_TIMEOUT_MS` | optional | OpenAI request timeout (default `120000`). |
+| `RESEND_API_KEY` | ✅ **F** | Resend API key for sending the trial verification code email. The new secret `trial-start` requires. Lives only here; never returned/logged. |
+| `TRIAL_CREDITS` | optional | The per-email trial credit grant (default `15`). Tunable without a logic change. |
+| `TRIAL_EMAIL_FROM` | optional | The verified getzerro.app sender (default `Zerro <noreply@getzerro.app>`). Must be a domain verified in Resend. |
+| `TRIAL_CODE_TTL_SECONDS` | optional | Verification-code lifetime (default `600` = 10 min). |
+| `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
+| `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
+| `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
 
 ---
 
@@ -101,9 +120,11 @@ supabase db push
 supabase secrets set SESSION_JWT_SECRET="$(openssl rand -hex 32)"
 supabase secrets set LEMONSQUEEZY_WEBHOOK_SECRET="<paste the LS webhook secret>"
 supabase secrets set OPENAI_API_KEY="<your OpenAI key>"   # D2 — generate proxy
+supabase secrets set RESEND_API_KEY="<your Resend key>"   # F  — trial-start email
 # Phase E: supabase secrets set LS_VARIANT_STARTER=... LS_VARIANT_PRO=...
+# Phase F (optional): supabase secrets set TRIAL_CREDITS=15 TRIAL_EMAIL_FROM="Zerro <noreply@getzerro.app>"
 
-# 3. Deploy the four functions. --no-verify-jwt is REQUIRED on all four
+# 3. Deploy the five functions. --no-verify-jwt is REQUIRED on all five
 #    (see "Why --no-verify-jwt" below). config.toml already encodes this, but
 #    pass the flag explicitly so a config drift can't silently re-enable the
 #    gateway JWT gate.
@@ -111,12 +132,17 @@ supabase functions deploy lemonsqueezy-webhook --no-verify-jwt
 supabase functions deploy session             --no-verify-jwt
 supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate            --no-verify-jwt
+supabase functions deploy trial-start         --no-verify-jwt
 ```
 
-### Why `--no-verify-jwt` on all four
+**Phase F also needs a verified sender domain in Resend** (`getzerro.app`, or
+whatever `TRIAL_EMAIL_FROM` uses) so the verification email isn't rejected /
+spam-filed. Add + verify the domain in the Resend dashboard before going live.
+
+### Why `--no-verify-jwt` on all five
 
 `verify_jwt` controls whether the **Supabase API gateway** demands a
-Supabase-issued JWT before the function runs. All four need it **off**, for
+Supabase-issued JWT before the function runs. All five need it **off**, for
 different reasons:
 
 - **lemonsqueezy-webhook** — LemonSqueezy sends no Supabase JWT. Security is the
@@ -127,6 +153,10 @@ different reasons:
   `SESSION_JWT_SECRET`) **in code**. If the gateway also tried to verify a JWT,
   it would reject the app's token before our code runs. So the gateway gate is
   off and the in-code verify is the real gate.
+- **trial-start** (Phase F) — an **unauthenticated public** endpoint: the user is
+  mid-trial with no credential yet. Security is the per-email/per-IP rate limit +
+  a hashed, TTL'd, attempt-limited code + a disposable-domain block + the
+  one-grant-per-email cap, all in code.
 
 ---
 
@@ -184,10 +214,13 @@ general-purpose LLM.
 **Flow (order is money-safety critical):**
 
 1. Cap the raw body (`MAX_PAYLOAD_BYTES`) before parsing.
-2. Verify our session JWT in code → `401` if invalid/expired (trial-kind tokens
-   are Phase F → `401`).
-3. Load the subscriber; `status ∈ (active, past_due)` → continue, else `403`.
-   `past_due` still generates on its remaining credits (§9.1).
+2. Verify our session JWT in code → `401` if invalid/expired. `kind` selects the
+   credit ledger: `subscription` (D2) or `trial` (Phase F, see below); any other
+   kind → `401`.
+3. Resolve + authorize the identity. Subscription: load the subscriber;
+   `status ∈ (active, past_due)` → continue, else `403` (`past_due` still
+   generates on its remaining credits, §9.1). Trial: load the `trial_grants` row
+   by the token's grant id; must exist + be verified, else `404`/`403`.
 4. **Input fuse** (`limits.ts`) — frame count, MIME allow-lists, audio bytes,
    optional declared duration. Over-limit → `413`/`415`, **before any OpenAI
    call or credit work**. The limits sit well above any real recording; only a
@@ -231,15 +264,68 @@ or interleaving changes, update the server copy too**, or Managed and BYOK drift
 
 ---
 
+## The `trial-start` flow (Phase F)
+
+`POST /functions/v1/trial-start` (no auth — see "Why `--no-verify-jwt`"). One
+function, two actions:
+
+**`{ action: "request", email }`** — normalize the email (lowercase + trim; Gmail
+dots/`+tags` collapsed so they can't farm the cap), reject disposable domains
+(`422`), rate-limit per email + per IP (`429`). If the email already verified and
+spent every credit → `{ status: "already_used" }` (no email sent). Otherwise mint
+a 6-digit code, store its **SHA-256 hash** with a short TTL (`trial_codes`,
+default 10 min, attempts reset to 0), and send it via **Resend** from the verified
+`getzerro.app` sender. A Resend failure → `502 { error: "send_failed" }`. Success
+→ `{ status: "code_sent" }`.
+
+**`{ action: "verify", email, code }`** — look up the pending code, check TTL +
+attempts (expired/over-attempts → burn it), **constant-time compare the hashes**
+(a mismatch increments attempts → `400 invalid_code`). On a match: delete the code
+(single use) and call `verify_trial_grant(email, TRIAL_CREDITS)` — a
+create-once/never-reset upsert on `trial_grants.email_normalized` (so a re-verify
+after a reinstall resumes the SAME balance, never a fresh grant). If the grant is
+already exhausted → `{ status: "already_used" }`. Otherwise mint a short-lived
+**trial session token** (`kind:"trial"`, `sub` = the opaque grant id — the raw
+email never travels onward) and return `{ token, expires_at,
+trial_credits_remaining }`.
+
+**The `generate` trial branch.** A `kind:"trial"` token resolves the
+`trial_grants` row by grant id, then runs the IDENTICAL pipeline as a subscription
+(input fuse → per-identity rate limit → concurrency cap of **1** via
+`trial_generation_slots` → credit availability → Whisper → true-seconds gate →
+chat → **`consume_trial_credit(grant_id)` only on success**). Same money safety:
+deduct on success only, OpenAI failure charges nothing, over-cap rejects with no
+charge, `402 out_of_credits` when the grant is spent (the app drops to the
+paywall — trial credits exhausted is one of the two trial-expiry conditions).
+`consume_trial_credit` is the single conditional UPDATE that is the double-spend
+guard; the slot cap makes check-then-consume safe exactly as for subscriptions.
+A trial generation logs to `generation_log` with `subscription_id = null` (no FK;
+the cap is enforced on `trial_grants`, not the log).
+
+**`TRIAL_CREDITS`** is the grant size (env, default 15) — tune the trial economics
+without a logic change.
+
+---
+
 ## Verify (no app needed)
 
-### Unit tests (`_shared` + `generate`)
+### Unit tests (`_shared` + `generate` + `trial-start`)
 
 ```bash
 cd supabase/functions
 deno test --allow-net _shared/                 # signature verify, JWT round-trip, crypto vectors
 deno test --allow-env --allow-net generate/    # full generate flow: stubbed OpenAI + in-memory store
+deno test --allow-env trial-start/             # request/verify flow + email helpers (stubbed sender)
 ```
+
+The `trial-start` tests inject an in-memory store + a stub email sender (no real
+mail), and cover: request rate-limits + rejects disposable domains + refuses an
+already-used email; verify creates a grant **once** (a second verify for the same
+email doesn't double-grant / reset credits); wrong/expired/over-attempts codes;
+and a successful verify minting a valid `kind:"trial"` token. The `generate`
+trial-branch tests (in `generate/`) cover: a trial token decrements the grant
+atomically, deduct-on-success-only, `402` at zero, the concurrency cap, and that
+the cap can't be exceeded across sequential requests.
 
 The `generate` tests inject a **stub OpenAI transport** and an in-memory store,
 so they never hit real OpenAI or spend money. They cover: happy path (credit
@@ -294,10 +380,13 @@ The service role (used inside the functions) bypasses RLS and works normally.
 - **Live LemonSqueezy re-check** when the mirror is stale (missed-webhook
   money-leak guard, §14.6) → seam + `// DEFERRED Phase G` marker in
   `session/index.ts`.
-- **`trial-start` + trial-credit enforcement** (email-keyed) → Phase F;
-  `trial_grants` table exists now, and `generate` rejects trial-kind tokens with
-  `401` until then.
-- **Abuse flagging on over-limit payloads** → possible Phase G; D2 just rejects
-  cleanly with no tracking.
+- **`trial-start` + trial-credit enforcement** (email-keyed) → **done (Phase F).**
+  `generate` now accepts `kind:"trial"` tokens and spends `trial_grants` via
+  `consume_trial_credit`.
+- **Abuse flagging on over-limit payloads** → possible Phase G; the proxy just
+  rejects cleanly with no tracking.
 - **Tighter rate limiting + window cleanup** → Phase G; `rate_limits` +
-  `check_rate_limit()` are the v1 basic limiter.
+  `check_rate_limit()` are the v1 basic limiter (now also backing `trial-start`).
+- **`trial_codes` / expired-row cleanup** → Phase G. Expired code rows are burned
+  on the next verify attempt but there's no periodic sweep; a cron/TTL job is a
+  Phase G nicety (the rows are tiny + harmless).

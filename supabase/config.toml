@@ -20,6 +20,10 @@ project_id = "zerro-billing"
 #   * generate (Phase D2) — same as entitlement: verifies OUR session JWT IN
 #     CODE before transcribing / calling OpenAI / consuming a credit. Gateway
 #     gate OFF so the app's token reaches our code.
+#   * trial-start (Phase F) — an UNAUTHENTICATED public endpoint: the user is
+#     mid-trial with no credential yet. Security is the per-email/per-IP rate
+#     limit + a hashed, TTL'd, attempt-limited code + a disposable-domain block
+#     + the one-grant-per-email cap, all done in code.
 #
 # The CLI equivalent is `--no-verify-jwt` on each `supabase functions deploy`
 # (see README-backend.md). Keep these in sync.
@@ -35,4 +39,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.generate]
+verify_jwt = false
+
+[functions.trial-start]
 verify_jwt = false

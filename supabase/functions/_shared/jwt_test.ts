@@ -21,6 +21,21 @@ Deno.test("round-trips claims and exp", async () => {
   assertEquals(claims!.exp, now + 1800);
 });
 
+Deno.test("mints a trial token with no tier (Phase F)", async () => {
+  const now = 1_000_000;
+  const { token } = await signSessionToken(
+    { sub: "grant-abc", kind: "trial" },
+    SECRET,
+    1800,
+    now,
+  );
+  const claims = await verifySessionToken(token, SECRET, now + 1);
+  assert(claims);
+  assertEquals(claims!.sub, "grant-abc");
+  assertEquals(claims!.kind, "trial");
+  assertEquals(claims!.tier, undefined); // trial carries no tier
+});
+
 Deno.test("rejects an expired token", async () => {
   const now = 1_000_000;
   const { token } = await signSessionToken({ sub: "s", tier: "starter" }, SECRET, 60, now);

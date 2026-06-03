@@ -20,8 +20,17 @@ export interface SubRow {
   credits_limit: number;
 }
 
+/** The subset of a trial_grants row the trial generate branch reads (Phase F). */
+export interface TrialGrantRow {
+  id: string;
+  verified_at: string | null;
+  trial_credits_limit: number;
+  trial_credits_used: number;
+}
+
 export interface GenerationLogRow {
-  subscriptionId: string;
+  /** Subscription id, or null for a trial generation (no subscription FK). */
+  subscriptionId: string | null;
   tokensIn: number | null;
   tokensOut: number | null;
   estCostUsd: number | null;
@@ -39,6 +48,17 @@ export interface BillingStore {
   /** TRUE if within the limit for the current window (fail-open on infra error). */
   rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
   logGeneration(row: GenerationLogRow): Promise<void>;
+
+  // ---- Trial path (Phase F) — mirrors the subscription primitives, keyed on a
+  // trial_grants row id instead of a subscription id.
+  /** The trial grant for `grantId`, or null if it doesn't exist. */
+  loadTrialGrant(grantId: string): Promise<TrialGrantRow | null>;
+  /** Remaining trial credits on the grant. */
+  trialCreditsRemaining(grantId: string): Promise<number>;
+  /** Atomic single-credit trial spend; remaining after, or null if none spendable. */
+  consumeTrialCredit(grantId: string): Promise<number | null>;
+  acquireTrialSlot(grantId: string, staleSeconds: number): Promise<boolean>;
+  releaseTrialSlot(grantId: string): Promise<void>;
 }
 
 export class SupabaseBillingStore implements BillingStore {
@@ -128,6 +148,55 @@ export class SupabaseBillingStore implements BillingStore {
     if (error) {
       // Logging is best-effort analytics; never fail a paid generation over it.
       console.error(JSON.stringify({ fn: "generate", op: "logGeneration", error: error.message }));
+    }
+  }
+
+  // ---- Trial path (Phase F) -------------------------------------------------
+
+  async loadTrialGrant(grantId: string): Promise<TrialGrantRow | null> {
+    const { data, error } = await this.db
+      .from("trial_grants")
+      .select("id, verified_at, trial_credits_limit, trial_credits_used")
+      .eq("id", grantId)
+      .maybeSingle();
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "loadTrialGrant", error: error.message }));
+      throw error;
+    }
+    return (data as TrialGrantRow) ?? null;
+  }
+
+  async trialCreditsRemaining(grantId: string): Promise<number> {
+    const grant = await this.loadTrialGrant(grantId);
+    if (!grant) return 0;
+    return Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
+  }
+
+  async consumeTrialCredit(grantId: string): Promise<number | null> {
+    const { data, error } = await this.db.rpc("consume_trial_credit", { p_grant_id: grantId });
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "consumeTrialCredit", error: error.message }));
+      throw error;
+    }
+    return data === null || data === undefined ? null : Number(data);
+  }
+
+  async acquireTrialSlot(grantId: string, staleSeconds: number): Promise<boolean> {
+    const { data, error } = await this.db.rpc("acquire_trial_slot", {
+      p_grant_id: grantId,
+      p_stale_seconds: staleSeconds,
+    });
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "acquireTrialSlot", error: error.message }));
+      throw error;
+    }
+    return data === true;
+  }
+
+  async releaseTrialSlot(grantId: string): Promise<void> {
+    const { error } = await this.db.rpc("release_trial_slot", { p_grant_id: grantId });
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "releaseTrialSlot", error: error.message }));
     }
   }
 }

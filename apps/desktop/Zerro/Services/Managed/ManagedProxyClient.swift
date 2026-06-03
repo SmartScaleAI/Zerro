@@ -98,16 +98,24 @@ final class ManagedProxyClient {
         self.transport = transport ?? URLSessionManagedTransport()
     }
 
-    /// Runs a Managed generation: reads the audio + frames off disk, base64s
-    /// them with the mode, POSTs to `/generate` with a session token, and parses
-    /// the returned prompt. A `401` triggers exactly one transparent token
-    /// refresh + retry. Throws `ManagedGenerationError` on every failure path.
+    /// Runs a proxy generation: reads the audio + frames off disk, base64s them
+    /// with the mode, POSTs to `/generate` with a bearer token, and parses the
+    /// returned prompt. A `401` triggers exactly one transparent token refresh +
+    /// retry. Throws `ManagedGenerationError` on every failure path.
+    ///
+    /// `tokenProvider` selects the credential: the default Managed
+    /// `SessionTokenManager` (a subscription token) or — passed by the trial
+    /// path (Phase F) — a `TrialCreditsManager` (a trial token). The wire shape,
+    /// flow, and error mapping are identical; only the token's `kind` differs,
+    /// which the SERVER uses to pick the credit ledger.
     func generate(
         audioURL: URL,
         frames: [ExtractedFrame],
         mode: OutputMode,
-        durationSeconds: Double?
+        durationSeconds: Double?,
+        tokenProvider: ProxyTokenProviding? = nil
     ) async throws -> ManagedGenerationResult {
+        let provider: ProxyTokenProviding = tokenProvider ?? sessionTokens
         // Flatten the frames to a Sendable representation on the current actor,
         // then build the (key-free) request body OFF the main actor — reading
         // and base64-ing a multi-MB audio + frame payload would otherwise hitch
@@ -124,16 +132,19 @@ final class ManagedProxyClient {
         }.value
 
         // First attempt with the cached/fresh token.
-        let token = try await token()
+        let token = try await token(from: provider)
         var (data, status) = try await post(body: body, token: token)
 
         // 401 → token expired/rotated mid-use. Refresh once and retry. A second
-        // 401 is a genuine auth failure, not a routine expiry.
+        // 401 is a genuine auth failure, not a routine expiry. (For the trial
+        // provider a refresh can't silently re-mint — it throws — so a mid-use
+        // expiry surfaces as authFailed, which the call site treats as "re-verify
+        // your email".)
         if status == 401 {
-            Log.billing.notice("generate 401 — refreshing session token and retrying once")
+            Log.billing.notice("generate 401 — refreshing token and retrying once")
             let refreshed: String
             do {
-                refreshed = try await sessionTokens.refreshToken()
+                refreshed = try await provider.refreshToken()
             } catch {
                 throw ManagedGenerationError.authFailed
             }
@@ -146,9 +157,9 @@ final class ManagedProxyClient {
 
     // MARK: - Token
 
-    private func token() async throws -> String {
+    private func token(from provider: ProxyTokenProviding) async throws -> String {
         do {
-            return try await sessionTokens.validToken()
+            return try await provider.validToken()
         } catch ManagedSessionError.network(let desc) {
             throw ManagedGenerationError.network(desc)
         } catch ManagedSessionError.notEntitled {

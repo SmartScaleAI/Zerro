@@ -54,10 +54,10 @@ struct OnboardingWindowView: View {
     private var stepBody: some View {
         switch onboarding.currentStep {
         case .welcome:         WelcomeStepView()
+        case .email:           EmailStepView()
         case .screenRecording: ScreenRecordingStepView()
         case .microphone:      MicrophoneStepView()
         case .accessibility:   AccessibilityStepView()
-        case .apiKey:          APIKeyStepView()
         case .allSet:          AllSetStepView()
         }
     }

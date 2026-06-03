@@ -19,6 +19,7 @@
 //
 
 import AppKit
+import os
 import SwiftUI
 
 // MARK: - Welcome
@@ -60,6 +61,329 @@ struct WelcomeStepView: View {
                 .foregroundStyle(Color.vfTextSecondary)
                 .padding(.top, 4)
         }
+    }
+}
+
+// MARK: - Email verification (Phase F — required step)
+
+/// The required email-verification step (right after Welcome). Every new user
+/// verifies an email here; on success the server-funded trial credits are
+/// granted (via `TrialCreditsManager` / `trial-start`) so the trial works
+/// afterward with no mid-task interruption. There is NO user-facing skip —
+/// verification is required to advance.
+///
+/// Infra-failure resilience (NOT a skip): if the backend/email service is
+/// genuinely unreachable (network / 5xx / Resend failure) and keeps failing,
+/// the user is allowed to proceed into the app WITHOUT granted credits, with a
+/// persistent "verify in Settings" affordance to finish later. This path is
+/// reached only on repeated SYSTEM failure — never by user choice, and never via
+/// a visible "Skip" control. A wrong code / unverified user simply stays here.
+struct EmailStepView: View {
+    @Environment(OnboardingState.self) private var onboarding
+    @Environment(TrialCreditsManager.self) private var trialCredits
+    @Environment(EntitlementStore.self) private var entitlements
+
+    private enum Step { case email, code }
+
+    @State private var step: Step = .email
+    @State private var email: String = ""
+    @State private var code: String = ""
+    @State private var working: Bool = false
+    @State private var verified: Bool = false
+    /// The email's trial is already spent (exhausted grant) — there are no
+    /// credits to grant, but the user may still continue (it's not an error).
+    @State private var alreadyUsed: Bool = false
+    @State private var errorMessage: String?
+    /// True when the last error was an infrastructure failure (network/5xx/send)
+    /// rather than user error (wrong code, etc.) — only these unlock the
+    /// infra fallback and surface "Resend code".
+    @State private var errorIsSystem: Bool = false
+    @State private var systemFailureCount: Int = 0
+    @FocusState private var fieldFocused: Bool
+
+    /// After this many CONSECUTIVE system-class failures, offer the infra
+    /// fallback so a backend/Resend outage can never permanently trap the user.
+    private static let maxSystemFailuresBeforeFallback = 2
+
+    private var showInfraFallback: Bool { systemFailureCount >= Self.maxSystemFailuresBeforeFallback }
+
+    private var trimmedEmail: String { email.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedCode: String { code.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var emailLooksValid: Bool { trimmedEmail.contains("@") && trimmedEmail.contains(".") }
+
+    var body: some View {
+        OnboardingStepLayout {
+            OnboardingIconTile(systemName: "envelope.fill")
+        } content: {
+            VStack(spacing: VFSpacing.lg) {
+                VStack(spacing: VFSpacing.md) {
+                    Text(headline)
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .multilineTextAlignment(.center)
+                    Text(subhead)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !verified && !alreadyUsed {
+                    field
+                }
+            }
+        } actions: {
+            actions
+        }
+        .onAppear(perform: prefill)
+    }
+
+    // MARK: - Copy
+
+    private var headline: String {
+        if verified { return "Email verified" }
+        if alreadyUsed { return "Welcome back" }
+        return step == .email ? "Verify your email" : "Enter your code"
+    }
+
+    private var subhead: String {
+        if verified {
+            return "Your free trial is ready \u{2014} you\u{2019}re good to go."
+        }
+        if alreadyUsed {
+            return "This email has already used its free trial. You can continue \u{2014} add your own OpenAI key or subscribe anytime."
+        }
+        switch step {
+        case .email:
+            return "Verify your email to start your free trial \u{2014} no credit card, no API key. We\u{2019}ll send a 6-digit code."
+        case .code:
+            return "We sent a 6-digit code to \(trimmedEmail). Enter it below to finish."
+        }
+    }
+
+    // MARK: - Field
+
+    @ViewBuilder
+    private var field: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.xs) {
+            switch step {
+            case .email:
+                fieldCapsule {
+                    TextField("you@example.com", text: $email)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .focused($fieldFocused)
+                        .disabled(working)
+                        .onChange(of: email) { _, _ in clearErrorOnEdit() }
+                        .onSubmit(sendCode)
+                }
+            case .code:
+                fieldCapsule {
+                    TextField("123456", text: $code)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .focused($fieldFocused)
+                        .disabled(working)
+                        .onChange(of: code) { _, newValue in
+                            let digits = String(newValue.filter(\.isNumber).prefix(6))
+                            if digits != newValue { code = digits }
+                            clearErrorOnEdit()
+                        }
+                        .onSubmit(verify)
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfRecordingRed)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func fieldCapsule<Inner: View>(@ViewBuilder _ inner: () -> Inner) -> some View {
+        HStack(spacing: VFSpacing.sm) {
+            inner()
+            if working {
+                ProgressView().controlSize(.small).progressViewStyle(.circular)
+            }
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Actions
+
+    @ViewBuilder
+    private var actions: some View {
+        if verified || alreadyUsed {
+            // The ONLY way to advance is after verification (or a genuinely
+            // already-used email). No skip exists for an unverified user.
+            OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
+        } else {
+            switch step {
+            case .email:
+                if working {
+                    OnboardingPrimaryButton("Sending\u{2026}", isEnabled: false) { }
+                } else {
+                    OnboardingPrimaryButton("Send code", isEnabled: emailLooksValid) { sendCode() }
+                }
+            case .code:
+                if working {
+                    OnboardingPrimaryButton("Verifying\u{2026}", isEnabled: false) { }
+                } else {
+                    OnboardingPrimaryButton("Verify", isEnabled: trimmedCode.count == 6) { verify() }
+                }
+                Button("Resend code", action: sendCode)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .disabled(working)
+                    .padding(.top, 2)
+                Button("Use a different email") {
+                    step = .email
+                    code = ""
+                    errorMessage = nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+            }
+
+            // Infra fallback — appears ONLY after repeated SYSTEM failures, so a
+            // backend/Resend outage can't trap the user. Framed as an outage
+            // consequence, NOT a skip; the user gets no credits until they
+            // verify later in Settings → Billing.
+            if showInfraFallback {
+                infraFallback
+            }
+        }
+    }
+
+    private var infraFallback: some View {
+        VStack(spacing: VFSpacing.xs) {
+            Text("We\u{2019}re having trouble reaching our servers. You can continue and finish verifying your email later in Settings \u{2192} Billing.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Continue for now") {
+                Log.billing.notice("trial email verification: infra fallback taken in onboarding — entering app WITHOUT granted credits (signals a trial-start/Resend outage)")
+                onboarding.advance()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.vfTextSecondary)
+        }
+        .padding(.top, VFSpacing.sm)
+    }
+
+    // MARK: - Behavior
+
+    private func prefill() {
+        // Pre-fill the remembered email for convenience ONLY. Do NOT treat a
+        // locally-cached email / credit count as "verified": verification is
+        // server-side truth, and a deleted server grant must not still read as
+        // verified locally (the bug this guards against). The user always
+        // re-verifies with a fresh code here — `verify_trial_grant` resumes the
+        // same grant server-side (no refarm), so re-verifying a still-valid email
+        // is cheap and simply continues with the existing balance.
+        if email.isEmpty, let remembered = trialCredits.rememberedEmail {
+            email = remembered
+        }
+        fieldFocused = true
+    }
+
+    private func clearErrorOnEdit() {
+        if errorMessage != nil { errorMessage = nil }
+    }
+
+    private func sendCode() {
+        let address = trimmedEmail
+        guard emailLooksValid else {
+            errorMessage = TrialStartError.invalidEmail.userMessage
+            errorIsSystem = false
+            return
+        }
+        working = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer { working = false }
+            do {
+                try await trialCredits.requestCode(email: address)
+                step = .code
+                code = ""
+                fieldFocused = true
+            } catch let error as TrialStartError {
+                handle(error)
+            } catch {
+                handleSystem("Couldn\u{2019}t send the code \u{2014} please try again.", error)
+            }
+        }
+    }
+
+    private func verify() {
+        let address = trimmedEmail
+        let entered = trimmedCode
+        guard entered.count == 6 else {
+            errorMessage = TrialStartError.invalidCode.userMessage
+            errorIsSystem = false
+            return
+        }
+        working = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer { working = false }
+            do {
+                _ = try await trialCredits.verifyCode(email: address, code: entered)
+                // Token + email + credits are now stored by TrialCreditsManager.
+                // Refresh the entitlement so the trial credits are reflected
+                // (and the gating affordance unlocks). Then the user continues.
+                entitlements.refresh()
+                systemFailureCount = 0
+                verified = true
+                Log.billing.notice("trial email verified during onboarding")
+            } catch let error as TrialStartError {
+                handle(error)
+            } catch {
+                handleSystem("Couldn\u{2019}t verify the code \u{2014} please try again.", error)
+            }
+        }
+    }
+
+    /// Map a typed `TrialStartError`, distinguishing USER state (stay on the
+    /// step) from SYSTEM/infra failure (counts toward the fallback).
+    private func handle(_ error: TrialStartError) {
+        switch error {
+        case .alreadyUsed:
+            // Not an error — the email's trial is spent. Let them continue.
+            alreadyUsed = true
+            errorMessage = nil
+        case .network, .server, .sendFailed, .malformedResponse:
+            handleSystem(error.userMessage, error)
+        case .invalidEmail, .disposableEmail, .invalidCode, .codeExpired,
+             .tooManyAttempts, .rateLimited:
+            // User-correctable → stay on the step, no fallback unlock.
+            errorMessage = error.userMessage
+            errorIsSystem = false
+        }
+    }
+
+    private func handleSystem(_ message: String, _ error: Error) {
+        errorMessage = message
+        errorIsSystem = true
+        systemFailureCount += 1
+        Log.billing.error("trial email verification system failure #\(systemFailureCount, privacy: .public) during onboarding: \(String(describing: error), privacy: .public)")
     }
 }
 
@@ -229,261 +553,6 @@ struct AccessibilityStepView: View {
                 settingsURL: SystemSettingsURLs.accessibility,
                 secondary: .continueAnyway { onboarding.advance() }
             )
-        }
-    }
-}
-
-// MARK: - API Key validation state
-//
-// Phase 11 added `.validating` as a transient between user-initiated
-// Verify and the network result. The dev-pin path intentionally exposes
-// only the resting states (untouched/valid/invalid) — pinning a transient
-// would just leave the UI permanently stuck on a spinner.
-
-enum APIKeyValidationState: Equatable {
-    case untouched
-    case validating
-    case valid
-    case invalid
-}
-
-// MARK: - API Key
-
-struct APIKeyStepView: View {
-    @Environment(OnboardingState.self) private var onboarding
-    @Environment(PermissionsManager.self) private var permissions
-
-    @State private var apiKey: String = ""
-    @State private var liveValidationState: APIKeyValidationState = .untouched
-    @State private var isRevealed: Bool = false
-
-    /// Same singleton the Settings field uses — single Keychain path per
-    /// the Phase 5 spec. No APIKeyStore wrapper needed; this constant
-    /// already IS the shared path.
-    private let keychain = KeychainStore.openAIAPIKey
-
-    private var effectiveState: APIKeyValidationState {
-        onboarding.pinnedAPIKeySubState ?? liveValidationState
-    }
-
-    private var trimmedKey: String {
-        apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var body: some View {
-        OnboardingStepLayout {
-            OnboardingIconTile(systemName: "key.fill")
-        } content: {
-            VStack(spacing: VFSpacing.lg) {
-                VStack(spacing: VFSpacing.md) {
-                    Text("Your API Key")
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .multilineTextAlignment(.center)
-                    Text("Zerro processes locally and uses your own API key. Your key is stored in macOS Keychain \u{2014} never transmitted to our servers.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                keyField
-            }
-        } actions: {
-            actionRow
-            helpLink
-                .padding(.top, 2)
-        }
-        .onAppear(perform: loadFromKeychain)
-    }
-
-    // MARK: - Subviews
-
-    private var keyField: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.xs) {
-            HStack(spacing: VFSpacing.sm) {
-                Group {
-                    if isRevealed {
-                        TextField("Paste your API key", text: $apiKey)
-                    } else {
-                        SecureField("Paste your API key", text: $apiKey)
-                    }
-                }
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(Color.vfTextPrimary)
-                .onChange(of: apiKey) { _, _ in
-                    // Editing a previously-validated key demotes the
-                    // state back to untouched so the user has to
-                    // re-verify before continuing. Skipped while a
-                    // dev pin is forcing the rendered state, and while
-                    // a verify request is mid-flight (the result will
-                    // overwrite this momentarily anyway).
-                    guard onboarding.pinnedAPIKeySubState == nil else { return }
-                    if liveValidationState != .untouched && liveValidationState != .validating {
-                        liveValidationState = .untouched
-                    }
-                }
-
-                Button { isRevealed.toggle() } label: {
-                    Image(systemName: isRevealed ? "eye.slash.fill" : "eye.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.vfTextSecondary)
-                }
-                .buttonStyle(.plain)
-
-                statusIcon
-                    .frame(width: 18)
-            }
-            .padding(.horizontal, VFSpacing.md)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: borderWidth)
-            )
-
-            if effectiveState == .invalid {
-                Text("OpenAI rejected this key \u{2014} double-check it and try again.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.vfRecordingRed)
-            } else if effectiveState == .valid {
-                HStack(spacing: 4) {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                    Text("Key verified. Stored in Keychain.")
-                        .font(.system(size: 11))
-                }
-                .foregroundStyle(Color.vfSuccessGreen)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var actionRow: some View {
-        switch effectiveState {
-        case .untouched, .invalid:
-            OnboardingPrimaryButton("Verify", isEnabled: !trimmedKey.isEmpty) { verify() }
-        case .validating:
-            OnboardingPrimaryButton("Verifying\u{2026}", isEnabled: false) { }
-        case .valid:
-            OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch effectiveState {
-        case .untouched:
-            EmptyView()
-        case .validating:
-            ProgressView()
-                .controlSize(.small)
-                .progressViewStyle(.circular)
-        case .valid:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(Color.vfSuccessGreen)
-        case .invalid:
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(Color.vfRecordingRed)
-        }
-    }
-
-    private var helpLink: some View {
-        Button {
-            if let url = URL(string: "https://platform.openai.com/api-keys") {
-                NSWorkspace.shared.open(url)
-            }
-        } label: {
-            Text("Where do I get a key?")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .underline()
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Behavior
-
-    private func loadFromKeychain() {
-        // Time the read so we can detect when SecurityAgent actually
-        // showed a popup (a synchronous user prompt blocks for >>100ms)
-        // vs. a fast in-process unlock (typically <10ms). We only need
-        // to re-grab focus in the popup case; in the silent path the
-        // window never lost focus and reactivating would unnecessarily
-        // boost it to .floating for 30s.
-        let start = CFAbsoluteTimeGetCurrent()
-        let stored = keychain.read()
-        let elapsed = CFAbsoluteTimeGetCurrent() - start
-        guard let stored, !stored.isEmpty else { return }
-        apiKey = stored
-        // Pre-filled key is treated as validated per the spec —
-        // "if a key is already present when onboarding runs, pre-fill
-        // the masked field and mark it validated."
-        liveValidationState = .valid
-        if elapsed > 0.1 {
-            // SecurityAgent popup almost certainly fired (codesign
-            // identity drifted from when the key was last stored — the
-            // common case on ad-hoc-signed dev builds). Focus was
-            // handed off to SecurityAgent and may not have come back to
-            // our .accessory-policy menu-bar app; reactivate so the
-            // onboarding window doesn't sink behind whatever else was
-            // open.
-            permissions.reactivateApp()
-        }
-    }
-
-    private func verify() {
-        // Phase 11: real provider validation via OpenAIClient.validateKey
-        // (cheap authenticated GET /v1/models). The key is written to
-        // Keychain ONLY on `.valid` — an invalid or inconclusive result
-        // leaves whatever was previously stored in place, so a working
-        // key isn't overwritten by a typo'd one. Empty-prefix check is
-        // gone: the validator already treats empty as invalidKey, and a
-        // wrong-but-sk-prefixed key would have slipped past the old
-        // check anyway.
-        let trimmed = trimmedKey
-        liveValidationState = .validating
-        Task { @MainActor in
-            let result = await OpenAIClient.validateKey(trimmed)
-            // Bail if the user kept typing while the request was in
-            // flight — the .onChange handler already moved us back to
-            // .untouched and we'd otherwise stomp it.
-            guard liveValidationState == .validating else { return }
-            switch result {
-            case .valid:
-                keychain.write(trimmed)
-                liveValidationState = .valid
-            case .invalidKey:
-                liveValidationState = .invalid
-            case .inconclusive:
-                // Couldn't reach OpenAI — don't claim invalid. Drop
-                // back to untouched so the user can retry; the message
-                // beneath the field below explains why.
-                liveValidationState = .untouched
-            }
-        }
-    }
-
-    // MARK: - Field styling
-
-    private var borderColor: Color {
-        switch effectiveState {
-        case .untouched, .validating: return Color.white.opacity(0.10)
-        case .valid:                  return Color.vfSuccessGreen.opacity(0.7)
-        case .invalid:                return Color.vfRecordingRed.opacity(0.8)
-        }
-    }
-
-    private var borderWidth: CGFloat {
-        switch effectiveState {
-        case .untouched, .validating: return 1
-        case .valid, .invalid:        return 1.5
         }
     }
 }

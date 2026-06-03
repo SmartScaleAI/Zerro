@@ -46,6 +46,8 @@ enum ManagedBackend {
     static var sessionURL: URL { baseURL.appendingPathComponent("session") }
     static var generateURL: URL { baseURL.appendingPathComponent("generate") }
     static var entitlementURL: URL { baseURL.appendingPathComponent("entitlement") }
+    /// Phase F — the email-gated trial-credits endpoint (request + verify code).
+    static var trialStartURL: URL { baseURL.appendingPathComponent("trial-start") }
 
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,
@@ -221,6 +223,39 @@ struct GenerateResponseDTO: Decodable {
             case model
         }
     }
+}
+
+/// `/trial-start` response body (Phase F). One shape covers both actions: a
+/// `request` returns `{ status }` ("code_sent" / "already_used"); a `verify`
+/// returns `{ token, expires_at, trial_credits_remaining }` on success or
+/// `{ status: "already_used" }`. `error` carries the typed failure string on a
+/// 4xx/5xx so the client maps it to a `TrialStartError`.
+struct TrialStartResponseDTO: Decodable {
+    let token: String?
+    let expiresAt: String?
+    let trialCreditsRemaining: Int?
+    let status: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case token, status, error
+        case expiresAt = "expires_at"
+        case trialCreditsRemaining = "trial_credits_remaining"
+    }
+}
+
+// MARK: - ProxyTokenProviding
+
+/// The minimal token surface `ManagedProxyClient` needs, so the SAME proxy can
+/// run a Managed subscription generation (token from `SessionTokenManager`) OR a
+/// trial generation (token from `TrialCreditsManager`) without knowing which.
+/// Both conformers mint/cache a short-lived bearer and surface failures as
+/// `ManagedSessionError`. `refreshToken()` re-mints when possible (subscription:
+/// re-exchange the license key) or throws when it can't (trial: the credential
+/// is an email+code the user must re-enter).
+protocol ProxyTokenProviding: AnyObject {
+    func validToken() async throws -> String
+    @discardableResult func refreshToken() async throws -> String
 }
 
 // MARK: - ManagedTransport

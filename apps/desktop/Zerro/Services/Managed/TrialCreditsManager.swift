@@ -1,0 +1,339 @@
+//
+//  TrialCreditsManager.swift
+//  Zerro
+//
+//  Created by Colin Breeding on 6/2/26.
+//
+//  Overview
+//  --------
+//  Phase F — Layer 2 of the trial (§3.3): server-funded trial credits. The local
+//  7-day clock (Phase B / `TrialManager`) gates reaching the area selector; this
+//  layer authorizes the actual server-funded generation for a trial user with NO
+//  OpenAI key of their own. The user verifies an EMAIL once (a 6-digit code) and
+//  the backend returns a short-lived TRIAL session token + a capped credit grant
+//  (default 15). Those generations then route through the SAME `ManagedProxyClient`
+//  /generate proxy — just with a trial token instead of a subscription one.
+//
+//  Where the credential lives
+//  --------------------------
+//  • The trial token lives IN MEMORY only (like the Managed session token) — it's
+//    short-lived and the spec keeps it off disk. It is NOT silently re-derivable
+//    (the credential is an email + emailed code), so a relaunch re-verifies. The
+//    server-side grant persists, so re-verifying RESUMES the same remaining
+//    balance — it never hands out fresh credits (verify_trial_grant never resets).
+//  • The verified email is remembered in the Keychain (`KeychainStore.trialEmail`)
+//    ONLY to pre-fill the capture sheet later. It is never the spend credential.
+//  • `creditsRemaining` is cached in UserDefaults for display (the menu-bar
+//    "N trial credits left" line) — display only; the server is the spend
+//    authority (every /generate response returns the true remaining).
+//
+//  Abuse bounding is entirely server-side: the cap is keyed to the verified email
+//  (`trial_grants.email_normalized` UNIQUE), so delete+reinstall — which resets
+//  the local clock and the in-memory token — can NOT farm fresh credits.
+//
+//  Conforms to `ProxyTokenProviding` so `ManagedProxyClient` can drive a trial
+//  generation with no special-casing. Networking goes through the injectable
+//  `ManagedTransport` (stubbed in tests); the clock is injectable for expiry
+//  tests; the email/credits stores are injectable seams.
+//
+
+import Foundation
+import os
+
+// MARK: - TrialStartError
+
+/// Typed failures of the `/trial-start` request/verify flow, mapped to user copy
+/// by the capture sheet. Distinct from `ManagedSessionError` (license↔session)
+/// and `ManagedGenerationError` (a single generation) — this is about getting a
+/// trial token in the first place.
+enum TrialStartError: Error, Equatable {
+    /// The address wasn't a valid email (client- or server-side check).
+    case invalidEmail
+    /// A disposable / throwaway domain the backend refuses to grant credits to.
+    case disposableEmail
+    /// Rate-limited (`429`) — too many requests for this email/IP. Back off.
+    case rateLimited
+    /// The backend couldn't send the email (Resend failure). Try again.
+    case sendFailed
+    /// This email already used its trial (verified + credits exhausted).
+    case alreadyUsed
+    /// The entered code didn't match.
+    case invalidCode
+    /// The code expired before it was entered — request a fresh one.
+    case codeExpired
+    /// Too many wrong codes against this issue — request a fresh one.
+    case tooManyAttempts
+    /// Couldn't reach the backend (offline/DNS/timeout). Retryable.
+    case network(String)
+    /// Backend 5xx / unexpected status.
+    case server(status: Int)
+    /// Response wasn't the JSON shape we expected.
+    case malformedResponse
+
+    var userMessage: String {
+        switch self {
+        case .invalidEmail:    return "That doesn\u{2019}t look like a valid email address."
+        case .disposableEmail: return "Please use a non-disposable email address."
+        case .rateLimited:     return "Too many attempts \u{2014} please wait a bit and try again."
+        case .sendFailed:      return "Couldn\u{2019}t send the code \u{2014} please try again."
+        case .alreadyUsed:     return "This email has already used its free trial."
+        case .invalidCode:     return "That code isn\u{2019}t right \u{2014} check it and try again."
+        case .codeExpired:     return "That code expired \u{2014} send a new one."
+        case .tooManyAttempts: return "Too many incorrect codes \u{2014} send a new one."
+        case .network:         return "Couldn\u{2019}t reach Zerro \u{2014} check your connection."
+        case .server:          return "Something went wrong \u{2014} please try again."
+        case .malformedResponse: return "Unexpected response \u{2014} please try again."
+        }
+    }
+}
+
+// MARK: - TrialCreditsManager
+
+@MainActor
+@Observable
+final class TrialCreditsManager: ProxyTokenProviding {
+
+    /// Refresh leeway before a token's real expiry, so an in-flight /generate
+    /// never races the boundary (mirrors `SessionTokenManager.refreshLeeway`).
+    static let refreshLeeway: TimeInterval = 60
+
+    // MARK: - Cached token
+    //
+    // The token is mirrored to the Keychain (`tokenSlot`) so it SURVIVES an app
+    // relaunch within its TTL — critically the SIGKILL macOS issues when Screen
+    // Recording is granted during onboarding (which happens AFTER the email
+    // step). The in-memory copy is just a fast path; the Keychain is the source
+    // of truth that's reloaded on init.
+
+    private struct CachedToken {
+        let token: String
+        let expiresAt: Date
+    }
+    @ObservationIgnored private var cached: CachedToken?
+
+    // MARK: - Dependencies
+
+    private let emailSlot: KeychainSlot
+    private let tokenSlot: KeychainSlot
+    private let defaults: UserDefaults
+    private let transport: ManagedTransport
+    private let clock: () -> Date
+
+    private static let creditsKey = "trial_credits_remaining_v1"
+
+    // MARK: - Init
+
+    init(
+        emailSlot: KeychainSlot? = nil,
+        tokenSlot: KeychainSlot? = nil,
+        transport: ManagedTransport? = nil,
+        defaults: UserDefaults = .standard,
+        clock: @escaping () -> Date = { Date() }
+    ) {
+        self.emailSlot = emailSlot ?? KeychainStore.trialEmail
+        self.tokenSlot = tokenSlot ?? KeychainStore.trialToken
+        self.transport = transport ?? URLSessionManagedTransport()
+        self.defaults = defaults
+        self.clock = clock
+        // Reload a persisted token so a relaunch (e.g. the onboarding
+        // Screen-Recording SIGKILL) keeps the just-verified trial usable.
+        self.cached = Self.loadToken(from: self.tokenSlot)
+    }
+
+    // MARK: - Display state
+
+    /// Credits remaining for display, or `nil` if the user has never verified.
+    /// Cached so the menu-bar line is correct at launch before any network call.
+    var creditsRemaining: Int? {
+        defaults.object(forKey: Self.creditsKey) as? Int
+    }
+
+    /// The last verified email, for pre-filling the capture sheet. Never used as
+    /// a credential.
+    var rememberedEmail: String? {
+        if case .found(let value) = emailSlot.readResult(), !value.isEmpty { return value }
+        return nil
+    }
+
+    /// True when a usable (comfortably-unexpired) trial token is cached, i.e. the
+    /// user has verified this session and trial generations can route through the
+    /// proxy. `EntitlementStore.routesThroughManagedProxy` reads this for `.trial`.
+    var hasActiveTrialToken: Bool {
+        guard let cached else { return false }
+        return cached.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway
+    }
+
+    // MARK: - trial-start flow
+
+    /// Request a verification code be emailed (`action: "request"`). Throws a
+    /// typed `TrialStartError` the capture sheet renders.
+    func requestCode(email: String) async throws {
+        let dto = try await postTrialStart(["action": "request", "email": email])
+        if let error = dto.error {
+            throw Self.mapError(error, status: nil)
+        }
+        if dto.status == "already_used" {
+            throw TrialStartError.alreadyUsed
+        }
+        // status == "code_sent" → nothing to do; the sheet advances to code entry.
+    }
+
+    /// Verify a code (`action: "verify"`). On success caches the trial token,
+    /// remembers the email, records the credit balance, and returns the credits
+    /// remaining. Throws a typed `TrialStartError` otherwise.
+    @discardableResult
+    func verifyCode(email: String, code: String) async throws -> Int {
+        let dto = try await postTrialStart(["action": "verify", "email": email, "code": code])
+        if let error = dto.error {
+            throw Self.mapError(error, status: nil)
+        }
+        if dto.status == "already_used" {
+            throw TrialStartError.alreadyUsed
+        }
+        guard let token = dto.token, let remaining = dto.trialCreditsRemaining else {
+            throw TrialStartError.malformedResponse
+        }
+        let expiresAt = ManagedBackend.parseISODate(dto.expiresAt)
+            ?? clock().addingTimeInterval(Self.refreshLeeway)
+        let token0 = CachedToken(token: token, expiresAt: expiresAt)
+        cached = token0
+        persistToken(token0) // survive a relaunch / onboarding SIGKILL
+        emailSlot.write(email)
+        setCreditsRemaining(remaining)
+        Log.billing.notice("trial verified — credits=\(remaining, privacy: .public)")
+        return remaining
+    }
+
+    // MARK: - ProxyTokenProviding
+
+    /// The cached trial token if it's still usable, else `.notEntitled` — there
+    /// is no silent re-mint (the credential is the email+code). Callers route to
+    /// the email-capture flow before reaching here, so a throw is the rare
+    /// mid-use-expiry case.
+    func validToken() async throws -> String {
+        if let cached, cached.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway {
+            return cached.token
+        }
+        throw ManagedSessionError.notEntitled
+    }
+
+    /// Cannot silently refresh a trial token (no stored credential). Drops the
+    /// stale token (memory + Keychain) and signals the caller to re-verify.
+    @discardableResult
+    func refreshToken() async throws -> String {
+        cached = nil
+        tokenSlot.delete()
+        throw ManagedSessionError.notEntitled
+    }
+
+    // MARK: - Credit bookkeeping
+
+    /// Reflect a just-completed generation's `credits_remaining` (display cache).
+    func applyCreditsRemaining(_ remaining: Int) {
+        setCreditsRemaining(max(0, remaining))
+    }
+
+    /// Drop the trial token (memory + Keychain) + cached credits (on definitive
+    /// trial revocation / exhaustion / re-verify-needed). The remembered email is
+    /// kept for re-fill.
+    func clear() {
+        cached = nil
+        tokenSlot.delete()
+        defaults.removeObject(forKey: Self.creditsKey)
+    }
+
+    /// FULL reset of all locally-cached verification state — the token (memory +
+    /// Keychain), the cached credits, AND the remembered email. Returns the
+    /// onboarding email step to its unverified, first-run state. Used by the DEBUG
+    /// reset controls; safe because the SERVER grant is the source of truth, so a
+    /// later re-verify of the same email resumes the same grant (no refarm).
+    func forgetVerification() {
+        cached = nil
+        tokenSlot.delete()
+        defaults.removeObject(forKey: Self.creditsKey)
+        emailSlot.delete()
+    }
+
+    private func setCreditsRemaining(_ remaining: Int) {
+        defaults.set(remaining, forKey: Self.creditsKey)
+    }
+
+    // MARK: - Token persistence
+    //
+    // Encoded as `token|epochSeconds` (a JWT contains no `|`, so the first
+    // separator is unambiguous). Low-sensitivity short-lived bearer; see the
+    // `KeychainStore.trialToken` header.
+
+    private func persistToken(_ token: CachedToken) {
+        let epoch = Int(token.expiresAt.timeIntervalSince1970)
+        tokenSlot.write("\(token.token)|\(epoch)")
+    }
+
+    private static func loadToken(from slot: KeychainSlot) -> CachedToken? {
+        guard case .found(let raw) = slot.readResult(),
+              let sep = raw.firstIndex(of: "|") else { return nil }
+        let token = String(raw[raw.startIndex..<sep])
+        let epochStr = String(raw[raw.index(after: sep)...])
+        guard !token.isEmpty, let epoch = TimeInterval(epochStr) else { return nil }
+        return CachedToken(token: token, expiresAt: Date(timeIntervalSince1970: epoch))
+    }
+
+    // MARK: - Networking
+
+    private func postTrialStart(_ payload: [String: String]) async throws -> TrialStartResponseDTO {
+        var request = URLRequest(url: ManagedBackend.trialStartURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        let (data, status): (Data, Int)
+        do {
+            (data, status) = try await transport.send(request)
+        } catch {
+            throw TrialStartError.network(error.localizedDescription)
+        }
+
+        // Decode the body first — the backend returns a typed `error` string on
+        // 4xx so we can map precisely (invalid_code vs code_expired, etc.).
+        let dto = try? JSONDecoder().decode(TrialStartResponseDTO.self, from: data)
+
+        switch status {
+        case 200...299:
+            guard let dto else { throw TrialStartError.malformedResponse }
+            return dto
+        default:
+            // Map via the typed error string when present, else by status.
+            throw Self.mapError(dto?.error, status: status)
+        }
+    }
+
+    /// Map a backend error string (and/or HTTP status) to a `TrialStartError`.
+    private static func mapError(_ error: String?, status: Int?) -> TrialStartError {
+        switch error {
+        case "invalid_email":     return .invalidEmail
+        case "disposable_email":  return .disposableEmail
+        case "rate_limited":      return .rateLimited
+        case "send_failed":       return .sendFailed
+        case "invalid_code":      return .invalidCode
+        case "code_expired":      return .codeExpired
+        case "too_many_attempts": return .tooManyAttempts
+        default:
+            if let status { return .server(status: status) }
+            return .malformedResponse
+        }
+    }
+
+    // MARK: - Preview / test support
+
+    /// An offline, empty trial manager so SwiftUI previews never hit the backend.
+    /// Non-`#if DEBUG` so `#Preview` blocks compile in every configuration.
+    static func inMemory() -> TrialCreditsManager {
+        TrialCreditsManager(
+            emailSlot: InMemoryKeychainSlot(nil),
+            tokenSlot: InMemoryKeychainSlot(nil),
+            transport: OfflineManagedTransport(),
+            defaults: .ephemeralPreview()
+        )
+    }
+}
