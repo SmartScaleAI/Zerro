@@ -49,3 +49,27 @@ export const SESSION_RATE_LIMIT_PER_IP = optionalEnvInt(
   "SESSION_RATE_LIMIT_PER_IP",
   30,
 );
+
+// ---- §14.6 missed-webhook staleness re-check -------------------------------
+// When the local subscription mirror has not been touched by a webhook (or a
+// prior live re-check) within this window, `session` does a LIVE LemonSqueezy
+// status lookup before minting, so a DROPPED `cancelled`/`expired` webhook can't
+// keep minting tokens for a non-paying user forever. Anchored to the token
+// lifetime by default: a missed revocation is caught within ~one token TTL of
+// the mirror going stale (an already-issued token still can't outlive its short
+// expiry). The freshness anchor is the mirror row's `updated_at` (the
+// set_updated_at trigger stamps it on every webhook write AND on a live
+// re-check's reconcile), so a recently-heard-from subscription skips the call.
+export const SESSION_STALENESS_SECONDS = optionalEnvInt(
+  "SESSION_STALENESS_SECONDS",
+  SESSION_TOKEN_TTL_SECONDS,
+);
+
+// LemonSqueezy REST API base for the live re-check (GET /subscriptions/{id}).
+// The LEMONSQUEEZY_API_KEY secret is read in session/index.ts; absent → the
+// guard is disabled (logged) and session fails OPEN rather than locking users
+// out, since the key being unset is an infra condition, not a revocation.
+export const LEMONSQUEEZY_API_BASE = optionalEnv(
+  "LEMONSQUEEZY_API_BASE",
+  "https://api.lemonsqueezy.com/v1",
+);

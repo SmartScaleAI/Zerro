@@ -85,8 +85,8 @@ code="$(post_webhook license_key_created "$LK_BODY")"
 [ "$code" = "200" ] && ok "license_key_created → 200" || bad "license_key_created got $code (want 200)"
 
 echo "== 2. Idempotency: repost the SAME created event =="
-code="$(post_webhook subscription_created "$BODY")"  # identical body → identical signature
-[ "$code" = "200" ] && ok "duplicate created → 200 no-op (deduped by signature)" || bad "duplicate got $code"
+code="$(post_webhook subscription_created "$BODY")"  # identical body → identical (event_name:data.id:updated_at)
+[ "$code" = "200" ] && ok "duplicate created → 200 no-op (composite idempotency key)" || bad "duplicate got $code"
 
 echo "== 4. session: active key → token =="
 SREQ="{\"license_key\":\"${LICENSE_KEY}\"}"
@@ -156,6 +156,48 @@ echo "== D2 generate: cancelled subscriber → 403 (server re-checks status) =="
 # rejects before any OpenAI call, so it costs nothing.
 code="$(gen_post "$TOKEN" "$WRONG_FRAME_MIME")"
 [ "$code" = "403" ] && ok "generate: cancelled subscriber → 403" || bad "generate cancelled got $code (want 403)"
+
+echo "== RLS: anon key cannot read the billing tables (deny-by-default) =="
+# The app NEVER receives an anon/publishable key; this proves the posture anyway.
+# Set SUPABASE_URL + ANON_KEY to run it; skipped (not failed) if unset.
+if [ -n "${SUPABASE_URL:-}" ] && [ -n "${ANON_KEY:-}" ]; then
+  for tbl in subscriptions usage_periods trial_grants generation_log rate_limits \
+             webhook_events pending_license_keys generation_slots \
+             trial_codes trial_generation_slots; do
+    # RLS deny-by-default returns an empty array (200 []) or a 401/403 — never rows.
+    body="$(curl -s "$SUPABASE_URL/rest/v1/${tbl}?select=*&limit=1" \
+              -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY")"
+    # Pass iff the response is exactly an empty array OR an error object (no rows).
+    if [ "$body" = "[]" ] || printf '%s' "$body" | grep -qi '"code"\|"message"\|permission denied'; then
+      ok "anon read of $tbl denied / empty"
+    else
+      bad "anon read of $tbl LEAKED rows: $body"
+    fi
+  done
+  # And a write must not succeed either.
+  wcode="$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SUPABASE_URL/rest/v1/subscriptions" \
+    -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"ls_subscription_id":"hax","tier":"pro","status":"active","credits_limit":999999}')"
+  { [ "$wcode" = "401" ] || [ "$wcode" = "403" ] || [ "$wcode" = "404" ]; } \
+    && ok "anon write to subscriptions rejected ($wcode)" \
+    || bad "anon write to subscriptions got $wcode (want 401/403/404)"
+else
+  echo "  ⏭  skipped (set SUPABASE_URL + ANON_KEY to run the RLS anon-denial check)"
+fi
+
+# NOTE — controls proven by the STUBBED Deno suite, NOT re-proven live here
+# (they would cost real OpenAI spend or need fault injection):
+#   * §14.1 key-repurposing: a generate body carrying its own transcript /
+#     system_prompt / messages is IGNORED — the server transcribes + composes.
+#     → generate/handler_test.ts "client-supplied … fields are IGNORED".
+#   * §14.6 staleness re-check: a stale mirror whose subscription was cancelled
+#     in LemonSqueezy (dropped webhook) is caught at the next session mint.
+#     → session/handler_test.ts + see SECURITY-RUNBOOK.md for the LIVE recipe
+#       (cancel a test subscription in the LS dashboard WITHOUT replaying the
+#       webhook, wait out the staleness window, then re-call /session → 403).
+#   * concurrent double-spend: two simultaneous last-credit requests → exactly
+#     one charges. → generate/handler_test.ts concurrency-cap tests.
 
 echo
 echo "==================  $PASS passed, $FAIL failed  =================="

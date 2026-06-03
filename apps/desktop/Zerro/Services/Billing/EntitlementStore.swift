@@ -427,6 +427,62 @@ final class EntitlementStore {
         }
     }
 
+    // MARK: - Pre-flight (record-start gate)
+
+    /// A DEFINITIVELY-known, pre-flightable block — a failure the record-start
+    /// gate can detect from the freshest LOCAL entitlement BEFORE the user
+    /// records, instead of after a wasted 3-minute capture. Each case maps 1:1
+    /// to the post-recording `RecordingFailureReason` so the surfaced copy is
+    /// identical; the post-recording path stays the backstop for anything that
+    /// only becomes true between the gate and the API call.
+    enum PreflightBlock: Equatable {
+        /// Managed: this period's credits are spent (snapshot shows 0 remaining).
+        case outOfCredits
+        /// Managed: the subscription is no longer active (snapshot status not live).
+        case subscriptionInactive
+        /// BYOK: funds generation with the user's own key, but none is on file.
+        case apiKeyMissing
+    }
+
+    /// The pre-flight decision for the record-start gate, or `nil` to proceed.
+    ///
+    /// SYNCHRONOUS + LOCAL: consults only the current state + the freshest cached
+    /// Managed snapshot + the caller-supplied key presence — never the network —
+    /// so it adds no latency and can't violate fail-open. It returns a block ONLY
+    /// for a definitively-known-bad state (credits confirmed zero, subscription
+    /// snapshot confirmed not-live, key confirmed absent). Anything inconclusive
+    /// (no snapshot yet, an in-flight refresh, a Keychain blip surfacing as
+    /// "has a key") returns `nil` → the user records, exactly as the existing
+    /// `canGenerate` gate fails open. The server proxy remains the spend
+    /// authority regardless.
+    ///
+    /// `hasOwnAPIKey` is whether the user has their own OpenAI key on file (the
+    /// gate reads the Keychain); only `.byok` consults it.
+    func preflightBlock(hasOwnAPIKey: Bool) -> PreflightBlock? {
+        switch state {
+        case .managed:
+            // The credit/status decision is the SERVER's; the gate only surfaces
+            // what the freshest snapshot already tells us. No snapshot yet → the
+            // launch/post-generation refresh hasn't landed → proceed (fail open).
+            guard let snapshot = managedSnapshot else { return nil }
+            if !snapshot.status.isLive { return .subscriptionInactive }
+            if snapshot.creditsRemaining <= 0 { return .outOfCredits }
+            return nil
+        case .byok:
+            // BYOK funds generation locally. A confirmed-absent key would fail
+            // post-recording with `.apiKeyMissing`; catch it now and route them
+            // to add it. A Keychain read blip reports `hasOwnAPIKey == true`
+            // (the key slot fails toward "present"), so a flaky read never blocks.
+            return hasOwnAPIKey ? nil : .apiKeyMissing
+        case .trial, .expired:
+            // Trial-exhausted is already mapped to `.expired` by the dual-expiry
+            // in `computeState` (so the `canGenerate` gate → paywall catches it);
+            // a live trial needs no pre-flight block here, and `.expired` is the
+            // `canGenerate` gate's job.
+            return nil
+        }
+    }
+
     /// True when the user is on the trial but has no USABLE trial token — so the
     /// persistent "verify your email to start your free trial" affordance
     /// (Settings/Billing row + menu-bar banner) should show. Keyed on the live

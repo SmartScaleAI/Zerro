@@ -586,6 +586,33 @@ final class AppState {
         state = .failed(reason: kind)
     }
 
+    /// Surfaces a record-start PRE-FLIGHT block: a failure that is knowable
+    /// before the user records (out of credits, inactive subscription, missing
+    /// BYOK key) is shown NOW with the same copy the post-recording path uses,
+    /// instead of after a wasted capture. Called by the gate (`handleHotkey`)
+    /// only when no recording is in flight (it has already returned for
+    /// recording/processing/confirming states), so this just sets the failure
+    /// state directly — the same mechanism as `handleMidSessionRevocation`.
+    ///
+    /// Returns the surfaced reason (for the gate's log line). For an inactive
+    /// subscription it also kicks the async, non-blocking entitlement refresh so
+    /// a confirmed-lapsed subscription drops out of `.managed` for the next
+    /// attempt — exactly as the post-recording `.subscriptionInactive` path does.
+    @discardableResult
+    func presentPreflightBlock(_ block: EntitlementStore.PreflightBlock) -> RecordingFailureReason {
+        let reason: RecordingFailureReason
+        switch block {
+        case .outOfCredits: reason = .outOfCredits
+        case .subscriptionInactive: reason = .subscriptionInactive
+        case .apiKeyMissing: reason = .apiKeyMissing
+        }
+        state = .failed(reason: reason)
+        if block == .subscriptionInactive, let entitlements {
+            Task { await entitlements.refreshManagedEntitlement() }
+        }
+        return reason
+    }
+
     /// Manual stop. State stays at .recording (or .wrappingUp) during
     /// finalize — the pill keeps showing the recording chrome for the
     /// few hundred ms it takes finishWriting to complete; on

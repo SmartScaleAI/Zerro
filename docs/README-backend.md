@@ -83,6 +83,8 @@ the runtime — do NOT set them yourself.**
 |---|---|---|
 | `SESSION_JWT_SECRET` | ✅ | HS256 signing secret for the short-lived session tokens. Generate a long random string (`openssl rand -hex 32`). |
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | ✅ | The signing secret you enter when creating the webhook in LemonSqueezy. The webhook verifies `X-Signature` against it. |
+| `LEMONSQUEEZY_API_KEY` | ⚠️ **G** | A LemonSqueezy **API key** (Settings → API), distinct from the webhook secret. Powers the §14.6 **missed-webhook staleness re-check** in `session`: when the mirror is stale, `session` calls `GET /v1/subscriptions/{id}` to confirm the sub is still live before minting. **Unset → the guard is disabled and `session` fails OPEN** (logged); set it before launch so a dropped `cancelled` webhook can't keep minting tokens forever. |
+| `SESSION_STALENESS_SECONDS` | optional | How stale the mirror may be before `session` does the live re-check (default = `SESSION_TOKEN_TTL_SECONDS`). |
 | `LS_VARIANT_STARTER` | ⚠️ Phase E | LemonSqueezy **variant id** of the Starter product → maps to tier `starter`. Until set, an unmapped variant defaults to `starter` (logged). |
 | `LS_VARIANT_PRO` | ⚠️ Phase E | Variant id of the Pro product → tier `pro`. |
 | `CREDITS_STARTER` | optional | Starter monthly allowance (default `100`). |
@@ -121,6 +123,7 @@ supabase secrets set SESSION_JWT_SECRET="$(openssl rand -hex 32)"
 supabase secrets set LEMONSQUEEZY_WEBHOOK_SECRET="<paste the LS webhook secret>"
 supabase secrets set OPENAI_API_KEY="<your OpenAI key>"   # D2 — generate proxy
 supabase secrets set RESEND_API_KEY="<your Resend key>"   # F  — trial-start email
+supabase secrets set LEMONSQUEEZY_API_KEY="<your LS API key>"  # G — staleness re-check
 # Phase E: supabase secrets set LS_VARIANT_STARTER=... LS_VARIANT_PRO=...
 # Phase F (optional): supabase secrets set TRIAL_CREDITS=15 TRIAL_EMAIL_FROM="Zerro <noreply@getzerro.app>"
 
@@ -313,10 +316,23 @@ without a logic change.
 
 ```bash
 cd supabase/functions
-deno test --allow-net _shared/                 # signature verify, JWT round-trip, crypto vectors
-deno test --allow-env --allow-net generate/    # full generate flow: stubbed OpenAI + in-memory store
+deno test --allow-env --allow-net .            # run EVERYTHING (all functions + _shared)
+# …or per area:
+deno test --allow-net _shared/                 # signature verify, JWT round-trip, crypto, LS status map
+deno test --allow-env --allow-net generate/    # full generate flow + key-repurposing defense
 deno test --allow-env trial-start/             # request/verify flow + email helpers (stubbed sender)
+deno test --allow-env --allow-net session/     # §14.6 staleness re-check (stub LS client)
+deno test --allow-env --allow-net lemonsqueezy-webhook/  # full lifecycle + replay/forgery/stale-drop
 ```
+
+The **Phase G** additions: `session/handler_test.ts` proves the §14.6 staleness
+re-check (stale + LS-cancelled → 403 even when the local mirror still says
+active; LS down → fail open); `lemonsqueezy-webhook/handler_test.ts` proves the
+whole subscription lifecycle (created → period, renewal → roll+reset, tier change
+→ next-period limit, payment_failed → past_due no reset, recovered → active,
+cancelled/expired/refund → revoke), plus replay dedup, signature forgery → 401,
+and stale-drop. `generate/handler_test.ts` adds the key-repurposing assertion (a
+client-supplied transcript / system_prompt / messages array is IGNORED).
 
 The `trial-start` tests inject an in-memory store + a stub email sender (no real
 mail), and cover: request rate-limits + rejects disposable domains + refuses an
@@ -378,8 +394,12 @@ The service role (used inside the functions) bypasses RLS and works normally.
   check-then-consume-on-success, kept safe by the concurrency cap of 1; the
   upgrade seam is marked `// DEFERRED Phase G` in `generate/handler.ts`.
 - **Live LemonSqueezy re-check** when the mirror is stale (missed-webhook
-  money-leak guard, §14.6) → seam + `// DEFERRED Phase G` marker in
-  `session/index.ts`.
+  money-leak guard, §14.6) → **done (Phase G).** `session/handler.ts` does a live
+  `GET /v1/subscriptions/{id}` when the mirror is older than
+  `SESSION_STALENESS_SECONDS`; a conclusive `cancelled`/`expired` reconciles the
+  mirror + refuses (403), a conclusive `active`/`past_due` reconciles + mints, and
+  an inconclusive answer (LS down / `LEMONSQUEEZY_API_KEY` unset) fails OPEN.
+  Proven by `session/handler_test.ts`; see SECURITY-RUNBOOK.md for the live recipe.
 - **`trial-start` + trial-credit enforcement** (email-keyed) → **done (Phase F).**
   `generate` now accepts `kind:"trial"` tokens and spends `trial_grants` via
   `consume_trial_credit`.

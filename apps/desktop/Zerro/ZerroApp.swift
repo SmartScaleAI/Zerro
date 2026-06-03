@@ -448,6 +448,24 @@ struct ZerroApp: App {
             return
         }
 
+        // Pre-flight gate (Phase G UX): catch a DEFINITIVELY-known failure that
+        // would otherwise only surface AFTER a wasted recording — Managed out of
+        // credits, an inactive/cancelled subscription, or a BYOK user with no key
+        // on file. Surfaces the SAME copy the post-recording path uses, before
+        // capture. Strictly fail-open: `preflightBlock` returns nil for anything
+        // inconclusive (no snapshot yet, an in-flight refresh, a Keychain blip),
+        // so a transient infra failure never traps an otherwise-entitled user —
+        // they record, and the proxy + post-recording path stay the backstop.
+        // The genuinely-not-pre-flightable failures (empty/too-quiet recording,
+        // OpenAI transient errors, model-output problems) are unreachable here by
+        // construction — they need the recording/API call to exist.
+        if let entitlements,
+           let block = entitlements.preflightBlock(hasOwnAPIKey: state.hasOwnAPIKeyProvider()) {
+            let reason = state.presentPreflightBlock(block)
+            Log.hotkey.notice("gating: pre-flight block \(String(describing: reason), privacy: .public) — surfacing before capture")
+            return
+        }
+
         Log.hotkey.notice("all gates passed — presenting area selector")
 
         // hotkey → area selector → (on confirm) → startRecording(selection:mic:)
