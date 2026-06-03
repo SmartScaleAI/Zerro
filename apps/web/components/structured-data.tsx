@@ -65,11 +65,12 @@ export function SoftwareApplicationJsonLd() {
         operatingSystem: "macOS",
         url: SITE_URL,
         description:
-          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns a structured Markdown prompt ready to paste into Cursor, Windsurf, v0, or any AI coding agent. Audio isolation and frame downsampling run locally; bring your own OpenAI and Gemini keys.",
+          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns a structured Markdown prompt ready to paste into Cursor, Windsurf, v0, or any AI coding agent. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI key.",
         featureList: [
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
           "Local-first processing — audio isolation and frame downsampling run on your machine",
-          "Bring your own OpenAI and Gemini keys, stored in macOS Keychain",
+          "Managed plans handle the AI for you, or bring your own OpenAI key stored in macOS Keychain",
+          "15 free generations to start — no card, no key, no time limit",
           "3-minute recording cap keeps each request fast and predictable",
           "Signed & notarized .dmg distribution",
           "Sparkle auto-updates",
@@ -77,21 +78,30 @@ export function SoftwareApplicationJsonLd() {
         offers: [
           {
             "@type": "Offer",
-            name: "BYOK",
-            price: "39",
+            name: "Starter",
+            price: "12",
             priceCurrency: "USD",
             description:
-              "Pay once. Bring your own OpenAI and Gemini keys. Includes all features and future updates.",
+              "Managed plan — we handle the AI, no keys or setup. About 100 recordings per month. $12/mo or $120/yr.",
             availability: "https://schema.org/InStock",
           },
           {
             "@type": "Offer",
-            name: "Managed",
-            price: "12",
+            name: "Pro",
+            price: "29",
             priceCurrency: "USD",
             description:
-              "Managed token usage — no API keys required. Monthly recording credits included.",
-            availability: "https://schema.org/PreOrder",
+              "Managed plan for heavy or daily use. About 300 recordings per month. $29/mo or $290/yr.",
+            availability: "https://schema.org/InStock",
+          },
+          {
+            "@type": "Offer",
+            name: "BYOK",
+            price: "39",
+            priceCurrency: "USD",
+            description:
+              "Pay once. Bring your own OpenAI key; recordings stay fully on your Mac. Includes all features and future updates.",
+            availability: "https://schema.org/InStock",
           },
         ],
       }}

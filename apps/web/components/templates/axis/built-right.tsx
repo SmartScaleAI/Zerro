@@ -24,9 +24,9 @@ const items: Item[] = [
     },
     {
         icon: KeyRound,
-        title: "Bring your own keys",
+        title: "Bring your own key",
         description:
-            "Your OpenAI and Gemini keys, stored in macOS Keychain. No servers handling your data.",
+            "On BYOK, your OpenAI key is stored in macOS Keychain and recordings never leave your Mac.",
     },
     {
         icon: Timer,

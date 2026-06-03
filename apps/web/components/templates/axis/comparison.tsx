@@ -1,9 +1,5 @@
 import { Check } from "lucide-react"
 import { GradientField } from "@/components/ui/gradient-field"
-import { Button } from "@/components/ui/button"
-import { AnimatedBorder } from "@/components/ui/animated-border"
-import { AppleIcon } from "@/components/ui/apple-icon"
-import { DOWNLOAD_URL } from "@/lib/site-config"
 
 // Server Component — a factual comparison table. Rendered as real <table> markup
 // so it's machine-readable (crawlers + AI tools parse it directly) and needs no
@@ -226,34 +222,6 @@ const Comparison = () => {
               ))}
             </tbody>
           </table>
-
-          {/* CTA footer — sits at the bottom of the Zerro card, centered on the
-              first product column. In normal flow (not absolute) so the inner
-              wrapper grows to include it and the card hugs it with no gap below.
-              Mirrors the hero's primary download button. Outside the <table> so
-              it isn't a data cell. */}
-          <div
-            className="relative z-20 flex justify-center pt-2 pb-6"
-            style={{
-              marginLeft: HILITE_LEFT,
-              width: HILITE_WIDTH,
-              transform: "translateX(-50%)",
-            }}
-          >
-            <Button
-              className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
-              size="lg"
-              nativeButton={false}
-              render={<a href={DOWNLOAD_URL} download />}
-            >
-              <AnimatedBorder />
-              <AppleIcon className="h-4 w-4" />
-              {/* Shorten the label on mobile so it fits inside the Zerro column. */}
-              <span>
-                Download<span className="hidden lg:inline"> for macOS</span>
-              </span>
-            </Button>
-          </div>
         </div>
       </div>
 

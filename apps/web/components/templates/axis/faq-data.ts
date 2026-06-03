@@ -21,24 +21,29 @@ export const faqEntries: FaqEntry[] = [
       "No. If you can show your screen and say what you want, you can use Zerro. It's just as useful for getting help with a spreadsheet, explaining a problem to an AI assistant, or drafting something as it is for coding. Plenty of people never touch a coding agent at all — they use Explain mode to make sense of a confusing error, spreadsheet, or design in plain language, no code involved.",
   },
   {
+    question: "Is there a free trial?",
+    answer:
+      "Yes — everyone starts with 15 free generations. No credit card, no API key, and no time limit, so there's no clock to race. The free generations run on the Managed pipeline, so you get the zero-setup experience before deciding on a plan.",
+  },
+  {
     question: "How much does Zerro cost?",
     answer:
-      "Zerro is a one-time purchase of $39 for the BYOK plan, which includes all features and future updates. A Managed plan at $12/month — where Zerro handles token usage and no API keys are required — is coming soon.",
+      "Everyone starts free with 15 generations. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, comes in two tiers: Starter at $12/month (or $120/year) for about 100 recordings a month, and Pro at $29/month (or $290/year) for about 300 recordings a month. Or BYOK, a one-time $39 purchase where you bring your own OpenAI key and pay once — no subscription.",
   },
   {
     question: "Do I need my own API keys?",
     answer:
-      "On the BYOK plan, yes — you add your own OpenAI and Gemini keys, stored securely in the macOS Keychain, and pay only for what you use. If you'd rather skip the setup, the upcoming Managed plan handles tokens for you with no keys required.",
+      "Only if you want to. On the Managed plans (Starter and Pro), Zerro handles the AI for you — no keys, no setup. On the BYOK plan, you add your own OpenAI key, stored securely in the macOS Keychain, and pay once with no subscription.",
   },
   {
     question: "Is my data private?",
     answer:
-      "Yes. Audio isolation and frame downsampling run locally on your Mac before anything leaves it. On the BYOK plan, Zerro uses your own keys, so there are no Zerro servers handling your recordings.",
+      "Audio isolation and frame downsampling always run locally on your Mac before anything leaves it. On the Managed plans (Starter and Pro), your recording is sent to Zerro's server to generate the prompt. On the BYOK plan, Zerro uses your own key and your recordings never leave your Mac — there are no Zerro servers handling them.",
   },
   {
     question: "Does Zerro need an account?",
     answer:
-      "No. The BYOK plan requires no account and no subscription. You bring your own API keys and pay once.",
+      "The BYOK plan requires no account and no subscription — you bring your own OpenAI key and pay once. The Managed plans (Starter and Pro) are subscriptions, so they involve an account and a monthly or yearly bill.",
   },
   {
     question: "How long can a recording be?",
