@@ -26,21 +26,30 @@ enum SettingsScene {
     /// both key off this string.
     static let windowID = "settings"
 
-    /// Fixed window width. macOS System Settings uses ~720pt for its
-    /// single-pane surfaces and the Phase 11 design mockups match that
-    /// figure; Round 3 hard-locks the width here so the user can't drag-
-    /// resize the window and break the section card rhythm.
-    static let preferredWidth: CGFloat = 720
+    /// Fixed window width. Revision 3 (sidebar layout) widened this from
+    /// 720 → 880pt: the 188pt sidebar eats into the content area, so the
+    /// detail pane needs the extra room to keep each row's label /
+    /// description column readable (at 720 the description wrapped one
+    /// word per line). Still hard-locked so the user can't drag-resize
+    /// and break the card rhythm.
+    static let preferredWidth: CGFloat = 880
 
-    /// Default open height. Round 5 iterated 720 → 1440 (too tall)
-    /// → 960 → 720pt, which lands roughly the first three sections
-    /// above the fold and keeps the window compact. ScrollView
-    /// handles the rest.
-    static let preferredHeight: CGFloat = 720
+    /// Default open height. Revision 3 trimmed this 720 → 600pt so the
+    /// window opens more compact; the ScrollView in each pane handles
+    /// anything below the fold.
+    static let preferredHeight: CGFloat = 600
 
     /// Minimum acceptable height — below this the cards start
     /// stacking awkwardly. Width is hard-locked above this floor.
     static let minimumHeight: CGFloat = 400
+
+    /// Fixed width of the left navigation sidebar. Chosen to match
+    /// Wispr Flow's sidebar proportion while leaving the detail pane
+    /// ~691pt (880 − 188 − 1pt divider) — enough room for the existing
+    /// cards (originally laid out for ~720pt) plus a comfortable
+    /// label/description column. The sidebar lives INSIDE the
+    /// hard-locked window width.
+    static let sidebarWidth: CGFloat = 188
 }
 
 // MARK: - WindowConfigurator
