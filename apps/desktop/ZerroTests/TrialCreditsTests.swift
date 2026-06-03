@@ -10,7 +10,8 @@
 //      the typed-error mapping.
 //    • EntitlementStore: the `generationRoute` decision (the unverified trial
 //      user → email capture, not a silent failure), `routesThroughManagedProxy`
-//      for a trial with a token, and the DUAL expiry (clock OR credits).
+//      for a trial with a token, and the credit-only expiry (the trial is
+//      `.expired` exactly when its server-funded credits hit zero — no clock).
 //    • ManagedProxyClient: a trial token rides through the SAME /generate proxy.
 //  All dependencies are in-memory / stubbed — no Keychain, no network.
 //
@@ -215,10 +216,10 @@ final class TrialCreditsManagerTests: XCTestCase {
 @MainActor
 final class EntitlementStoreTrialTests: XCTestCase {
 
-    /// A store on an ACTIVE trial clock (no license), with the given trial layer.
-    private func trialStore(_ trial: TrialCreditsManager, startedDaysAgo: Int = 1) -> EntitlementStore {
+    /// A store on the free trial (no license), backed by the given trial layer.
+    /// Trial standing is now decided purely by that layer's credit balance.
+    private func trialStore(_ trial: TrialCreditsManager) -> EntitlementStore {
         EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: startedDaysAgo),
             licenseService: .inMemory(),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(nil),
@@ -267,7 +268,7 @@ final class EntitlementStoreTrialTests: XCTestCase {
         let mgr = try await verifiedManager(remaining: 9)
         let store = trialStore(mgr)
         store.refresh()
-        guard case .trial(_, let credits) = store.state else {
+        guard case .trial(let credits) = store.state else {
             return XCTFail("expected .trial, got \(store.state)")
         }
         XCTAssertEqual(credits, 9)
@@ -275,7 +276,7 @@ final class EntitlementStoreTrialTests: XCTestCase {
 
     func testUnverifiedTrialStateHasNilCredits() {
         let store = trialStore(makeTrialManager(StubManagedTransport()))
-        guard case .trial(_, let credits) = store.state else {
+        guard case .trial(let credits) = store.state else {
             return XCTFail("expected .trial, got \(store.state)")
         }
         XCTAssertNil(credits)
@@ -298,9 +299,11 @@ final class EntitlementStoreTrialTests: XCTestCase {
     }
 
     func testNonTrialNeverNeedsVerification() async throws {
-        // A verified-but-now-expired-clock store is .expired, not .trial.
+        // A verified store whose credits are exhausted is .expired, not .trial —
+        // so the verify affordance stays hidden (nothing left to verify into).
         let mgr = try await verifiedManager(remaining: 5)
-        let expired = trialStore(mgr, startedDaysAgo: 30)
+        mgr.applyCreditsRemaining(0)
+        let expired = trialStore(mgr)
         XCTAssertEqual(expired.state, .expired)
         XCTAssertFalse(expired.needsTrialEmailVerification)
     }
@@ -321,13 +324,13 @@ final class EntitlementStoreTrialTests: XCTestCase {
     }
     #endif
 
-    // MARK: dual expiry (clock OR credits)
+    // MARK: credit-only expiry (the trial ends exactly when credits hit zero)
 
-    func testExhaustedCreditsExpireEvenWithLiveClock() {
-        // Active clock, but credits cached at 0 → trial is over (Layer 2).
+    func testExhaustedCreditsExpire() {
+        // Credits cached at 0 → the trial is over. No clock, no token needed.
         let mgr = makeTrialManager(StubManagedTransport())
-        mgr.applyCreditsRemaining(0) // exhausted, no token needed
-        let store = trialStore(mgr, startedDaysAgo: 1) // clock still live
+        mgr.applyCreditsRemaining(0) // exhausted
+        let store = trialStore(mgr)
         XCTAssertEqual(store.state, .expired)
         XCTAssertFalse(store.canGenerate)
     }
@@ -343,10 +346,17 @@ final class EntitlementStoreTrialTests: XCTestCase {
         XCTAssertEqual(store.state, .expired)
     }
 
-    func testExpiredClockStillExpiredRegardlessOfCredits() async throws {
-        let mgr = try await verifiedManager(remaining: 15) // has credits
-        let store = trialStore(mgr, startedDaysAgo: 30)     // clock long expired
-        XCTAssertEqual(store.state, .expired)
+    func testPositiveCreditsStayTrialWithNoTimeLimit() async throws {
+        // The whole point of the refactor: a trial with credits is `.trial`
+        // regardless of how much time has passed (there is no time concept).
+        let mgr = try await verifiedManager(remaining: 15)
+        let store = trialStore(mgr)
+        store.refresh()
+        guard case .trial(let credits) = store.state else {
+            return XCTFail("expected .trial, got \(store.state)")
+        }
+        XCTAssertEqual(credits, 15)
+        XCTAssertTrue(store.canGenerate)
     }
 }
 

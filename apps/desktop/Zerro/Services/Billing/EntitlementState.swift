@@ -41,17 +41,17 @@ public enum ManagedTier: String, Codable, Equatable, CaseIterable {
 /// as `RecordingState` / `RecordingFailureReason` because, like those,
 /// this enum is the source of truth a whole subsystem branches on.
 public enum EntitlementState: Equatable {
-    /// Local 7-day trial active. `daysRemaining` is the clock countdown
-    /// (computed by Phase B's TrialManager). `trialCreditsRemaining` is
-    /// server-funded trial credits introduced in Phase F — `nil` until
-    /// that backend exists, so Phase A always passes `nil`. The gate
-    /// grants access on `.trial` in Phase A; Phase F additionally
-    /// requires credits > 0, but that decision becomes server-side then.
-    case trial(daysRemaining: Int, trialCreditsRemaining: Int?)
+    /// Free trial active. The trial is simply a pool of server-funded
+    /// generations (the Phase F email-gated grant, default 15) with NO time
+    /// limit — usable whenever. `creditsRemaining` is the live balance from the
+    /// grant snapshot, or `nil` before the user has verified an email / received
+    /// a grant (a "pre-trial" user; onboarding's email step captures this). The
+    /// gate grants access on `.trial`; the server is the spend authority.
+    case trial(creditsRemaining: Int?)
 
-    /// Trial is over — either the clock ran out or (Phase F) the trial
-    /// credits hit zero — and no purchase has been made. This is the one
-    /// state the gate refuses: hitting record routes to the paywall.
+    /// Trial is over — the server-funded trial credits hit zero — and no
+    /// purchase has been made. This is the one state the gate refuses:
+    /// hitting record routes to the paywall.
     case expired
 
     /// Valid one-time BYOK ("bring your own key") license AND the user's

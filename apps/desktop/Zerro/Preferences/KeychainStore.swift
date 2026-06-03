@@ -83,10 +83,11 @@ enum KeychainReadResult: Equatable {
 
 // MARK: - KeychainSlot
 
-/// The narrow read/write/delete surface the trial clock depends on, so
-/// `TrialManager` can be driven by an in-memory fake in tests and previews
-/// without ever touching the real Keychain. `KeychainStore` is the
-/// production conformer; `InMemoryKeychainSlot` is the fake.
+/// The narrow read/write/delete surface the billing layers depend on, so
+/// `LicenseService` / `TrialCreditsManager` / `EntitlementStore` can be driven
+/// by in-memory fakes in tests and previews without ever touching the real
+/// Keychain. `KeychainStore` is the production conformer; `InMemoryKeychainSlot`
+/// is the fake.
 protocol KeychainSlot {
     /// Read distinguishing absent from a genuine failure (see
     /// `KeychainReadResult`).
@@ -178,23 +179,6 @@ extension KeychainStore {
     /// lands, swap callers to a parameterized factory.
     static let openAIAPIKey = KeychainStore(service: defaultService, account: "openai_api_key")
 
-    // MARK: - Trial clock slots (Phase B)
-    //
-    // The 7-day trial's two persisted values live in the Keychain — NOT
-    // UserDefaults / @AppStorage — specifically so they survive an app
-    // uninstall/reinstall: the OS retains generic-password items past app
-    // deletion, which is the entire reason the trial start can't be reset by
-    // reinstalling. Both store an epoch-seconds string (see `TrialManager`).
-
-    /// First-launch trial start instant. Written ONCE, never overwritten —
-    /// reinstalling must not reset the trial.
-    static let trialStartDate = KeychainStore(service: defaultService, account: "trial_start_date")
-
-    /// The latest wall-clock instant the app has ever observed. The trial's
-    /// elapsed time is measured against `max(now, maxDateSeen)`, so winding
-    /// the system clock backward can't rewind the trial. See `TrialManager`.
-    static let trialMaxDateSeen = KeychainStore(service: defaultService, account: "trial_max_date_seen")
-
     // MARK: - BYOK license slots (Phase C)
     //
     // The one-time LemonSqueezy license the user buys/enters. Stored in the
@@ -271,11 +255,12 @@ extension KeychainStore {
 
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
-    /// / `failure`) of the trial slot reads — never the values — so the
-    /// reinstall-persistence test is observable without attaching a debugger.
-    /// On a true same-build reinstall the start slot should read `found`; on
-    /// a first-ever launch (or a different signing scope, per the header)
-    /// it reads `absent`. Dispositions are `.public` — they carry no secret.
+    /// / `failure`) of the trial email slot read — never the value — so the
+    /// reinstall-persistence of the Phase F grant is observable without
+    /// attaching a debugger. On a true same-build reinstall (same verified
+    /// email) the slot should read `found`; on a first-ever launch (or a
+    /// different signing scope, per the header) it reads `absent`. The
+    /// disposition is `.public` — it carries no secret.
     static func debugLogTrialSlotDisposition() {
         func disposition(_ result: KeychainReadResult) -> String {
             switch result {
@@ -284,7 +269,7 @@ extension KeychainStore {
             case .failure: return "failure"
             }
         }
-        Log.state.notice("trial keychain @launch — start=\(disposition(trialStartDate.readResult()), privacy: .public) maxSeen=\(disposition(trialMaxDateSeen.readResult()), privacy: .public)")
+        Log.state.notice("trial keychain @launch — email=\(disposition(trialEmail.readResult()), privacy: .public)")
     }
     #endif
 }
@@ -292,14 +277,14 @@ extension KeychainStore {
 // MARK: - InMemoryKeychainSlot
 
 /// A non-persistent `KeychainSlot` backed by a single in-memory string.
-/// Used by `TrialManager` unit tests and by SwiftUI previews so neither
-/// touches the developer's real login Keychain. Kept out of `#if DEBUG`
-/// because `#Preview` blocks compile in every configuration; the type is a
-/// tiny, unused-in-production reference holder.
+/// Used by the billing unit tests and by SwiftUI previews so neither touches
+/// the developer's real login Keychain. Kept out of `#if DEBUG` because
+/// `#Preview` blocks compile in every configuration; the type is a tiny,
+/// unused-in-production reference holder.
 ///
-/// A reference type (not a struct) so the same instance can be shared
-/// between a `TrialManager` and the code seeding it, and so successive
-/// reads/writes observe each other.
+/// A reference type (not a struct) so the same instance can be shared between
+/// a billing layer and the code seeding it, and so successive reads/writes
+/// observe each other.
 final class InMemoryKeychainSlot: KeychainSlot {
     private var value: String?
     /// When `true`, every `readResult()` reports `.failure` regardless of

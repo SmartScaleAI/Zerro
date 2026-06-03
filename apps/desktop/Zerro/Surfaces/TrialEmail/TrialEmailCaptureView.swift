@@ -268,5 +268,5 @@ struct TrialEmailCaptureView: View {
     TrialEmailCaptureView()
         .environment(AppState())
         .environment(TrialCreditsManager.inMemory())
-        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory()))
+        .environment(EntitlementStore(licenseService: .inMemory()))
 }

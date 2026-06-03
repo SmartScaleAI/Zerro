@@ -55,7 +55,6 @@ final class PreflightGateTests: XCTestCase {
     /// A `.managed` store carrying `snapshot` (nil → no cached snapshot yet).
     private func managedStore(snapshot: ManagedEntitlementSnapshot?) -> EntitlementStore {
         EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: 30),
             licenseService: makeLicense(present: true),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(LicenseProductKind.managed.rawValue),
@@ -79,7 +78,6 @@ final class PreflightGateTests: XCTestCase {
 
     private func byokStore() -> EntitlementStore {
         EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: 1),
             licenseService: makeLicense(present: true),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(LicenseProductKind.byok.rawValue),
@@ -87,12 +85,21 @@ final class PreflightGateTests: XCTestCase {
         )
     }
 
-    private func trialStore(startedDaysAgo: Int = 1) -> EntitlementStore {
-        EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: startedDaysAgo),
+    /// A trial store (no license). `expired: true` seeds confirmed-exhausted
+    /// trial credits so it computes to `.expired`; otherwise it's a live
+    /// (never-granted) trial.
+    private func trialStore(expired: Bool = false) -> EntitlementStore {
+        var trialCredits: TrialCreditsManager?
+        if expired {
+            let mgr = TrialCreditsManager.inMemory()
+            mgr.applyCreditsRemaining(0)
+            trialCredits = mgr
+        }
+        return EntitlementStore(
             licenseService: makeLicense(present: false),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(nil),
+            trialCredits: trialCredits,
             defaults: .ephemeralPreview()
         )
     }
@@ -158,15 +165,15 @@ final class PreflightGateTests: XCTestCase {
     func testActiveTrialDoesNotBlock() {
         // A live trial with no own key is handled by the generation route
         // (email capture), not a pre-flight failure block.
-        let store = trialStore(startedDaysAgo: 1)
+        let store = trialStore()
         guard case .trial = store.state else { return XCTFail("expected .trial") }
         XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
     }
 
     func testExpiredIsHandledByCanGenerateNotPreflight() {
-        // Trial-exhausted / lapsed clock → `.expired`; the `canGenerate` gate
-        // (not pre-flight) routes it to the paywall, so pre-flight returns nil.
-        let store = trialStore(startedDaysAgo: 30)
+        // Trial credits exhausted → `.expired`; the `canGenerate` gate (not
+        // pre-flight) routes it to the paywall, so pre-flight returns nil.
+        let store = trialStore(expired: true)
         XCTAssertEqual(store.state, .expired)
         XCTAssertFalse(store.canGenerate)
         XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))

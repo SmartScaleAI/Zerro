@@ -119,7 +119,7 @@ final class LicenseServiceTests: XCTestCase {
         let service = makeService(transport: transport, keySlot: keySlot, instanceSlot: instanceSlot)
 
         // Start in trial; activation should flip the store to .byok.
-        let store = EntitlementStore(trialManager: .inMemory(), licenseService: service)
+        let store = EntitlementStore(licenseService: service)
         if case .trial = store.state {} else {
             XCTFail("expected initial .trial, got \(store.state)")
         }
@@ -193,7 +193,7 @@ final class LicenseServiceTests: XCTestCase {
         )
 
         // A present license → store starts .byok.
-        let store = EntitlementStore(trialManager: .inMemory(), licenseService: service)
+        let store = EntitlementStore(licenseService: service)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -224,7 +224,7 @@ final class LicenseServiceTests: XCTestCase {
             lastValidatedSlot: lastValidatedSlot
         )
 
-        let store = EntitlementStore(trialManager: .inMemory(), licenseService: service)
+        let store = EntitlementStore(licenseService: service)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -256,7 +256,7 @@ final class LicenseServiceTests: XCTestCase {
             clock: { now }
         )
 
-        let store = EntitlementStore(trialManager: .inMemory(), licenseService: service)
+        let store = EntitlementStore(licenseService: service)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -339,7 +339,7 @@ final class LicenseServiceTests: XCTestCase {
             lastValidatedSlot: lastValidatedSlot
         )
 
-        let store = EntitlementStore(trialManager: .inMemory(), licenseService: service)
+        let store = EntitlementStore(licenseService: service)
         XCTAssertEqual(store.state, .byok)
 
         try await store.deactivateThisDevice()

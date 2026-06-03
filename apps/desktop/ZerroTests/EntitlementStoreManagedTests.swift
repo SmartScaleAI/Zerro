@@ -9,9 +9,11 @@
 //  deterministic checks on `computeState`'s precedence ladder and the
 //  `routesThroughManagedProxy` branch the generation pipeline reads.
 //
-//  Precedence under test: Managed subscription > BYOK license > trial clock >
+//  Precedence under test: Managed subscription > BYOK license > trial credits >
 //  expired — with the fail-open contract: a transient Keychain read failure for
-//  an entitled user never drops them to `.expired`.
+//  an entitled user never drops them to `.expired`. The trial is now a pure
+//  credit pool (no clock): `.trial` while credits remain (or before any grant),
+//  `.expired` only on a CONFIRMED zero balance.
 //
 
 import XCTest
@@ -39,15 +41,24 @@ final class EntitlementStoreManagedTests: XCTestCase {
     private func makeStore(
         license: LicenseService,
         productKind: LicenseProductKind?,
-        startedDaysAgo: Int = 1
+        trialCredits: TrialCreditsManager? = nil
     ) -> EntitlementStore {
         EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: startedDaysAgo),
             licenseService: license,
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(productKind?.rawValue),
+            trialCredits: trialCredits,
             defaults: .ephemeralPreview()
         )
+    }
+
+    /// A trial layer whose server-funded credits are confirmed exhausted (0) —
+    /// the only way a no-license user computes to `.expired` now that the trial
+    /// is purely credit-gated.
+    private func exhaustedTrialCredits() -> TrialCreditsManager {
+        let mgr = TrialCreditsManager.inMemory()
+        mgr.applyCreditsRemaining(0)
+        return mgr
     }
 
     private func isManaged(_ state: EntitlementState) -> Bool {
@@ -58,11 +69,11 @@ final class EntitlementStoreManagedTests: XCTestCase {
     // MARK: - Precedence
 
     func testManagedOutranksExpiredTrial() {
-        // License present + kind managed + trial long expired → still .managed.
+        // License present + kind managed + trial credits exhausted → still .managed.
         let store = makeStore(
             license: makeLicense(present: true),
             productKind: .managed,
-            startedDaysAgo: 30
+            trialCredits: exhaustedTrialCredits()
         )
         XCTAssertTrue(isManaged(store.state))
         XCTAssertTrue(store.routesThroughManagedProxy)
@@ -73,8 +84,7 @@ final class EntitlementStoreManagedTests: XCTestCase {
         // Same present license, kind byok → .byok (local path, not the proxy).
         let store = makeStore(
             license: makeLicense(present: true),
-            productKind: .byok,
-            startedDaysAgo: 1
+            productKind: .byok
         )
         XCTAssertEqual(store.state, .byok)
         XCTAssertFalse(store.routesThroughManagedProxy)
@@ -83,21 +93,22 @@ final class EntitlementStoreManagedTests: XCTestCase {
     func testUnresolvedKindWithLicenseFailsOpenToByok() {
         // License present but kind not yet resolved → defaults to .byok (the
         // server-money-free path; a background probe upgrades a real managed
-        // key to .managed later).
+        // key to .managed later). Exhausted trial credits underneath confirm the
+        // license — not a leftover trial — is what's granting access.
         let store = makeStore(
             license: makeLicense(present: true),
             productKind: nil,
-            startedDaysAgo: 30
+            trialCredits: exhaustedTrialCredits()
         )
         XCTAssertEqual(store.state, .byok)
         XCTAssertFalse(store.routesThroughManagedProxy)
     }
 
     func testNoLicenseActiveTrial() {
+        // No license, never-granted trial (nil credits) → .trial (pre-trial).
         let store = makeStore(
             license: makeLicense(present: false),
-            productKind: nil,
-            startedDaysAgo: 1
+            productKind: nil
         )
         guard case .trial = store.state else {
             return XCTFail("expected .trial, got \(store.state)")
@@ -105,10 +116,11 @@ final class EntitlementStoreManagedTests: XCTestCase {
     }
 
     func testNoLicenseExpiredTrial() {
+        // No license + trial credits confirmed exhausted → .expired.
         let store = makeStore(
             license: makeLicense(present: false),
             productKind: nil,
-            startedDaysAgo: 30
+            trialCredits: exhaustedTrialCredits()
         )
         XCTAssertEqual(store.state, .expired)
         XCTAssertFalse(store.canGenerate)
@@ -122,7 +134,7 @@ final class EntitlementStoreManagedTests: XCTestCase {
         let store = makeStore(
             license: makeLicense(present: true, readFailure: true),
             productKind: .managed,
-            startedDaysAgo: 30
+            trialCredits: exhaustedTrialCredits()
         )
         XCTAssertTrue(isManaged(store.state))
         XCTAssertNotEqual(store.state, .expired)
@@ -132,7 +144,7 @@ final class EntitlementStoreManagedTests: XCTestCase {
         let store = makeStore(
             license: makeLicense(present: true, readFailure: true),
             productKind: .byok,
-            startedDaysAgo: 30
+            trialCredits: exhaustedTrialCredits()
         )
         XCTAssertEqual(store.state, .byok)
     }

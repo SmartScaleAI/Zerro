@@ -6,13 +6,15 @@
 //
 //  Overview
 //  --------
-//  Phase F — Layer 2 of the trial (§3.3): server-funded trial credits. The local
-//  7-day clock (Phase B / `TrialManager`) gates reaching the area selector; this
-//  layer authorizes the actual server-funded generation for a trial user with NO
-//  OpenAI key of their own. The user verifies an EMAIL once (a 6-digit code) and
-//  the backend returns a short-lived TRIAL session token + a capped credit grant
-//  (default 15). Those generations then route through the SAME `ManagedProxyClient`
-//  /generate proxy — just with a trial token instead of a subscription one.
+//  Phase F — the free trial itself: server-funded trial credits, with NO time
+//  limit. The trial is simply a pool of generations (default 15), gated purely
+//  on credits remaining. This layer authorizes the server-funded generation for
+//  a trial user with NO OpenAI key of their own: the user verifies an EMAIL once
+//  (a 6-digit code) and the backend returns a short-lived TRIAL session token +
+//  a capped credit grant. Those generations then route through the SAME
+//  `ManagedProxyClient` /generate proxy — just with a trial token instead of a
+//  subscription one. `EntitlementStore` reads `creditsRemaining` to decide
+//  `.trial` (credits remain / not yet granted) vs `.expired` (a confirmed zero).
 //
 //  Where the credential lives
 //  --------------------------
@@ -28,8 +30,10 @@
 //    authority (every /generate response returns the true remaining).
 //
 //  Abuse bounding is entirely server-side: the cap is keyed to the verified email
-//  (`trial_grants.email_normalized` UNIQUE), so delete+reinstall — which resets
-//  the local clock and the in-memory token — can NOT farm fresh credits.
+//  (`trial_grants.email_normalized` UNIQUE), so delete+reinstall — which drops the
+//  in-memory token — resumes the same remaining balance and can NOT farm fresh
+//  credits. This server-side per-email cap is the real abuse bound; there is no
+//  longer any local time gate.
 //
 //  Conforms to `ProxyTokenProviding` so `ManagedProxyClient` can drive a trial
 //  generation with no special-casing. Networking goes through the injectable

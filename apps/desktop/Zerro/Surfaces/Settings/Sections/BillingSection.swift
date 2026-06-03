@@ -9,8 +9,8 @@
 //  masked/plain field + verification pill, secondary/destructive buttons).
 //  Rows:
 //    1. Current plan   — reads `EntitlementStore.state` and renders the live
-//                        standing (Trial — N days left / Licensed / Expired /
-//                        Managed), with a status pill.
+//                        standing (Trial — N free generations / Licensed /
+//                        Expired / Managed), with a status pill.
 //    2. License key    — plain field pre-filled from the Keychain if a license
 //                        is on file; Activate / Re-activate → the shared
 //                        `EntitlementStore.activate(...)`. When licensed, a
@@ -187,10 +187,13 @@ private struct CurrentPlanRow: View {
 
     private var planDescription: String {
         switch entitlements.state {
-        case .trial:
-            return "Your free trial is active."
+        case .trial(let creditsRemaining):
+            guard let creditsRemaining else { return "Your free trial is active." }
+            return creditsRemaining == 1
+                ? "1 free generation left in your trial."
+                : "\(creditsRemaining) free generations left in your trial."
         case .expired:
-            return "Your free trial has ended."
+            return "You\u{2019}ve used your free generations."
         case .byok:
             return "Lifetime license \u{2014} you fund generation with your own OpenAI key."
         case .managed:
@@ -212,12 +215,20 @@ private struct CurrentPlanRow: View {
         return "\(credits) this month\(resetClause)."
     }
 
+    /// The compact trial pill text. Shows the remaining free-generation count
+    /// when known, or a bare "Trial" before the user has been granted any
+    /// (the "Free Trial Credits" verify row sits below for that case).
+    private func trialPillText(creditsRemaining: Int?) -> String {
+        guard let creditsRemaining else { return "Trial" }
+        return creditsRemaining == 1 ? "Trial \u{00B7} 1 left" : "Trial \u{00B7} \(creditsRemaining) left"
+    }
+
     @ViewBuilder
     private var planPill: some View {
         switch entitlements.state {
-        case .trial(let daysRemaining, _):
+        case .trial(let creditsRemaining):
             PlanPill(
-                text: daysRemaining == 1 ? "Trial \u{00B7} 1 day left" : "Trial \u{00B7} \(daysRemaining) days left",
+                text: trialPillText(creditsRemaining: creditsRemaining),
                 tint: Color.vfWarningAmber
             )
         case .expired:
@@ -502,7 +513,7 @@ private struct DevRevalidateRow: View {
 
 #Preview("Billing · licensed") {
     BillingSection()
-        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory(licensed: true)))
+        .environment(EntitlementStore(licenseService: .inMemory(licensed: true)))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)
@@ -510,7 +521,7 @@ private struct DevRevalidateRow: View {
 
 #Preview("Billing · trial") {
     BillingSection()
-        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory()))
+        .environment(EntitlementStore(licenseService: .inMemory()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

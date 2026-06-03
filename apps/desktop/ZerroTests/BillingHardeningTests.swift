@@ -49,21 +49,23 @@ final class BillingHardeningTests: XCTestCase {
 
     /// A `.managed` store whose `/session` + `/entitlement` traffic is driven by
     /// `transport`. The session manager has a key on file so the exchange runs.
-    /// `startedDaysAgo` controls where a definitive revocation lands (30 → the
-    /// clock has also lapsed, so revocation drops to `.expired`, the paywall).
+    /// The underlying trial credits are seeded exhausted (0) so that when a
+    /// definitive revocation clears the Managed license, the store falls through
+    /// to `.expired` (the paywall) rather than a leftover trial.
     private func makeManagedStore(
-        transport: StubManagedTransport,
-        startedDaysAgo: Int = 30
+        transport: StubManagedTransport
     ) -> EntitlementStore {
         let sessionTokens = SessionTokenManager(
             licenseKeySlot: InMemoryKeychainSlot("KEY"),
             transport: transport
         )
+        let exhaustedTrial = TrialCreditsManager.inMemory()
+        exhaustedTrial.applyCreditsRemaining(0)
         return EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: startedDaysAgo),
             licenseService: makeLicense(present: true),
             sessionTokens: sessionTokens,
             productKindSlot: InMemoryKeychainSlot(LicenseProductKind.managed.rawValue),
+            trialCredits: exhaustedTrial,
             defaults: .ephemeralPreview()
         )
     }
@@ -112,7 +114,7 @@ final class BillingHardeningTests: XCTestCase {
         let transport = StubManagedTransport()
         transport.enqueue(ManagedFixtures.sessionJSON(token: "SUB-TOK"), status: 200)
         transport.enqueue(#"{"error":"not_entitled"}"#, status: 403)
-        let store = makeManagedStore(transport: transport, startedDaysAgo: 30)
+        let store = makeManagedStore(transport: transport)
         XCTAssertTrue(isManaged(store.state))
 
         await store.refreshManagedEntitlement()
@@ -130,7 +132,7 @@ final class BillingHardeningTests: XCTestCase {
         let transport = StubManagedTransport()
         transport.enqueue(ManagedFixtures.sessionJSON(token: "SUB-TOK"), status: 200)
         transport.enqueue(ManagedFixtures.entitlementJSON(status: "cancelled"), status: 200)
-        let store = makeManagedStore(transport: transport, startedDaysAgo: 30)
+        let store = makeManagedStore(transport: transport)
 
         await store.refreshManagedEntitlement()
 
@@ -150,7 +152,7 @@ final class BillingHardeningTests: XCTestCase {
             ManagedFixtures.entitlementJSON(status: "past_due", creditsRemaining: 20),
             status: 200
         )
-        let store = makeManagedStore(transport: transport, startedDaysAgo: 30)
+        let store = makeManagedStore(transport: transport)
 
         await store.refreshManagedEntitlement()
 
@@ -169,7 +171,7 @@ final class BillingHardeningTests: XCTestCase {
             ManagedFixtures.entitlementJSON(status: "active", creditsRemaining: 42),
             status: 200
         )
-        let store = makeManagedStore(transport: transport, startedDaysAgo: 30)
+        let store = makeManagedStore(transport: transport)
 
         await store.refreshManagedEntitlement()
 
@@ -192,11 +194,14 @@ final class BillingHardeningTests: XCTestCase {
 
     func testExpiredStateBlocksTheRecordGate() {
         // Terminal state → the record-start gate refuses (paywall), no dead end.
+        // No license + trial credits confirmed exhausted → `.expired`.
+        let exhaustedTrial = TrialCreditsManager.inMemory()
+        exhaustedTrial.applyCreditsRemaining(0)
         let store = EntitlementStore(
-            trialManager: .inMemory(startedDaysAgo: 30),
             licenseService: makeLicense(present: false),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(nil),
+            trialCredits: exhaustedTrial,
             defaults: .ephemeralPreview()
         )
         XCTAssertEqual(store.state, .expired)
@@ -209,7 +214,7 @@ final class BillingHardeningTests: XCTestCase {
         let transport = StubManagedTransport()
         transport.enqueue(ManagedFixtures.sessionJSON(token: "SUB-TOK"), status: 200)
         transport.enqueue(#"{"error":"not_entitled"}"#, status: 403)
-        let store = makeManagedStore(transport: transport, startedDaysAgo: 30)
+        let store = makeManagedStore(transport: transport)
 
         await store.refreshManagedEntitlement() // drops to expired
         XCTAssertEqual(store.state, .expired)

@@ -129,9 +129,10 @@ struct ZerroApp: App {
             // any crash report shows a clean "app launched → ..." lead.
             Log.breadcrumb(category: .appLifecycle, message: "app launched")
             #if DEBUG
-            // Phase B: log the trial Keychain slot disposition at launch
-            // (found/absent/failure, no values) so the reinstall-persistence
-            // test is observable without a debugger. See KeychainStore header.
+            // Phase F: log the trial email Keychain slot disposition at launch
+            // (found/absent/failure, no values) so the reinstall-persistence of
+            // the server-funded grant is observable without a debugger. See the
+            // KeychainStore header.
             KeychainStore.debugLogTrialSlotDisposition()
             #endif
             KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in

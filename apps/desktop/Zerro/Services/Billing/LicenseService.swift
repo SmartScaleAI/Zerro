@@ -42,12 +42,11 @@
 //  Network goes through the injectable `LicenseTransport` protocol so unit
 //  tests stub the three endpoints with canned JSON + status codes, never
 //  touching the real network. The Keychain goes through the same
-//  `KeychainSlot` seam Phase B introduced, so tests use `InMemoryKeychainSlot`
-//  fakes. The clock is injectable for deterministic throttle tests. Like
-//  `TrialManager`, `nil` dependency defaults resolve to the real
-//  Keychain/transport INSIDE the (MainActor) init body — a default-argument
-//  expression touching `KeychainStore` statics would evaluate nonisolated and
-//  trip the project's MainActor-default isolation.
+//  `KeychainSlot` seam, so tests use `InMemoryKeychainSlot` fakes. The clock is
+//  injectable for deterministic throttle tests. `nil` dependency defaults
+//  resolve to the real Keychain/transport INSIDE the (MainActor) init body — a
+//  default-argument expression touching `KeychainStore` statics would evaluate
+//  nonisolated and trip the project's MainActor-default isolation.
 //
 
 import Foundation

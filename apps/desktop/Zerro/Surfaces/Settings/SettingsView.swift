@@ -185,7 +185,7 @@ private struct BackChevron: View {
         // Phase C: the Billing section reads the entitlement from the
         // environment. In-memory deps so the preview never touches the real
         // Keychain or network.
-        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory()))
+        .environment(EntitlementStore(licenseService: .inMemory()))
         .environment(store)
         .frame(width: 760, height: 820)
 }

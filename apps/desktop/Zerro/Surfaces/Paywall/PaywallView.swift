@@ -68,7 +68,7 @@ struct PaywallView: View {
             OnboardingLogoTile()
         } content: {
             VStack(spacing: VFSpacing.md) {
-                Text("Your free trial has ended")
+                Text("You\u{2019}ve used your free generations")
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
@@ -461,5 +461,5 @@ private struct ManageDevicesLink: View {
     // or network. Both factories are non-DEBUG (so this compiles in every
     // config, like all `#Preview` bodies).
     PaywallView()
-        .environment(EntitlementStore(trialManager: .inMemory(), licenseService: .inMemory()))
+        .environment(EntitlementStore(licenseService: .inMemory()))
 }

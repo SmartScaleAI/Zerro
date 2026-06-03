@@ -13,12 +13,11 @@
 //  and the Paywall window via the SwiftUI environment, exactly like
 //  `AppState` / `PermissionsManager`.
 //
-//  Phase A deliberately has no real source of truth: `state` is a safe
-//  placeholder (a fresh 7-day trial) and `refresh()` is a stub. Phases
-//  B–F replace the placeholder with a real computation (trial clock,
-//  BYOK license, backend entitlement). Everything here is structured so
-//  those phases only have to fill in the body of `refresh()` and the
-//  initial-state computation — the gate's contract never changes.
+//  The state is COMPUTED from real sources in `computeState` /  `refresh()`:
+//  the BYOK license, the backend Managed entitlement, and the server-funded
+//  trial credit balance. Precedence: Managed > BYOK > trial(credits) > expired.
+//  The gate's contract never changes — surfaces only read `state` /
+//  `canGenerate`.
 //
 //  @MainActor @Observable to match the rest of the app's state objects;
 //  SwiftUI surfaces read `state` / `canGenerate` directly from the
@@ -57,11 +56,6 @@ final class EntitlementStore {
     private(set) var state: EntitlementState
 
     // MARK: - Dependencies
-
-    /// The trial clock (Phase B). Injectable so tests can drive a fake
-    /// Keychain + controllable clock; production uses the default, which
-    /// reads the real Keychain slots.
-    private let trialManager: TrialManager
 
     /// The BYOK license layer (Phase C). Owns the license Keychain slots and
     /// the three LemonSqueezy calls; consulted SYNCHRONOUSLY (no network) for
@@ -107,22 +101,19 @@ final class EntitlementStore {
     // MARK: - Init
 
     /// `nil` constructs the default real-Keychain dependencies inside the
-    /// (MainActor) body — a `TrialManager()` / `LicenseService()` default-
-    /// argument expression would be evaluated nonisolated and trip MainActor
-    /// isolation. Tests and previews inject fakes over in-memory slots.
+    /// (MainActor) body — a `LicenseService()` default-argument expression
+    /// would be evaluated nonisolated and trip MainActor isolation. Tests and
+    /// previews inject fakes over in-memory slots.
     init(
-        trialManager: TrialManager? = nil,
         licenseService: LicenseService? = nil,
         sessionTokens: SessionTokenManager? = nil,
         productKindSlot: KeychainSlot? = nil,
         trialCredits: TrialCreditsManager? = nil,
         defaults: UserDefaults = .standard
     ) {
-        let manager = trialManager ?? TrialManager()
         let license = licenseService ?? LicenseService()
         let tokens = sessionTokens ?? SessionTokenManager()
         let kindSlot = productKindSlot ?? KeychainStore.licenseProductKind
-        self.trialManager = manager
         self.licenseService = license
         self.sessionTokens = tokens
         self.productKindSlot = kindSlot
@@ -133,11 +124,10 @@ final class EntitlementStore {
         // after). Decoded from the resolved local (no `self` access yet).
         let cached = Self.loadCachedSnapshot(from: defaults)
         self.managedSnapshot = cached
-        // Phase B/C/E/F: the initial state is COMPUTED, not hard-coded — from the
+        // Phase C/E/F: the initial state is COMPUTED, not hard-coded — from the
         // resolved locals (so this runs without touching `self`). Precedence:
-        // Managed (Phase E) > BYOK (Phase C) > trial (Phase B/F) > expired.
+        // Managed (Phase E) > BYOK (Phase C) > trial credits (Phase F) > expired.
         self.state = Self.computeState(
-            trialManager: manager,
             licenseService: license,
             productKind: Self.readProductKind(from: kindSlot),
             cachedSnapshot: cached,
@@ -148,21 +138,17 @@ final class EntitlementStore {
     // MARK: - State computation
 
     /// Derives the current `EntitlementState` from its real sources, in
-    /// precedence order: Managed subscription > BYOK license > trial clock >
+    /// precedence order: Managed subscription > BYOK license > trial credits >
     /// expired. The DEBUG override (in `refresh`) sits above all of this.
     ///
     /// `static` (takes the dependencies explicitly) so `init` can call it
     /// before `self` is fully initialized AND `refresh()` can reuse it.
     private static func computeState(
-        trialManager: TrialManager,
         licenseService: LicenseService,
         productKind: LicenseProductKind?,
         cachedSnapshot: ManagedEntitlementSnapshot?,
         trialCreditsRemaining: Int?
     ) -> EntitlementState {
-        // First launch establishes the trial start (idempotent thereafter).
-        trialManager.startTrialIfNeeded()
-
         // Phase E: a present (or, fail-open, indeterminate) cached license
         // OUTRANKS the trial clock. WHICH paid state it grants depends on the
         // recorded product kind:
@@ -186,22 +172,21 @@ final class EntitlementStore {
             return .byok
         }
 
-        switch trialManager.evaluate() {
-        case .active(let daysRemaining):
-            // Phase F dual expiry (§3.3): the trial ends on WHICHEVER comes first
-            // — the local clock (this `.active` branch means it hasn't) OR the
-            // server-funded credits being exhausted. `trialCreditsRemaining` is
-            // nil until the user verifies an email; once it exists and hits zero,
-            // the trial is over → `.expired` → paywall, exactly like a lapsed
-            // clock. A nil (never-verified) balance keeps the trial open on the
-            // clock alone, and the first generation triggers the email capture.
-            if let credits = trialCreditsRemaining, credits <= 0 {
-                return .expired
-            }
-            return .trial(daysRemaining: daysRemaining, trialCreditsRemaining: trialCreditsRemaining)
-        case .expired:
+        // Phase F: the trial is now PURELY a pool of server-funded credits, with
+        // no time limit. It is `.trial` while credits remain (or before the user
+        // has been granted any — a nil balance is a never-verified "pre-trial"
+        // user whom onboarding's email step still gates), and `.expired` the
+        // instant a CONFIRMED balance hits zero. This is the only trial-expiry
+        // condition.
+        //
+        // FAIL-OPEN: only a definitive zero (server truth, cached from the last
+        // /generate response) expires the trial. A nil balance — never granted,
+        // or a transient inability to read the cache — keeps the user in `.trial`,
+        // never dropping an entitled user to `.expired` over a missing read.
+        if let credits = trialCreditsRemaining, credits <= 0 {
             return .expired
         }
+        return .trial(creditsRemaining: trialCreditsRemaining)
     }
 
     /// Builds the `.managed` state from a snapshot (or a neutral placeholder if
@@ -229,8 +214,9 @@ final class EntitlementStore {
     /// access rules at the call site.
     ///
     /// Phase A rules (the server-side decisions noted inline arrive later):
-    ///   • `.trial`   → true. Phase F will additionally require trial
-    ///                  credits > 0, but that check becomes server-side then.
+    ///   • `.trial`   → true. A trial only reaches `.trial` while it still has
+    ///                  server-funded credits (a confirmed-zero balance is
+    ///                  `.expired`); the server is the spend authority.
     ///   • `.byok`    → true. The user funds generation with their own key.
     ///   • `.managed` → true. The real per-generation credit check is
     ///                  server-side in Phase E; the client never gates on
@@ -247,12 +233,11 @@ final class EntitlementStore {
 
     // MARK: - Refresh
 
-    /// Recomputes `state` from its real sources. Phase B re-runs the trial
-    /// clock; Phases C/D add their sources via the precedence marker in
-    /// `computeState`. Called at launch (via `init`) and at every
-    /// record-start attempt (see `ZerroApp.handleHotkey`) so a trial that
-    /// lapsed while the app sat idle is caught the moment the user tries to
-    /// record, never honored stale.
+    /// Recomputes `state` from its real sources via the precedence ladder in
+    /// `computeState`. Called at launch (via `init`) and at every record-start
+    /// attempt (see `ZerroApp.handleHotkey`) so a trial whose credits ran out
+    /// while the app sat idle is caught the moment the user tries to record,
+    /// never honored stale.
     ///
     /// FAIL-OPEN CONTRACT (binding on every real implementation): on a
     /// TRANSIENT failure — a Keychain read error, a backend timeout, an
@@ -261,10 +246,9 @@ final class EntitlementStore {
     /// `.byok` / `.managed` / `.trial` to `.expired` just because a check
     /// couldn't complete. Locking a paying user out of their own tool over
     /// a flaky network is a far worse failure than briefly honoring an
-    /// entitlement that has actually lapsed. Phase B honors this through
-    /// `TrialManager`, which returns a GRANTING status on any genuine
-    /// Keychain read failure and only ever returns `.expired` for a real
-    /// elapsed-time expiry.
+    /// entitlement that has actually lapsed. The trial honors this through
+    /// `computeState`: only a CONFIRMED zero credit balance (server truth)
+    /// expires it; a never-granted or unreadable balance stays `.trial`.
     func refresh() {
         #if DEBUG
         // A pinned dev override (devSetState) wins over the computed clock
@@ -278,7 +262,6 @@ final class EntitlementStore {
         }
         #endif
         state = Self.computeState(
-            trialManager: trialManager,
             licenseService: licenseService,
             productKind: readProductKind(),
             cachedSnapshot: managedSnapshot,
@@ -733,42 +716,12 @@ final class EntitlementStore {
         Log.ui.notice("entitlement dev override cleared → \(String(describing: self.state), privacy: .public)")
     }
 
-    // MARK: - Trial-clock dev controls (DEBUG only)
+    // MARK: - Trial dev controls (DEBUG only)
     //
-    // These manipulate the UNDERLYING clock (via TrialManager) and then
-    // recompute — orthogonal to `devSetState`, which forces a state
-    // directly. Each releases any pinned override first, because the whole
-    // point is to watch `refresh()` derive the state from the clock.
-
-    /// Rewrites the trial to a clean 7 days, then recomputes.
-    func devResetTrial() {
-        devOverrideActive = false
-        trialManager.devResetTrial()
-        refresh()
-    }
-
-    /// Forces the trial expired (start far in the past, ceiling pinned to
-    /// now), then recomputes — drives `.expired` so ⌘⇧R opens the paywall.
-    func devExpireTrial() {
-        devOverrideActive = false
-        trialManager.devExpireTrial()
-        refresh()
-    }
-
-    /// Deletes the trial Keychain slots (simulates a truly-fresh install),
-    /// then recomputes — `computeState` re-establishes a fresh 7-day trial.
-    func devClearTrialKeychain() {
-        devOverrideActive = false
-        trialManager.devClearKeychain()
-        refresh()
-    }
-
-    /// Steps the countdown down by one day, then recomputes.
-    func devAdvanceTrialOneDay() {
-        devOverrideActive = false
-        trialManager.devAdvanceOneDay()
-        refresh()
-    }
+    // The trial is now a pure credit pool (no clock), so forcing trial states
+    // is done directly via `devSetState` (the Entitlement picker — `.trial` /
+    // `.expired`). What remains here is the email-verification reset, which
+    // clears the local Phase F cache so the onboarding email step re-runs.
 
     /// Clears ALL locally-cached trial email-verification state (in-memory token,
     /// cached credits, remembered email) so the onboarding email step returns to
@@ -782,13 +735,12 @@ final class EntitlementStore {
     }
 
     /// Preview convenience: a store pinned to `state` via the dev override,
-    /// backed by an in-memory trial clock so previews never touch the real
+    /// backed by in-memory dependencies so previews never touch the real
     /// Keychain. (DEBUG-only; reference only from `#if DEBUG`-guarded
     /// previews so Release builds — which still compile `#Preview` bodies —
     /// don't see this symbol.)
     static func preview(_ state: EntitlementState) -> EntitlementStore {
         let store = EntitlementStore(
-            trialManager: .inMemory(),
             licenseService: .inMemory(),
             sessionTokens: .inMemory(),
             productKindSlot: InMemoryKeychainSlot(nil),
@@ -816,7 +768,7 @@ final class EntitlementStore {
     static var devStates: [(label: String, state: EntitlementState)] {
         let resetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
         return [
-            ("Trial", .trial(daysRemaining: 7, trialCreditsRemaining: nil)),
+            ("Trial", .trial(creditsRemaining: 15)),
             ("Expired", .expired),
             ("BYOK", .byok),
             ("Managed · Starter", .managed(tier: .starter, creditsRemaining: 100, resetDate: resetDate)),
@@ -826,7 +778,7 @@ final class EntitlementStore {
 
     /// Whether `candidate` is the currently-active state, for selected-pill
     /// rendering in the dev panel. Compares by case identity so two
-    /// `.managed` tiers (or two `.trial`s with different day counts) read
+    /// `.managed` tiers (or two `.trial`s with different credit counts) read
     /// as the "same" dev selection regardless of the throwaway numbers.
     func devMatches(_ candidate: EntitlementState) -> Bool {
         switch (state, candidate) {
