@@ -23,8 +23,9 @@ env:
   BUNDLE_ID: com.cbreeding.Zerro
   TEAM_ID: H6NWCRRAHV
   # The site repo that serves getzerro.app (Vercel auto-deploys it).
-  SITE_REPO: SmartScaleAI/smartscale-website    # the website repo (serves getzerro.app)
-  SITE_APPCAST_PATH: public/appcast.xml          # confirmed: where appcast.xml lives in the site repo
+  SITE_REPO: SmartScaleAI/smartscale-zerro-website  # the website repo (serves getzerro.app)
+  SITE_BRANCH: production                            # Vercel production branch for getzerro.app
+  SITE_APPCAST_PATH: public/appcast.xml              # where appcast.xml lives in the site repo
   # Where the dmg download lives (a GitHub Release asset URL is filled in at runtime).
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
 
@@ -225,16 +226,16 @@ jobs:
           SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
         run: |
           set -euo pipefail
-          git clone "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" "$RUNNER_TEMP/site"
+          git clone --branch "$SITE_BRANCH" "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" "$RUNNER_TEMP/site"
           mkdir -p "$(dirname "$RUNNER_TEMP/site/$SITE_APPCAST_PATH")"
           cp "dist/appcast.xml" "$RUNNER_TEMP/site/$SITE_APPCAST_PATH"
           cd "$RUNNER_TEMP/site"
           git config user.name "Zerro Release Bot"
           git config user.email "release-bot@users.noreply.github.com"
-          if git diff --quiet; then
+          git add "$SITE_APPCAST_PATH"
+          if git diff --cached --quiet; then
             echo "Appcast unchanged — nothing to commit."
           else
-            git add "$SITE_APPCAST_PATH"
             git commit -m "Update appcast for ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
             git push
           fi
