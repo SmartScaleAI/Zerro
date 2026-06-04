@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>SENTRY_DSN</key>
-	<string>https://c6ea09df0e809a38afdf758784e7c0d2@o4511481234128896.ingest.us.sentry.io/4511481246973952</string>
+	<string>https://c6ea09df0e809a38afdf758784e7c0d2@o4511504656302080.ingest.us.sentry.io/4511481246973952</string>
 	<key>SUFeedURL</key>
 	<string>https://getzerro.app/appcast.xml</string>
 	<key>SUPublicEDKey</key>

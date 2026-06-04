@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Distribution outside the Mac App Store, signed with Developer ID. -->
+    <key>method</key>
+    <string>developer-id</string>
+
+    <!-- Your Apple Developer Team ID. -->
+    <key>teamID</key>
+    <string>H6NWCRRAHV</string>
+
+    <!-- Manual signing to match the project's CODE_SIGN_STYLE = Manual and
+         pick the Developer ID Application identity explicitly. -->
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>signingCertificate</key>
+    <string>Developer ID Application</string>
+
+    <!-- Notarization is done separately in release.sh via notarytool, so we do
+         NOT ask xcodebuild to upload here. -->
+    <key>destination</key>
+    <string>export</string>
+
+    <!-- Keep symbols out of the public build; not required but tidy. -->
+    <key>stripSwiftSymbols</key>
+    <true/>
+</dict>
+</plist>
