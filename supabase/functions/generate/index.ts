@@ -8,15 +8,17 @@
 // would reject the app's token before our code runs. See config.toml /
 // README-backend.md.
 //
-// The OPENAI_API_KEY secret is read HERE and handed to the HTTP client. It is
-// never returned to the client and never logged.
+// Provider keys are read HERE and handed to the adapter factories. OPENAI_API_KEY
+// is always required (Whisper STT). They are never returned to the client or
+// logged.
 // =============================================================================
 
 import { serviceClient } from "../_shared/db.ts";
 import { requireEnv } from "../_shared/env.ts";
 import { handlePreflight } from "../_shared/http.ts";
 import { handleGenerate } from "./handler.ts";
-import { HttpOpenAIClient } from "./openai.ts";
+import { CHAT_MODEL, CHAT_PROVIDER, GEMINI_THINKING_LEVEL, STT_PROVIDER } from "./config.ts";
+import { makeChatClient, makeSttClient } from "./providers/factory.ts";
 import { SupabaseBillingStore } from "./store.ts";
 
 Deno.serve(async (req: Request) => {
@@ -24,11 +26,21 @@ Deno.serve(async (req: Request) => {
   if (preflight) return preflight;
 
   const jwtSecret = requireEnv("SESSION_JWT_SECRET");
+  // Whisper STT always needs the OpenAI key (STT stays OpenAI this phase).
   const openaiKey = requireEnv("OPENAI_API_KEY");
+  // Only hard-require the Gemini key when the chat provider actually uses it.
+  const geminiKey = CHAT_PROVIDER === "gemini" ? requireEnv("GEMINI_API_KEY") : undefined;
 
   return await handleGenerate(req, {
     store: new SupabaseBillingStore(serviceClient()),
-    openai: new HttpOpenAIClient(openaiKey),
+    stt: makeSttClient({ provider: STT_PROVIDER, openaiKey }),
+    chat: makeChatClient({
+      provider: CHAT_PROVIDER,
+      model: CHAT_MODEL,
+      openaiKey,
+      geminiKey,
+      thinkingLevel: GEMINI_THINKING_LEVEL,
+    }),
     jwtSecret,
   });
 });

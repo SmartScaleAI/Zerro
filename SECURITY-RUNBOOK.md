@@ -49,7 +49,7 @@ and `session` fails open.
 
 | # | Threat-model control | Status | Proven by |
 |---|---|---|---|
-| §14.1 | OpenAI key never reaches the client; lives only in `OPENAI_API_KEY` | A | `generate/openai.ts` reads env; key never in any response/log. Asserted indirectly by the no-content log test. |
+| §14.1 | Provider keys never reach the client; live only in `OPENAI_API_KEY` / `GEMINI_API_KEY` | A | `generate/index.ts` reads env and passes keys to the adapter factory; keys never in any response/log (Gemini key sent via `x-goog-api-key` header, never the URL). Asserted indirectly by the no-content log test. |
 | §14.1 | **Key can't be repurposed** — client-supplied transcript / system_prompt / messages are IGNORED; server transcribes + composes | **A** | `generate/handler_test.ts` → *"client-supplied … fields are IGNORED"*. The wire contract (`limits.ts`) has no transcript/prompt field at all. |
 | §14 input | Oversized audio / too many frames / oversized payload / wrong MIME rejected **before** any OpenAI call or charge | A | `generate/handler_test.ts` (payload 413, frames 413, MIME 415, **true post-Whisper seconds gate** 413). |
 | §14 spend | **Concurrent double-spend** prevented — two last-credit requests → exactly one charges | A | `generate/handler_test.ts` concurrency-cap tests (sub + trial); the atomic `consume_credit` / `consume_trial_credit` conditional `UPDATE` + the slot cap=1. |
@@ -216,10 +216,11 @@ generation is authorized. **No violations found**; each row is the proof.
 - [ ] `SESSION_JWT_SECRET` (32+ random bytes)
 - [ ] `LEMONSQUEEZY_WEBHOOK_SECRET` (matches the LS webhook)
 - [ ] `LEMONSQUEEZY_API_KEY` — **required for the §14.6 guard** (else it fails open)
-- [ ] `OPENAI_API_KEY`
+- [ ] `OPENAI_API_KEY` — **always required** (Whisper STT, even when chat runs on Gemini)
+- [ ] `GEMINI_API_KEY` — **required only when `CHAT_PROVIDER=gemini`**; rotate alongside `OPENAI_API_KEY`. Lives only in secrets; never returned/logged (same handling as the OpenAI key, §14.1).
 - [ ] `RESEND_API_KEY` + a **verified** Resend sender domain
 - [ ] `LS_VARIANT_STARTER` / `LS_VARIANT_PRO` (comma-separated monthly,yearly ids)
-- [ ] (optional) `CREDITS_*`, `TRIAL_CREDITS`, `SESSION_STALENESS_SECONDS`, model overrides
+- [ ] (optional) `CREDITS_*`, `TRIAL_CREDITS`, `SESSION_STALENESS_SECONDS`, provider/model overrides (`CHAT_PROVIDER`, `CHAT_MODEL`, `GEMINI_THINKING_LEVEL`)
 
 **Deploy**:
 

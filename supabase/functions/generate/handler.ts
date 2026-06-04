@@ -37,9 +37,9 @@ import { json } from "../_shared/http.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
-import { estimatedCostUsd, whisperCostUsd } from "./cost.ts";
+import { CHAT_MODEL, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { validateBody } from "./limits.ts";
-import { OpenAIError, type OpenAIClient } from "./openai.ts";
+import { type ChatClient, ProviderError, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
   GENERATE_RATE_LIMIT_PER_SUB,
@@ -51,7 +51,10 @@ import {
 
 export interface GenerateDeps {
   store: BillingStore;
-  openai: OpenAIClient;
+  /** Speech-to-text (Whisper) — independent of the chat provider. */
+  stt: SttClient;
+  /** Chat / vision generation — OpenAI or Gemini, selected by config. */
+  chat: ChatClient;
   jwtSecret: string;
   /** Injectable clock for verifying the session token in tests. */
   nowSeconds?: number;
@@ -139,7 +142,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     let durationSeconds: number;
     let segments;
     try {
-      const tr = await deps.openai.transcribe(audio);
+      const tr = await deps.stt.transcribe(audio);
       segments = tr.segments;
       durationSeconds = tr.durationSeconds;
     } catch (e) {
@@ -150,7 +153,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         estCostUsd: null, // no usable transcription → nothing billable recorded
         success: false,
       });
-      return openAIErrorResponse(e);
+      return providerErrorResponse(e);
     }
 
     // 10. TRUE seconds gate on Whisper's measured duration, BEFORE the expensive
@@ -163,7 +166,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         subscriptionId: account.logSubscriptionId,
         tokensIn: null,
         tokensOut: null,
-        estCostUsd: whisperCostUsd(measured),
+        estCostUsd: sttCostUsd(measured),
         success: false,
       });
       return json({ error: "audio_too_long" }, 413);
@@ -176,21 +179,23 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
 
     let chat;
     try {
-      chat = await deps.openai.chat(systemPrompt, userContent);
+      chat = await deps.chat.chat(systemPrompt, userContent);
     } catch (e) {
       await deps.store.logGeneration({
         subscriptionId: account.logSubscriptionId,
         tokensIn: null,
         tokensOut: null,
-        estCostUsd: whisperCostUsd(measured), // whisper was paid; chat failed
+        estCostUsd: sttCostUsd(measured), // STT was paid; chat failed
         success: false,
       });
-      return openAIErrorResponse(e);
+      return providerErrorResponse(e);
     }
 
     // 12. Fully successful + usable result → consume exactly one credit.
     const afterConsume = await account.consume();
-    const estCost = estimatedCostUsd(measured, chat.inputTokens, chat.outputTokens);
+    // Cost keys on the CONFIGURED chat model (CHAT_MODEL), not chat.model — a
+    // provider may report a dated modelVersion the price table doesn't carry.
+    const estCost = estimatedCostUsd(measured, chat.provider, CHAT_MODEL, chat.inputTokens, chat.outputTokens);
 
     if (afterConsume === null) {
       // Race edge (near-impossible under the cap=1 slot): the credit became
@@ -279,13 +284,15 @@ function usageBody(chat: { inputTokens: number; outputTokens: number; model: str
   return { input_tokens: chat.inputTokens, output_tokens: chat.outputTokens, model: chat.model };
 }
 
-/** Map an OpenAI failure to a client response. Retryable → 503; else 502. */
-function openAIErrorResponse(e: unknown): Response {
-  if (e instanceof OpenAIError) {
-    if (e.retryable) return json({ error: "openai_unavailable", retryable: true }, 503);
+/** Map a provider failure to a client response. Retryable → 503; else 502. The
+ *  client (ManagedProxyClient.parse) keys on HTTP status, not this body string,
+ *  so the strings are kept stable regardless of which provider failed. */
+function providerErrorResponse(e: unknown): Response {
+  if (e instanceof ProviderError) {
+    if (e.retryable) return json({ error: "provider_unavailable", retryable: true }, 503);
     return json({ error: "generation_failed", retryable: false }, 502);
   }
-  // Unexpected (non-OpenAI) error — surface as a generic server error.
+  // Unexpected (non-provider) error — surface as a generic server error.
   console.error(JSON.stringify({ fn: "generate", error: String(e) }));
   return json({ error: "server_error" }, 500);
 }

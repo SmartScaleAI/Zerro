@@ -91,13 +91,17 @@ the runtime — do NOT set them yourself.**
 | `CREDITS_PRO` | optional | Pro monthly allowance (default `300`). |
 | `SESSION_TOKEN_TTL_SECONDS` | optional | Session token lifetime (default `1800` = 30 min). |
 | `SESSION_RATE_LIMIT_PER_KEY` / `_PER_IP` / `_WINDOW_SECONDS` | optional | Basic `session` rate limit (defaults `10` / `30` per `60`s). |
-| `OPENAI_API_KEY` | ✅ **D2** | The OpenAI key for the `generate` proxy. **Lives ONLY here**, read from env in the function — never returned to the client, never logged. This is the new secret D2 requires. |
+| `OPENAI_API_KEY` | ✅ **D2** | The OpenAI key for the `generate` proxy. **Always required** — Whisper STT stays on OpenAI even when chat runs on Gemini. **Lives ONLY here**, read from env in the function — never returned to the client, never logged. |
+| `GEMINI_API_KEY` | ⚠️ when `CHAT_PROVIDER=gemini` | The Gemini key for the chat/vision call. Only required when the chat provider is `gemini` (the function hard-requires it at boot only then). Lives only here; never returned/logged. |
+| `STT_PROVIDER` | optional | Transcription provider (default `openai`). Only `openai` is supported this phase (the interleaver needs segment-level timestamps). |
 | `STT_MODEL` | optional | Transcription model (default `whisper-1`). Swap server-side without an app update. |
-| `CHAT_MODEL` | optional | Generation model (default `gpt-4o`). Swap server-side without an app update. |
+| `CHAT_PROVIDER` | optional | Chat/vision provider — `openai` (default) or `gemini`. One secret flips it; see "Switching the chat provider" below. |
+| `CHAT_MODEL` | optional | Generation model (default `gpt-4o`). For Gemini, set to `gemini-3.5-flash` (priced flat) or `gemini-3.1-pro-preview` (priced tiered at 200k input tokens). Unpriced models still generate but log `est_cost_usd = null`. |
+| `GEMINI_THINKING_LEVEL` | optional | Gemini thinking depth — `low` (default) or `high`. Only consulted when `CHAT_PROVIDER=gemini`. `high` adds latency + billed thinking (output) tokens; the rewrite task rarely needs it. |
 | `GENERATE_MAX_AUDIO_SECONDS` / `_MAX_AUDIO_BYTES` / `_MAX_FRAMES` / `_MAX_PAYLOAD_BYTES` | optional | Input fuse (defaults `300`s / `12`MB / `200` / `60`MB). Set generously above any real recording; lower against measured cost. |
-| `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case OpenAI round-trip). |
+| `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case provider round-trip). |
 | `GENERATE_RATE_LIMIT_PER_SUB` / `_WINDOW_SECONDS` | optional | Per-subscriber `generate` rate limit (defaults `20` per `60`s). |
-| `GENERATE_OPENAI_TIMEOUT_MS` | optional | OpenAI request timeout (default `120000`). |
+| `GENERATE_PROVIDER_TIMEOUT_MS` | optional | Provider request timeout (default `120000`). Falls back to the legacy `GENERATE_OPENAI_TIMEOUT_MS` if the new var is unset, so a tuned deployment keeps its value. |
 | `RESEND_API_KEY` | ✅ **F** | Resend API key for sending the trial verification code email. The new secret `trial-start` requires. Lives only here; never returned/logged. |
 | `TRIAL_CREDITS` | optional | The per-email trial credit grant (default `15`). Tunable without a logic change. |
 | `TRIAL_EMAIL_FROM` | optional | The verified getzerro.app sender (default `Zerro <noreply@getzerro.app>`). Must be a domain verified in Resend. |
@@ -260,10 +264,42 @@ column that could hold content.
 `GENERATE_MAX_*` constants are the input fuse — lower them in one place against
 measured cost (search `// TODO: tune down` in `generate/config.ts`).
 
+**Provider-agnostic chat.** The `generate` proxy resolves its STT and chat
+clients through `generate/providers/factory.ts` (`makeSttClient` /
+`makeChatClient`), so the **chat** provider is a config switch, not a code
+change. STT stays OpenAI Whisper (the interleaver needs segment-level
+timestamps). The interleaver emits provider-neutral `TimelineBlock`s; each
+adapter (`providers/openai.ts`, `providers/gemini.ts`) renders its own wire
+format. The Swift **BYOK path is intentionally OpenAI-only** — that divergence is
+correct, not drift.
+
+**Switching the chat provider** (zero code changes, instant rollback):
+
+```bash
+# → Gemini (Flash; cheapest, GA-class). OPENAI_API_KEY must remain set (Whisper).
+supabase secrets set GEMINI_API_KEY="<your Gemini key>" \
+  CHAT_PROVIDER=gemini CHAT_MODEL=gemini-3.5-flash
+supabase functions deploy generate --no-verify-jwt
+
+# Pro A/B instead of Flash: CHAT_MODEL=gemini-3.1-pro-preview
+#   (tiered pricing >200k input tokens; optionally GEMINI_THINKING_LEVEL=high).
+
+# → instant rollback to OpenAI (the documented safe default):
+supabase secrets set CHAT_PROVIDER=openai CHAT_MODEL=gpt-4o
+supabase functions deploy generate --no-verify-jwt
+```
+
+Verify `generation_log` rows carry sane token counts and a non-null
+`est_cost_usd` after the switch. An unpriced `CHAT_MODEL` still generates but
+logs `est_cost_usd = null` (see `generate/cost.ts`).
+
 **Prompt/interleaving parity.** `generate/prompt.ts` and
 `generate/interleave.ts` are **verbatim ports** of the Swift BYOK path so Managed
 output matches. They carry `KEEP IN SYNC with …` markers — **if the Swift prompt
 or interleaving changes, update the server copy too**, or Managed and BYOK drift.
+The interleaving algorithm and system prompt stay byte-identical across
+BYOK/Managed and across chat providers; only the final wire format differs
+per-provider (handled in the adapters).
 
 ---
 

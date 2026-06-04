@@ -3,8 +3,13 @@ import "./test_setup.ts"; // MUST be first — sets test env before config.ts lo
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { signSessionToken } from "../_shared/jwt.ts";
 import { handleGenerate, type GenerateDeps } from "./handler.ts";
-import { OpenAIError, type AudioInput, type OpenAIClient } from "./openai.ts";
-import type { UserContentBlock } from "./interleave.ts";
+import {
+  type AudioInput,
+  type ChatClient,
+  ProviderError,
+  type SttClient,
+  type TimelineBlock,
+} from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import type { BillingStore, GenerationLogRow, SubRow } from "./store.ts";
 
@@ -106,13 +111,15 @@ class InMemoryStore implements BillingStore {
   }
 }
 
-// ---- Stub OpenAI transport (no network, no money) ---------------------------
-class StubOpenAI implements OpenAIClient {
+// ---- Stub provider transport (no network, no money) -------------------------
+// One stub satisfies BOTH SttClient and ChatClient — it's injected as
+// { stt: stub, chat: stub }, mirroring the single-vendor (OpenAI) deployment.
+class StubProvider implements SttClient, ChatClient {
   transcribeCalls = 0;
   chatCalls = 0;
   duration = 10;
-  failTranscribe: OpenAIError | null = null;
-  failChat: OpenAIError | null = null;
+  failTranscribe: ProviderError | null = null;
+  failChat: ProviderError | null = null;
   hang = false;
   private hangResolve: (() => void) | null = null;
 
@@ -128,13 +135,19 @@ class StubOpenAI implements OpenAIClient {
   // Capture what the server actually sends to the model, so a test can prove the
   // server owns the prompt + transcript (no client-supplied path into it).
   lastSystem = "";
-  lastContent: UserContentBlock[] = [];
-  chat(system: string, content: UserContentBlock[]) {
+  lastContent: TimelineBlock[] = [];
+  chat(system: string, content: TimelineBlock[]) {
     this.chatCalls++;
     this.lastSystem = system;
     this.lastContent = content;
     if (this.failChat) return Promise.reject(this.failChat);
-    return Promise.resolve({ content: "GENERATED PROMPT", inputTokens: 120, outputTokens: 60, model: "gpt-4o" });
+    return Promise.resolve({
+      provider: "openai",
+      content: "GENERATED PROMPT",
+      inputTokens: 120,
+      outputTokens: 60,
+      model: "gpt-4o",
+    });
   }
 }
 
@@ -183,8 +196,8 @@ function makeReq(token: string | null, body: unknown) {
   });
 }
 
-function deps(store: InMemoryStore, openai: StubOpenAI): GenerateDeps {
-  return { store, openai, jwtSecret: SECRET, nowSeconds: NOW + 1 };
+function deps(store: InMemoryStore, provider: StubProvider): GenerateDeps {
+  return { store, stt: provider, chat: provider, jwtSecret: SECRET, nowSeconds: NOW + 1 };
 }
 
 function activeStore(usedCredits = 0): InMemoryStore {
@@ -196,7 +209,7 @@ function activeStore(usedCredits = 0): InMemoryStore {
 // ---- happy path -------------------------------------------------------------
 Deno.test("happy path: charges exactly one credit, logs cost (no content), returns prompt", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
 
   assertEquals(res.status, 200);
@@ -229,7 +242,7 @@ Deno.test("happy path: charges exactly one credit, logs cost (no content), retur
 // ---- key-repurposing defense (§14.1 / §1.2): the server owns the prompt -----
 Deno.test("client-supplied transcript/system_prompt/messages fields are IGNORED — server transcribes + composes", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   // A patched client tries to drive the OpenAI key as a general LLM by smuggling
   // its own transcript + system prompt + a full messages array.
   const malicious = makeBody({
@@ -263,7 +276,7 @@ Deno.test("client-supplied transcript/system_prompt/messages fields are IGNORED 
 Deno.test("past_due still generates on remaining credits", async () => {
   const store = new InMemoryStore();
   store.seed({ id: "sub-1", tier: "starter", status: "past_due", credits_limit: 100 }, 40);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 200);
   const json = await res.json();
@@ -274,7 +287,7 @@ Deno.test("past_due still generates on remaining credits", async () => {
 // ---- credit gating ----------------------------------------------------------
 Deno.test("zero credits → 402, no OpenAI call, no decrement, slot released", async () => {
   const store = activeStore(100); // used == limit
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 402);
   assertEquals(openai.transcribeCalls, 0);
@@ -287,7 +300,7 @@ Deno.test("zero credits → 402, no OpenAI call, no decrement, slot released", a
 // ---- input fuse (before any OpenAI call / credit work) ----------------------
 Deno.test("too many frames → 413, no OpenAI call, no charge", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const frames = Array.from({ length: 201 }, (_, i) => ({
     timestamp: i,
     mime: "image/jpeg",
@@ -302,7 +315,7 @@ Deno.test("too many frames → 413, no OpenAI call, no charge", async () => {
 
 Deno.test("wrong audio mime → 415, no OpenAI call", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const body = makeBody({ audio: { mime: "audio/wav", data: btoa("x") } });
   const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
   assertEquals(res.status, 415);
@@ -312,7 +325,7 @@ Deno.test("wrong audio mime → 415, no OpenAI call", async () => {
 
 Deno.test("wrong frame mime → 415, no OpenAI call", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const body = makeBody({ frames: [{ timestamp: 0, mime: "image/png", data: btoa("x") }] });
   const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
   assertEquals(res.status, 415);
@@ -322,7 +335,7 @@ Deno.test("wrong frame mime → 415, no OpenAI call", async () => {
 
 Deno.test("oversized payload → 413 before parse, no OpenAI call", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   // Body > GENERATE_MAX_PAYLOAD_BYTES (50000, set in test_setup.ts).
   const big = makeBody({ audio: { mime: "audio/m4a", data: "A".repeat(60_000) } });
   const res = await handleGenerate(makeReq(await mintToken(), big), deps(store, openai));
@@ -333,7 +346,7 @@ Deno.test("oversized payload → 413 before parse, no OpenAI call", async () => 
 
 Deno.test("audio too long (measured post-transcription) → 413 before chat, no charge", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   openai.duration = 999; // > MAX_AUDIO_SECONDS (300)
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 413);
@@ -349,8 +362,8 @@ Deno.test("audio too long (measured post-transcription) → 413 before chat, no 
 // ---- OpenAI failure never charges ------------------------------------------
 Deno.test("transcribe 429 → 503 retryable, chat not called, no charge", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
-  openai.failTranscribe = new OpenAIError("rate", true, 429);
+  const openai = new StubProvider();
+  openai.failTranscribe = new ProviderError("rate", true, 429);
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 503);
   assertEquals((await res.json()).retryable, true);
@@ -364,8 +377,8 @@ Deno.test("transcribe 429 → 503 retryable, chat not called, no charge", async 
 
 Deno.test("chat 500 → 503 retryable, credit NOT consumed", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
-  openai.failChat = new OpenAIError("server", true, 500);
+  const openai = new StubProvider();
+  openai.failChat = new ProviderError("server", true, 500);
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 503);
   assertEquals(openai.transcribeCalls, 1);
@@ -376,8 +389,8 @@ Deno.test("chat 500 → 503 retryable, credit NOT consumed", async () => {
 
 Deno.test("non-retryable OpenAI error → 502", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
-  openai.failChat = new OpenAIError("bad key", false, 401);
+  const openai = new StubProvider();
+  openai.failChat = new ProviderError("bad key", false, 401);
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 502);
   assertEquals(store.used.get("sub-1"), 0);
@@ -386,7 +399,7 @@ Deno.test("non-retryable OpenAI error → 502", async () => {
 // ---- auth -------------------------------------------------------------------
 Deno.test("missing token → 401, nothing happens", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(null, makeBody()), deps(store, openai));
   assertEquals(res.status, 401);
   assertEquals(openai.transcribeCalls, 0);
@@ -394,17 +407,17 @@ Deno.test("missing token → 401, nothing happens", async () => {
 
 Deno.test("invalid token → 401", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq("not.a.jwt", makeBody()), deps(store, openai));
   assertEquals(res.status, 401);
 });
 
 Deno.test("expired token → 401", async () => {
   const store = activeStore(0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const { token } = await signSessionToken({ sub: "sub-1", tier: "starter" }, SECRET, 60, NOW);
   // verify with a clock past expiry
-  const res = await handleGenerate(makeReq(token, makeBody()), { store, openai, jwtSecret: SECRET, nowSeconds: NOW + 61 });
+  const res = await handleGenerate(makeReq(token, makeBody()), { store, stt: openai, chat: openai, jwtSecret: SECRET, nowSeconds: NOW + 61 });
   assertEquals(res.status, 401);
   assertEquals(openai.transcribeCalls, 0);
 });
@@ -412,7 +425,7 @@ Deno.test("expired token → 401", async () => {
 // ---- trial branch (Phase F) -------------------------------------------------
 Deno.test("trial token: charges exactly one trial credit, logs cost with null sub", async () => {
   const store = trialStore(0, 15);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
 
   assertEquals(res.status, 200);
@@ -434,7 +447,7 @@ Deno.test("trial token: charges exactly one trial credit, logs cost with null su
 
 Deno.test("trial token: zero trial credits → 402, no OpenAI call, no charge", async () => {
   const store = trialStore(15, 15); // used == limit
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 402);
   assertEquals((await res.json()).error, "out_of_credits");
@@ -446,7 +459,7 @@ Deno.test("trial token: zero trial credits → 402, no OpenAI call, no charge", 
 
 Deno.test("trial token: unknown grant → 404", async () => {
   const store = new InMemoryStore(); // grant-1 not seeded
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 404);
   assertEquals(openai.transcribeCalls, 0);
@@ -455,7 +468,7 @@ Deno.test("trial token: unknown grant → 404", async () => {
 Deno.test("trial token: unverified grant → 403, no OpenAI call", async () => {
   const store = new InMemoryStore();
   store.seedTrial("grant-1", { verified: false, limit: 15, used: 0 });
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 403);
   assertEquals(openai.transcribeCalls, 0);
@@ -463,8 +476,8 @@ Deno.test("trial token: unverified grant → 403, no OpenAI call", async () => {
 
 Deno.test("trial token: OpenAI chat failure never charges a trial credit", async () => {
   const store = trialStore(0, 15);
-  const openai = new StubOpenAI();
-  openai.failChat = new OpenAIError("server", true, 500);
+  const openai = new StubProvider();
+  openai.failChat = new ProviderError("server", true, 500);
   const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 503);
   assertEquals(store.trialGrants.get("grant-1")?.used, 0); // not charged
@@ -474,7 +487,7 @@ Deno.test("trial token: OpenAI chat failure never charges a trial credit", async
 
 Deno.test("trial token: concurrent second request → 429 (concurrency cap), cap not exceeded", async () => {
   const store = trialStore(14, 15); // exactly 1 trial credit left
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   openai.hang = true; // first request parks inside transcribe, holding the slot
 
   const p1 = handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
@@ -495,7 +508,7 @@ Deno.test("trial token: concurrent second request → 429 (concurrency cap), cap
 Deno.test("trial token: cannot exceed the cap across sequential requests", async () => {
   // 2 credits left; three sequential generations → exactly two succeed, third 402.
   const store = trialStore(13, 15);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const a = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   const b = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   const c = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
@@ -509,7 +522,7 @@ Deno.test("trial token: cannot exceed the cap across sequential requests", async
 Deno.test("cancelled subscriber → 403, no OpenAI call", async () => {
   const store = new InMemoryStore();
   store.seed({ id: "sub-1", tier: "starter", status: "cancelled", credits_limit: 100 }, 0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 403);
   assertEquals(openai.transcribeCalls, 0);
@@ -518,14 +531,14 @@ Deno.test("cancelled subscriber → 403, no OpenAI call", async () => {
 Deno.test("expired subscriber → 403", async () => {
   const store = new InMemoryStore();
   store.seed({ id: "sub-1", tier: "starter", status: "expired", credits_limit: 100 }, 0);
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 403);
 });
 
 Deno.test("unknown subscriber → 404", async () => {
   const store = new InMemoryStore(); // sub-1 not seeded
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 404);
 });
@@ -534,7 +547,7 @@ Deno.test("unknown subscriber → 404", async () => {
 Deno.test("rate limited → 429, no OpenAI call", async () => {
   const store = activeStore(0);
   store.rateOk = false;
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 429);
   assertEquals((await res.json()).error, "rate_limited");
@@ -544,7 +557,7 @@ Deno.test("rate limited → 429, no OpenAI call", async () => {
 // ---- concurrency cap (double-spend guard) -----------------------------------
 Deno.test("second concurrent request for same subscriber → 429 (concurrency cap)", async () => {
   const store = activeStore(99); // exactly 1 credit left
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   openai.hang = true; // first request parks inside transcribe, holding the slot
 
   const p1 = handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
@@ -568,7 +581,7 @@ Deno.test("second concurrent request for same subscriber → 429 (concurrency ca
 Deno.test("credit becomes unspendable after the check → result returned once, logged, not double-charged", async () => {
   const store = activeStore(0);
   store.forceConsumeNull = true; // simulate a mid-flight state change
-  const openai = new StubOpenAI();
+  const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 200); // we already paid OpenAI → return the result once
   const json = await res.json();

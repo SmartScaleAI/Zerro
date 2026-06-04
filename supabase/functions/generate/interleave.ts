@@ -5,35 +5,35 @@
 // payload the BYOK path does, or Managed output drifts from BYOK.
 //   KEEP IN SYNC with Zerro/Services/InterleavedTimeline.swift (Interleaver.merge,
 //     TimelineItem.timestampTag / mmss, the frame-before-speech tie-break)
-//   KEEP IN SYNC with Zerro/Services/OpenAI/OpenAIPromptGenerationService.swift
-//     (the per-item text + image_url content-block shape, detail:"high", the
-//     leading-newline prefix on every tag).
+//
+// The interleaving ALGORITHM and tag text are byte-identical across BYOK/Managed
+// and across chat providers. What differs per provider is only the final WIRE
+// format: this file emits provider-neutral `TimelineBlock`s, and each chat
+// adapter (providers/openai.ts, providers/gemini.ts) converts them to its own
+// content shape (OpenAI `image_url` data-URLs with detail:"high", Gemini
+// `inlineData`, …). BYOK is intentionally OpenAI-only; do not "fix" that
+// divergence — it is correct, not drift.
 //
 // The naive "all frames, then all transcript" ordering is destructive — it
 // severs the temporal link the model uses to resolve deictic references
 // ("this"/"that"/"here") against the visual context. Preserve the chronology.
 // =============================================================================
 
+import type { SpeechSegment, TimelineBlock } from "./providers/types.ts";
+
+export type { SpeechSegment, TimelineBlock };
+
 export interface FrameInput {
   /** Seconds from recording start (client-supplied, validated upstream). */
   timestamp: number;
-  /** A `data:image/jpeg;base64,…` URL reconstructed from the uploaded frame. */
-  dataUrl: string;
+  /** Frame image MIME (image/jpeg) and its raw base64 — NOT a data URL. The
+   *  data-URL / inline-data wrapping is the chat adapter's job. */
+  mime: string;
+  base64: string;
 }
-
-export interface SpeechSegment {
-  start: number;
-  end: number;
-  text: string;
-}
-
-/** OpenAI chat user-content block — text or an image_url (detail-tagged). */
-export type UserContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string; detail: string } };
 
 type Item =
-  | { kind: "frame"; start: number; dataUrl: string }
+  | { kind: "frame"; start: number; mime: string; base64: string }
   | { kind: "speech"; start: number; end: number; text: string };
 
 /** M:SS, seconds TRUNCATED not rounded, clamped at 0. Mirrors Swift `mmss`. */
@@ -51,17 +51,19 @@ function tieRank(item: Item): number {
 }
 
 /**
- * Merge frames + transcript segments into the interleaved OpenAI user-content
- * array. One text block per item; frames additionally emit an image_url block.
- * Every tag is newline-prefixed so each lands on its own rendered line —
- * matching the BYOK request byte-for-byte.
+ * Merge frames + transcript segments into the interleaved neutral timeline.
+ * One text block per item; frames additionally emit an image block. Every tag is
+ * newline-prefixed so each lands on its own rendered line — matching the BYOK
+ * request byte-for-byte once an adapter renders the blocks.
  */
 export function buildInterleavedContent(
   frames: FrameInput[],
   segments: SpeechSegment[],
-): UserContentBlock[] {
+): TimelineBlock[] {
   const items: Item[] = [];
-  for (const f of frames) items.push({ kind: "frame", start: f.timestamp, dataUrl: f.dataUrl });
+  for (const f of frames) {
+    items.push({ kind: "frame", start: f.timestamp, mime: f.mime, base64: f.base64 });
+  }
   for (const s of segments) {
     items.push({ kind: "speech", start: s.start, end: s.end, text: s.text });
   }
@@ -69,11 +71,11 @@ export function buildInterleavedContent(
   // Sort by start time; ties broken frame-before-speech (file header).
   items.sort((a, b) => (a.start !== b.start ? a.start - b.start : tieRank(a) - tieRank(b)));
 
-  const content: UserContentBlock[] = [];
+  const content: TimelineBlock[] = [];
   for (const item of items) {
     if (item.kind === "frame") {
       content.push({ type: "text", text: `\n[${mmss(item.start)}] ` });
-      content.push({ type: "image_url", image_url: { url: item.dataUrl, detail: "high" } });
+      content.push({ type: "image", mime: item.mime, base64: item.base64 });
     } else {
       const tag = `[${mmss(item.start)}–${mmss(item.end)}]`;
       content.push({ type: "text", text: `\n${tag} "${item.text}"` });

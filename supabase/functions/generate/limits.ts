@@ -110,9 +110,9 @@ export function validateBody(body: unknown): ValidationResult {
     if (!Number.isFinite(ts) || ts < 0) return reject(400, "invalid_frame_timestamp");
     const data = f.data;
     if (typeof data !== "string" || data.length === 0) return reject(400, "missing_frame_data");
-    // Keep the frame as a data URL (no decode round-trip); matches the BYOK
-    // path, which sends `data:image/jpeg;base64,…`.
-    frames.push({ timestamp: ts, dataUrl: `data:${frameMime};base64,${data}` });
+    // Pass the raw base64 + MIME through (no decode round-trip). The chat adapter
+    // wraps it for its wire format (OpenAI data-URL, Gemini inlineData, …).
+    frames.push({ timestamp: ts, mime: frameMime, base64: data });
   }
 
   return {
