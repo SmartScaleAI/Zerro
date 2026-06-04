@@ -30,7 +30,7 @@ env:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26      # default Xcode 26.4.x — required for the macOS 26.4 deployment target
     steps:
       # ----------------------------------------------------------------------
       - name: Checkout app repo
@@ -56,9 +56,17 @@ jobs:
           echo "Releasing $MARKETING (build $BUILD)"
 
       # ----------------------------------------------------------------------
-      # Select a recent Xcode (needed for the macOS 26.4 deployment target).
-      - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.app || sudo xcode-select -switch /Applications/Xcode.app
+      # Select the newest Xcode on the runner (needed for the macOS 26.4
+      # deployment target and Swift 6.1+ packages). Picked dynamically so this
+      # doesn't break when GitHub updates the runner image.
+      - name: Select latest Xcode
+        run: |
+          set -euo pipefail
+          LATEST="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "Selecting $LATEST"
+          sudo xcode-select -switch "$LATEST"
+          xcodebuild -version
+          swift --version
 
       # ----------------------------------------------------------------------
       # Import the Developer ID certificate into a temporary keychain.
