@@ -41,7 +41,21 @@ enum ManagedBackend {
     /// the server enforces auth + credits regardless of who calls.
     static let functionsBaseURLString = "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1"
 
-    static let baseURL = URL(string: functionsBaseURLString)!
+    /// DEBUG-only base-URL override for local model testing. Set the
+    /// ZERRO_FUNCTIONS_BASE_URL environment variable in the Xcode scheme
+    /// (e.g. http://127.0.0.1:54321/functions/v1) to point a debug build at
+    /// `supabase functions serve`, where CHAT_PROVIDER / CHAT_MODEL can be
+    /// flipped per-run via an --env-file — no deploy, production untouched.
+    /// Compiled OUT of release builds: ships pinned to the production URL.
+    static let baseURL: URL = {
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"],
+           let url = URL(string: override) {
+            return url
+        }
+        #endif
+        return URL(string: functionsBaseURLString)!
+    }()
 
     static var sessionURL: URL { baseURL.appendingPathComponent("session") }
     static var generateURL: URL { baseURL.appendingPathComponent("generate") }
