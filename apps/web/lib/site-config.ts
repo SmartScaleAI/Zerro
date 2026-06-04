@@ -5,8 +5,9 @@
 /**
  * Direct download URL for the signed/notarized Zerro macOS DMG.
  *
- * The DMG is hosted on the site itself (served from `public/Zerro.dmg` via Vercel),
- * so the download target is the file at the site root.
+ * Public-facing, stable link. It is redirected (302) to GitHub's "latest release"
+ * asset via the `/Zerro.dmg` rewrite in next.config.ts, so this URL never has to
+ * change across releases — and any existing links to it keep working.
  */
 export const DOWNLOAD_URL = "https://getzerro.app/Zerro.dmg";
 

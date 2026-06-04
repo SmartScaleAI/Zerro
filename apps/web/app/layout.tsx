@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import {
   OrganizationJsonLd,
@@ -93,6 +94,12 @@ export default function RootLayout({
           {children}
         </div>
         <Analytics />
+        {/* LemonSqueezy affiliate tracking. The config must be set before
+            affiliate.js loads, so the inline config runs beforeInteractive. */}
+        <Script id="lemonsqueezy-affiliate-config" strategy="beforeInteractive">
+          {`window.lemonSqueezyAffiliateConfig = { store: "zerro" };`}
+        </Script>
+        <Script src="https://lmsqueezy.com/affiliate.js" strategy="afterInteractive" />
       </body>
     </html>
   );
