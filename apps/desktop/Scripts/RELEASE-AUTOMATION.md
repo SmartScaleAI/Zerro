@@ -70,7 +70,7 @@ One-time setup; never touched per release.
 
 Triggered by pushing a tag matching `v*` **to the Zerro repo**:
 
-1. **Checkout** Zerro on a `macos-15` runner (recent enough for the macOS 26.4
+1. **Checkout** Zerro on a `macos-26` runner (default Xcode 26.4.x, required for the macOS 26.4
    deployment target and Sparkle 2.9.2).
 2. **Import the Developer ID cert** from the secret into a temporary keychain
    (destroyed when the job ends).
