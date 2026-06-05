@@ -535,6 +535,15 @@ final class AppState {
                 // Error description is .private — capture errors carry
                 // file paths and device-identifying strings.
                 Log.state.error("session.start() failed: \(error.localizedDescription, privacy: .private)")
+                // Delete the orphaned output .mov. startWriting() created the
+                // file at outputURL before startCapture() threw, so a failed
+                // start leaves an empty/header-only zerro-*.mov on disk. It's
+                // the same orphan class the launch sweep() reclaims, but
+                // there's no reason to let it outlive a known-failed session.
+                // Off the main actor via the M1-era nonisolated remove path,
+                // capturing the URL first for Sendable cleanliness.
+                let orphanedURL = session.outputURL
+                Task.detached(priority: .utility) { WorkingDirectory.remove(at: orphanedURL) }
                 guard let self, self.recordingSession === session else { return }
                 self.recordingSession = nil
                 self.activeSelection = nil
