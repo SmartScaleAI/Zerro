@@ -160,7 +160,7 @@ public enum RecordingFailureReason: Equatable {
         case .screenRecordingRevoked:
             return "Screen Recording permission was revoked."
         case .microphoneRevoked:
-            return "Microphone permission was revoked."
+            return "Microphone permission is off."
         case .microphoneUnavailable:
             return "Selected microphone isn\u{2019}t available."
         case .streamStartFailed:

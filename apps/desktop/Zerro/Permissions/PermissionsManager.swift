@@ -72,6 +72,23 @@ final class PermissionsManager {
     private(set) var microphoneStatus: PermissionStatus = .notDetermined
     private(set) var accessibilityStatus: PermissionStatus = .notDetermined
 
+    /// True when Screen Recording reads as granted at the OS level (or the
+    /// user just enabled it in System Settings) but a live
+    /// `SCShareableContent.current` probe still FAILS — the classic
+    /// "granted but the running process needs a relaunch to pick it up"
+    /// state. macOS caches TCC authorization per-process, so an instance
+    /// that launched while denied keeps seeing "denied" and capture keeps
+    /// failing until a fresh process starts.
+    ///
+    /// Set ONLY by `probeScreenRecordingEffectiveness()` at explicit
+    /// decision points (the onboarding "Check Again" button; a focus-return
+    /// during a denied-state polling session) — NEVER on the poll tick.
+    /// Cleared the instant a probe succeeds. Drives the onboarding screen
+    /// step's dedicated "needs relaunch" sub-view, which takes priority over
+    /// the tri-state so the user is never stranded on a "denied" screen that
+    /// contradicts their System Settings toggle.
+    private(set) var screenRecordingNeedsRelaunch = false
+
     // MARK: Storage
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -653,7 +670,13 @@ final class PermissionsManager {
                 // user just did in Settings before probing.
                 try? await Task.sleep(for: .milliseconds(300))
                 if self.isAwaitingScreenRecordingResponse { return }
-                self.refreshScreenRecordingViaWindowList()
+                // M1: this focus-return is a decision point ("user likely
+                // just came back from System Settings"), not the poll tick,
+                // so the SCShareableContent effectiveness probe is allowed
+                // here. It detects a live grant (→ .granted) AND the
+                // "granted-but-needs-relaunch" stuck state, supersetting the
+                // old WindowList-only check.
+                await self.probeScreenRecordingEffectiveness()
             }
         }
     }
@@ -738,6 +761,74 @@ final class PermissionsManager {
             // window to the front so the user can see the onboarding
             // advance even though the popup hasn't been clicked away.
             refreshStatuses()
+        }
+    }
+
+    /// Decision-point effectiveness check for Screen Recording (M1). Runs
+    /// the authoritative live probe — `SCShareableContent.current` succeeds
+    /// ONLY when screen capture genuinely works in THIS process and cannot
+    /// be faked — and reconciles three outcomes:
+    ///
+    ///   • Probe succeeds → the grant is live and effective. Record it and
+    ///     clear any pending "needs relaunch" flag; the standard refresh
+    ///     transitions the onboarding step to `.granted`.
+    ///   • Probe fails BUT the OS reports the grant present
+    ///     (`isScreenRecordingGrantedWithDevDriftFallback()` — CGPreflight
+    ///     in Release, CGPreflight ∨ the DEBUG WindowList name-sniff in dev)
+    ///     → the user enabled the toggle in System Settings but the running
+    ///     process hasn't picked it up. Surface `screenRecordingNeedsRelaunch`
+    ///     so the step offers a Relaunch affordance instead of "denied".
+    ///   • Probe fails AND no grant is present → genuinely denied; leave the
+    ///     denied sub-state as-is (the relaunch flag stays false).
+    ///
+    /// The probe only ever flips us TO the relaunch/granted states off a
+    /// real signal, so it can't false-positive the relaunch prompt: a
+    /// successful probe always clears the flag (the effective-grant case
+    /// never shows relaunch).
+    ///
+    /// `SCShareableContent.current` is async and, when permission is
+    /// missing, can spawn the system "Open System Settings" popup — so this
+    /// MUST run only at explicit, user-proximate decision points, NEVER on
+    /// the 1Hz poll tick or any hot path (same caution as M3). It awaits
+    /// cleanly off the MainActor-isolated context (the call suspends; it
+    /// does not block the actor).
+    func probeScreenRecordingEffectiveness() async {
+        do {
+            _ = try await SCShareableContent.current
+            // Live and effective — no relaunch needed.
+            screenRecordingGrantedViaShareable = true
+            screenRecordingNeedsRelaunch = false
+        } catch {
+            // Probe failed: capture does not currently work in this process.
+            screenRecordingGrantedViaShareable = false
+            // If the OS nonetheless reports the grant present, this is the
+            // "granted in Settings but not live in-process" stuck state.
+            screenRecordingNeedsRelaunch = Self.isScreenRecordingGrantedWithDevDriftFallback()
+        }
+        refreshStatuses()
+    }
+
+    /// Quits and relaunches Zerro so a Screen Recording grant the user just
+    /// enabled in System Settings takes effect (M1). macOS caches TCC
+    /// authorization per-process — see `screenRecordingNeedsRelaunch` — so a
+    /// fresh process is the only way to clear a stale "denied". Mirrors the
+    /// DEBUG "Reset Permissions & Quit" pattern (an action paired with
+    /// `NSApp.terminate`), but opens a new instance FIRST so the user lands
+    /// back in Zerro automatically rather than having to reopen it by hand.
+    func relaunchToApplyScreenRecording() {
+        let bundleURL = Bundle.main.bundleURL
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        Log.permissions.notice("relaunching to apply Screen Recording grant")
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
+            if let error {
+                Log.permissions.error(
+                    "relaunch openApplication failed: \(error.localizedDescription, privacy: .private)"
+                )
+            }
+            Task { @MainActor in
+                NSApp.terminate(nil)
+            }
         }
     }
 

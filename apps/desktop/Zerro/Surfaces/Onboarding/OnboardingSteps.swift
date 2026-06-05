@@ -400,6 +400,18 @@ struct ScreenRecordingStepView: View {
         onboarding.pinnedScreenSubState == nil
     }
 
+    /// M1: show the dedicated "needs relaunch" sub-view when the grant is
+    /// present in System Settings but a live capture probe failed in this
+    /// process. Takes priority over the tri-state so the user is never
+    /// stranded on a "denied" screen that contradicts their toggle (in a
+    /// stuck Release build CGPreflight may even read `.granted` and the
+    /// step would otherwise auto-advance into a recording that can't
+    /// capture). Suppressed while a dev pin is active so the panel can
+    /// still inspect the three base sub-states.
+    private var showsNeedsRelaunch: Bool {
+        onboarding.pinnedScreenSubState == nil && permissions.screenRecordingNeedsRelaunch
+    }
+
     var body: some View {
         content
             .task(id: effectiveStatus) { permissions.managePolling(for: effectiveStatus) }
@@ -408,6 +420,20 @@ struct ScreenRecordingStepView: View {
 
     @ViewBuilder
     private var content: some View {
+        if showsNeedsRelaunch {
+            OnboardingRelaunchView(
+                title: "Almost there",
+                description: "Screen Recording is enabled but needs a relaunch to take effect.",
+                onRelaunch: { permissions.relaunchToApplyScreenRecording() },
+                onCheckAgain: { Task { await permissions.probeScreenRecordingEffectiveness() } }
+            )
+        } else {
+            screenStatusContent
+        }
+    }
+
+    @ViewBuilder
+    private var screenStatusContent: some View {
         switch effectiveStatus {
         case .notDetermined:
             OnboardingStepLayout {
@@ -436,16 +462,16 @@ struct ScreenRecordingStepView: View {
                 description: "macOS won\u{2019}t re-prompt \u{2014} you need to enable it manually.",
                 breadcrumbLabel: "Screen Recording",
                 settingsURL: SystemSettingsURLs.screenRecording,
-                // CGWindowList-based probe in addition to CGPreflight.
-                // Catches dev-drift on ad-hoc-signed builds where the
-                // cheap CGPreflight check stays false even after the
-                // user grants in Settings. Stays silent when the grant
-                // exists (the common case after the user has just
-                // enabled it); may spawn one popup if permission is
-                // still actually missing — acceptable for a user-
-                // initiated "Check Again" action.
+                // M1: "Check Again" is a decision point, so it runs the
+                // SCShareableContent effectiveness probe. Three outcomes:
+                // a live grant advances to .granted; a grant that's present
+                // in Settings but not yet live in this process flips to the
+                // "needs relaunch" sub-view (instead of stranding the user
+                // here); still-missing stays denied. Stays silent when the
+                // grant is live; may spawn one popup if permission is still
+                // actually missing — acceptable for a user-initiated action.
                 secondary: .checkAgain {
-                    permissions.refreshScreenRecordingViaWindowList()
+                    Task { await permissions.probeScreenRecordingEffectiveness() }
                 }
             )
         }
@@ -885,6 +911,51 @@ struct OnboardingDeniedView: View {
         .padding(.horizontal, VFSpacing.md)
         .padding(.vertical, VFSpacing.md)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+    }
+}
+
+// MARK: - Needs-relaunch sub-state (M1)
+
+/// Shown when Screen Recording reads as granted at the OS level but a live
+/// capture probe still fails — the user enabled the toggle in System
+/// Settings while Zerro was running, and the process needs a relaunch to
+/// pick it up. Distinct from the denied view: the user has ALREADY granted,
+/// so the only thing left is to restart the app. The primary action quits
+/// and relaunches; "Check again" re-probes in case the grant went live
+/// some other way (e.g. the user already relaunched manually).
+struct OnboardingRelaunchView: View {
+    let title: String
+    let description: String
+    let onRelaunch: () -> Void
+    let onCheckAgain: () -> Void
+
+    var body: some View {
+        VStack(spacing: VFSpacing.lg) {
+            Spacer(minLength: 0)
+
+            HaloBadge(color: .vfBrandAccent, systemName: "arrow.clockwise")
+
+            VStack(spacing: VFSpacing.md) {
+                Text(title)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .multilineTextAlignment(.center)
+                Text(description)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, VFSpacing.xxl)
+
+            VStack(spacing: VFSpacing.sm) {
+                OnboardingPrimaryButton("Relaunch Zerro") { onRelaunch() }
+                OnboardingSecondaryButton("Check again") { onCheckAgain() }
+            }
+            .padding(.horizontal, VFSpacing.xxl)
+
+            Spacer(minLength: 0)
+        }
     }
 }
 
