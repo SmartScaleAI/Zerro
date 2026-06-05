@@ -211,6 +211,12 @@ struct ProcessingPipeline {
         generator.requestedTimeToleranceBefore = tolerance
         generator.requestedTimeToleranceAfter = tolerance
 
+        // Resolve the config clamps once, here on the main actor, so the
+        // detached per-frame work captures plain Sendable scalars and
+        // never reaches back into main-isolated config.
+        let maxDimension = ProcessingConfig.maxFrameDimension
+        let jpegQuality = ProcessingConfig.jpegQuality
+
         var frames: [ExtractedFrame] = []
         var index = 0
 
@@ -219,23 +225,31 @@ struct ProcessingPipeline {
                 let cgImage = try item.image
                 let actualTime = try item.actualTime
 
-                guard let downsampled = Self.downsample(
-                    cgImage, maxDimension: ProcessingConfig.maxFrameDimension
-                ) else {
-                    Log.processing.error("downsample failed at index \(index, privacy: .public)")
-                    continue
-                }
+                // The decode above runs on AVFoundation's own threads, but
+                // because extractFrames is main-actor-isolated (the
+                // project's SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor) this
+                // `for await` resumes on main. Hand the synchronous pixel
+                // work — a CGContext draw of a possibly-4K CGImage plus the
+                // JPEG encode, ~90–150 times — to a detached task so it
+                // genuinely runs off the main thread. Marking processFrame
+                // `nonisolated` alone would NOT suffice: a synchronous
+                // nonisolated function runs on whoever calls it (here,
+                // main). The Task.detached is what moves it off (M1's
+                // lesson). The CGImage is created and consumed inside the
+                // closure, so nothing non-Sendable outlives the hop.
+                let frame = await Task.detached(priority: .userInitiated) {
+                    Self.processFrame(
+                        cgImage,
+                        index: index,
+                        actualTime: actualTime,
+                        maxDimension: maxDimension,
+                        jpegQuality: jpegQuality,
+                        into: workingDirectory
+                    )
+                }.value
+                guard let frame else { continue }
 
-                let filename = String(format: "frame-%03d.jpg", index)
-                let url = workingDirectory.appendingPathComponent(filename)
-                guard Self.encodeJPEG(
-                    downsampled, quality: ProcessingConfig.jpegQuality, to: url
-                ) else {
-                    Log.processing.error("JPEG encode failed at index \(index, privacy: .public)")
-                    continue
-                }
-
-                frames.append(ExtractedFrame(url: url, timestamp: actualTime, index: index))
+                frames.append(frame)
                 index += 1
             } catch {
                 // Timestamp is .public (a position into our own buffer,
@@ -278,13 +292,49 @@ struct ProcessingPipeline {
         return ProcessingConfig.sampleIntervalSeconds
     }
 
+    /// Downsamples one decoded frame and writes it to disk as
+    /// `frame-NNN.jpg`, returning the `ExtractedFrame` on success or `nil`
+    /// (after logging) when the downsample or JPEG encode fails — the same
+    /// log-and-skip behavior the loop had inline. `nonisolated` so it can
+    /// run inside `extractFrames`' detached task without the project's
+    /// MainActor-default isolation bouncing the pixel work back to main;
+    /// it touches only its (Sendable) arguments and the already-nonisolated
+    /// `downsample`/`encodeJPEG`/`Log.processing`, so no main-actor state
+    /// is reached. The config clamps are passed in (not read from
+    /// `ProcessingConfig`) to keep that read on the main actor at the call
+    /// site.
+    nonisolated private static func processFrame(
+        _ image: CGImage,
+        index: Int,
+        actualTime: CMTime,
+        maxDimension: CGFloat,
+        jpegQuality: CGFloat,
+        into workingDirectory: URL
+    ) -> ExtractedFrame? {
+        guard let downsampled = downsample(image, maxDimension: maxDimension) else {
+            Log.processing.error("downsample failed at index \(index, privacy: .public)")
+            return nil
+        }
+
+        let filename = String(format: "frame-%03d.jpg", index)
+        let url = workingDirectory.appendingPathComponent(filename)
+        guard encodeJPEG(downsampled, quality: jpegQuality, to: url) else {
+            Log.processing.error("JPEG encode failed at index \(index, privacy: .public)")
+            return nil
+        }
+
+        return ExtractedFrame(url: url, timestamp: actualTime, index: index)
+    }
+
     /// Scales `image` so its longest edge equals `maxDimension`,
     /// preserving aspect ratio. Returns the original CGImage when it's
     /// already at or below the cap. Uses CGContext directly rather
     /// than CGImageSource thumbnailing — we already have a decoded
     /// CGImage from AVAssetImageGenerator and round-tripping through
     /// the source/thumbnail API would just re-encode and re-decode.
-    private static func downsample(_ image: CGImage, maxDimension: CGFloat) -> CGImage? {
+    /// `nonisolated` so the per-frame draw + makeImage runs off the main
+    /// actor inside `processFrame`'s detached task.
+    nonisolated private static func downsample(_ image: CGImage, maxDimension: CGFloat) -> CGImage? {
         let originalSize = CGSize(width: image.width, height: image.height)
         let longestEdge = max(originalSize.width, originalSize.height)
         if longestEdge <= maxDimension { return image }
@@ -352,8 +402,9 @@ struct ProcessingPipeline {
     /// Writes `image` to `url` as JPEG at the given quality (0…1).
     /// Returns false if either the destination couldn't be created or
     /// finalize failed; the caller logs + skips on false rather than
-    /// crashing the whole pipeline.
-    private static func encodeJPEG(_ image: CGImage, quality: CGFloat, to url: URL) -> Bool {
+    /// crashing the whole pipeline. `nonisolated` so the encode runs off
+    /// the main actor inside `processFrame`'s detached task.
+    nonisolated private static func encodeJPEG(_ image: CGImage, quality: CGFloat, to url: URL) -> Bool {
         guard let destination = CGImageDestinationCreateWithURL(
             url as CFURL,
             UTType.jpeg.identifier as CFString,

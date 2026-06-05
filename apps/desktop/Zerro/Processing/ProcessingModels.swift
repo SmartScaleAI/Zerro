@@ -36,7 +36,13 @@ struct ProcessedRecording {
 /// ACTUAL time the image generator returned, not the requested sample
 /// time — the two differ because of keyframe snapping (see the pipeline's
 /// tolerance handling).
-struct ExtractedFrame {
+///
+/// `Sendable` (all fields already are) so the off-main per-frame work in
+/// `ProcessingPipeline.processFrame` can construct it and hand it back to
+/// the main actor. Conforming also opts the struct out of the project's
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` inference, so its
+/// memberwise init isn't main-isolated and can run in the detached task.
+struct ExtractedFrame: Sendable {
     let url: URL
     let timestamp: CMTime
     let index: Int
