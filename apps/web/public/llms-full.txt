@@ -1,0 +1,162 @@
+# Zerro — full site content
+
+> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
+> instructions into a structured prompt for AI coding agents. Record it. Paste it.
+> Zerro in between.
+
+This file contains the full marketing-site content as Markdown, for AI tools that
+want deep ingestion. Source: https://getzerro.app
+
+---
+
+## What is Zerro?
+
+Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
+instructions into a structured prompt for AI coding agents. You frame a region of
+your screen, dictate what you want in plain language, and Zerro returns a Markdown
+prompt ready to paste into Cursor, Windsurf, v0, or any agent you already use.
+
+Processing is local-first: audio isolation and frame downsampling happen on your
+machine before a single API call turns the recording into a prompt. You bring your
+own OpenAI and Gemini keys, stored in the macOS Keychain — there are no servers in
+the middle handling your data, and no account required.
+
+Think of it as voice dictation for your codebase: instead of plain text, you get a
+structured prompt. There's no new app to learn; the whole flow runs from the menu bar.
+
+---
+
+## How it works — Record. Speak. Copy.
+
+1. **Select a region.** Hit the hotkey, drag to frame the part of your screen you
+   want the agent to see. Native macOS crosshair, no window switching.
+2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
+   Point at things, change your mind, ramble. Zerro records up to 3 minutes.
+3. **Zerro processes locally.** Audio gets isolated and frames get downsampled on
+   your machine. Then a single API call turns it into a structured prompt.
+4. **Paste the prompt.** A Markdown prompt lands on your clipboard, ready to drop
+   into Cursor, Windsurf, v0, or wherever you ship from.
+
+The prompt writes itself — you get a structured Markdown prompt with clear sections
+(such as Context, Current State, and Request) rather than a raw transcript.
+
+---
+
+## Built right — native, local-first, no surprises
+
+Zerro is built the way you'd build it if it were your tool.
+
+- **Native Swift & SwiftUI.** A real menu-bar app, built on ScreenCaptureKit. Not
+  an Electron tab pretending to be a Mac app.
+- **Local-first processing.** Audio isolation and frame downsampling happen on your
+  machine before anything leaves it.
+- **Bring your own keys.** Your OpenAI and Gemini keys, stored in macOS Keychain.
+  No servers handling your data.
+- **Cost-bounded by design.** A 3-minute hard cap on every recording keeps each
+  request fast, cheap, and predictable.
+- **Signed & notarized.** Distributed direct as a code-signed .dmg. macOS
+  Gatekeeper will not complain.
+- **Sparkle auto-updates.** Updates ship through Sparkle, the standard for indie
+  Mac apps. You stay current without thinking about it.
+
+---
+
+## How it compares
+
+Dictation tools give you text. Screen recorders give you a video. Zerro gives your
+agent a prompt. This comparison reflects Zerro's positioning; competitor
+capabilities change over time, so check each product for current details.
+
+| Feature | Zerro | Wispr Flow | Loom |
+| --- | --- | --- | --- |
+| Primary input | Screen + voice | Voice | Screen + voice |
+| Output | Structured prompt | Dictated text | Video link |
+| Built for AI coding agents | Yes | No | No |
+| Local-first processing | Yes | No | No |
+| Bring your own API keys | Yes | No | No |
+| Native macOS app | Yes | Yes | No |
+| Pricing model | One-time ($39) | Subscription | Subscription |
+
+---
+
+## The shift — now we're talking
+
+The keyboard was never the point — it was just the only interface we had. As agents
+get better at acting on what you actually mean, typing out every instruction by hand
+starts to feel like the bottleneck it always was.
+
+You think faster than you type. You talk faster than you think. Voice closes that
+gap — and dictation is becoming the default. You speak nearly 4× faster than you
+type. Zerro is built for that future: less typing, more talking.
+
+---
+
+## Pricing — pay once, or let us handle it
+
+BYOK is available at launch. The Managed tier opens up shortly after.
+
+### BYOK — $39 one-time (available now)
+
+Pay once. Bring your own keys.
+
+- All features and future updates
+- Bring your own OpenAI + Gemini keys
+- Keys stored in your macOS Keychain
+- No subscription, no account required
+- No servers handling your data
+
+### Managed — $12/month, or $96/year (coming soon)
+
+We handle the tokens — no keys, no setup.
+
+- No API keys required
+- Monthly recording credits included
+- We manage all token usage
+- Priority support
+- Cancel anytime
+
+Prices listed in USD. The one-time purchase includes all v1 features and updates.
+
+---
+
+## FAQ
+
+**What is Zerro?**
+Zerro is a native macOS menu-bar app that records a region of your screen and your
+voice, then returns a structured Markdown prompt ready to paste into an AI coding
+agent like Cursor, Windsurf, or v0.
+
+**Does Zerro work with Cursor?**
+Yes. Zerro puts a structured Markdown prompt on your clipboard, so it works with
+Cursor, Windsurf, v0, or any tool that takes a text prompt. It isn't tied to a
+single agent.
+
+**Can Zerro replace Wispr Flow?**
+They solve different problems. Wispr Flow is general voice dictation that types text
+for you. Zerro is purpose-built for coding agents: it captures your screen alongside
+your voice and returns a structured prompt, not plain dictated text.
+
+**How much does Zerro cost?**
+Zerro is a one-time purchase of $39 for the BYOK plan, which includes all features
+and future updates. A Managed plan at $12/month — where Zerro handles token usage
+and no API keys are required — is coming soon.
+
+**Is my data private?**
+Yes. Audio isolation and frame downsampling run locally on your Mac before anything
+leaves it. Zerro uses your own OpenAI and Gemini keys, stored in the macOS Keychain,
+so there are no Zerro servers handling your recordings.
+
+**Does Zerro need an account?**
+No. The BYOK plan requires no account and no subscription. You bring your own API
+keys and pay once.
+
+**How long can a recording be?**
+Each recording is capped at 3 minutes. The hard cap keeps every request fast, cheap,
+and predictable.
+
+---
+
+## Contact
+
+- Homepage: https://getzerro.app
+- Support: support@getzerro.app

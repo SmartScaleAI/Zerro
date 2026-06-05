@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Zerro</title>
+        <item>
+            <title>1.0.1</title>
+            <pubDate>Sun, 31 May 2026 08:58:36 -0400</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.4</sparkle:minimumSystemVersion>
+            <enclosure url="https://getzerro.app/Zerro.dmg" length="4216137" type="application/octet-stream" sparkle:edSignature="r34BWNcR5KZblYZKFNb7k76ftRpRNLLqnMUuiBowHfUxpOYV5oIFSWhM5mtPcFc499ycQrms5faCjHHRfajXAQ=="/>
+        </item>
+    </channel>
+</rss>

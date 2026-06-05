@@ -1,0 +1,25 @@
+import type { MetadataRoute } from "next";
+
+// Ported from the former public/site.webmanifest so the manifest is generated
+// through the native App Router convention. Next links it automatically.
+export default function manifest(): MetadataRoute.Manifest {
+  return {
+    name: "Zerro",
+    short_name: "Zerro",
+    icons: [
+      {
+        src: "/android-chrome-192x192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        src: "/android-chrome-512x512.png",
+        sizes: "512x512",
+        type: "image/png",
+      },
+    ],
+    theme_color: "#0a0a0a",
+    background_color: "#0a0a0a",
+    display: "standalone",
+  };
+}
