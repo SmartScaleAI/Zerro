@@ -24,6 +24,7 @@
 //
 
 import Foundation
+import os
 
 struct OpenAITranscriptionService: TranscriptionService {
 
@@ -87,8 +88,13 @@ struct OpenAITranscriptionService: TranscriptionService {
             // the retry also got 429.
             throw TranscriptionError.rateLimited
         default:
-            let body = String(data: data, encoding: .utf8)
-            throw TranscriptionError.server(status: response.statusCode, body: body)
+            // Log the provider's error body `.private` for local debugging
+            // only — it must NOT ride into the typed error, which can reach
+            // Sentry where the exception value is scrubbed by length, not by
+            // content. The error keeps just the status code.
+            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            Log.transcription.error("Whisper non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
+            throw TranscriptionError.server(status: response.statusCode)
         }
 
         let decoded: WhisperResponse

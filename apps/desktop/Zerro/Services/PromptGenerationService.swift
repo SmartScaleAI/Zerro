@@ -70,7 +70,14 @@ enum PromptGenerationError: Error {
     case auth
     case rateLimited
     case network(underlying: Error)
-    case server(status: Int, body: String?)
+    /// Non-2xx provider response. Carries the status code ONLY — useful and
+    /// non-sensitive. The raw response body is deliberately NOT an associated
+    /// value: this error can reach `CrashReporting.capture`, where the Sentry
+    /// SDK derives the exception value from the error's description, and a raw
+    /// provider body would ride into that value scrubbed only by a length clamp
+    /// (not a content filter). The body is logged `.private` at the throw site
+    /// for local debugging instead. See `OpenAIPromptGenerationService`.
+    case server(status: Int)
     case decodeFailure(underlying: Error)
     /// Provider returned a valid response but with no text content
     /// (e.g. `choices[0].message.content` was null or empty). Distinct
