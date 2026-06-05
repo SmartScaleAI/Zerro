@@ -91,11 +91,46 @@ final class RecordingFocusWindowController {
         guard let screen = resolveScreen(for: selection) else { return }
         ensureWindow()
         guard let window, let hostingView else { return }
-        window.setFrame(screen.frame, display: true)
+        let wasVisible = window.isVisible
+
+        window.setFrame(screen.frame, display: false)
         hostingView.rootView = RecordingFocusView(
             cutout: Self.windowLocalRect(selection.rect, on: screen)
         )
+
+        // Updates to an already-visible dim (e.g. selection change) just
+        // re-order; only a fresh appearance gets the fade-in.
+        guard !wasVisible else {
+            window.orderFrontRegardless()
+            return
+        }
+
+        // Appear as a pure opacity fade with NO scale. The "zoom in" on show
+        // is Core Animation's implicit `onOrderIn` action, which runs on the
+        // SwiftUI content's layers the moment they join the visible window
+        // tree. Ordering the window in while invisible AND inside a
+        // transaction with implicit actions disabled — forcing the hosting
+        // view to mount + render its layers right now — lands them at full
+        // size with no `onOrderIn`. Then fade the overlay's opacity in. (Same
+        // approach as AreaSelectorWindowController.present.)
+        window.alphaValue = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         window.orderFrontRegardless()
+        hostingView.layoutSubtreeIfNeeded()
+        hostingView.display() // force SwiftUI to render+mount layers now
+        CATransaction.commit()
+
+        // Defer one runloop tick so any SwiftUI render that landed after the
+        // synchronous layout has also settled at full size before we reveal.
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().alphaValue = 1
+            }
+        }
     }
 
     /// The NSScreen the selection was made on. Prefers the screen by its
@@ -140,6 +175,9 @@ final class RecordingFocusWindowController {
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = false
+        // Suppress AppKit's implicit window appearance animation; the dim
+        // fades via the explicit `alphaValue` ramp in `show(around:)`.
+        win.animationBehavior = .none
         // Above normal app windows (the recorded content) but below the
         // pill, which is raised one level above .floating so it always
         // stays in front of this dim.

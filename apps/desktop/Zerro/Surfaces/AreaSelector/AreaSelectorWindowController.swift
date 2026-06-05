@@ -108,8 +108,37 @@ final class AreaSelectorWindowController {
         self.window = win
 
         NSApp.activate(ignoringOtherApps: true)
+
+        // Appear as a pure opacity fade with NO scale. The "zoom in" on show
+        // is Core Animation's implicit `onOrderIn` action, which runs on the
+        // SwiftUI content's layers the moment they join the visible window
+        // tree. Suppressing it at the window level (`animationBehavior`,
+        // `alphaValue`) isn't enough because it fires on those freshly-
+        // mounted sublayers. So: order the window in while it's still
+        // invisible AND inside a transaction with implicit actions disabled,
+        // forcing the hosting view to mount + lay out its layers right now —
+        // they join the tree at full size with no `onOrderIn`. Then fade the
+        // whole overlay's opacity in.
+        win.alphaValue = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         win.orderFrontRegardless()
+        win.contentView?.layoutSubtreeIfNeeded()
+        win.contentView?.display() // force SwiftUI to render+mount layers now
+        CATransaction.commit()
         win.makeKey()
+
+        // Defer one runloop tick so any SwiftUI render that landed after the
+        // synchronous layout has also settled at full size before we reveal —
+        // guaranteeing the fade carries no residual scale.
+        DispatchQueue.main.async { [weak win] in
+            guard let win else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                win.animator().alphaValue = 1
+            }
+        }
 
         installEventMonitors(for: win, state: state)
         installScreenChangeObserver()
@@ -544,6 +573,10 @@ final class AreaSelectorWindowController {
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = false
+        // Suppress AppKit's implicit window appearance animation; `present`
+        // reveals the overlay with an explicit opacity-only fade so the dim
+        // never scales/zooms up on show.
+        win.animationBehavior = .none
         // .screenSaver sits above .floating, .modalPanel, normal app
         // windows, and the menu bar — appropriate for a modal-feeling
         // capture overlay (matches macOS Screenshot's behavior).
