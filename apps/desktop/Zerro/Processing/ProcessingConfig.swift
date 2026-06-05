@@ -38,4 +38,16 @@ enum ProcessingConfig {
     /// comfortably inside these and won't usually trigger the clamp.
     static let minFramesPerMinute: Int = 6
     static let maxFramesPerMinute: Int = 60
+
+    /// Hard ceiling on real recorded content, in seconds — the 3-minute
+    /// auto-stop cap (the `.autoStopped` transition at 180s in
+    /// AppState.handleElapsedUpdate). Frame extraction sources its
+    /// total-frame ceiling from this so the two can't drift: a legitimate
+    /// recording is already ≤ this, so the clamp is a no-op for real
+    /// content; a malformed or sleep-inflated container duration (read
+    /// back from disk as untrusted file I/O) is bounded here instead of
+    /// egressing a frame set that scales with the bogus duration.
+    /// NOTE: kept in lockstep by hand with the 180s auto-stop literal in
+    /// AppState — if that threshold changes, change this too.
+    static let maxRecordingSeconds: Double = 180
 }

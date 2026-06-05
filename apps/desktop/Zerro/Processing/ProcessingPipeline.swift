@@ -187,12 +187,27 @@ struct ProcessingPipeline {
         }
 
         let interval = Self.effectiveSampleInterval()
+        // Clamp the stride's upper bound to the recording cap. The asset
+        // is read back from disk (untrusted file I/O): a malformed or
+        // sleep-inflated container could report a duration far beyond the
+        // 3-minute cap, and the frame count scales linearly with it. A
+        // legitimate recording is already ≤ the cap (auto-stop at 180s),
+        // so `min` is a no-op for real content and only bites the
+        // abnormal over-cap case.
+        let cappedDurationSeconds = min(durationSeconds, ProcessingConfig.maxRecordingSeconds)
         // Start at `interval` (not 0) — first-frame keyframes in a
         // fresh capture are reliably present but their content is the
         // session pre-roll (cursor mid-click, half-rendered surface).
         // Stepping to `interval` lands on a settled image.
-        let times: [CMTime] = stride(from: interval, through: durationSeconds, by: interval)
+        let strided: [CMTime] = stride(from: interval, through: cappedDurationSeconds, by: interval)
             .map { CMTime(seconds: $0, preferredTimescale: 600) }
+        // Absolute ceiling on emitted frames, independent of the reported
+        // duration: the most a legitimate 3-minute recording could yield
+        // at the configured per-minute rate. Belt-and-braces with the
+        // duration clamp above — even if the stride somehow over-produced,
+        // the emitted set can't exceed this.
+        let maxFrames = ProcessingConfig.maxFramesPerMinute * 3
+        let times = Array(strided.prefix(maxFrames))
 
         guard !times.isEmpty else {
             // Duration is positive but shorter than one sample interval,
