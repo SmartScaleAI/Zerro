@@ -64,6 +64,13 @@ public enum RecordingFailureReason: Equatable {
     case screenRecordingRevoked
     case microphoneRevoked
     case microphoneUnavailable
+    /// M4 — the microphone captured at start disconnected mid-recording
+    /// (AirPods removed, USB mic unplugged). Distinct from
+    /// `.microphoneRevoked` (a permission flip, not connectivity) and from
+    /// `.microphoneUnavailable` (no device at start): here narration was
+    /// being captured fine until the device vanished. Retryable — the user
+    /// reconnects the device and records again.
+    case microphoneDisconnected
     case streamStartFailed
     case writerStartFailed
     case captureInterrupted
@@ -143,7 +150,8 @@ public enum RecordingFailureReason: Equatable {
     /// `AppState.maxFailureRetries`.
     var isRetryable: Bool {
         switch self {
-        case .networkOffline, .rateLimited, .providerError:
+        case .networkOffline, .rateLimited, .providerError,
+             .microphoneDisconnected:
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneUnavailable,
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
@@ -163,6 +171,8 @@ public enum RecordingFailureReason: Equatable {
             return "Microphone permission is off."
         case .microphoneUnavailable:
             return "Selected microphone isn\u{2019}t available."
+        case .microphoneDisconnected:
+            return "Your microphone disconnected \u{2014} recording stopped."
         case .streamStartFailed:
             return "Couldn\u{2019}t start screen capture."
         case .writerStartFailed:
@@ -1406,7 +1416,7 @@ final class AppState {
              .processingFailed,
              .providerError:
             return true
-        case .screenRecordingRevoked, .microphoneRevoked,
+        case .screenRecordingRevoked, .microphoneRevoked, .microphoneDisconnected,
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
              .outOfCredits, .subscriptionInactive,
@@ -1442,6 +1452,8 @@ final class AppState {
                 return .streamStartFailed
             case .noMicrophoneAvailable, .audioInputSetupFailed:
                 return .microphoneUnavailable
+            case .microphoneDisconnected:
+                return .microphoneDisconnected
             case .writerFailedToStart:
                 return .writerStartFailed
             }

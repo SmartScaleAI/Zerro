@@ -107,6 +107,15 @@ final class RecordingSession: NSObject {
         case writerFailedToStart(underlying: Error?)
         case audioInputSetupFailed(underlying: Error?)
         case alreadyStarted
+        /// M4: the microphone pinned at start (microphoneCaptureDeviceID)
+        /// disconnected mid-recording — AirPods removed, USB mic unplugged.
+        /// SCK silently stops delivering buffers from a pinned device that
+        /// vanishes (no auto-failover, not always an error), so without
+        /// this the rest of the recording loses narration and the user
+        /// gets a truncated transcript with no signal anything went wrong.
+        /// Distinct from `.noMicrophoneAvailable` (no device at start) and
+        /// from `.microphoneRevoked` (a permission, not connectivity).
+        case microphoneDisconnected
     }
 
     // MARK: - Init parameters
@@ -150,6 +159,20 @@ final class RecordingSession: NSObject {
     private var stream: SCStream?
     private var streamOutput: StreamSampleOutput?
     private var lifecycleState: LifecycleState = .idle
+
+    /// The microphone AVCaptureDevice pinned at start (resolved from the
+    /// stored preference into `microphoneCaptureDeviceID`). Held so the
+    /// disconnect observer below can be scoped to THIS exact device — see
+    /// `micDisconnectObserver`. Released in `teardownCaptureStack`.
+    private var capturedMicDevice: AVCaptureDevice?
+
+    /// M4 observer token for the pinned mic's `wasDisconnectedNotification`.
+    /// Installed at the end of `start()` (capture is live) and removed at
+    /// the top of `finalize()` on every exit path, so it matches the
+    /// capture lifetime exactly and cannot outlive the session or leak one
+    /// observer per recording. `nil` whenever no observer is registered
+    /// (before start, after finalize).
+    private var micDisconnectObserver: NSObjectProtocol?
 
     /// Wall-clock anchor for the elapsed publish task. Set in start()
     /// once both capture pipelines are running; read by the publish
@@ -259,11 +282,14 @@ final class RecordingSession: NSObject {
         // narration signal and would only invite echo. Resolve the mic up
         // front so a machine with no input device fails fast on the same
         // `.noMicrophoneAvailable` path as before.
-        guard let micDeviceID = Self.resolveMicrophoneDeviceID(preferred: microphoneDeviceID) else {
+        guard let micDevice = Self.resolveMicrophoneDevice(preferred: microphoneDeviceID) else {
             throw SessionError.noMicrophoneAvailable
         }
         config.captureMicrophone = true
-        config.microphoneCaptureDeviceID = micDeviceID
+        config.microphoneCaptureDeviceID = micDevice.uniqueID
+        // Hold the resolved device so the M4 disconnect observer (installed
+        // once capture is live, below) can be scoped to this exact device.
+        self.capturedMicDevice = micDevice
 
         // Three capture shapes, in priority order:
         //   1. Window target whose SCWindow is still on screen — clean
@@ -364,6 +390,39 @@ final class RecordingSession: NSObject {
         self.stream = stream
         self.lifecycleState = .running
 
+        // M4: watch the pinned mic for a mid-recording disconnect (AirPods
+        // pulled, USB mic unplugged). Scoped to THIS device via the
+        // notification `object:`, so it fires ONLY for the resolved
+        // captured device disappearing — not for an unrelated device being
+        // unplugged, not for the user adding a device or switching the
+        // system default while our device stays connected. Installed only
+        // now (capture is live) and removed at the top of finalize() on
+        // every exit path, mirroring elapsedPublishTask's lifetime so it
+        // can't outlive the session or leak.
+        //
+        // On fire we route through `failSession` — the SAME machinery
+        // SCStream's didStopWithError uses (failSession → finalize(
+        // deletingFile: true) → onFinish(.failed) → handleSessionFinish) —
+        // so the partial .mov is discarded and the state machine reaches
+        // .failed through the existing guarded transitions, not a parallel
+        // teardown. A disconnect can also trip SCStream didStopWithError;
+        // whichever lands first flips lifecycleState to .finishing and the
+        // other is a guarded no-op (failSession's `== .running` guard, plus
+        // the observer being removed at finalize's top). The MainActor hop
+        // mirrors the didStopWithError delegate path so failSession's guard
+        // sees coherent state.
+        if let capturedMicDevice {
+            micDisconnectObserver = NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: capturedMicDevice,
+                queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.failSession(with: SessionError.microphoneDisconnected)
+                }
+            }
+        }
+
         // Anchor the UI-facing elapsed clock on wall time and start
         // publishing at 10Hz. The wall-clock anchor (not video PTS)
         // is intentional: SCStream's minimumFrameInterval is a CAP,
@@ -429,6 +488,17 @@ final class RecordingSession: NSObject {
         elapsedPublishTask?.cancel()
         elapsedPublishTask = nil
         sessionStartWallClock = nil
+
+        // M4: remove the mic-disconnect observer up front so it's gone on
+        // EVERY finalize path (success, cancel, failure — including a
+        // disconnect-triggered failure itself), leaving no per-session
+        // leak. Removing it here also ensures a disconnect landing during
+        // teardown can't re-enter failSession. Synchronous and MainActor-
+        // isolated, like the ticker teardown above.
+        if let micDisconnectObserver {
+            NotificationCenter.default.removeObserver(micDisconnectObserver)
+        }
+        self.micDisconnectObserver = nil
 
         Task { @MainActor in
             // Stop the stream first so no more sample buffers (video OR
@@ -544,6 +614,7 @@ final class RecordingSession: NSObject {
         self.writer = nil
         self.videoInput = nil
         self.audioInput = nil
+        self.capturedMicDevice = nil
     }
 
     // MARK: - Sample buffer handler (runs on videoQueue)
@@ -774,8 +845,10 @@ final class RecordingSession: NSObject {
         )
     }
 
-    /// Resolves the user's stored mic preference to a concrete device
-    /// uniqueID for `SCStreamConfiguration.microphoneCaptureDeviceID`.
+    /// Resolves the user's stored mic preference to a concrete
+    /// AVCaptureDevice — its `uniqueID` feeds
+    /// `SCStreamConfiguration.microphoneCaptureDeviceID`, and the device
+    /// itself is held so the M4 disconnect observer can be scoped to it.
     /// Empty `preferred` is the "system default" sentinel
     /// (PreferencesStore convention). If the persisted device has since
     /// been disconnected, falls back to the system default and logs —
@@ -784,13 +857,13 @@ final class RecordingSession: NSObject {
     /// opened. Returns nil only when the machine has no audio input at
     /// all, which `start()` maps to `.noMicrophoneAvailable`.
     ///
-    /// We still resolve through AVCaptureDevice (rather than handing the
-    /// raw string to SCK) so a stale/unplugged preference degrades
-    /// gracefully to the default instead of capturing silence.
-    private static func resolveMicrophoneDeviceID(preferred: String) -> String? {
+    /// We resolve through AVCaptureDevice (rather than handing the raw
+    /// string to SCK) so a stale/unplugged preference degrades gracefully
+    /// to the default instead of capturing silence.
+    private static func resolveMicrophoneDevice(preferred: String) -> AVCaptureDevice? {
         if !preferred.isEmpty {
             if let device = AVCaptureDevice(uniqueID: preferred) {
-                return device.uniqueID
+                return device
             }
             // preferred is .private — AVCaptureDevice unique IDs can contain
             // serial numbers (especially for USB mics) that uniquely
@@ -799,7 +872,7 @@ final class RecordingSession: NSObject {
                 "persisted mic uniqueID '\(preferred, privacy: .private)' not found — falling back to system default"
             )
         }
-        return AVCaptureDevice.default(for: .audio)?.uniqueID
+        return AVCaptureDevice.default(for: .audio)
     }
 }
 
