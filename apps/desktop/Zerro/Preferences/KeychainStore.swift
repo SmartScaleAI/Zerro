@@ -231,10 +231,11 @@ extension KeychainStore {
     // MARK: - Trial credits (Phase F)
     //
     // The email a trial user verified for server-funded credits. NOT the spend
-    // credential — that's the short-lived in-memory trial token (see
-    // `TrialCreditsManager`, never persisted). This is remembered only so the
-    // email-capture sheet can PRE-FILL it on a later launch / reinstall (the
-    // trial cap is enforced server-side against the verified email regardless).
+    // credential — that's the short-lived trial token (see `TrialCreditsManager`
+    // and the `trialToken` slot below: persisted, but only a ≤30-min bearer). This
+    // is remembered only so the email-capture sheet can PRE-FILL it on a later
+    // launch / reinstall (the trial cap is enforced server-side against the
+    // verified email regardless).
     // Kept in the Keychain (not UserDefaults) so it survives a reinstall, matching
     // the other billing slots.
 

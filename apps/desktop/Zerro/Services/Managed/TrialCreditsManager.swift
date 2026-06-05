@@ -18,11 +18,20 @@
 //
 //  Where the credential lives
 //  --------------------------
-//  • The trial token lives IN MEMORY only (like the Managed session token) — it's
-//    short-lived and the spec keeps it off disk. It is NOT silently re-derivable
-//    (the credential is an email + emailed code), so a relaunch re-verifies. The
-//    server-side grant persists, so re-verifying RESUMES the same remaining
-//    balance — it never hands out fresh credits (verify_trial_grant never resets).
+//  • The trial token is PERSISTED to the Keychain (`KeychainStore.trialToken`,
+//    encoded `token|epoch`) and reloaded on init — the in-memory `cached` copy is
+//    just a fast path; the Keychain is the source of truth. Unlike the Managed
+//    session token (silently re-derivable from the stored license key), the trial
+//    token's only credential is the emailed code, so it can't be re-minted without
+//    user action — it MUST survive a relaunch within its TTL, in particular the
+//    SIGKILL macOS issues when Screen Recording is granted DURING onboarding (the
+//    email step precedes the screen-recording step), or the just-granted trial
+//    would read as unverified the moment the user records. Low-sensitivity (a
+//    ≤30-min bearer for capped trial credits); the abuse bound is the server-side
+//    per-email grant cap (below), not this token. Once the TTL lapses a relaunch
+//    re-verifies; the server-side grant persists, so re-verifying RESUMES the same
+//    remaining balance — it never hands out fresh credits (verify_trial_grant
+//    never resets).
 //  • The verified email is remembered in the Keychain (`KeychainStore.trialEmail`)
 //    ONLY to pre-fill the capture sheet later. It is never the spend credential.
 //  • `creditsRemaining` is cached in UserDefaults for display (the menu-bar
@@ -30,10 +39,10 @@
 //    authority (every /generate response returns the true remaining).
 //
 //  Abuse bounding is entirely server-side: the cap is keyed to the verified email
-//  (`trial_grants.email_normalized` UNIQUE), so delete+reinstall — which drops the
-//  in-memory token — resumes the same remaining balance and can NOT farm fresh
-//  credits. This server-side per-email cap is the real abuse bound; there is no
-//  longer any local time gate.
+//  (`trial_grants.email_normalized` UNIQUE), so delete+reinstall resumes the same
+//  remaining balance and can NOT farm fresh credits — the persisted token is only
+//  a short-lived (≤30-min) bearer, never a fresh grant. This server-side per-email
+//  cap is the real abuse bound; there is no longer any local time gate.
 //
 //  Conforms to `ProxyTokenProviding` so `ManagedProxyClient` can drive a trial
 //  generation with no special-casing. Networking goes through the injectable
