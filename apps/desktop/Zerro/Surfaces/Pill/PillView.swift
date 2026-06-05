@@ -441,7 +441,13 @@ private struct RecordingPillContent: View {
 
             stopButton
         }
-        .padding(.horizontal, VFSpacing.xl)
+        // Extra leading inset: the capsule's left cap is a 25pt-radius
+        // curve, so the standard xl pad crowds the record dot into the
+        // bend. Pad the leading edge out toward the cap radius so the dot
+        // + timer read as centered against the rounded edge rather than
+        // hugging it; the trailing edge keeps the standard xl inset.
+        .padding(.leading, VFSpacing.xxl)
+        .padding(.trailing, VFSpacing.xl)
         .padding(.vertical, 10)
     }
 
@@ -525,7 +531,7 @@ private struct ProcessingPillContent: View {
             HStack(spacing: 4) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .medium))
-                Text("Cancel processing")
+                Text("Cancel")
                     .font(.system(size: 12))
                     .fixedSize()
             }
