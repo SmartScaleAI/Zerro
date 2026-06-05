@@ -152,7 +152,7 @@ struct ZerroApp: App {
             // which SwiftUI may re-invoke). Safe to run before any
             // new artifact is created — anything alive in the current
             // run is constructed after this returns.
-            WorkingDirectory.sweep()
+            Task.detached(priority: .utility) { WorkingDirectory.sweep() }
 
             // Phase C: throttled background re-validation of a cached BYOK
             // license. No-ops unless a license is present AND the ~weekly

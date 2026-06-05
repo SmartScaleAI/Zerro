@@ -467,10 +467,10 @@ final class AppState {
         // already had its window to consume the prior result, and
         // keeping them would just leak disk between recordings.
         if let priorRecording = lastRecordingURL {
-            WorkingDirectory.remove(at: priorRecording)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorRecording) }
         }
         if let priorWorkingDir = processedRecording?.workingDirectory {
-            WorkingDirectory.remove(at: priorWorkingDir)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
         isResultExpanded = false
         activeSelection = selection
@@ -648,10 +648,10 @@ final class AppState {
         // they were looking at, so the working dir is garbage now
         // (Phase 9 won't run on a discarded result).
         if let priorRecording = lastRecordingURL {
-            WorkingDirectory.remove(at: priorRecording)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorRecording) }
         }
         if let priorWorkingDir = processedRecording?.workingDirectory {
-            WorkingDirectory.remove(at: priorWorkingDir)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
         recordingSession = nil
         elapsedSeconds = 0
@@ -674,10 +674,10 @@ final class AppState {
         processingTask?.cancel()
         processingTask = nil
         if let priorRecording = lastRecordingURL {
-            WorkingDirectory.remove(at: priorRecording)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorRecording) }
         }
         if let priorWorkingDir = processedRecording?.workingDirectory {
-            WorkingDirectory.remove(at: priorWorkingDir)
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
         recordingSession = nil
         elapsedSeconds = 0
@@ -840,7 +840,8 @@ final class AppState {
                 // already cleared their refs, so clean it here rather than
                 // leaking it until the next launch-sweep.
                 guard self.state == .processing else {
-                    WorkingDirectory.remove(at: result.workingDirectory)
+                    let orphanedDir = result.workingDirectory
+                    Task.detached(priority: .utility) { WorkingDirectory.remove(at: orphanedDir) }
                     return
                 }
                 self.processedRecording = result
@@ -848,7 +849,7 @@ final class AppState {
                 // + manifest in the working dir are everything Phase 9
                 // will consume. Drop the .mov so a 3-min recording
                 // doesn't double-occupy tmp until the next sweep.
-                WorkingDirectory.remove(at: sourceURL)
+                Task.detached(priority: .utility) { WorkingDirectory.remove(at: sourceURL) }
                 self.lastRecordingURL = nil
                 // Phase 8 done → kick off Phase 9 API work. The
                 // .processing → .done transition fires from inside

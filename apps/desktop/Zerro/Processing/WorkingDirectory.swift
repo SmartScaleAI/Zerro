@@ -37,7 +37,7 @@ enum WorkingDirectory {
     /// and processing working directories (`zerro-work-*/`). The
     /// launch-sweep matches on this prefix to clear both families in
     /// one pass.
-    static let prefix = "zerro-"
+    nonisolated static let prefix = "zerro-"
 
     /// Filename prefix for processing working directories specifically.
     /// Used by `make()` to disambiguate from raw recordings.
@@ -66,7 +66,7 @@ enum WorkingDirectory {
     /// load-bearing for correctness, and surfacing a "couldn't delete
     /// tmp" error to the user is worse than leaving the artifact for
     /// the next launch-sweep.
-    static func remove(at url: URL) {
+    nonisolated static func remove(at url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
 
@@ -105,7 +105,7 @@ enum WorkingDirectory {
     /// launch. Anything created in the current run is created AFTER
     /// this call, so we can't accidentally clobber a live artifact.
     /// Failures are logged + ignored — sweep is best-effort.
-    static func sweep() {
+    nonisolated static func sweep() {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
         let contents: [URL]
