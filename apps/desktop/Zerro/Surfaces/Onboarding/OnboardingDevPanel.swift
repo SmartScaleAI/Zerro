@@ -6,9 +6,9 @@
 //
 //  DEBUG-only dev panel that sits below the main onboarding card.
 //  Provides:
-//    • Step jump pills — leap to any of the 6 steps without walking
+//    • Step jump pills — leap to any of the 5 steps without walking
 //      through the flow.
-//    • Sub-state pin pills — for the three permission steps, override
+//    • Sub-state pin pills — for the two permission steps, override
 //      the live PermissionsManager value with a forced .notDetermined
 //      / .granted / .denied so each sub-state can be rendered without
 //      toggling system permissions.
@@ -76,8 +76,6 @@ struct OnboardingDevPanel: View {
             permissionPinRow(label: "SCREEN", binding: bindScreen)
         case .microphone:
             permissionPinRow(label: "MIC", binding: bindMic)
-        case .accessibility:
-            permissionPinRow(label: "ACCESS", binding: bindAccess)
         case .welcome, .email, .allSet:
             HStack {
                 Text("\u{2014}").font(.system(size: 11)).foregroundStyle(Color.vfTextTertiary)
@@ -134,13 +132,6 @@ struct OnboardingDevPanel: View {
         Binding(
             get: { onboarding.pinnedMicSubState },
             set: { onboarding.pinnedMicSubState = $0 }
-        )
-    }
-
-    private var bindAccess: Binding<PermissionStatus?> {
-        Binding(
-            get: { onboarding.pinnedAccessSubState },
-            set: { onboarding.pinnedAccessSubState = $0 }
         )
     }
 }

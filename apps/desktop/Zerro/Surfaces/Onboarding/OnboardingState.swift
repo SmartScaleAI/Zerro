@@ -67,7 +67,6 @@ final class OnboardingState {
 
     var pinnedScreenSubState: PermissionStatus?
     var pinnedMicSubState: PermissionStatus?
-    var pinnedAccessSubState: PermissionStatus?
 
     // MARK: - Storage
 

@@ -57,7 +57,6 @@ struct OnboardingWindowView: View {
         case .email:           EmailStepView()
         case .screenRecording: ScreenRecordingStepView()
         case .microphone:      MicrophoneStepView()
-        case .accessibility:   AccessibilityStepView()
         case .allSet:          AllSetStepView()
         }
     }

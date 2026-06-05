@@ -25,7 +25,6 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     case email
     case screenRecording
     case microphone
-    case accessibility
     case allSet
 
     var id: Int { rawValue }
@@ -38,8 +37,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
         case .email:           return "2 \u{00B7} Email"
         case .screenRecording: return "3 \u{00B7} Screen"
         case .microphone:      return "4 \u{00B7} Mic"
-        case .accessibility:   return "5 \u{00B7} Access"
-        case .allSet:          return "6 \u{00B7} Ready"
+        case .allSet:          return "5 \u{00B7} Ready"
         }
     }
 }

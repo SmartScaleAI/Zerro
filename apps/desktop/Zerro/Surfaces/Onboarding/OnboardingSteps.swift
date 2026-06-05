@@ -4,18 +4,15 @@
 //
 //  Created by Colin Breeding on 5/27/26.
 //
-//  The six step views. Permission steps (Screen / Mic / Accessibility)
-//  branch on a tri-state sub-state derived from PermissionsManager,
-//  with a DEBUG-only override pin on OnboardingState so the dev panel
-//  can preview any sub-state without toggling system permissions.
+//  The five step views. Permission steps (Screen / Mic) branch on a
+//  tri-state sub-state derived from PermissionsManager, with a
+//  DEBUG-only override pin on OnboardingState so the dev panel can
+//  preview any sub-state without toggling system permissions.
 //
 //  Sub-state semantics:
 //    • Screen / Mic — blocking. Continue in BEFORE triggers the OS
 //      request; GRANTED shows a manual Continue (auto-advance lands
 //      in Checkpoint 4); DENIED offers System Settings + Check again.
-//    • Accessibility — informational/optional. Continue in BEFORE just
-//      advances (no AX request API exists); DENIED offers System
-//      Settings + "Continue anyway" to skip.
 //
 
 import AppKit
@@ -505,58 +502,6 @@ struct MicrophoneStepView: View {
     }
 }
 
-// MARK: - Accessibility
-
-struct AccessibilityStepView: View {
-    @Environment(OnboardingState.self) private var onboarding
-    @Environment(PermissionsManager.self) private var permissions
-
-    private var effectiveStatus: PermissionStatus {
-        onboarding.pinnedAccessSubState ?? permissions.accessibilityStatus
-    }
-
-    private var autoAdvanceFromGranted: Bool {
-        onboarding.pinnedAccessSubState == nil
-    }
-
-    var body: some View {
-        content
-            .task(id: effectiveStatus) { permissions.managePolling(for: effectiveStatus) }
-            .onDisappear { permissions.stopPolling() }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch effectiveStatus {
-        case .notDetermined:
-            // Accessibility has no "request" API; Continue here just
-            // advances, since the permission is optional and the user
-            // can grant it later in System Settings on their own.
-            OnboardingStepShell(
-                title: "Accessibility",
-                bodyText: "So you can trigger Zerro with \u{2318}\u{21E7}R from anywhere, without switching apps."
-            ) {
-                OnboardingPrimaryButton("Continue") { onboarding.advance() }
-            }
-        case .granted:
-            OnboardingGrantedView(
-                title: "Accessibility enabled \u{2014} you\u{2019}re good to go",
-                autoAdvance: autoAdvanceFromGranted,
-                onContinue: { onboarding.advance() }
-            )
-        case .denied:
-            // Optional tone: the user can skip without enabling.
-            OnboardingDeniedView(
-                title: "Accessibility is off",
-                description: "Optional \u{2014} you can enable it later in Settings if you ever need it.",
-                breadcrumbLabel: "Accessibility",
-                settingsURL: SystemSettingsURLs.accessibility,
-                secondary: .continueAnyway { onboarding.advance() }
-            )
-        }
-    }
-}
-
 // MARK: - All Set
 
 struct AllSetStepView: View {
@@ -845,25 +790,22 @@ struct OnboardingGrantedView: View {
 
 // MARK: - Denied sub-state
 
-/// Shared denied-state UI used by all three permission steps. The
-/// `secondary` action distinguishes blocking-tone (Screen / Mic, where
-/// the only path forward is to enable in System Settings) from
-/// optional-tone (Accessibility, where the user can skip).
+/// Shared denied-state UI used by both permission steps (Screen / Mic),
+/// where the only path forward is to enable in System Settings. The
+/// `secondary` action offers a "Check again" re-probe.
 struct OnboardingDeniedView: View {
     enum SecondaryAction {
         case checkAgain(() -> Void)
-        case continueAnyway(() -> Void)
 
         var label: String {
             switch self {
-            case .checkAgain:     return "Check again"
-            case .continueAnyway: return "Continue anyway"
+            case .checkAgain: return "Check again"
             }
         }
 
         func invoke() {
             switch self {
-            case .checkAgain(let action), .continueAnyway(let action):
+            case .checkAgain(let action):
                 action()
             }
         }
