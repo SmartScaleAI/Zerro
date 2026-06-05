@@ -554,14 +554,10 @@ final class AreaSelectorWindowController {
         // No restoration — this is a transient modal-feeling surface.
         win.isReleasedWhenClosed = false
         win.contentViewController = hostingController
-        // After contentViewController is set, the controller's view
-        // becomes the window's contentView. Assert layer transparency
-        // through that view — borderless transparent windows otherwise
-        // show an opaque backing layer through any non-filled regions
-        // of the SwiftUI tree. Pattern matches PillWindowController.
-        win.contentView?.wantsLayer = true
-        win.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
-        win.contentView?.layer?.isOpaque = false
+        // After contentViewController is set, the controller's view becomes
+        // the window's contentView — make that view's backing transparent
+        // (see makeBackingTransparent for why).
+        win.contentView?.makeBackingTransparent()
         // Pin to the screen explicitly — `contentRect:` is in global
         // screen coordinates, so for a non-primary display we have to
         // re-set the frame after construction to land the window on

@@ -119,9 +119,7 @@ struct RecentPromptsView: View {
     }
 
     private func copy(_ entry: RecentPrompt) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(entry.prompt, forType: .string)
+        Pasteboard.copy(entry.prompt)
         didCopyTickID = entry.id
         let tickID = entry.id
         Task {

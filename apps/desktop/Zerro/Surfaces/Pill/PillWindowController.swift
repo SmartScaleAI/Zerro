@@ -132,13 +132,7 @@ final class PillWindowController {
         let hostingView = NSHostingView(
             rootView: PillHostView(viewModel: viewModel, appState: appState)
         )
-        // Force the hosting view's backing layer to be transparent.
-        // Without this, the layer defaults to an opaque background that
-        // shows through as dark notches in the rectangular window
-        // corners outside the pill's rounded shape.
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        hostingView.layer?.isOpaque = false
+        hostingView.makeBackingTransparent()
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: hostingView.fittingSize.width, height: hostingView.fittingSize.height),
@@ -159,13 +153,9 @@ final class PillWindowController {
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         win.ignoresMouseEvents = false
         win.contentView = hostingView
-        // contentView is the hostingView here, but belt-and-suspenders:
-        // assert layer transparency through the contentView accessor too,
-        // because AppKit sometimes resets the layer when the view is
-        // attached as contentView.
-        win.contentView?.wantsLayer = true
-        win.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
-        win.contentView?.layer?.isOpaque = false
+        // contentView is the hostingView here, but assert again through the
+        // contentView accessor too (see makeBackingTransparent for why).
+        win.contentView?.makeBackingTransparent()
 
         window = win
     }
@@ -233,16 +223,11 @@ private struct PillHostView: View {
                 appState.cancelRecording()
             },
             onCopy: {
-                // Phase 9 Step 6: write the generated prompt to the
-                // system clipboard. clearContents() drops anything the
-                // user had on the pasteboard before; that's the
-                // expected behavior — the Copy button's contract is
-                // "the prompt is now on your clipboard", not "the
-                // prompt has been added to whatever was there".
+                // Phase 9 Step 6: write the generated prompt to the system
+                // clipboard (see Pasteboard.copy for the replace-not-append
+                // contract).
                 guard let prompt = appState.generatedPrompt, !prompt.isEmpty else { return }
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(prompt, forType: .string)
+                Pasteboard.copy(prompt)
             },
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },

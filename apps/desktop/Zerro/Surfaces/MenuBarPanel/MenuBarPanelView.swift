@@ -825,9 +825,7 @@ private struct CopyLastPromptRow: View {
 
     private func copyToClipboard() {
         guard let entry else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(entry.prompt, forType: .string)
+        Pasteboard.copy(entry.prompt)
         // Close the dropdown once the prompt is on the clipboard.
         MenuBarExtraDismiss.dismiss()
     }
@@ -922,9 +920,7 @@ private struct RecentPromptSubmenuRow: View {
     }
 
     private func copy() {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(entry.prompt, forType: .string)
+        Pasteboard.copy(entry.prompt)
         // Close the side panel, then the whole dropdown, once the prompt is
         // on the clipboard.
         dismiss()

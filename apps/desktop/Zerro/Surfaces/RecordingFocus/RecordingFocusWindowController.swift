@@ -128,9 +128,7 @@ final class RecordingFocusWindowController {
         guard window == nil else { return }
 
         let hosting = NSHostingView(rootView: RecordingFocusView(cutout: .zero))
-        hosting.wantsLayer = true
-        hosting.layer?.backgroundColor = NSColor.clear.cgColor
-        hosting.layer?.isOpaque = false
+        hosting.makeBackingTransparent()
         self.hostingView = hosting
 
         let win = NSWindow(
@@ -153,9 +151,7 @@ final class RecordingFocusWindowController {
         win.isExcludedFromWindowsMenu = true
         win.isReleasedWhenClosed = false
         win.contentView = hosting
-        win.contentView?.wantsLayer = true
-        win.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
-        win.contentView?.layer?.isOpaque = false
+        win.contentView?.makeBackingTransparent()
 
         window = win
     }
