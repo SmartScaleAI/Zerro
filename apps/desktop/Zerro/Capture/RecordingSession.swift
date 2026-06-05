@@ -214,7 +214,7 @@ final class RecordingSession: NSObject {
 
     /// M3 observer token for `NSApplication.didChangeScreenParametersNotification`.
     /// Installed at the end of `start()` (capture is live) and removed at the
-    /// top of `finalize()` / `abandonForSleep()` on every exit path — same
+    /// top of `finalize()` / `abandon()` on every exit path — same
     /// capture-scoped lifetime as `micDisconnectObserver` / `sleepObserver`,
     /// so it can't outlive the session or leak one observer per recording.
     /// `nil` whenever no observer is registered. Registered on
@@ -533,22 +533,22 @@ final class RecordingSession: NSObject {
         // posted BEFORE the machine actually sleeps, so the handler gets to
         // run while we're still awake. Scoped to the capture lifetime exactly
         // like micDisconnectObserver above — installed only now (capture is
-        // live), removed at the top of finalize() / abandonForSleep() on every
+        // live), removed at the top of finalize() / abandon() on every
         // exit path.
         //
-        // On fire we route through `abandonForSleep()`, NOT stop()/finalize.
+        // On fire we route through `abandon()`, NOT stop()/finalize.
         // The prior revision called stop() → finishWriting, but on a real
         // suspend macOS freezes the process mid-rewrite and the interrupted
         // finishWriting corrupts the otherwise-recoverable fragmented file
         // (device-confirmed: the recording came back as .processingFailed).
-        // abandonForSleep deliberately does NOT finalize: it leaves the
+        // abandon deliberately does NOT finalize: it leaves the
         // fragmented .mov intact on disk (readable up to the last flushed
         // fragment) and emits `.interrupted`, so the recording is recovered at
         // next launch instead. A sleep can also trip SCStream
         // didStopWithError; willSleep fires first (pre-sleep) in the normal
         // case, and either ordering is safe — whichever lands first flips
         // lifecycleState off .running and the other's `== .running` guard
-        // (failSession's and abandonForSleep's), plus the observer being
+        // (failSession's and abandon's), plus the observer being
         // removed at the teardown top, makes it a no-op. Registered on
         // NSWorkspace.shared.notificationCenter — teardown removes it there.
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -557,7 +557,7 @@ final class RecordingSession: NSObject {
             queue: nil
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.abandonForSleep()
+                self?.abandon()
             }
         }
 
@@ -576,7 +576,7 @@ final class RecordingSession: NSObject {
         // the recorded display's ID is known; without it we couldn't scope the
         // check and would risk over-firing on unrelated display events.
         // Installed only now (capture is live) and removed at the top of
-        // finalize() / abandonForSleep() on every exit path, mirroring the mic
+        // finalize() / abandon() on every exit path, mirroring the mic
         // + sleep observers' capture-scoped lifetime so it can't leak.
         //
         // On fire we route through `failSession` — the SAME machinery
@@ -726,10 +726,11 @@ final class RecordingSession: NSObject {
     /// immediately (the writer release is dispatched async) and the fragment is
     /// already flushed to disk, so terminating before the async tail runs leaves
     /// the identical recoverable `.mov` a sleep abandon would, and the next
-    /// launch's recovery offers it the same way. The name is kept (not renamed
-    /// to `abandon()`) to avoid churning the M2 sleep path; it is now the shared
-    /// sleep+quit abandon.
-    func abandonForSleep() {
+    /// launch's recovery offers it the same way. The plain name `abandon()`
+    /// reflects that this is the shared sleep+quit path — both callers want the
+    /// writer released without finalizing, leaving a recoverable fragmented
+    /// `.mov` on disk.
+    func abandon() {
         guard lifecycleState == .running else { return }
         lifecycleState = .finishing
         removeCaptureMonitors()
@@ -756,7 +757,7 @@ final class RecordingSession: NSObject {
 
     /// Stops the UI ticker and removes both capture-duration observers (mic
     /// disconnect + sleep), from the centers they were registered on. Called
-    /// at the top of every teardown path (finalize, abandonForSleep) so they
+    /// at the top of every teardown path (finalize, abandon) so they
     /// can't leak or re-enter. Synchronous + MainActor-isolated.
     private func removeCaptureMonitors() {
         elapsedPublishTask?.cancel()
@@ -795,7 +796,7 @@ final class RecordingSession: NSObject {
 
         // Stop the UI ticker + remove the capture-duration observers up front
         // so they're gone on every exit path with no per-session leak, and
-        // nothing can re-enter the teardown. Shared with abandonForSleep().
+        // nothing can re-enter the teardown. Shared with abandon().
         removeCaptureMonitors()
 
         Task { @MainActor in

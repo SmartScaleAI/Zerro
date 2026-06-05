@@ -366,7 +366,7 @@ struct EmailStepView: View {
             // Not an error — the email's trial is spent. Let them continue.
             alreadyUsed = true
             errorMessage = nil
-        case .network, .server, .sendFailed, .malformedResponse:
+        case .network, .server, .sendFailed, .malformedResponse, .malformedRequest:
             handleSystem(error.userMessage, error)
         case .invalidEmail, .disposableEmail, .invalidCode, .codeExpired,
              .tooManyAttempts, .rateLimited:

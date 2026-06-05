@@ -149,7 +149,7 @@ struct ZerroApp: App {
             // Phase 8 launch-sweep + M2 recovery: clear orphaned zerro-*
             // artifacts from prior crashes / force-quits, BUT first salvage a
             // recording a prior session abandoned for sleep —
-            // RecordingSession.abandonForSleep leaves a fragmented .mov on disk
+            // RecordingSession.abandon leaves a fragmented .mov on disk
             // WITHOUT finalizing it (an interrupted finishWriting would corrupt
             // it), so it's recoverable instead of junk. recoverOrphanedRecording
             // IfAny OFFERS the survivor (rev 3 — asks before generating, never

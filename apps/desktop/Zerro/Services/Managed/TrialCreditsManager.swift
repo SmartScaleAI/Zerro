@@ -86,6 +86,10 @@ enum TrialStartError: Error, Equatable {
     case server(status: Int)
     /// Response wasn't the JSON shape we expected.
     case malformedResponse
+    /// Couldn't serialize the request body — should be unreachable for the
+    /// `[String: String]` payload we send. Fail loud here rather than POSTing
+    /// an empty body the backend would reject with a confusing generic error.
+    case malformedRequest
 
     var userMessage: String {
         switch self {
@@ -100,6 +104,7 @@ enum TrialStartError: Error, Equatable {
         case .network:         return "Couldn\u{2019}t reach Zerro \u{2014} check your connection."
         case .server:          return "Something went wrong \u{2014} please try again."
         case .malformedResponse: return "Unexpected response \u{2014} please try again."
+        case .malformedRequest:  return "Something went wrong \u{2014} please try again."
         }
     }
 }
@@ -367,7 +372,11 @@ final class TrialCreditsManager: ProxyTokenProviding {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            throw TrialStartError.malformedRequest
+        }
 
         let (data, status): (Data, Int)
         do {

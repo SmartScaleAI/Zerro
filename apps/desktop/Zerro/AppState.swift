@@ -335,7 +335,7 @@ final class AppState {
     /// recording and on every exit-to-idle path, exactly like
     /// `resultHadNoNarration`. (In-session sleep no longer produces a result
     /// directly — it abandons the file for launch recovery; see
-    /// RecordingSession.abandonForSleep.)
+    /// RecordingSession.abandon.)
     var stoppedBySleep: Bool = false
 
     // MARK: Recents
@@ -654,15 +654,7 @@ final class AppState {
         Log.breadcrumb(category: .permissionChange, level: .warning, message: "permission revoked mid-session")
         permissions?.stopMonitoring()
         session.cancel()
-        recordingSession = nil
-        elapsedSeconds = 0
-        frameCount = 0
-        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-        isResultExpanded = false
-        effectiveOutputMode = nil
-        pendingGeneration = nil
-        activeSelection = nil
-        lastRecordingURL = nil
+        resetTransientRecordingState()
         state = .failed(reason: kind)
     }
 
@@ -706,6 +698,33 @@ final class AppState {
         session.stop()
     }
 
+    /// Resets the full set of transient per-recording state back to its idle
+    /// defaults — the properties that accumulate over a record → process →
+    /// result cycle. Centralized so the teardown paths (cancel, reset-to-idle,
+    /// mid-session revocation, and the three `handleSessionFinish` outcomes)
+    /// can't drift in WHICH properties they clear: the next transient property
+    /// added is reset everywhere by construction. Deliberately does NOT set
+    /// `state` or perform path-specific work (on-disk artifact removal, task
+    /// cancellation, the failure reason) — those stay at each call site because
+    /// they legitimately differ between paths.
+    private func resetTransientRecordingState() {
+        recordingSession = nil
+        elapsedSeconds = 0
+        frameCount = 0
+        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
+        isResultExpanded = false
+        effectiveOutputMode = nil
+        pendingGeneration = nil
+        activeSelection = nil
+        lastRecordingURL = nil
+        processedRecording = nil
+        generatedPrompt = nil
+        resultHadNoNarration = false
+        stoppedBySleep = false
+        pendingRecoveryURL = nil
+        failureRetryAttempts = 0
+    }
+
     /// Tears down the live session and discards the partial file.
     /// Transition to .idle happens in handleSessionFinish(.cancelled)
     /// after the writer has actually closed — keeps file cleanup
@@ -733,21 +752,7 @@ final class AppState {
         if let priorWorkingDir = processedRecording?.workingDirectory {
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
-        recordingSession = nil
-        elapsedSeconds = 0
-        frameCount = 0
-        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-        isResultExpanded = false
-        effectiveOutputMode = nil
-        pendingGeneration = nil
-        activeSelection = nil
-        lastRecordingURL = nil
-        processedRecording = nil
-        generatedPrompt = nil
-        resultHadNoNarration = false
-        stoppedBySleep = false
-        pendingRecoveryURL = nil
-        failureRetryAttempts = 0
+        resetTransientRecordingState()
         state = .idle
     }
 
@@ -761,21 +766,7 @@ final class AppState {
         if let priorWorkingDir = processedRecording?.workingDirectory {
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
-        recordingSession = nil
-        elapsedSeconds = 0
-        frameCount = 0
-        audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-        isResultExpanded = false
-        effectiveOutputMode = nil
-        pendingGeneration = nil
-        activeSelection = nil
-        lastRecordingURL = nil
-        processedRecording = nil
-        generatedPrompt = nil
-        resultHadNoNarration = false
-        stoppedBySleep = false
-        pendingRecoveryURL = nil
-        failureRetryAttempts = 0
+        resetTransientRecordingState()
         state = .idle
     }
 
@@ -788,7 +779,7 @@ final class AppState {
     /// existing processing-cancel cleanup — it adds no parallel teardown.
     ///
     /// • `.recording` / `.wrappingUp` / `.autoStopped`: abandon via the SAME
-    ///   no-finalize path sleep uses (`RecordingSession.abandonForSleep`),
+    ///   no-finalize path sleep uses (`RecordingSession.abandon`),
     ///   leaving a recoverable fragmented `.mov` on disk. The abandon returns
     ///   immediately (its writer release is dispatched onto writerQueue) and the
     ///   fragment is already flushed (`movieFragmentInterval`), so terminating
@@ -816,7 +807,7 @@ final class AppState {
     func prepareForTermination() {
         switch state {
         case .recording, .wrappingUp, .autoStopped:
-            recordingSession?.abandonForSleep()
+            recordingSession?.abandon()
         case .processing:
             processingTask?.cancel()
             processingTask = nil
@@ -863,10 +854,10 @@ final class AppState {
         elapsedSeconds = seconds
         frameCount = Int(seconds / 3.0)
 
-        if state == .recording && seconds >= 150 {
+        if state == .recording && seconds >= ProcessingConfig.wrappingUpSeconds {
             state = .wrappingUp
         }
-        if state == .wrappingUp && seconds >= 180 {
+        if state == .wrappingUp && seconds >= ProcessingConfig.maxRecordingSeconds {
             state = .autoStopped
             // Initiate finalize. The transition to .processing
             // happens when the writer reports .finished — see the
@@ -914,49 +905,14 @@ final class AppState {
             // (recoverOrphanedRecordingIfAny), which OFFERS it on the next wake
             // (the common lid-close case) or launch.
             Log.breadcrumb(category: .stateMachine, message: "recording interrupted by sleep — left for recovery")
-            elapsedSeconds = 0
-            frameCount = 0
-            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-            isResultExpanded = false
-            effectiveOutputMode = nil
-            pendingGeneration = nil
-            activeSelection = nil
-            lastRecordingURL = nil
-            processedRecording = nil
-            generatedPrompt = nil
-            resultHadNoNarration = false
-            stoppedBySleep = false
-            failureRetryAttempts = 0
+            resetTransientRecordingState()
             state = .idle
         case .cancelled:
-            elapsedSeconds = 0
-            frameCount = 0
-            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-            isResultExpanded = false
-            effectiveOutputMode = nil
-            pendingGeneration = nil
-            activeSelection = nil
-            lastRecordingURL = nil
-            processedRecording = nil
-            generatedPrompt = nil
-            resultHadNoNarration = false
-            stoppedBySleep = false
-            failureRetryAttempts = 0
+            resetTransientRecordingState()
             state = .idle
         case .failed(let error):
             Log.state.error("session failed: \(error.localizedDescription, privacy: .private)")
-            elapsedSeconds = 0
-            frameCount = 0
-            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
-            isResultExpanded = false
-            effectiveOutputMode = nil
-            pendingGeneration = nil
-            activeSelection = nil
-            lastRecordingURL = nil
-            processedRecording = nil
-            generatedPrompt = nil
-            resultHadNoNarration = false
-            stoppedBySleep = false
+            resetTransientRecordingState()
             state = .failed(reason: Self.failureReason(from: error))
         }
     }
@@ -996,7 +952,7 @@ final class AppState {
     }
 
     /// Detect a recording that a prior/just-interrupted session abandoned for
-    /// sleep (`RecordingSession.abandonForSleep` left a fragmented `.mov` on
+    /// sleep (`RecordingSession.abandon` left a fragmented `.mov` on
     /// disk WITHOUT finalizing it — readable up to its last flushed fragment).
     /// Instead of auto-generating (rev 2) — which would silently spend a
     /// possibly-trial credit on a recording the user may have been abandoning —

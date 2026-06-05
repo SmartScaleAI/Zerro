@@ -40,14 +40,20 @@ enum ProcessingConfig {
     static let maxFramesPerMinute: Int = 60
 
     /// Hard ceiling on real recorded content, in seconds — the 3-minute
-    /// auto-stop cap (the `.autoStopped` transition at 180s in
-    /// AppState.handleElapsedUpdate). Frame extraction sources its
-    /// total-frame ceiling from this so the two can't drift: a legitimate
-    /// recording is already ≤ this, so the clamp is a no-op for real
-    /// content; a malformed or sleep-inflated container duration (read
-    /// back from disk as untrusted file I/O) is bounded here instead of
-    /// egressing a frame set that scales with the bogus duration.
-    /// NOTE: kept in lockstep by hand with the 180s auto-stop literal in
-    /// AppState — if that threshold changes, change this too.
+    /// auto-stop cap (the `.autoStopped` transition in
+    /// AppState.handleElapsedUpdate). This is the SINGLE SOURCE OF TRUTH for
+    /// the cap: AppState reads its auto-stop threshold from here rather than
+    /// re-hardcoding it, so the recording length and frame-extraction ceiling
+    /// can't drift apart. Frame extraction sources its total-frame ceiling
+    /// from this too: a legitimate recording is already ≤ this, so the clamp
+    /// is a no-op for real content; a malformed or sleep-inflated container
+    /// duration (read back from disk as untrusted file I/O) is bounded here
+    /// instead of egressing a frame set that scales with the bogus duration.
     static let maxRecordingSeconds: Double = 180
+
+    /// When the recording crosses into its final stretch the pill shifts to
+    /// "wrapping up" so the auto-stop at `maxRecordingSeconds` isn't a
+    /// surprise (read by AppState.handleElapsedUpdate). Derived from the cap
+    /// (30s before it) so the two thresholds always track together.
+    static let wrappingUpSeconds: Double = maxRecordingSeconds - 30
 }

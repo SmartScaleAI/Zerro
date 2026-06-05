@@ -62,6 +62,10 @@ enum ManagedSessionError: Error, Equatable {
     case server(status: Int)
     /// Response wasn't the JSON shape we expected.
     case malformedResponse
+    /// Couldn't serialize the request body — should be unreachable for the
+    /// `[String: String]` payload we send. Fail loud here rather than POSTing
+    /// an empty body the backend would reject with a confusing generic error.
+    case malformedRequest
 }
 
 // MARK: - SessionTokenManager
@@ -170,7 +174,11 @@ final class SessionTokenManager: ProxyTokenProviding {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // The raw key goes ONLY here. Body is the single field the backend reads.
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["license_key": key])
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["license_key": key])
+        } catch {
+            throw ManagedSessionError.malformedRequest
+        }
 
         let (data, status): (Data, Int)
         do {
