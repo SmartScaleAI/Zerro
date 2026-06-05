@@ -442,6 +442,11 @@ final class RecordingSession: NSObject {
                 guard let self else { return }
                 guard let writer = self.writer, let videoInput = self.videoInput else {
                     Task { @MainActor in
+                        // Tear down whatever WAS constructed (the stream
+                        // may exist even though the writer path never
+                        // completed) after onFinish — see
+                        // teardownCaptureStack.
+                        defer { self.teardownCaptureStack() }
                         self.lifecycleState = .finished
                         self.onFinish(deletingFile ? .cancelled : .failed(SessionError.writerFailedToStart(underlying: nil)))
                     }
@@ -459,6 +464,14 @@ final class RecordingSession: NSObject {
                 let writerShim = UncheckedSendable(writer)
                 writer.finishWriting {
                     Task { @MainActor in
+                        // finishWriting's completion has now fired, so the
+                        // writer is done and nothing more will append —
+                        // the genuine end of finalize. Release the capture
+                        // stack after onFinish is delivered on every
+                        // branch below (defer runs on each return). Only
+                        // releases in-memory objects; the recorded .mov is
+                        // never touched here. See teardownCaptureStack.
+                        defer { self.teardownCaptureStack() }
                         // Re-unwrap inside the Task so writer isn't
                         // captured across the @Sendable Task boundary
                         // (AVAssetWriter isn't Sendable; writerShim is).
@@ -494,6 +507,43 @@ final class RecordingSession: NSObject {
                 }
             }
         }
+    }
+
+    /// Releases the in-memory capture stack (SCStream + its registered
+    /// output, AVAssetWriter + its two inputs) from the session's OWN
+    /// code, so the stack is torn down on every exit path rather than
+    /// surviving until AppState nils the session or relying on SCK's
+    /// internal weak-delegate policy to break a potential session ⇄
+    /// stream cycle. Defense-in-depth: if SCK ever retained its delegate
+    /// strongly, the omission of this teardown would leak the full
+    /// capture stack per recording.
+    ///
+    /// Ordering: only ever invoked at the genuine END of `finalize`,
+    /// after `stopCapture()` has drained SCK and (on the writer path)
+    /// `finishWriting`'s completion has fired — i.e. nothing more will
+    /// append, so releasing the writer/inputs here cannot tear them down
+    /// mid-finalize.
+    ///
+    /// Idempotent and safe on partially-constructed state: every
+    /// reference is optional (a `start()` that threw before assigning
+    /// `stream` leaves them nil), `removeStreamOutput` is tolerated via
+    /// `try?` (already-removed or never-registered is fine), and niling
+    /// an already-nil reference is a no-op — so a double-`finalize`
+    /// cannot crash here.
+    @MainActor
+    private func teardownCaptureStack() {
+        // ONE output object was registered for BOTH stream types in
+        // start() (addStreamOutput type: .screen + type: .microphone),
+        // so unregister it for both before releasing the stream.
+        if let stream = self.stream, let streamOutput = self.streamOutput {
+            try? stream.removeStreamOutput(streamOutput, type: .screen)
+            try? stream.removeStreamOutput(streamOutput, type: .microphone)
+        }
+        self.stream = nil
+        self.streamOutput = nil
+        self.writer = nil
+        self.videoInput = nil
+        self.audioInput = nil
     }
 
     // MARK: - Sample buffer handler (runs on videoQueue)
