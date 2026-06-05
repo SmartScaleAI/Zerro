@@ -28,10 +28,14 @@
 //    email step precedes the screen-recording step), or the just-granted trial
 //    would read as unverified the moment the user records. Low-sensitivity (a
 //    ≤30-min bearer for capped trial credits); the abuse bound is the server-side
-//    per-email grant cap (below), not this token. Once the TTL lapses a relaunch
-//    re-verifies; the server-side grant persists, so re-verifying RESUMES the same
-//    remaining balance — it never hands out fresh credits (verify_trial_grant
-//    never resets).
+//    per-email grant cap (below), not this token. Once the TTL lapses the token
+//    is RESUMED silently in the background (H1): `refreshToken()` POSTs
+//    `action:"resume"` with the remembered verified email and the server mints a
+//    fresh token against the SAME grant — the user never re-verifies. Email
+//    ownership is proven exactly once, ever; the server-side grant persists, so a
+//    resume RESUMES the same remaining balance and never hands out fresh credits
+//    (verify_trial_grant never resets). Only a genuine first-time user (no
+//    remembered email) is sent through the email+code flow.
 //  • The verified email is remembered in the Keychain (`KeychainStore.trialEmail`)
 //    ONLY to pre-fill the capture sheet later. It is never the spend credential.
 //  • `creditsRemaining` is cached in UserDefaults for display (the menu-bar
@@ -123,6 +127,12 @@ final class TrialCreditsManager: ProxyTokenProviding {
         let expiresAt: Date
     }
     @ObservationIgnored private var cached: CachedToken?
+
+    /// Single-flight guard for the silent resume (H1). `refreshToken()` is called
+    /// from several places that can race on an expired token (launch preflight,
+    /// `validToken()` on a stale cache, the `/generate` 401 retry); concurrent
+    /// callers must await ONE resume, not each fire their own.
+    @ObservationIgnored private var inFlightResume: Task<String, Error>?
 
     // MARK: - Dependencies
 
@@ -219,24 +229,83 @@ final class TrialCreditsManager: ProxyTokenProviding {
 
     // MARK: - ProxyTokenProviding
 
-    /// The cached trial token if it's still usable, else `.notEntitled` — there
-    /// is no silent re-mint (the credential is the email+code). Callers route to
-    /// the email-capture flow before reaching here, so a throw is the rare
-    /// mid-use-expiry case.
+    /// The cached trial token if it's still comfortably unexpired, otherwise a
+    /// silently-resumed one (H1). Mirrors `SessionTokenManager.validToken()`: a
+    /// stale cache no longer throws — it attempts a background resume against the
+    /// remembered verified email. Only a genuine first-time user (no remembered
+    /// email) ends up at `.notEntitled`, which routes to the email-capture flow.
     func validToken() async throws -> String {
         if let cached, cached.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway {
             return cached.token
         }
+        return try await refreshToken()
+    }
+
+    /// Silently re-mint an expired trial token (the H1 fix). Verification is a
+    /// PERMANENT server-side fact (the per-email grant), not the liveness of the
+    /// ≤30-min token, so an expired token resumes in the background using the
+    /// remembered verified email — the user sees nothing. Single-flighted so
+    /// concurrent expired-token callers await one `resume`. Throws `.notEntitled`
+    /// only when there's no verified email to resume against (first-time user) or
+    /// the server reports the grant is gone/exhausted — the caller then routes to
+    /// the email+code flow.
+    @discardableResult
+    func refreshToken() async throws -> String {
+        if let inFlight = inFlightResume {
+            return try await inFlight.value
+        }
+        let task = Task { try await self.performResume() }
+        inFlightResume = task
+        defer { inFlightResume = nil }
+        return try await task.value
+    }
+
+    /// One resume round-trip: POST `{ action:"resume", email }` and, on a fresh
+    /// token, cache + persist it and update the cached balance silently.
+    private func performResume() async throws -> String {
+        // The remembered email is the resume credential. None on file → never
+        // verified → re-verify from scratch (no token to drop).
+        guard let email = rememberedEmail else {
+            clearStaleToken()
+            throw ManagedSessionError.notEntitled
+        }
+
+        let dto: TrialStartResponseDTO
+        do {
+            dto = try await postTrialStart(["action": "resume", "email": email])
+        } catch {
+            // Treat the server response as untrusted and the call as best-effort:
+            // ANY failure (network, 5xx, malformed) drops the stale token and
+            // routes to re-verify rather than crashing. With the server-side
+            // expires_at guard the success path always carries a valid expiry.
+            clearStaleToken()
+            throw ManagedSessionError.notEntitled
+        }
+
+        // A previously-verified email → fresh token + the persisted balance.
+        // Cache, persist (survive relaunch), and proceed silently.
+        if let token = dto.token, let remaining = dto.trialCreditsRemaining {
+            let expiresAt = ManagedBackend.parseISODate(dto.expiresAt)
+                ?? clock().addingTimeInterval(Self.refreshLeeway)
+            let token0 = CachedToken(token: token, expiresAt: expiresAt)
+            cached = token0
+            persistToken(token0) // survive a relaunch
+            setCreditsRemaining(remaining)
+            Log.billing.notice("trial token resumed silently — credits=\(remaining, privacy: .public)")
+            return token0.token
+        }
+
+        // `needs_verification` (no grant) / `already_used` / any unexpected shape
+        // → drop the stale token and route to re-verify.
+        clearStaleToken()
         throw ManagedSessionError.notEntitled
     }
 
-    /// Cannot silently refresh a trial token (no stored credential). Drops the
-    /// stale token (memory + Keychain) and signals the caller to re-verify.
-    @discardableResult
-    func refreshToken() async throws -> String {
+    /// Drop the stale token (memory + Keychain) but KEEP the remembered email and
+    /// cached credits — we're routing to re-verify, not forgetting the user.
+    private func clearStaleToken() {
         cached = nil
         tokenSlot.delete()
-        throw ManagedSessionError.notEntitled
     }
 
     // MARK: - Credit bookkeeping

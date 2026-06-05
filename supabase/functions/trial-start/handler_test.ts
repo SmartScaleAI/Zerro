@@ -244,6 +244,95 @@ Deno.test("verify: no pending code → invalid_code", async () => {
   assertEquals((await res.json()).error, "invalid_code");
 });
 
+// ---- resume (H1: silent token refresh for an already-verified email) --------
+function assertValidFutureExpiry(expiresAt: unknown) {
+  assert(typeof expiresAt === "string", "expires_at must be a string");
+  const ms = new Date(expiresAt as string).getTime();
+  assert(Number.isFinite(ms), "expires_at must parse");
+  assert(ms > NOW * 1000, "expires_at must be in the future");
+}
+
+Deno.test("resume: verified email re-mints a token with the persisted balance, no code", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  // Establish a verified grant, then spend some credits.
+  const code = await sendAndGetCode(store, email, "a@b.com");
+  await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
+  store.grants.get("a@b.com")!.used = 6; // 9 remaining
+  const sentBefore = email.sent.length;
+
+  const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assert(typeof json.token === "string");
+  assertEquals(json.trial_credits_remaining, 9); // persisted balance, NOT reset to 15
+  assertValidFutureExpiry(json.expires_at);
+  // No email sent and no new grant created — resume only reads the grant.
+  assertEquals(email.sent.length, sentBefore);
+  assertEquals(store.grants.size, 1);
+
+  // The minted token is a valid TRIAL token for the SAME grant.
+  const claims = await verifySessionToken(json.token, SECRET, NOW + 1);
+  assert(claims);
+  assertEquals(claims!.kind, "trial");
+  assertEquals(claims!.sub, store.grants.get("a@b.com")!.id);
+});
+
+Deno.test("resume: unknown email → needs_verification, no token, no grant created", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  const res = await handleTrialStart(req({ action: "resume", email: "nobody@b.com" }), deps(store, email));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.status, "needs_verification");
+  assertEquals(json.token, undefined);
+  assertEquals(store.grants.size, 0); // resume NEVER auto-creates a grant
+  assertEquals(email.sent.length, 0);
+});
+
+Deno.test("resume: grant exists but never verified → needs_verification", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  store.grants.set("a@b.com", { id: "g1", verified: false, limit: 15, used: 0 });
+  const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).status, "needs_verification");
+});
+
+Deno.test("resume: verified but exhausted → already_used (no token)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  store.grants.set("a@b.com", { id: "g1", verified: true, limit: 15, used: 15 });
+  const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.status, "already_used");
+  assertEquals(json.token, undefined);
+});
+
+Deno.test("resume: respects the rate limit (429, mints nothing)", async () => {
+  const store = new InMemoryTrialStore();
+  store.rateOk = false;
+  store.grants.set("a@b.com", { id: "g1", verified: true, limit: 15, used: 0 });
+  const email = new StubEmailSender();
+  const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
+  assertEquals(res.status, 429);
+});
+
+Deno.test("mint: BOTH verify and resume emit a well-formed FUTURE expires_at", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+
+  // verify path
+  const code = await sendAndGetCode(store, email, "a@b.com");
+  const vres = await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
+  assertValidFutureExpiry((await vres.json()).expires_at);
+
+  // resume path
+  const rres = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
+  assertValidFutureExpiry((await rres.json()).expires_at);
+});
+
 Deno.test("rejects invalid email + bad action", async () => {
   const store = new InMemoryTrialStore();
   const email = new StubEmailSender();

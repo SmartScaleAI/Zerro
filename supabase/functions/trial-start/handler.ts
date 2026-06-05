@@ -18,6 +18,14 @@
 //             create-once the grant (verify_trial_grant) and mint a short-lived
 //             TRIAL session token. Returns { token, expires_at,
 //             trial_credits_remaining }.
+//   resume  — { action:"resume", email } → look up the grant by email_normalized
+//             and, if it's already VERIFIED, mint a FRESH token against the
+//             persisted balance with NO emailed code (the H1 fix: email is
+//             verified exactly once, ever; token expiry is a silent background
+//             refresh, never a re-verify). No grant → { status:"needs_verification" }
+//             so the client routes to the genuine first-time email+code flow.
+//             resume creates no grant and no credits, so the per-email abuse cap
+//             is unchanged.
 //
 // The raw email never travels to `generate` — the trial token carries only the
 // opaque trial_grants row id, exactly as the subscription token carries the
@@ -90,7 +98,8 @@ export async function handleTrialStart(req: Request, deps: TrialStartDeps): Prom
   const action = String(body.action ?? "");
   // Tolerate the implicit form too: a body with `code` is a verify.
   const isVerify = action === "verify" || (action === "" && body.code !== undefined);
-  if (!isVerify && action !== "request") {
+  const isResume = action === "resume";
+  if (!isVerify && !isResume && action !== "request") {
     return json({ error: "invalid_action" }, 400);
   }
 
@@ -102,6 +111,7 @@ export async function handleTrialStart(req: Request, deps: TrialStartDeps): Prom
     return json({ error: "rate_limited" }, 429);
   }
 
+  if (isResume) return await handleResume(deps, email);
   return isVerify
     ? await handleVerify(deps, email, body)
     : await handleRequest(deps, email);
@@ -195,6 +205,48 @@ async function handleVerify(
     return json({ status: "already_used" }, 200);
   }
 
+  return await mintTokenResponse(deps, grantId, creditsRemaining, nowSeconds);
+}
+
+// -----------------------------------------------------------------------------
+// resume — re-mint a token for an ALREADY-verified email, no code required (H1).
+// -----------------------------------------------------------------------------
+// "Verified" is a permanent server-side fact (the per-email grant), NOT the
+// liveness of the ≤30-min token. A previously-verified email gets a fresh token
+// silently, so token expiry never forces re-proving ownership. This only READS
+// the grant — it creates no grant and no credits, so the per-email cap (the real
+// abuse bound) is unchanged.
+async function handleResume(deps: TrialStartDeps, email: string): Promise<Response> {
+  const grant = await deps.store.loadGrantByEmail(email);
+
+  // No grant, or one that never completed verification → genuine first-time
+  // verification required. Do NOT auto-create a grant; signal the client to run
+  // the normal email+code flow.
+  if (!grant || !grant.verified_at) {
+    return json({ status: "needs_verification" }, 200);
+  }
+
+  // Verified but the pool is spent → nothing to authorize (mirrors verify).
+  const remaining = Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
+  if (remaining <= 0) {
+    return json({ status: "already_used" }, 200);
+  }
+
+  const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
+  return await mintTokenResponse(deps, grant.id, remaining, nowSeconds);
+}
+
+// -----------------------------------------------------------------------------
+// Shared token mint + response shaping (verify AND resume).
+// -----------------------------------------------------------------------------
+// The ONE place a trial token + its success body are produced, so the expires_at
+// guard necessarily covers BOTH paths — no parallel mint that could drift.
+async function mintTokenResponse(
+  deps: TrialStartDeps,
+  grantId: string,
+  creditsRemaining: number,
+  nowSeconds: number,
+): Promise<Response> {
   // Mint a short-lived TRIAL session token. `sub` is the opaque grant id; no
   // tier (trial has none). The app sends THIS to /generate, never the email.
   const { token, exp } = await signSessionToken(
@@ -203,6 +255,19 @@ async function handleVerify(
     TRIAL_TOKEN_TTL_SECONDS,
     nowSeconds,
   );
+
+  // The expires_at guard — the highest-leverage line in the H1 fix. The client
+  // treats a nil/unparseable/past expires_at as "expires in 60 seconds", which
+  // would re-gate every user almost immediately. A token must NEVER be emitted
+  // without a well-formed FUTURE expiry. This holds by construction (exp = now +
+  // TTL, with TTL > 0), but we assert it so a misconfigured TRIAL_TOKEN_TTL
+  // fails LOUDLY here instead of silently re-gating every client.
+  if (!Number.isFinite(exp) || exp <= nowSeconds) {
+    console.error(
+      JSON.stringify({ fn: "trial-start", op: "mint", error: "non_future_exp", exp, nowSeconds }),
+    );
+    return json({ error: "server_error" }, 500);
+  }
 
   return json(
     {

@@ -406,6 +406,12 @@ final class EntitlementStore {
         case .trial:
             if hasOwnAPIKey { return .local }
             if trialCredits?.hasActiveTrialToken == true { return .trialProxy }
+            // H1 decouple: a token that merely expired is NOT a re-verify. If the
+            // email was EVER verified (a remembered email on file), the proxy path
+            // silently resumes a token (validToken → refreshToken) and proceeds.
+            // Only a genuine first-time user (no verified email) is sent to the
+            // email-capture flow.
+            if trialCredits?.rememberedEmail != nil { return .trialProxy }
             return .trialNeedsEmail
         }
     }
@@ -466,20 +472,21 @@ final class EntitlementStore {
         }
     }
 
-    /// True when the user is on the trial but has no USABLE trial token — so the
+    /// True when the user is on the trial but has NEVER verified an email — so the
     /// persistent "verify your email to start your free trial" affordance
-    /// (Settings/Billing row + menu-bar banner) should show. Keyed on the live
-    /// token, NOT on "have they ever verified", so it correctly surfaces in all
-    /// the cases where the user can't generate and must (re-)verify:
+    /// (Settings/Billing row + menu-bar banner) should show. Keyed on whether an
+    /// email was EVER verified (a remembered email), NOT on the live token (H1):
+    /// a token that merely expired resumes silently in the background
+    /// (`TrialCreditsManager.refreshToken`), so it must NOT surface the verify
+    /// affordance. This correctly fires for the only case that still needs a
+    /// genuine first-time verification:
     ///   • never verified (existing users from before the required email step, or
-    ///     anyone who took the onboarding infra-failure fallback);
-    ///   • a verified token that expired (TTL elapsed) or was lost and could not
-    ///     be reloaded — re-verifying re-mints one (the server grant, and its
-    ///     remaining balance, are unchanged).
-    /// Flips false the moment a valid token is in hand.
+    ///     anyone who took the onboarding infra-failure fallback).
+    /// An expired-but-previously-verified token is handled by the silent resume,
+    /// not here.
     var needsTrialEmailVerification: Bool {
         guard case .trial = state, let trialCredits else { return false }
-        return !trialCredits.hasActiveTrialToken
+        return trialCredits.rememberedEmail == nil
     }
 
     /// Reflect a just-completed trial generation's `credits_remaining` and

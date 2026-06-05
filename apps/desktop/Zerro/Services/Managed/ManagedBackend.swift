@@ -264,9 +264,10 @@ struct TrialStartResponseDTO: Decodable {
 /// run a Managed subscription generation (token from `SessionTokenManager`) OR a
 /// trial generation (token from `TrialCreditsManager`) without knowing which.
 /// Both conformers mint/cache a short-lived bearer and surface failures as
-/// `ManagedSessionError`. `refreshToken()` re-mints when possible (subscription:
-/// re-exchange the license key) or throws when it can't (trial: the credential
-/// is an email+code the user must re-enter).
+/// `ManagedSessionError`. `refreshToken()` re-mints silently when possible
+/// (subscription: re-exchange the license key; trial: POST `action:"resume"`
+/// with the remembered verified email — H1) and throws `.notEntitled` only when
+/// it genuinely can't (trial: no verified email on record → first-time verify).
 protocol ProxyTokenProviding: AnyObject {
     func validToken() async throws -> String
     @discardableResult func refreshToken() async throws -> String

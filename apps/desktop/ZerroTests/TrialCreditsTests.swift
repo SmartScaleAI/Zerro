@@ -25,23 +25,49 @@ import XCTest
 private enum TrialFixtures {
     static func codeSent() -> String { #"{"status":"code_sent"}"# }
     static func alreadyUsed() -> String { #"{"status":"already_used"}"# }
-    static func verifyOK(token: String = "TRIAL-TOK", remaining: Int = 15) -> String {
-        #"{"token":"\#(token)","expires_at":"2030-01-01T00:00:00.000Z","trial_credits_remaining":\#(remaining)}"#
+    /// A `verify`/`resume` success body. The same shape covers both actions, so
+    /// `expiresAt` is parameterized for the TTL-gap tests (resume returns a token
+    /// whose expiry is in the future of the ADVANCED clock).
+    static func verifyOK(
+        token: String = "TRIAL-TOK",
+        remaining: Int = 15,
+        expiresAt: String = "2030-01-01T00:00:00.000Z"
+    ) -> String {
+        #"{"token":"\#(token)","expires_at":"\#(expiresAt)","trial_credits_remaining":\#(remaining)}"#
     }
+    /// The resume "first-time user" signal — no token, route to email+code.
+    static func needsVerification() -> String { #"{"status":"needs_verification"}"# }
     static func error(_ code: String) -> String { #"{"error":"\#(code)"}"# }
+}
+
+/// A mutable clock the test can advance after a manager is constructed, to
+/// simulate an away-gap that outlives the trial token's TTL.
+private final class ClockBox: @unchecked Sendable {
+    var now: Date
+    init(_ now: Date) { self.now = now }
+}
+
+/// ISO-8601 (with fractional seconds, matching JS `Date.toISOString()`) so the
+/// fixture's `expires_at` round-trips through `ManagedBackend.parseISODate`.
+private func isoString(_ date: Date) -> String {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.string(from: date)
 }
 
 private func makeTrialManager(
     _ transport: StubManagedTransport,
     tokenSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(nil),
     emailSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(nil),
-    defaults: UserDefaults? = nil
+    defaults: UserDefaults? = nil,
+    clock: @escaping () -> Date = { Date() }
 ) -> TrialCreditsManager {
     TrialCreditsManager(
         emailSlot: emailSlot,
         tokenSlot: tokenSlot,
         transport: transport,
-        defaults: defaults ?? .ephemeralPreview()
+        defaults: defaults ?? .ephemeralPreview(),
+        clock: clock
     )
 }
 
@@ -194,6 +220,117 @@ final class TrialCreditsManagerTests: XCTestCase {
         XCTAssertNil(mgr.rememberedEmail)
     }
 
+    // MARK: - H1: silent token resume
+
+    /// A verified manager whose cached token has gone stale after an away-gap
+    /// longer than the token TTL — the exact condition that used to force a full
+    /// re-verify. `transport` should have a `verify` then a `resume` response
+    /// queued; the returned clock box is already advanced past the TTL.
+    private func staleVerifiedManager(
+        _ transport: StubManagedTransport,
+        remaining: Int = 15
+    ) async throws -> (mgr: TrialCreditsManager, base: Date) {
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        let nowBox = ClockBox(base)
+        let mgr = makeTrialManager(transport, clock: { nowBox.now })
+        _ = try await mgr.verifyCode(email: "a@b.com", code: "123456")
+        XCTAssertTrue(mgr.hasActiveTrialToken)
+        // A day-long gap — far past the 30-min token TTL.
+        nowBox.now = base.addingTimeInterval(86_400)
+        XCTAssertFalse(mgr.hasActiveTrialToken)
+        return (mgr, base)
+    }
+
+    func testRefreshTokenSilentlyResumesForVerifiedEmail() async throws {
+        // The bug's absence: a TTL-length away-gap must NOT force re-verification —
+        // refreshToken() resumes silently against the remembered email.
+        let transport = StubManagedTransport()
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK1", remaining: 15, expiresAt: isoString(base.addingTimeInterval(1800))),
+            status: 200
+        )
+        // The resumed token is valid for 30 min past the ADVANCED clock.
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK2", remaining: 11, expiresAt: isoString(base.addingTimeInterval(86_400 + 1800))),
+            status: 200
+        )
+        let (mgr, _) = try await staleVerifiedManager(transport)
+
+        let token = try await mgr.validToken() // stale → silent resume
+        XCTAssertEqual(token, "TOK2")
+        XCTAssertTrue(mgr.hasActiveTrialToken)
+        XCTAssertEqual(mgr.creditsRemaining, 11)         // persisted balance, not 15
+        XCTAssertEqual(mgr.rememberedEmail, "a@b.com")   // unchanged
+        // The second POST was a `resume` (no code), not a re-verify.
+        let body = try XCTUnwrap(transport.requests[1].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["action"] as? String, "resume")
+        XCTAssertNil(json["code"])
+    }
+
+    func testRefreshTokenWithoutVerifiedEmailThrowsNotEntitled() async {
+        // A genuine first-time user (no remembered email) has nothing to resume
+        // against → notEntitled, which routes to the email+code capture flow. No
+        // network call is made.
+        let transport = StubManagedTransport()
+        let mgr = makeTrialManager(transport)
+        do {
+            _ = try await mgr.refreshToken()
+            XCTFail("expected notEntitled")
+        } catch let error as ManagedSessionError {
+            XCTAssertEqual(error, .notEntitled)
+        } catch { XCTFail("unexpected \(error)") }
+        XCTAssertEqual(transport.requests.count, 0)
+    }
+
+    func testRefreshTokenNeedsVerificationDropsTokenAndReVerifies() async throws {
+        // Server says the grant is gone (needs_verification) → drop the stale
+        // token and surface notEntitled (re-verify), keeping the remembered email.
+        let transport = StubManagedTransport()
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK1", remaining: 15, expiresAt: isoString(base.addingTimeInterval(1800))),
+            status: 200
+        )
+        transport.enqueue(TrialFixtures.needsVerification(), status: 200)
+        let (mgr, _) = try await staleVerifiedManager(transport)
+
+        do {
+            _ = try await mgr.validToken()
+            XCTFail("expected notEntitled")
+        } catch let error as ManagedSessionError {
+            XCTAssertEqual(error, .notEntitled)
+        }
+        XCTAssertFalse(mgr.hasActiveTrialToken)
+        XCTAssertEqual(mgr.rememberedEmail, "a@b.com") // email kept for re-fill
+    }
+
+    func testConcurrentRefreshSingleFlightsOneResume() async throws {
+        // Two concurrent expired-token callers must trigger exactly ONE resume.
+        // Only one resume response is queued; a second network call would hit the
+        // empty `{}` fallback and fail to produce a token.
+        let transport = StubManagedTransport()
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK1", remaining: 9, expiresAt: isoString(base.addingTimeInterval(1800))),
+            status: 200
+        )
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK2", remaining: 9, expiresAt: isoString(base.addingTimeInterval(86_400 + 1800))),
+            status: 200
+        )
+        let (mgr, _) = try await staleVerifiedManager(transport)
+
+        async let a = mgr.refreshToken()
+        async let b = mgr.refreshToken()
+        let (ra, rb) = try await (a, b)
+        XCTAssertEqual(ra, "TOK2")
+        XCTAssertEqual(rb, "TOK2")
+        // verify + exactly one resume == 2 requests total (no thundering herd).
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
     private func assertTrialThrows(
         _ expected: TrialStartError,
         _ body: () async throws -> Void,
@@ -260,6 +397,27 @@ final class EntitlementStoreTrialTests: XCTestCase {
     func testUnverifiedTrialDoesNotRouteThroughProxy() {
         let store = trialStore(makeTrialManager(StubManagedTransport()))
         XCTAssertFalse(store.routesThroughManagedProxy) // no token yet
+    }
+
+    func testExpiredTokenButVerifiedEmailRoutesToProxyNotEmail() async throws {
+        // H1 decouple: an expired token with a verified email on record resumes
+        // silently — so the route is the proxy (which resumes), NOT the first-time
+        // email capture, and the "verify your email" affordance stays hidden.
+        let transport = StubManagedTransport()
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK1", remaining: 10, expiresAt: isoString(base.addingTimeInterval(1800))),
+            status: 200
+        )
+        let nowBox = ClockBox(base)
+        let mgr = makeTrialManager(transport, clock: { nowBox.now })
+        _ = try await mgr.verifyCode(email: "a@b.com", code: "123456")
+        nowBox.now = base.addingTimeInterval(86_400) // gap > TTL
+        XCTAssertFalse(mgr.hasActiveTrialToken)
+
+        let store = trialStore(mgr)
+        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: false), .trialProxy)
+        XCTAssertFalse(store.needsTrialEmailVerification)
     }
 
     // MARK: display
@@ -391,5 +549,51 @@ final class TrialProxyRoutingTests: XCTestCase {
         // The /generate request carried the TRIAL token, never a subscription one.
         XCTAssertEqual(genTransport.requests.count, 1)
         XCTAssertEqual(genTransport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer TRIAL-XYZ")
+    }
+
+    func testVerifiedUserKeepsGeneratingAfterTTLGap() async throws {
+        // The exact regression H1 fixes: a verified user with credits, after an
+        // away-gap LONGER than the token TTL (sleep / overnight / vacation),
+        // generates with NO re-verification — the token resumes silently and the
+        // generation draws from the SAME server-side balance.
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        let nowBox = ClockBox(base)
+        let trialTransport = StubManagedTransport()
+        // verify → token good for 30 min from base.
+        trialTransport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK1", remaining: 12, expiresAt: isoString(base.addingTimeInterval(1800))),
+            status: 200
+        )
+        // resume → fresh token good for 30 min past the ADVANCED clock.
+        trialTransport.enqueue(
+            TrialFixtures.verifyOK(token: "TOK2", remaining: 12, expiresAt: isoString(base.addingTimeInterval(86_400 + 1800))),
+            status: 200
+        )
+        let trial = makeTrialManager(trialTransport, clock: { nowBox.now })
+        _ = try await trial.verifyCode(email: "a@b.com", code: "123456")
+
+        // Long away-gap → the cached token is stale.
+        nowBox.now = base.addingTimeInterval(86_400)
+        XCTAssertFalse(trial.hasActiveTrialToken)
+
+        // A generation now silently resumes the token, then proceeds.
+        let genTransport = StubManagedTransport()
+        genTransport.enqueue(ManagedFixtures.generateJSON(prompt: "After the gap.", creditsRemaining: 11), status: 200)
+        let proxy = ManagedProxyClient(sessionTokens: .inMemory(), transport: genTransport)
+
+        let result = try await proxy.generate(
+            audioURL: ManagedFixtures.tempFile(),
+            frames: [ExtractedFrame(url: ManagedFixtures.tempFile(), timestamp: .zero, index: 0)],
+            mode: .instruct,
+            durationSeconds: 5,
+            tokenProvider: trial
+        )
+
+        XCTAssertEqual(result.result.prompt, "After the gap.")
+        XCTAssertEqual(result.creditsRemaining, 11) // drew from the same balance
+        // The /generate call carried the RESUMED token, not the stale one.
+        XCTAssertEqual(genTransport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer TOK2")
+        // verify + exactly one resume — no re-verify round-trip.
+        XCTAssertEqual(trialTransport.requests.count, 2)
     }
 }
