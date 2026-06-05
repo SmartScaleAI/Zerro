@@ -3,6 +3,18 @@
 project_id = "zerro-billing"
 
 # -----------------------------------------------------------------------------
+# LOCAL-ONLY edge runtime policy. The default per-request worker policy
+# terminates long-running requests ("wall clock duration warning … early
+# termination has been triggered"), which kills /generate locally — it does a
+# Whisper round-trip plus a multimodal chat call with ~30 images and can run
+# 1–3 minutes. `per_worker` keeps the worker alive for the whole request, like
+# the deployed runtime. This section affects `supabase functions serve` ONLY;
+# deployed functions use Supabase's hosted limits.
+# -----------------------------------------------------------------------------
+[edge_runtime]
+policy = "per_worker"
+
+# -----------------------------------------------------------------------------
 # Edge Function gateway JWT settings.
 #
 # verify_jwt = false means the Supabase API gateway does NOT require a

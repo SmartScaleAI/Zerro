@@ -282,6 +282,33 @@ final class LicenseService {
         let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw LicenseError.keyInvalid }
 
+        #if DEBUG
+        // Local-backend testing bypass — active ONLY when the debug build is
+        // pointed at a local stack via ZERRO_FUNCTIONS_BASE_URL (the same env
+        // var that overrides ManagedBackend.baseURL). Local test keys are
+        // seeded straight into the local DB and don't exist in LemonSqueezy,
+        // so the real /activate call would always refuse them. Skip it and do
+        // exactly what a successful activation does: write the key + a fake
+        // instance ID, stamp validation, return a normal ActivationResult.
+        // EntitlementStore's step-2 /session probe then runs unchanged against
+        // the LOCAL backend and resolves Managed vs BYOK from the local mirror.
+        // Compiled out of release builds; inert in debug unless the var is set.
+        if ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"] != nil {
+            let instanceID = "local-dev-instance"
+            licenseKeySlot.write(key)
+            instanceIDSlot.write(instanceID)
+            stampValidated()
+            Log.billing.notice("license activated via LOCAL DEV BYPASS — LemonSqueezy not contacted")
+            return ActivationResult(
+                instanceID: instanceID,
+                status: .active,
+                storeID: nil,
+                productID: nil,
+                customerEmail: nil
+            )
+        }
+        #endif
+
         let response = try await perform(
             path: Self.activatePath,
             parameters: ["license_key": key, "instance_name": instanceNameProvider()]

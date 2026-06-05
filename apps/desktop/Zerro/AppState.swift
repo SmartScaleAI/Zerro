@@ -180,11 +180,11 @@ public enum RecordingFailureReason: Equatable {
         case .apiAuth:
             return "OpenAI rejected your API key \u{2014} check it in Settings."
         case .networkOffline:
-            return "Couldn\u{2019}t reach OpenAI \u{2014} check your connection."
+            return "Couldn\u{2019}t connect \u{2014} check your connection."
         case .rateLimited:
-            return "Hit OpenAI\u{2019}s rate limit \u{2014} try again in a minute."
+            return "Hit a rate limit \u{2014} try again in a minute."
         case .providerError:
-            return "OpenAI returned an error \u{2014} try again."
+            return "Generation failed \u{2014} try again."
         case .outOfCredits:
             return "You\u{2019}re out of credits this month. Your library stays open \u{2014} credits reset on your renewal date."
         case .subscriptionInactive:

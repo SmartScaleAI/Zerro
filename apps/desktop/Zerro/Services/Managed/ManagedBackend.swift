@@ -295,8 +295,15 @@ struct URLSessionManagedTransport: ManagedTransport {
 
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 60
-        config.timeoutIntervalForResource = 120
+        // /generate is a long call: upload (audio + ~30 JPEG frames) + server
+        // Whisper + multimodal chat. 60s proved too tight — the app timed out
+        // while the server was still mid-generation (and the server then paid
+        // for a result nobody received). Align with the server's own provider
+        // budget: GENERATE_OPENAI/PROVIDER_TIMEOUT_MS defaults to 120s, plus
+        // upload + transcription headroom. Request = max quiet gap between
+        // bytes; resource = whole-transfer ceiling.
+        config.timeoutIntervalForRequest = 180
+        config.timeoutIntervalForResource = 300
         config.urlCache = nil
         return URLSession(configuration: config)
     }
