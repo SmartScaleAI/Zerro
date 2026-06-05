@@ -234,19 +234,44 @@ final class PermissionsManager {
     }
 
     /// Failure-reason variant: CGPreflight, with the CGWindowList second
-    /// opinion as a tiebreaker for dev codesign drift. ONLY safe to call
-    /// from contexts where the binary just successfully started or ran
-    /// a capture session and is now asking "do I still have permission?"
-    /// — i.e., a recent observed grant exists. Calling from the
-    /// pre-grant onboarding path would re-introduce the false positive
-    /// the strict variant is designed to avoid.
+    /// opinion as a DEBUG-only tiebreaker for dev codesign drift. ONLY
+    /// safe to call from contexts where the binary just successfully
+    /// started or ran a capture session and is now asking "do I still
+    /// have permission?" — i.e., a recent observed grant exists. Calling
+    /// from the pre-grant onboarding path would re-introduce the false
+    /// positive the strict variant is designed to avoid.
+    ///
+    /// In a production (Release) build this collapses to CGPreflight
+    /// alone. CGPreflight is reliable in a properly-signed app, whereas
+    /// the CGWindowList name-sniff can FALSE-POSITIVE on system processes
+    /// (menu-bar items, Dock, Control Center) that leak a non-empty
+    /// `kCGWindowName` without the grant. Letting that heuristic run in
+    /// production would flip a genuine "denied" into "granted" — e.g.
+    /// misclassifying a mid-session revocation as the generic
+    /// `.captureInterrupted` instead of the actionable
+    /// `.screenRecordingRevoked`. The fallback exists purely for the
+    /// dev-time case where CGPreflight false-negatives across ad-hoc
+    /// rebuilds, so it is fenced to DEBUG.
     nonisolated static func isScreenRecordingGrantedWithDevDriftFallback() -> Bool {
         if CGPreflightScreenCaptureAccess() {
             return true
         }
+        #if DEBUG
+        // Dev-only escape hatch: CGPreflight false-negatives when the
+        // ad-hoc codesign identity churns between rebuilds. The
+        // WindowList name-sniff is a popup-free second opinion. Never
+        // compiled into Release, so it can't influence a production
+        // permission decision.
         return hasScreenRecordingPermissionViaWindowList()
+        #else
+        return false
+        #endif
     }
 
+    #if DEBUG
+    /// DEBUG-only. Compiled out of Release so the WindowList name-sniff
+    /// can never reach a production permission decision (see
+    /// `isScreenRecordingGrantedWithDevDriftFallback`).
     private nonisolated static func hasScreenRecordingPermissionViaWindowList() -> Bool {
         let myPID = ProcessInfo.processInfo.processIdentifier
         guard let infoList = CGWindowListCopyWindowInfo(
@@ -265,6 +290,7 @@ final class PermissionsManager {
         }
         return false
     }
+    #endif
 
     private func computeMicrophoneStatus() -> PermissionStatus {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -663,11 +689,24 @@ final class PermissionsManager {
             refreshStatuses()
             return
         }
+        #if DEBUG
+        // Dev-only: CGPreflight said not-granted, but on ad-hoc-signed
+        // builds it false-negatives. Consult the WindowList name-sniff
+        // as a second opinion. Fenced to DEBUG — in production this
+        // heuristic can false-positive on leaked system window names and
+        // wrongly advance onboarding to .granted, so production "Check
+        // Again" trusts CGPreflight only.
         let wasGranted = screenRecordingGrantedViaShareable
         screenRecordingGrantedViaShareable = Self.hasScreenRecordingPermissionViaWindowList()
         if !wasGranted && screenRecordingGrantedViaShareable {
             refreshStatuses()
         }
+        #else
+        // Production: CGPreflight is authoritative and already reported
+        // not-granted. Refresh so the onboarding step re-renders its
+        // denied sub-state; do NOT let the WindowList name-sniff flip it.
+        refreshStatuses()
+        #endif
     }
 
     /// Probes `SCShareableContent.current` and updates
