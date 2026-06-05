@@ -68,7 +68,9 @@ enum TimelineItem: Sendable {
 
     /// The bracketed timestamp tag rendered in the API payload + the
     /// debug view. Frames are instants, speech is a range with em-dash.
-    var timestampTag: String {
+    /// `nonisolated` (pure string formatting, no main-actor state) so the
+    /// BYOK `encodeBody` can render tags off the main actor.
+    nonisolated var timestampTag: String {
         switch self {
         case .frame(let t, _):
             return "[\(Self.mmss(t))]"
@@ -77,7 +79,7 @@ enum TimelineItem: Sendable {
         }
     }
 
-    private static func mmss(_ seconds: TimeInterval) -> String {
+    nonisolated private static func mmss(_ seconds: TimeInterval) -> String {
         // Negative timestamps shouldn't happen, but guard so the
         // truncation arithmetic doesn't render "-1:59" if a future
         // bug feeds us bad input.

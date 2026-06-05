@@ -119,8 +119,9 @@ final class ManagedProxyClient {
         // Flatten the frames to a Sendable representation on the current actor,
         // then build the (key-free) request body OFF the main actor — reading
         // and base64-ing a multi-MB audio + frame payload would otherwise hitch
-        // the UI (the BYOK path likewise encodes off-main). The same bytes are
-        // reused on the post-refresh retry.
+        // the UI (the BYOK `OpenAIPromptGenerationService.encodeBody` encodes
+        // off-main the same way). The same bytes are reused on the post-refresh
+        // retry.
         let uploads = frames.map { FrameUpload(url: $0.url, timestamp: CMTimeGetSeconds($0.timestamp)) }
         let body = try await Task.detached(priority: .userInitiated) {
             try Self.encodeBody(

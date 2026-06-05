@@ -48,8 +48,9 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// GPT-4o model id. Pinned here so a future swap to a date-stamped
     /// variant (e.g. `gpt-4o-2024-08-06`) or a newer model is a
     /// single-line change with a before/after token-cost diff to back
-    /// the decision.
-    static let model = "gpt-4o"
+    /// the decision. `nonisolated` so `encodeBody` can read it off the
+    /// main actor.
+    nonisolated static let model = "gpt-4o"
 
     func generatePrompt(
         timeline: InterleavedTimeline,
@@ -59,49 +60,18 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             throw PromptGenerationError.missingAPIKey
         }
 
-        // Build the multimodal user content array. One text block per
-        // timeline item + one image_url block per frame; the model
-        // concatenates adjacent text blocks transparently. Newlines
-        // are prefixed so each tag/segment lands on its own line in
-        // the rendered prompt — matches the kickoff's interleaving
-        // example exactly.
-        var userContent: [UserContentBlock] = []
-        for item in timeline.items {
-            switch item {
-            case .frame(_, let imageURL):
-                let dataURL: String
-                do {
-                    dataURL = try Self.base64DataURL(from: imageURL)
-                } catch {
-                    // Frame failed to read from disk — treat as a
-                    // network-class failure rather than emptyContent
-                    // (the cause is local I/O, not the model).
-                    throw PromptGenerationError.network(underlying: error)
-                }
-                userContent.append(.text("\n\(item.timestampTag) "))
-                userContent.append(.imageURL(url: dataURL, detail: "high"))
-
-            case .speech(_, _, let text):
-                userContent.append(.text("\n\(item.timestampTag) \"\(text)\""))
-            }
-        }
-
-        let requestBody = ChatRequest(
-            model: Self.model,
-            messages: [
-                .systemMessage(content: systemPrompt),
-                .userMessage(content: userContent)
-            ]
-        )
-
-        let bodyData: Data
-        do {
-            bodyData = try JSONEncoder().encode(requestBody)
-        } catch {
-            // Encoding our own request body should never fail; if it
-            // does, it's a programming error, not a runtime one.
-            throw PromptGenerationError.decodeFailure(underlying: error)
-        }
+        // Build + JSON-encode the multimodal request body OFF the main
+        // actor. The per-frame disk read + base64 and the full-body
+        // encode (with all image data inlined) run uninterrupted before
+        // the first network await — for a typical 3-minute recording
+        // that's ~150 file reads plus tens of MB of base64/JSON, a
+        // multi-hundred-ms hitch if left on main. `encodeBody` is
+        // `nonisolated`, so the detached task genuinely stays off-main.
+        // The base64 body is dropped after the request — never held on
+        // the in-memory timeline.
+        let bodyData = try await Task.detached(priority: .userInitiated) {
+            try Self.encodeBody(timeline: timeline, systemPrompt: systemPrompt)
+        }.value
 
         var request = URLRequest(url: OpenAIClient.baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
@@ -151,25 +121,87 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         )
     }
 
+    // MARK: - Body encoding
+
+    /// Builds the Chat Completions request body — one text block per
+    /// timeline item plus one image_url block per frame — and JSON-encodes
+    /// the whole thing with each frame's base64 inlined. The model
+    /// concatenates adjacent text blocks transparently; newlines are
+    /// prefixed so each tag/segment lands on its own line in the rendered
+    /// prompt, matching the kickoff's interleaving example exactly.
+    ///
+    /// Each frame's JPEG is read off disk and base64-encoded here, at
+    /// request-build time — the 33% overhead is dropped after the request,
+    /// never held on the in-memory timeline (mirrors the Managed path's
+    /// `ManagedProxyClient.encodeBody` discipline). `nonisolated` so it
+    /// runs in a detached task off the main actor: under the project's
+    /// MainActor-default isolation an unmarked static on this struct would
+    /// be implicitly main-isolated and bounce the work right back to main.
+    nonisolated static func encodeBody(
+        timeline: InterleavedTimeline,
+        systemPrompt: String
+    ) throws -> Data {
+        var userContent: [UserContentBlock] = []
+        for item in timeline.items {
+            switch item {
+            case .frame(_, let imageURL):
+                let dataURL: String
+                do {
+                    dataURL = try Self.base64DataURL(from: imageURL)
+                } catch {
+                    // Frame failed to read from disk — treat as a
+                    // network-class failure rather than emptyContent
+                    // (the cause is local I/O, not the model).
+                    throw PromptGenerationError.network(underlying: error)
+                }
+                userContent.append(.text("\n\(item.timestampTag) "))
+                userContent.append(.imageURL(url: dataURL, detail: "high"))
+
+            case .speech(_, _, let text):
+                userContent.append(.text("\n\(item.timestampTag) \"\(text)\""))
+            }
+        }
+
+        let requestBody = ChatRequest(
+            model: Self.model,
+            messages: [
+                .systemMessage(content: systemPrompt),
+                .userMessage(content: userContent)
+            ]
+        )
+
+        do {
+            return try JSONEncoder().encode(requestBody)
+        } catch {
+            // Encoding our own request body should never fail; if it
+            // does, it's a programming error, not a runtime one.
+            throw PromptGenerationError.decodeFailure(underlying: error)
+        }
+    }
+
     // MARK: - Image encoding
 
     /// Reads the JPEG at `url` and wraps its base64 in a data URL.
     /// The 33% base64 overhead is added at request-build time and
     /// dropped after the request — never held on the in-memory
-    /// timeline.
-    private static func base64DataURL(from url: URL) throws -> String {
+    /// timeline. `nonisolated` so it stays off-main when called from
+    /// `encodeBody`'s detached task.
+    nonisolated private static func base64DataURL(from url: URL) throws -> String {
         let data = try Data(contentsOf: url)
         return "data:image/jpeg;base64,\(data.base64EncodedString())"
     }
 
     // MARK: - Wire types — request
 
-    private struct ChatRequest: Encodable {
+    // Wire types are pure Codable data with no main-actor state; their
+    // `Encodable` conformances are `nonisolated` so `encodeBody` can
+    // serialize them entirely off the main actor.
+    private nonisolated struct ChatRequest: Encodable {
         let model: String
         let messages: [Message]
     }
 
-    private enum Message: Encodable {
+    private nonisolated enum Message: Encodable {
         case systemMessage(content: String)
         case userMessage(content: [UserContentBlock])
 
@@ -244,7 +276,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
 // so the same type can be reused by future provider impls (Anthropic's
 // content shape is similar enough that this maps cleanly).
 
-enum UserContentBlock: Encodable {
+nonisolated enum UserContentBlock: Encodable {
     case text(String)
     case imageURL(url: String, detail: String)
 
