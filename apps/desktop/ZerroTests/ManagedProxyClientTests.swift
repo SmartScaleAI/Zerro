@@ -86,6 +86,33 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(session.callCount, 2)
     }
 
+    // MARK: - Idempotency key (M1)
+
+    /// The `Idempotency-Key` header is sent, and the SAME key rides the
+    /// post-refresh retry — so a 401-driven retry can't make the server
+    /// double-charge.
+    func testIdempotencyKeySentAndReusedAcrossRefresh() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200) // validToken
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T2"), status: 200) // refreshToken
+        let gen = StubManagedTransport()
+        gen.enqueue(#"{"error":"invalid_token"}"#, status: 401)                 // first attempt
+        gen.enqueue(ManagedFixtures.generateJSON(prompt: "Retried.", creditsRemaining: 5), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        _ = try await proxy.generate(
+            audioURL: ManagedFixtures.tempFile(),
+            frames: frames(),
+            mode: .instruct,
+            durationSeconds: nil,
+            idempotencyKey: "REC-KEY-1"
+        )
+
+        XCTAssertEqual(gen.requests.count, 2)
+        XCTAssertEqual(gen.requests[0].value(forHTTPHeaderField: "Idempotency-Key"), "REC-KEY-1")
+        XCTAssertEqual(gen.requests[1].value(forHTTPHeaderField: "Idempotency-Key"), "REC-KEY-1")
+    }
+
     func testRepeatedAuthFailureSurfacesAuthFailed() async throws {
         let session = StubManagedTransport()
         session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)

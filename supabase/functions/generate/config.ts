@@ -63,3 +63,14 @@ export const PROVIDER_TIMEOUT_MS = optionalEnvInt(
   "GENERATE_PROVIDER_TIMEOUT_MS",
   optionalEnvInt("GENERATE_OPENAI_TIMEOUT_MS", 120_000),
 );
+
+// ---- Idempotency cache TTL (M1) --------------------------------------------
+// How long a charged generation's result stays replayable for a retry carrying
+// the same Idempotency-Key. Set to the SHORTEST window that reliably covers the
+// retry path — minutes, not days — because this is the one place a generated
+// prompt is persisted (the documented §14.5 carve-out; see the idempotency
+// migration). The window must outlive: the client's 180s request timeout, the
+// user's think-time before tapping Retry, and up to maxFailureRetries (2)
+// attempts. 15 min is generous headroom over that while keeping content
+// retention minimal. Tunable server-side, no app update.
+export const IDEMPOTENCY_TTL_SECONDS = optionalEnvInt("GENERATE_IDEMPOTENCY_TTL_SECONDS", 900);

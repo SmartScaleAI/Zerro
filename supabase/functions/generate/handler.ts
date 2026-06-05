@@ -21,6 +21,21 @@
 // generation_log holds token counts + cost + success ONLY — never content. (A
 // trial generation logs with subscription_id = null; the trial cap is enforced
 // on trial_grants, not via the log.)
+//   ONE DOCUMENTED CARVE-OUT (M1 idempotency): when the request carries an
+//   `Idempotency-Key`, a successful generation's PROMPT is cached for a short
+//   TTL (IDEMPOTENCY_TTL_SECONDS, minutes) so a charged-but-dropped response is
+//   replayed on retry WITHOUT a second charge — instead of re-billing the same
+//   recording. That cache (idempotency_cache) is the only place generated
+//   content is persisted, time-bounded by design; nothing else here persists.
+//
+// IDEMPOTENCY (M1): the credit decrement is check-then-consume-on-success, so a
+// completed-but-lost 200 (network drop, or the client's 180s timeout firing as
+// the server finishes at ~179s) leaves the credit SPENT but the client seeing a
+// retryable error. The retry re-sends the SAME recording with the SAME
+// Idempotency-Key; we replay the cached result rather than charging again. The
+// cache check sits INSIDE the slot (cap=1) critical section and BEFORE the
+// credit gate, so a replay can't be wrongly rejected as out_of_credits once the
+// first charge brought the balance to zero.
 //
 // CREDIT ORDERING — CHECK-THEN-CONSUME-ON-SUCCESS (documented choice):
 //   check a credit is available (no decrement) → call OpenAI →
@@ -45,6 +60,7 @@ import {
   GENERATE_RATE_LIMIT_PER_SUB,
   GENERATE_RATE_LIMIT_WINDOW_SECONDS,
   GENERATE_SLOT_STALE_SECONDS,
+  IDEMPOTENCY_TTL_SECONDS,
   MAX_AUDIO_SECONDS,
   MAX_PAYLOAD_BYTES,
 } from "./config.ts";
@@ -81,6 +97,15 @@ function bearer(req: Request): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** The client-minted idempotency key (one per recording, reused across retries),
+ *  or null. Header lookup is case-insensitive (Headers normalizes). Absent →
+ *  dedup is simply off for this request (backward compatible with older apps). */
+function idempotencyKey(req: Request): string | null {
+  const v = req.headers.get("Idempotency-Key");
+  const trimmed = v?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
@@ -96,6 +121,11 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   if (claims.kind !== "subscription" && claims.kind !== "trial") {
     return json({ error: "unsupported_token_kind" }, 401);
   }
+
+  // Idempotency key (M1) — one per recording, reused across the app's retries.
+  // Absent → dedup off (older app / non-managed path). Used inside the slot
+  // critical section below, scoped to the resolved identity.
+  const idemKey = idempotencyKey(req);
 
   // 3. Parse the (size-capped) body.
   let body: unknown;
@@ -134,6 +164,22 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
 
   // From here we hold the slot — release it on EVERY exit path.
   try {
+    // 7.5 Idempotent replay (M1). Checked INSIDE the slot (a still-in-flight
+    //     original holds the cap, so a true concurrent dup already got 429) and
+    //     BEFORE the credit gate (so a retry of a charged generation isn't
+    //     wrongly rejected as out_of_credits once that first charge zeroed the
+    //     balance). HIT → return the cached result: no STT, no chat, no second
+    //     decrement. Scoped to account.key so keys can't collide across users.
+    if (idemKey) {
+      const cached = await deps.store.getIdempotent(account.key, idemKey, IDEMPOTENCY_TTL_SECONDS);
+      if (cached) {
+        return json(
+          { prompt: cached.prompt, usage: cached.usage, credits_remaining: cached.creditsRemaining },
+          200,
+        );
+      }
+    }
+
     // 8. Credit availability (read-only; do NOT decrement yet). Zero → 402.
     const remaining = await account.creditsRemaining();
     if (remaining <= 0) return json({ error: "out_of_credits" }, 402);
@@ -210,6 +256,14 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         estCostUsd: estCost,
         success: true,
       });
+      // Cache this (uncharged) result too: a retry should replay it, not re-run.
+      if (idemKey) {
+        await deps.store.putIdempotent(account.key, idemKey, {
+          prompt: chat.content,
+          usage: usageBody(chat),
+          creditsRemaining: 0,
+        }, IDEMPOTENCY_TTL_SECONDS);
+      }
       return json(
         { prompt: chat.content, usage: usageBody(chat), credits_remaining: 0 },
         200,
@@ -224,6 +278,19 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       estCostUsd: estCost,
       success: true,
     });
+
+    // 13b. Cache the result for an idempotent retry (M1) — BEFORE the finally
+    //      releases the slot, so a retry arriving after this request returns
+    //      sees the populated cache (and a concurrent dup is held off by the
+    //      slot until then). Best-effort; a failed write never fails the (now
+    //      charged) generation — it just leaves the rare pre-M1 re-charge open.
+    if (idemKey) {
+      await deps.store.putIdempotent(account.key, idemKey, {
+        prompt: chat.content,
+        usage: usageBody(chat),
+        creditsRemaining: afterConsume,
+      }, IDEMPOTENCY_TTL_SECONDS);
+    }
 
     // 14. Return the prompt to the app.
     return json(

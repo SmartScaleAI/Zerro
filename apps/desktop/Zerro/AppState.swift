@@ -1256,7 +1256,11 @@ final class AppState {
                     frames: processed.frames,
                     mode: mode,
                     durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
-                    tokenProvider: tokenProvider
+                    tokenProvider: tokenProvider,
+                    // M1: the recording's stable key — reused across every retry
+                    // (here and `retryFailedPrompt`) so a charged-but-dropped
+                    // response is replayed, not re-billed.
+                    idempotencyKey: processed.idempotencyKey
                 )
                 let result = managed.result
                 Log.promptGen.info(

@@ -11,7 +11,7 @@ import {
   type TimelineBlock,
 } from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
-import type { BillingStore, GenerationLogRow, SubRow } from "./store.ts";
+import type { BillingStore, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
 const SECRET = "test_session_jwt_secret";
 const NOW = 1_000_000;
@@ -35,6 +35,10 @@ class InMemoryStore implements BillingStore {
   trialGrants = new Map<string, TrialGrant>();
   trialSlots = new Set<string>();
   forceTrialConsumeNull = false;
+
+  // Idempotency cache (M1). Keyed "<identityKey>::<idemKey>". The fake ignores
+  // the TTL (clock control isn't needed to exercise the dedup logic).
+  idempotent = new Map<string, IdempotentResult>();
 
   seed(sub: SubRow, usedCredits = 0) {
     this.subs.set(sub.id, sub);
@@ -75,6 +79,15 @@ class InMemoryStore implements BillingStore {
   }
   logGeneration(row: GenerationLogRow) {
     this.log.push(row);
+    return Promise.resolve();
+  }
+
+  // ---- Idempotency cache (M1) -----------------------------------------------
+  getIdempotent(identityKey: string, idemKey: string, _ttlSeconds: number) {
+    return Promise.resolve(this.idempotent.get(`${identityKey}::${idemKey}`) ?? null);
+  }
+  putIdempotent(identityKey: string, idemKey: string, value: IdempotentResult, _ttlSeconds: number) {
+    this.idempotent.set(`${identityKey}::${idemKey}`, value);
     return Promise.resolve();
   }
 
@@ -186,9 +199,10 @@ function makeBody(over: Record<string, unknown> = {}) {
   };
 }
 
-function makeReq(token: string | null, body: unknown) {
+function makeReq(token: string | null, body: unknown, idemKey?: string) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (idemKey) headers["Idempotency-Key"] = idemKey;
   return new Request("http://local/generate", {
     method: "POST",
     headers,
@@ -281,6 +295,96 @@ Deno.test("past_due still generates on remaining credits", async () => {
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(json.credits_remaining, 59); // 100-40 = 60 available → 59 after spend
+  assertEquals(openai.chatCalls, 1);
+});
+
+// ---- idempotency (M1): a charged-but-dropped response must not re-bill -------
+Deno.test("same Idempotency-Key replays the cached result and charges exactly once", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const KEY = "rec-uuid-1";
+
+  // First attempt: charges normally (100→99) and caches the result.
+  const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  const firstJson = await first.json();
+  assertEquals(firstJson.credits_remaining, 99);
+
+  // The response was "lost"; the client retries the SAME recording (same key).
+  const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  const retryJson = await retry.json();
+
+  // Replayed verbatim — same prompt, same (already-charged) balance.
+  assertEquals(retryJson.prompt, firstJson.prompt);
+  assertEquals(retryJson.credits_remaining, 99);
+
+  // Exactly ONE decrement total, and the retry did NO OpenAI work.
+  assertEquals(store.used.get("sub-1"), 1);
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1);
+  // One generation_log row (the original); the replay isn't a fresh generation.
+  assertEquals(store.log.length, 1);
+  assertEquals(store.slots.size, 0); // slot released on both paths
+});
+
+Deno.test("replay returns the cached result even after the first charge zeroed the balance", async () => {
+  // remaining == 1: the first charge brings it to 0. A retry must replay the
+  // cached result, NOT 402 — the cache check sits before the credit gate.
+  const store = activeStore(99); // limit 100, used 99 → 1 remaining
+  const openai = new StubProvider();
+  const KEY = "rec-uuid-last-credit";
+
+  const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).credits_remaining, 0);
+
+  const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200); // NOT 402
+  assertEquals((await retry.json()).credits_remaining, 0);
+  assertEquals(store.used.get("sub-1"), 100); // still exactly one spend
+  assertEquals(openai.chatCalls, 1); // replay did no work
+});
+
+Deno.test("a different Idempotency-Key is a new recording and charges again", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+
+  await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-uuid-A"), deps(store, openai));
+  const second = await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-uuid-B"), deps(store, openai));
+
+  assertEquals(second.status, 200);
+  assertEquals((await second.json()).credits_remaining, 98); // 100→99→98
+  assertEquals(store.used.get("sub-1"), 2);
+  assertEquals(openai.chatCalls, 2);
+});
+
+Deno.test("no Idempotency-Key → no dedup (each request charges; backward compatible)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+
+  await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  const second = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+
+  assertEquals(second.status, 200);
+  assertEquals((await second.json()).credits_remaining, 98);
+  assertEquals(store.used.get("sub-1"), 2);
+  assertEquals(store.idempotent.size, 0); // nothing cached without a key
+});
+
+Deno.test("trial path dedupes on its own key and charges the grant exactly once", async () => {
+  const store = trialStore(0, 15);
+  const openai = new StubProvider();
+  const KEY = "trial-rec-1";
+
+  const first = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).credits_remaining, 14);
+
+  const retry = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  assertEquals((await retry.json()).credits_remaining, 14); // replayed, not re-charged
+  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
   assertEquals(openai.chatCalls, 1);
 });
 

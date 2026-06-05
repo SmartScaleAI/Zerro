@@ -37,6 +37,15 @@ export interface GenerationLogRow {
   success: boolean;
 }
 
+/** A cached generation result, replayed verbatim for a retry carrying the same
+ *  Idempotency-Key (M1). The one persisted-content shape (documented §14.5
+ *  carve-out — see idempotency_cache migration). */
+export interface IdempotentResult {
+  prompt: string;
+  usage: { input_tokens: number; output_tokens: number; model: string };
+  creditsRemaining: number;
+}
+
 export interface BillingStore {
   loadSubscription(id: string): Promise<SubRow | null>;
   /** Remaining credits on the subscription's LATEST period (consume_credit's target). */
@@ -48,6 +57,26 @@ export interface BillingStore {
   /** TRUE if within the limit for the current window (fail-open on infra error). */
   rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
   logGeneration(row: GenerationLogRow): Promise<void>;
+
+  // ---- Idempotency cache (M1) — dedupes a charged-but-dropped /generate so a
+  // retry carrying the same key replays the result instead of charging again.
+  /** Cached result for (identityKey, idemKey) if present and newer than
+   *  ttlSeconds; else null. Fail-OPEN (null) on infra error — a broken cache
+   *  must never block a paid generation. */
+  getIdempotent(
+    identityKey: string,
+    idemKey: string,
+    ttlSeconds: number,
+  ): Promise<IdempotentResult | null>;
+  /** Cache a charged result, then opportunistically prune rows older than
+   *  ttlSeconds (the content-retention window). Best-effort: a failed write
+   *  never fails an already-charged generation. */
+  putIdempotent(
+    identityKey: string,
+    idemKey: string,
+    value: IdempotentResult,
+    ttlSeconds: number,
+  ): Promise<void>;
 
   // ---- Trial path (Phase F) — mirrors the subscription primitives, keyed on a
   // trial_grants row id instead of a subscription id.
@@ -148,6 +177,69 @@ export class SupabaseBillingStore implements BillingStore {
     if (error) {
       // Logging is best-effort analytics; never fail a paid generation over it.
       console.error(JSON.stringify({ fn: "generate", op: "logGeneration", error: error.message }));
+    }
+  }
+
+  // ---- Idempotency cache (M1) -----------------------------------------------
+
+  async getIdempotent(
+    identityKey: string,
+    idemKey: string,
+    ttlSeconds: number,
+  ): Promise<IdempotentResult | null> {
+    const cutoff = new Date(Date.now() - ttlSeconds * 1000).toISOString();
+    const { data, error } = await this.db
+      .from("idempotency_cache")
+      .select("prompt, usage, credits_remaining")
+      .eq("identity_key", identityKey)
+      .eq("idempotency_key", idemKey)
+      .gt("created_at", cutoff) // ignore rows past the retention window
+      .maybeSingle();
+    if (error) {
+      // Fail OPEN: a broken cache read must not block a paid generation. The
+      // worst case is the pre-M1 behavior (the retry re-charges) — never a
+      // lock-out. Spend is still gated by consume_credit.
+      console.error(JSON.stringify({ fn: "generate", op: "getIdempotent", error: error.message }));
+      return null;
+    }
+    if (!data) return null;
+    return {
+      prompt: String(data.prompt),
+      usage: data.usage as IdempotentResult["usage"],
+      creditsRemaining: Number(data.credits_remaining),
+    };
+  }
+
+  async putIdempotent(
+    identityKey: string,
+    idemKey: string,
+    value: IdempotentResult,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const { error } = await this.db.from("idempotency_cache").upsert({
+      identity_key: identityKey,
+      idempotency_key: idemKey,
+      prompt: value.prompt,
+      usage: value.usage,
+      credits_remaining: value.creditsRemaining,
+      created_at: new Date().toISOString(),
+    }, { onConflict: "identity_key,idempotency_key" });
+    if (error) {
+      // Best-effort, like logGeneration: never fail an already-charged
+      // generation over the cache. A lost write just means a retry could
+      // re-charge (the rare pre-M1 case), not a broken response.
+      console.error(JSON.stringify({ fn: "generate", op: "putIdempotent", error: error.message }));
+    }
+
+    // Opportunistic prune so a generated prompt never lingers past the TTL even
+    // without a scheduled sweep (the §14.5 carve-out is time-bounded by design).
+    const cutoff = new Date(Date.now() - ttlSeconds * 1000).toISOString();
+    const { error: pruneError } = await this.db
+      .from("idempotency_cache")
+      .delete()
+      .lt("created_at", cutoff);
+    if (pruneError) {
+      console.error(JSON.stringify({ fn: "generate", op: "pruneIdempotent", error: pruneError.message }));
     }
   }
 

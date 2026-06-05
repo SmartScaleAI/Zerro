@@ -108,12 +108,20 @@ final class ManagedProxyClient {
     /// path (Phase F) — a `TrialCreditsManager` (a trial token). The wire shape,
     /// flow, and error mapping are identical; only the token's `kind` differs,
     /// which the SERVER uses to pick the credit ledger.
+    /// `idempotencyKey` (M1): one key per recording, reused across EVERY retry of
+    /// that recording (the 401 refresh-retry below, and AppState's user-driven
+    /// `retryFailedPrompt`). It rides as the `Idempotency-Key` header so the
+    /// server replays a charged-but-dropped result instead of charging twice.
+    /// Defaulted to a fresh UUID so callers that don't care (tests, ad-hoc calls)
+    /// still get a valid single-use key; the real path passes the recording's
+    /// stable `ProcessedRecording.idempotencyKey`.
     func generate(
         audioURL: URL,
         frames: [ExtractedFrame],
         mode: OutputMode,
         durationSeconds: Double?,
-        tokenProvider: ProxyTokenProviding? = nil
+        tokenProvider: ProxyTokenProviding? = nil,
+        idempotencyKey: String = UUID().uuidString
     ) async throws -> ManagedGenerationResult {
         let provider: ProxyTokenProviding = tokenProvider ?? sessionTokens
         // Flatten the frames to a Sendable representation on the current actor,
@@ -132,9 +140,11 @@ final class ManagedProxyClient {
             )
         }.value
 
-        // First attempt with the cached/fresh token.
+        // First attempt with the cached/fresh token. The same idempotency key
+        // rides both this attempt and the post-refresh retry below — the server
+        // dedupes on it, so a refresh-retry can't double-charge.
         let token = try await token(from: provider)
-        var (data, status) = try await post(body: body, token: token)
+        var (data, status) = try await post(body: body, token: token, idempotencyKey: idempotencyKey)
 
         // 401 → token expired/rotated mid-use. Refresh once and retry. A second
         // 401 is a genuine auth failure, not a routine expiry. (For the trial
@@ -149,7 +159,7 @@ final class ManagedProxyClient {
             } catch {
                 throw ManagedGenerationError.authFailed
             }
-            (data, status) = try await post(body: body, token: refreshed)
+            (data, status) = try await post(body: body, token: refreshed, idempotencyKey: idempotencyKey)
             if status == 401 { throw ManagedGenerationError.authFailed }
         }
 
@@ -174,12 +184,13 @@ final class ManagedProxyClient {
 
     // MARK: - POST
 
-    private func post(body: Data, token: String) async throws -> (Data, Int) {
+    private func post(body: Data, token: String, idempotencyKey: String) async throws -> (Data, Int) {
         var request = URLRequest(url: ManagedBackend.generateURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         request.httpBody = body
         do {
             return try await transport.send(request)

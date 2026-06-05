@@ -28,6 +28,20 @@ struct ProcessedRecording {
     let frames: [ExtractedFrame]
     let duration: CMTime
     let workingDirectory: URL
+
+    /// Stable per-recording idempotency key (M1). Minted ONCE here, when the
+    /// processed recording is produced, and carried unchanged across every
+    /// generation retry of THIS recording — `retryFailedPrompt` re-runs against
+    /// the same `ProcessedRecording` value, and a value copy preserves this
+    /// `let` rather than re-minting it. The Managed proxy sends it as the
+    /// `Idempotency-Key` header so a charged-but-dropped `/generate` response is
+    /// replayed on retry instead of charging a second credit. A genuinely new
+    /// recording yields a new `ProcessedRecording`, hence a new key.
+    ///
+    /// A property default (not a memberwise-init parameter): excluded from the
+    /// synthesized initializer, so the pipeline's construction site is unchanged
+    /// and the key can't be set — or accidentally reused — from outside.
+    let idempotencyKey: String = UUID().uuidString
 }
 
 // MARK: - ExtractedFrame
