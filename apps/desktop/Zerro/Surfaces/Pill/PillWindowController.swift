@@ -253,8 +253,15 @@ private struct PillHostView: View {
             // the suggested opposite mode to this one generation only.
             onKeepMode: { appState.resolveModeSwitch(switchTo: false) },
             onSwitchMode: { appState.resolveModeSwitch(switchTo: true) },
+            // M2 — recovery offer resolutions, exactly two outcomes. Generate
+            // runs the recovered recording (spends the credit, with consent);
+            // Discard deletes it. There is no separate dismiss affordance — any
+            // other dismissal routes to Discard (delete), never leave-on-disk.
+            onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
+            onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
             generatedPrompt: appState.generatedPrompt,
             resultHadNoNarration: appState.resultHadNoNarration,
+            stoppedBySleep: appState.stoppedBySleep,
             audioLevels: appState.audioLevels
         )
         .scaleEffect(flashScale)

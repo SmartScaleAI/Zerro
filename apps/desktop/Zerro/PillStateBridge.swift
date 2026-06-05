@@ -36,6 +36,10 @@ extension AppState {
             // the processing capsule in place.
             return .confirmSwitch(suggestedMode: suggested)
 
+        case .confirmingRecovery:
+            // M2 (rev 3) — the sleep-interrupted-recording recovery offer.
+            return .confirmRecovery
+
         case .done:
             return isResultExpanded ? .resultExpanded : .resultCompact
 

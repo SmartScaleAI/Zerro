@@ -48,6 +48,15 @@ public enum RecordingState: Equatable {
     /// single generation with the effective mode. Lives between
     /// `.processing` and `.done` and only ever entered when a match fires.
     case confirmingMode(suggested: OutputMode)
+    /// M2 — a recording that a system sleep interrupted was found recoverable
+    /// on disk (at wake or launch) and we're asking the user whether to
+    /// generate from it. Entered by `recoverOrphanedRecordingIfAny`; resolved
+    /// by `resolveRecovery(generate:)` — Generate (→ `.processing`) or Discard
+    /// (→ `.idle`, deleting the orphan). Dismissing the pill any other way also
+    /// routes to Discard, so the recording is never silently retained once the
+    /// user engages. Recovery never auto-generates — it always passes through
+    /// here first.
+    case confirmingRecovery
     case done
     case failed(reason: RecordingFailureReason)
 }
@@ -299,6 +308,19 @@ final class AppState {
     /// entering .done; reset wherever `generatedPrompt` is.
     var resultHadNoNarration: Bool = false
 
+    /// M2 — true when the result currently being shown was RECOVERED from a
+    /// recording that a system sleep interrupted (lid closed mid-recording),
+    /// after the user accepted the recovery offer. Set by `resolveRecovery`
+    /// before it runs the recovered `.mov` through processing, and carried to
+    /// `.done`, where
+    /// the result pill surfaces a one-line "recovered from a recording stopped
+    /// when your Mac slept" note alongside the prompt. Reset on every new
+    /// recording and on every exit-to-idle path, exactly like
+    /// `resultHadNoNarration`. (In-session sleep no longer produces a result
+    /// directly — it abandons the file for launch recovery; see
+    /// RecordingSession.abandonForSleep.)
+    var stoppedBySleep: Bool = false
+
     // MARK: Recents
     //
     // Phase 11: history moved off AppState onto a dedicated
@@ -337,6 +359,27 @@ final class AppState {
         }
         return false
     }
+
+    /// Whether onboarding is complete — gates launch/wake recovery (we only
+    /// offer to recover an interrupted recording once the user is set up). A
+    /// closure (like `hasOwnAPIKeyProvider`) so AppState can own the wake
+    /// observer without holding the OnboardingStore; wired by `ZerroApp.init`
+    /// to read the real store. Defaults to `true` so tests/previews that don't
+    /// wire it aren't gated.
+    @ObservationIgnored var onboardingCompleteProvider: () -> Bool = { true }
+
+    /// M2 (rev 3): token for the app-lifetime `NSWorkspace.didWakeNotification`
+    /// observer that triggers recovery on wake (the common lid-close case never
+    /// relaunches the app). Distinct from the capture-duration observers in
+    /// RecordingSession — this one lives for the whole app run. Held so
+    /// registration is idempotent (no double-register / leak); never removed
+    /// before process exit.
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+
+    /// M2 (rev 3): the orphaned recording currently being OFFERED for recovery
+    /// (state `.confirmingRecovery`). Set by `recoverOrphanedRecordingIfAny`,
+    /// consumed by `resolveRecovery` (Generate or Discard). Nil otherwise.
+    @ObservationIgnored private var pendingRecoveryURL: URL?
 
     // MARK: Internal
 
@@ -491,6 +534,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        stoppedBySleep = false
         failureRetryAttempts = 0
         elapsedSeconds = 0
         frameCount = 0
@@ -684,6 +728,8 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        stoppedBySleep = false
+        pendingRecoveryURL = nil
         failureRetryAttempts = 0
         state = .idle
     }
@@ -710,8 +756,62 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         resultHadNoNarration = false
+        stoppedBySleep = false
+        pendingRecoveryURL = nil
         failureRetryAttempts = 0
         state = .idle
+    }
+
+    // MARK: - App termination (M1)
+
+    /// Routes a quit (⌘Q / menu "Quit Zerro" → `NSApplication.terminate`) by
+    /// the current state so on-disk artifacts are left in the right shape, then
+    /// returns promptly so `applicationShouldTerminate` can answer
+    /// `.terminateNow` without hanging quit. Reuses M2's sleep-abandon and the
+    /// existing processing-cancel cleanup — it adds no parallel teardown.
+    ///
+    /// • `.recording` / `.wrappingUp` / `.autoStopped`: abandon via the SAME
+    ///   no-finalize path sleep uses (`RecordingSession.abandonForSleep`),
+    ///   leaving a recoverable fragmented `.mov` on disk. The abandon returns
+    ///   immediately (its writer release is dispatched onto writerQueue) and the
+    ///   fragment is already flushed (`movieFragmentInterval`), so terminating
+    ///   before that async tail runs neither corrupts nor loses it — the next
+    ///   launch's recovery OFFERS it exactly as it does a sleep-interrupted
+    ///   recording. If a finalize is already in flight (a stop() mid-flight, the
+    ///   narrow window where state is still active but `lifecycleState` is
+    ///   `.finishing`), the abandon's `== .running` guard makes this a safe
+    ///   no-op — same double-fire convergence as sleep.
+    /// • `.processing`: cancel the in-flight pipeline / proxy work (its awaits
+    ///   are cancellation-aware) and DELETE the source `.mov` synchronously. A
+    ///   .processing-stage recording is a post-recording artifact the user is
+    ///   abandoning, NOT a recoverable recording, and only a surviving `.mov`
+    ///   could be wrongly picked up by the next launch's recovery scan
+    ///   (`orphanedRecordings()` matches `.mov` only — the `zerro-work-*`
+    ///   working dir is never offered). Deletion is synchronous (not the usual
+    ///   detached task) because `.terminateNow` may exit before a detached
+    ///   delete runs. We accept that an in-flight proxy generation already sent
+    ///   to the server may spend a credit server-side without the user
+    ///   receiving the result — a rare, narrow case; blocking quit to salvage it
+    ///   is the worse tradeoff.
+    /// • everything else: nothing to do. In particular a `.confirmingRecovery`
+    ///   offer open at quit must NOT delete its un-acted-on orphan — left
+    ///   untouched, it is simply re-offered on the next launch.
+    func prepareForTermination() {
+        switch state {
+        case .recording, .wrappingUp, .autoStopped:
+            recordingSession?.abandonForSleep()
+        case .processing:
+            processingTask?.cancel()
+            processingTask = nil
+            if let source = lastRecordingURL {
+                WorkingDirectory.remove(at: source)
+            }
+            if let workingDir = processedRecording?.workingDirectory {
+                WorkingDirectory.remove(at: workingDir)
+            }
+        case .idle, .done, .failed, .confirmingMode, .confirmingRecovery:
+            break
+        }
     }
 
     // MARK: - Session callbacks
@@ -788,6 +888,29 @@ final class AppState {
             // logged so the isolated audio can be played + verified.
             state = .processing
             runProcessing(sourceURL: url)
+        case .interrupted:
+            // M2 (rev 2): the recording was abandoned for sleep WITHOUT
+            // finalizing, leaving a recoverable fragmented `.mov` on disk
+            // (RecordingSession did NOT delete it). Reset the UI to idle
+            // cleanly — the pill was .recording when the lid closed — and do
+            // NOT track or delete the file: it stays orphaned for recovery
+            // (recoverOrphanedRecordingIfAny), which OFFERS it on the next wake
+            // (the common lid-close case) or launch.
+            Log.breadcrumb(category: .stateMachine, message: "recording interrupted by sleep — left for recovery")
+            elapsedSeconds = 0
+            frameCount = 0
+            audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
+            isResultExpanded = false
+            effectiveOutputMode = nil
+            pendingGeneration = nil
+            activeSelection = nil
+            lastRecordingURL = nil
+            processedRecording = nil
+            generatedPrompt = nil
+            resultHadNoNarration = false
+            stoppedBySleep = false
+            failureRetryAttempts = 0
+            state = .idle
         case .cancelled:
             elapsedSeconds = 0
             frameCount = 0
@@ -800,6 +923,7 @@ final class AppState {
             processedRecording = nil
             generatedPrompt = nil
             resultHadNoNarration = false
+            stoppedBySleep = false
             failureRetryAttempts = 0
             state = .idle
         case .failed(let error):
@@ -814,8 +938,129 @@ final class AppState {
             lastRecordingURL = nil
             processedRecording = nil
             generatedPrompt = nil
-        resultHadNoNarration = false
+            resultHadNoNarration = false
+            stoppedBySleep = false
             state = .failed(reason: Self.failureReason(from: error))
+        }
+    }
+
+    // MARK: - Sleep-interrupted recording recovery (M2 rev 2/3)
+
+    /// Why recovery is triggered, which decides the no-recovery fallback.
+    enum RecoveryTrigger {
+        /// App launch (crash/force-quit/relaunch). Safe to blanket-sweep junk
+        /// when there's nothing to offer — single-instance, this run's own
+        /// recordings don't exist yet.
+        case launch
+        /// System wake (the common lid-close case never relaunches). Must NOT
+        /// blanket-sweep — the app is live and may hold a recording or pending
+        /// recovery file the prefix sweep would clobber; just no-op.
+        case wake
+    }
+
+    /// Registers the app-lifetime `NSWorkspace.didWakeNotification` observer so
+    /// an interrupted recording is offered for recovery when the user reopens
+    /// the lid — not only at some unrelated future launch. Idempotent: a second
+    /// call is a no-op (the one-shot launch block already guards this, but the
+    /// `wakeObserver != nil` check makes double-register impossible regardless).
+    /// App-lifetime by design (NOT capture-scoped like the willSleep/mic
+    /// observers) — never removed before process exit, so it can't miss a wake.
+    func startWakeRecoveryObserver() {
+        guard wakeObserver == nil else { return }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.recoverOrphanedRecordingIfAny(trigger: .wake)
+            }
+        }
+    }
+
+    /// Detect a recording that a prior/just-interrupted session abandoned for
+    /// sleep (`RecordingSession.abandonForSleep` left a fragmented `.mov` on
+    /// disk WITHOUT finalizing it — readable up to its last flushed fragment).
+    /// Instead of auto-generating (rev 2) — which would silently spend a
+    /// possibly-trial credit on a recording the user may have been abandoning —
+    /// we OFFER it: enter `.confirmingRecovery` and let the user choose Generate
+    /// / Discard / dismiss. Generation (the credit spend) happens only on an
+    /// explicit Generate (`resolveRecovery`).
+    ///
+    /// Double-recovery / preemption safety: gated on `state == .idle`, so a wake
+    /// during an active recording, an in-progress recovery offer, processing, a
+    /// shown result, or a failure pill is a safe no-op — recovery never preempts
+    /// what the user is doing, and the same orphan can't be offered twice (once
+    /// offered, state is `.confirmingRecovery`; once resolved, the file is
+    /// processed/deleted/left, never re-entering until a fresh wake/launch finds
+    /// it). The post-`await` `state == .idle` re-check bails if the user started
+    /// something during the readability probe. Single-instance (no
+    /// `LSMultipleInstances`) means any orphan here is from a prior/own
+    /// interrupted session, never a file another instance is writing live.
+    func recoverOrphanedRecordingIfAny(trigger: RecoveryTrigger) async {
+        guard onboardingCompleteProvider(), state == .idle else {
+            sweepIfLaunch(trigger)
+            return
+        }
+        guard let newest = WorkingDirectory.orphanedRecordings().first else {
+            sweepIfLaunch(trigger)
+            return
+        }
+        // Validate readable (fragments present) — the same duration > 0 gate
+        // the pipeline opens with. Interrupted-but-fragmented passes; truly
+        // empty/corrupt doesn't.
+        let durationOK: Bool
+        do {
+            let seconds = CMTimeGetSeconds(try await AVURLAsset(url: newest).load(.duration))
+            durationOK = seconds.isFinite && seconds > 0
+        } catch {
+            durationOK = false
+        }
+        // If the user started something during the await, DON'T sweep (would
+        // delete the now-live file) — leave the orphan for the next offer.
+        guard state == .idle else { return }
+        guard durationOK else {
+            sweepIfLaunch(trigger)
+            return
+        }
+        // One offer at a time: clear the OTHER orphans + work-dir junk now,
+        // keeping only the one we're about to offer. Then OFFER (do not
+        // auto-generate). The credit is spent only if the user picks Generate.
+        Task.detached(priority: .utility) { WorkingDirectory.sweep(keeping: newest) }
+        Log.breadcrumb(category: .stateMachine, message: "offering sleep-interrupted recording recovery")
+        pendingRecoveryURL = newest
+        state = .confirmingRecovery
+    }
+
+    /// Blanket-sweep junk only on the launch trigger; on wake we never sweep
+    /// (the running app may hold live/pending files the prefix sweep would
+    /// clobber).
+    private func sweepIfLaunch(_ trigger: RecoveryTrigger) {
+        guard trigger == .launch else { return }
+        Task.detached(priority: .utility) { WorkingDirectory.sweep() }
+    }
+
+    /// Resolve the recovery offer. `generate == true` runs the recovered
+    /// recording through the normal finished-recording path (processing →
+    /// generation → result, with the "recovered after sleep" note) — this is
+    /// where the credit/API call is spent, now with explicit consent. `false`
+    /// (Discard) deletes the orphan and returns to idle, spending nothing.
+    /// No-op outside `.confirmingRecovery`. Discard (and any non-Generate
+    /// dismissal of the pill, which the UI routes here) deletes the orphan —
+    /// there is no leave-on-disk path once the user engages the offer.
+    func resolveRecovery(generate: Bool) {
+        guard case .confirmingRecovery = state, let url = pendingRecoveryURL else { return }
+        pendingRecoveryURL = nil
+        if generate {
+            Log.breadcrumb(category: .stateMachine, message: "recovery accepted — generating")
+            stoppedBySleep = true
+            lastRecordingURL = url
+            state = .processing
+            runProcessing(sourceURL: url)
+        } else {
+            Log.breadcrumb(category: .stateMachine, message: "recovery discarded")
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: url) }
+            state = .idle
         }
     }
 

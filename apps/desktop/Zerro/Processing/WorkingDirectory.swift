@@ -100,14 +100,42 @@ enum WorkingDirectory {
         }
     }
 
+    /// Source recordings (`zerro-*.mov`) left in the temp dir by a prior
+    /// session, newest first by modification date. Excludes working dirs
+    /// (`zerro-work-*`) and any non-`.mov` entries. M2 (rev 2) launch
+    /// recovery uses this to find a sleep-interrupted recording to salvage
+    /// before `sweep` clears the remaining junk. Best-effort: returns [] if
+    /// the temp dir can't be listed.
+    nonisolated static func orphanedRecordings() -> [URL] {
+        let fm = FileManager.default
+        let contents = (try? fm.contentsOfDirectory(
+            at: fm.temporaryDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        func modDate(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        }
+        return contents
+            .filter {
+                let name = $0.lastPathComponent
+                return name.hasPrefix(prefix)
+                    && !name.hasPrefix(workingPrefix)
+                    && $0.pathExtension == "mov"
+            }
+            .sorted { modDate($0) > modDate($1) }
+    }
+
     /// Scans `NSTemporaryDirectory()` and deletes every entry whose
-    /// basename starts with `prefix` (`zerro-`). Run once at app
-    /// launch. Anything created in the current run is created AFTER
-    /// this call, so we can't accidentally clobber a live artifact.
-    /// Failures are logged + ignored — sweep is best-effort.
-    nonisolated static func sweep() {
+    /// basename starts with `prefix` (`zerro-`), EXCEPT `keep` (the one
+    /// recording M2 launch recovery is about to salvage; nil → delete all,
+    /// the original behavior). Run once at app launch. Anything created in
+    /// the current run is created AFTER this call, so we can't accidentally
+    /// clobber a live artifact. Failures are logged + ignored — best-effort.
+    nonisolated static func sweep(keeping keep: URL? = nil) {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
+        let keepPath = keep?.standardizedFileURL.path
         let contents: [URL]
         do {
             contents = try fm.contentsOfDirectory(
@@ -122,6 +150,7 @@ enum WorkingDirectory {
 
         var removed = 0
         for entry in contents where entry.lastPathComponent.hasPrefix(prefix) {
+            if let keepPath, entry.standardizedFileURL.path == keepPath { continue }
             do {
                 try fm.removeItem(at: entry)
                 removed += 1

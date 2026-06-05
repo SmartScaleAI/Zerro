@@ -38,6 +38,13 @@ enum PillState: Equatable {
     /// `.processing`; resolved by Keep (use the selected mode) or Switch
     /// (use `suggestedMode` for this one generation only).
     case confirmSwitch(suggestedMode: OutputMode)
+    /// M2 — recovery confirmation. Offered at wake/launch when a recording that
+    /// a system sleep interrupted is recoverable on disk. Reads "Recording
+    /// stopped when your Mac slept — generate a prompt from it?" with exactly
+    /// two outcomes: Generate (run the recovered recording, spending the credit
+    /// with consent) and Discard (delete it). Dismissing the pill any other way
+    /// also resolves to Discard. Recovery NEVER auto-generates — it always asks.
+    case confirmRecovery
 }
 
 // MARK: - PillView
@@ -72,6 +79,15 @@ struct PillView: View {
     var onKeepMode: () -> Void = {}
     var onSwitchMode: () -> Void = {}
 
+    /// M2 recovery-pill resolutions — exactly two outcomes. `onRecoveryGenerate`
+    /// runs the recovered recording (spends the credit, with consent);
+    /// `onRecoveryDiscard` deletes it. Dismissing the pill by any other means
+    /// also routes to Discard (wired in PillWindowController) — there is no
+    /// leave-on-disk path. Default no-ops so `#Preview` blocks can pass a
+    /// literal `.confirmRecovery` state without ceremony.
+    var onRecoveryGenerate: () -> Void = {}
+    var onRecoveryDiscard: () -> Void = {}
+
     /// The generated structured prompt, displayed in the .resultExpanded
     /// body. Threaded from AppState.generatedPrompt via PillWindowController
     /// so the pure-renderer PillView doesn't need to know about AppState.
@@ -85,6 +101,12 @@ struct PillView: View {
     /// in the result pill. Threaded from AppState.resultHadNoNarration
     /// via PillWindowController so PillView stays a pure renderer.
     var resultHadNoNarration: Bool = false
+
+    /// M2 — true when this result was recovered at launch from a recording a
+    /// system sleep interrupted. Drives a one-line "recovered after sleep"
+    /// note in the expanded result body. Threaded from AppState.stoppedBySleep
+    /// via PillWindowController; PillView stays a pure renderer.
+    var stoppedBySleep: Bool = false
 
     /// Live mic-input peak levels for the recording/wrappingUp waveform.
     /// 22-element rolling buffer threaded from AppState.audioLevels.
@@ -135,14 +157,14 @@ struct PillView: View {
         // .confirmSwitch sizes to its content's natural width (it may widen
         // slightly to fit the mode name) while keeping the locked height —
         // see lockedCapsuleHeight. Per the locked mockup it stays one line.
-        case .resultExpanded, .confirmSwitch:
+        case .resultExpanded, .confirmSwitch, .confirmRecovery:
             return nil
         }
     }
 
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact, .confirmSwitch:
+        case .recording, .wrappingUp, .processing, .resultCompact, .confirmSwitch, .confirmRecovery:
             return Self.capsuleHeight
         // .error keeps the locked 392 width (so it still reads as the same
         // capsule it morphed from) but drives its own height: a long
@@ -199,6 +221,7 @@ struct PillView: View {
                 expanded: false,
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
+                stoppedBySleep: stoppedBySleep,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
@@ -208,6 +231,7 @@ struct PillView: View {
                 expanded: true,
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
+                stoppedBySleep: stoppedBySleep,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
@@ -223,6 +247,11 @@ struct PillView: View {
                 suggestedMode: suggestedMode,
                 onKeep: onKeepMode,
                 onSwitch: onSwitchMode
+            )
+        case .confirmRecovery:
+            ConfirmRecoveryPillContent(
+                onGenerate: onRecoveryGenerate,
+                onDiscard: onRecoveryDiscard
             )
         }
     }
@@ -585,6 +614,74 @@ private struct ConfirmSwitchPillContent: View {
     }
 }
 
+// MARK: - ConfirmRecoveryPillContent
+//
+// M2 — the recovery confirmation, reusing ConfirmSwitchPillContent's chrome
+// geometry (locked capsule height, content-driven width, left icon badge +
+// question + trailing action cluster) so it reads as the same pill family. A
+// recording that a system sleep interrupted is recoverable on disk; rather
+// than silently spending a credit, we ASK — exactly two outcomes, made
+// self-evident by the two verbs: "Discard" (delete it, secondary) and the
+// primary "Generate" (run it, spending the credit with consent). There is no
+// separate dismiss affordance: dismissing the pill resolves to Discard (see
+// PillWindowController), so a recovered recording is never silently retained.
+// The moon glyph ties it to the result's "recovered after sleep" note.
+
+private struct ConfirmRecoveryPillContent: View {
+    let onGenerate: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(spacing: VFSpacing.md) {
+            iconBadge
+
+            Text("Recording stopped when your Mac slept \u{2014} generate a prompt from it?")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.vfTextPrimary)
+                .fixedSize()
+
+            Spacer(minLength: 40)
+
+            discardButton
+            generateButton
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
+    }
+
+    private var iconBadge: some View {
+        Image(systemName: "moon.fill")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.vfAccentBlue)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(Color.vfAccentBlue.opacity(0.20)))
+    }
+
+    private var discardButton: some View {
+        Button(action: onDiscard) {
+            Text("Discard")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    private var generateButton: some View {
+        Button(action: onGenerate) {
+            Text("Generate")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.vfAccentBlue, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
 // MARK: - ResultPillContent
 //
 // Shared by `.resultCompact` (expanded == false) and `.resultExpanded`
@@ -611,6 +708,12 @@ private struct ResultPillContent: View {
     /// reads generically. The prompt is still real and copyable — this is
     /// a heads-up, not an error.
     let noNarration: Bool
+    /// M2 — true when this result was recovered at launch from a sleep-
+    /// interrupted recording. Shows an informational note in the expanded body.
+    /// Unlike `noNarration`, this is NOT a quality caveat: the prompt is
+    /// complete and valid, so the note stays neutral (no amber header tint) —
+    /// it only explains why a result appeared on its own.
+    let stoppedBySleep: Bool
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
@@ -796,6 +899,10 @@ private struct ResultPillContent: View {
 
     private var bodyContainer: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if stoppedBySleep {
+                stoppedBySleepNote
+                Divider().overlay(Color.vfHairline)
+            }
             if noNarration {
                 noNarrationNote
                 Divider().overlay(Color.vfHairline)
@@ -828,6 +935,26 @@ private struct ResultPillContent: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfWarningAmber)
             Text("No narration detected \u{2014} this prompt was generated from your screen alone. For a sharper result, record again and describe what you want.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, VFSpacing.xl)
+        .padding(.vertical, VFSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// M2 — neutral heads-up shown above the prompt body when this result was
+    /// recovered at launch from a recording a system sleep interrupted.
+    /// Explains why a result appeared on its own without framing it as a
+    /// failure: the prompt below is complete and copyable, built from what was
+    /// captured before the sleep. Expanded-only, mirroring `noNarrationNote`.
+    private var stoppedBySleepNote: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "moon.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+            Text("Recovered from a recording that stopped when your Mac went to sleep \u{2014} this prompt was built from what you captured before then.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -98,6 +98,17 @@ final class RecordingSession: NSObject {
     enum Outcome {
         case finished(URL)
         case cancelled
+        /// M2 (rev 2): the recording was abandoned because the system was
+        /// about to sleep — deliberately WITHOUT finalizing the writer (a
+        /// `finishWriting` interrupted by the suspend corrupts the file;
+        /// device-confirmed). The fragmented `.mov` is left intact on disk at
+        /// `outputURL`, readable up to the last flushed fragment, and is
+        /// recovered at next wake/launch (see `AppState.recoverOrphanedRecordingIfAny`).
+        /// The session reaches a clean terminal state without depending on
+        /// `finishWriting`; AppState resets the UI to idle and does NOT delete
+        /// the file. Distinct from `.cancelled` (which deletes) precisely so
+        /// the file survives for recovery.
+        case interrupted(URL)
         case failed(Error)
     }
 
@@ -174,13 +185,31 @@ final class RecordingSession: NSObject {
     /// (before start, after finalize).
     private var micDisconnectObserver: NSObjectProtocol?
 
-    /// Wall-clock anchor for the elapsed publish task. Set in start()
-    /// once both capture pipelines are running; read by the publish
-    /// loop. The file's actual duration comes from video PTS (which
-    /// can lag wall clock when the screen is static and SCStream
-    /// throttles frame delivery) — anchoring the UI on wall clock
-    /// gives the user a smooth stopwatch tick regardless.
-    private var sessionStartWallClock: CFAbsoluteTime?
+    /// M2 observer token for `NSWorkspace.willSleepNotification`. Installed
+    /// at the end of `start()` (capture is live) and removed at the top of
+    /// `finalize()` on every exit path — same capture-scoped lifetime as
+    /// `micDisconnectObserver`, so it can't outlive the session or leak one
+    /// observer per recording. `nil` whenever no observer is registered.
+    /// NOTE: registered on `NSWorkspace.shared.notificationCenter` (NOT
+    /// `NotificationCenter.default`), so the matching `removeObserver` in
+    /// finalize must use that same center.
+    private var sleepObserver: NSObjectProtocol?
+
+    /// Monotonic anchor for the elapsed publish task. A `SuspendingClock`
+    /// instant — NOT wall clock (CFAbsoluteTime) — set in start() once both
+    /// capture pipelines are running and read by the publish loop.
+    ///
+    /// SuspendingClock freezes while the Mac is asleep (unlike
+    /// ContinuousClock / wall clock, which keep advancing). That's the M2
+    /// fix: the 150s/180s cap must measure CAPTURED (awake) time, not
+    /// wall-clock time that includes a sleep the user spent with the lid
+    /// shut. With wall clock, closing the lid for a few minutes inflated the
+    /// next post-wake tick by the full sleep duration — jumping the timer
+    /// and silently auto-stopping past 180s while the user was away. The
+    /// file's actual duration still comes from video PTS via the writer;
+    /// this anchor drives the UI ticker AND the cap thresholds, now from one
+    /// sleep-excluding clock.
+    private var sessionStartInstant: SuspendingClock.Instant?
     private var elapsedPublishTask: Task<Void, Never>?
 
     private enum LifecycleState {
@@ -322,6 +351,31 @@ final class RecordingSession: NSObject {
         // entered .running, so callers can treat a throw as "no recording
         // happened" without cleanup.
         let writer = try AVAssetWriter(url: outputURL, fileType: .mov)
+
+        // M2 (revised): write the .mov in self-contained movie fragments so
+        // the file on disk stays playable/recoverable up to the last flushed
+        // fragment even if finishWriting never runs cleanly. Without this, a
+        // .mov is only valid after a clean finishWriting writes the trailing
+        // moov atom — and on a lid-close, macOS suspends the process before
+        // the async finishWriting can finalize, leaving a truncated file that
+        // AVFoundation rejects with "Cannot Open / media may be damaged"
+        // (-11829), surfacing as .processingFailed (device-confirmed). With a
+        // fragment interval the moov (+ mvex) is written UP FRONT and media
+        // lands in periodic moof/mdat pairs flushed to disk, so AVURLAsset
+        // can walk the fragments present at interruption time — covering
+        // sleep, quit, and crash, not just sleep. Verified empirically: an
+        // unclean fragmented file reads cleanly through every pipeline path
+        // (duration, video track + AVAssetImageGenerator, AVAssetExportSession
+        // AppleM4A), while the same unclean NON-fragmented file is
+        // unreadable. Must be set BEFORE startWriting().
+        //
+        // 1s granularity: on interruption we lose at most the final <1s of
+        // not-yet-flushed tail; the cost is one small moof box per second
+        // (≤180 over a full 3-min capture) — negligible file/I/O overhead.
+        // Coexists with expectsMediaDataInRealTime + the SCK sample handlers
+        // (confirmed: real-time appends and clean finalize both unaffected).
+        writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
+
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: config.width,
@@ -423,21 +477,57 @@ final class RecordingSession: NSObject {
             }
         }
 
-        // Anchor the UI-facing elapsed clock on wall time and start
-        // publishing at 10Hz. The wall-clock anchor (not video PTS)
-        // is intentional: SCStream's minimumFrameInterval is a CAP,
-        // not a floor — when the screen is static, frames arrive
-        // sparsely (sometimes <1fps), which would make a PTS-driven
-        // pill timer freeze and lurch. The file's actual duration
-        // still comes from video PTS via the writer; this clock is
-        // strictly the UI ticker.
-        sessionStartWallClock = CFAbsoluteTimeGetCurrent()
+        // M2 (rev 2): watch for the system going to sleep mid-recording (lid
+        // closed, idle sleep, Apple-menu → Sleep). willSleepNotification is
+        // posted BEFORE the machine actually sleeps, so the handler gets to
+        // run while we're still awake. Scoped to the capture lifetime exactly
+        // like micDisconnectObserver above — installed only now (capture is
+        // live), removed at the top of finalize() / abandonForSleep() on every
+        // exit path.
+        //
+        // On fire we route through `abandonForSleep()`, NOT stop()/finalize.
+        // The prior revision called stop() → finishWriting, but on a real
+        // suspend macOS freezes the process mid-rewrite and the interrupted
+        // finishWriting corrupts the otherwise-recoverable fragmented file
+        // (device-confirmed: the recording came back as .processingFailed).
+        // abandonForSleep deliberately does NOT finalize: it leaves the
+        // fragmented .mov intact on disk (readable up to the last flushed
+        // fragment) and emits `.interrupted`, so the recording is recovered at
+        // next launch instead. A sleep can also trip SCStream
+        // didStopWithError; willSleep fires first (pre-sleep) in the normal
+        // case, and either ordering is safe — whichever lands first flips
+        // lifecycleState off .running and the other's `== .running` guard
+        // (failSession's and abandonForSleep's), plus the observer being
+        // removed at the teardown top, makes it a no-op. Registered on
+        // NSWorkspace.shared.notificationCenter — teardown removes it there.
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.abandonForSleep()
+            }
+        }
+
+        // Anchor the UI-facing elapsed clock AND the 150s/180s cap on a
+        // SuspendingClock instant (see `sessionStartInstant`). NOT video PTS:
+        // SCStream's minimumFrameInterval is a CAP, not a floor — when the
+        // screen is static, frames arrive sparsely (sometimes <1fps), which
+        // would make a PTS-driven pill timer freeze and lurch, AND a
+        // PTS-driven cap would never fire if SCK silently stopped delivering
+        // frames (removing the anti-wedge backstop). This self-driven 0.1s
+        // timer is independent of frame arrival, so the cap still fires
+        // within 3 minutes of AWAKE time even if frames stop — while
+        // SuspendingClock keeps sleep from inflating it. The file's actual
+        // duration still comes from video PTS via the writer.
+        sessionStartInstant = SuspendingClock().now
         elapsedPublishTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                 guard let self else { return }
-                guard let start = self.sessionStartWallClock else { continue }
-                let elapsed = (CFAbsoluteTimeGetCurrent() - start) * self.clockMultiplier
+                guard let start = self.sessionStartInstant else { continue }
+                let elapsed = Self.seconds(since: start) * self.clockMultiplier
                 self.onElapsed(elapsed)
             }
         }
@@ -471,6 +561,78 @@ final class RecordingSession: NSObject {
         finalize(deletingFile: true, failureError: error)
     }
 
+    /// M2 (rev 2): sleep teardown that deliberately does NOT finalize the
+    /// writer. On a real lid-close, macOS suspends the process before the
+    /// async `finishWriting` can finalize, and an interrupted finishWriting
+    /// corrupts the otherwise-recoverable fragmented `.mov` (device-confirmed
+    /// → `.processingFailed`). So instead of `stop()`/`finalize`, we abandon:
+    ///   • Freeze the ticker + remove observers (shared `removeCaptureMonitors`).
+    ///   • Release the writer WITHOUT `finishWriting` (the interrupted-finalize
+    ///     that corrupts) and WITHOUT `cancelWriting` (which DELETES the file).
+    ///     A plain release leaves the fragmented `.mov` on disk, readable up to
+    ///     the last flushed fragment (harness-verified) — an orphan recovered
+    ///     at next launch.
+    ///   • Tear down the in-memory stack and emit `.interrupted(outputURL)` so
+    ///     AppState resets the UI to idle WITHOUT deleting the file.
+    /// The release is marshalled onto `writerQueue` (serial) so any in-flight
+    /// appends complete first; after the inputs are niled, later SCK buffers
+    /// no-op in append*(). Guarded on `.running` so it converges with a
+    /// concurrent didStopWithError exactly like finalize/failSession.
+    ///
+    /// M1: also invoked at app-quit (`AppState.prepareForTermination`) for a
+    /// recording in flight. Quit deliberately reuses this exact no-finalize
+    /// abandon rather than a parallel teardown — the synchronous part returns
+    /// immediately (the writer release is dispatched async) and the fragment is
+    /// already flushed to disk, so terminating before the async tail runs leaves
+    /// the identical recoverable `.mov` a sleep abandon would, and the next
+    /// launch's recovery offers it the same way. The name is kept (not renamed
+    /// to `abandon()`) to avoid churning the M2 sleep path; it is now the shared
+    /// sleep+quit abandon.
+    func abandonForSleep() {
+        guard lifecycleState == .running else { return }
+        lifecycleState = .finishing
+        removeCaptureMonitors()
+
+        let outputURL = self.outputURL
+        writerQueue.async { [weak self] in
+            guard let self else { return }
+            // In-flight appends have drained (serial queue). Release the writer
+            // WITHOUT finishWriting/cancelWriting. The fragmented file survives.
+            self.writer = nil
+            self.videoInput = nil
+            self.audioInput = nil
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.lifecycleState = .finished
+                // teardownCaptureStack removes the stream outputs + releases the
+                // SCStream (stopping delivery); it never touches the .mov.
+                self.teardownCaptureStack()
+                Log.capture.notice("recording abandoned for sleep — left intact for launch recovery")
+                self.onFinish(.interrupted(outputURL))
+            }
+        }
+    }
+
+    /// Stops the UI ticker and removes both capture-duration observers (mic
+    /// disconnect + sleep), from the centers they were registered on. Called
+    /// at the top of every teardown path (finalize, abandonForSleep) so they
+    /// can't leak or re-enter. Synchronous + MainActor-isolated.
+    private func removeCaptureMonitors() {
+        elapsedPublishTask?.cancel()
+        elapsedPublishTask = nil
+        sessionStartInstant = nil
+        if let micDisconnectObserver {
+            NotificationCenter.default.removeObserver(micDisconnectObserver)
+        }
+        self.micDisconnectObserver = nil
+        // The sleep observer lives on NSWorkspace's center (NOT
+        // NotificationCenter.default) — remove it from the same one.
+        if let sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+        }
+        self.sleepObserver = nil
+    }
+
     // MARK: - Finalize
 
     /// `failureError` non-nil → mid-session failure path: ignore the
@@ -482,23 +644,10 @@ final class RecordingSession: NSObject {
         let outputURL = self.outputURL
         let writerQueue = self.writerQueue
 
-        // Stop the UI ticker before the capture pipelines drain so
-        // the pill freezes at its final elapsed value rather than
-        // ticking through the (brief) finalize window.
-        elapsedPublishTask?.cancel()
-        elapsedPublishTask = nil
-        sessionStartWallClock = nil
-
-        // M4: remove the mic-disconnect observer up front so it's gone on
-        // EVERY finalize path (success, cancel, failure — including a
-        // disconnect-triggered failure itself), leaving no per-session
-        // leak. Removing it here also ensures a disconnect landing during
-        // teardown can't re-enter failSession. Synchronous and MainActor-
-        // isolated, like the ticker teardown above.
-        if let micDisconnectObserver {
-            NotificationCenter.default.removeObserver(micDisconnectObserver)
-        }
-        self.micDisconnectObserver = nil
+        // Stop the UI ticker + remove the capture-duration observers up front
+        // so they're gone on every exit path with no per-session leak, and
+        // nothing can re-enter the teardown. Shared with abandonForSleep().
+        removeCaptureMonitors()
 
         Task { @MainActor in
             // Stop the stream first so no more sample buffers (video OR
@@ -773,6 +922,18 @@ final class RecordingSession: NSObject {
         }
         audioInput.append(sampleBuffer)
         audioAppendCount += 1
+    }
+
+    // MARK: - Elapsed clock
+
+    /// Seconds elapsed (as a Double) between a `SuspendingClock` anchor and
+    /// now. SuspendingClock excludes time the Mac spent asleep, so this is
+    /// the captured/awake duration that drives the pill timer and the
+    /// 150s/180s cap (M2). `Duration` carries seconds + attoseconds; fold
+    /// both into one Double.
+    nonisolated private static func seconds(since start: SuspendingClock.Instant) -> Double {
+        let d = start.duration(to: SuspendingClock().now)
+        return Double(d.components.seconds) + Double(d.components.attoseconds) * 1e-18
     }
 
     // MARK: - C3 helpers (display + audio device resolution)

@@ -146,13 +146,39 @@ struct ZerroApp: App {
                     pillController: pillCtrl
                 )
             }
-            // Phase 8 launch-sweep: clear orphaned zerro-*
-            // recordings and working dirs from prior crashes / force-
-            // quits. Runs in this one-shot block (NOT App.init body,
-            // which SwiftUI may re-invoke). Safe to run before any
-            // new artifact is created — anything alive in the current
-            // run is constructed after this returns.
-            Task.detached(priority: .utility) { WorkingDirectory.sweep() }
+            // Phase 8 launch-sweep + M2 recovery: clear orphaned zerro-*
+            // artifacts from prior crashes / force-quits, BUT first salvage a
+            // recording a prior session abandoned for sleep —
+            // RecordingSession.abandonForSleep leaves a fragmented .mov on disk
+            // WITHOUT finalizing it (an interrupted finishWriting would corrupt
+            // it), so it's recoverable instead of junk. recoverOrphanedRecording
+            // IfAny OFFERS the survivor (rev 3 — asks before generating, never
+            // auto-spends a credit) and sweeps the rest, or falls back to the
+            // blanket sweep when there's nothing recoverable. Runs in this
+            // one-shot block (NOT App.init body, which SwiftUI may re-invoke);
+            // single-instance, so any orphan here is from a prior session,
+            // never a live file.
+            // M1: hand the live AppState to the AppDelegate so
+            // applicationShouldTerminate can route a quit (abandon an in-flight
+            // recording for recovery / clean an in-flight generation). Set here
+            // in the one-shot block — `state` is the retained instance only on
+            // the first init.
+            AppDelegate.appState = state
+            // Wire onboarding gating for recovery (AppState owns the recovery
+            // logic + the wake observer but not the OnboardingStore).
+            state.onboardingCompleteProvider = { [weak onb] in
+                onb?.hasCompletedOnboarding ?? false
+            }
+            // M2 (rev 3): recover on WAKE too — the common lid-close case
+            // survives sleep and never relaunches, so a launch-only check would
+            // never surface it. App-lifetime observer, registered once here.
+            state.startWakeRecoveryObserver()
+            // Launch recovery still covers crash / force-quit / relaunch (where
+            // the app actually exited). Both paths OFFER (ask before
+            // generating); neither auto-spends a credit.
+            Task { @MainActor [weak state] in
+                await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
+            }
 
             // Phase C: throttled background re-validation of a cached BYOK
             // license. No-ops unless a license is present AND the ~weekly
@@ -399,6 +425,15 @@ struct ZerroApp: App {
             pillController?.flashBusy()
             return
         }
+        // M2 (rev 3): the recovery offer is awaiting an answer (Generate /
+        // Discard / dismiss). Like .confirmingMode, the record hotkey must not
+        // start a new recording over it — flash to signal "resolve the pill
+        // first" (the pill's "x" is the quick "not now").
+        if case .confirmingRecovery = state.state {
+            Log.hotkey.notice("recovery confirm in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
+            return
+        }
 
         if !onboarding.hasCompletedOnboarding {
             Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
@@ -531,6 +566,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user's first server-funded generation (Phase F). Mirrors the two above.
     nonisolated(unsafe) static var requestOpenTrialEmail: (() -> Void)?
 
+    /// Set by `ZerroApp.init`'s one-shot block to the live, long-lived
+    /// AppState. Read by `applicationShouldTerminate` (M1) to route a quit by
+    /// the current recording/processing state. Weak — AppState is owned by
+    /// ZerroApp's @State for the app's lifetime, so the ref stays valid; set
+    /// only inside the one-shot block so it never points at one of the
+    /// throwaway AppStates SwiftUI builds on App.init re-invocation.
+    nonisolated(unsafe) static weak var appState: AppState?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The Window scene's .defaultLaunchBehavior(.presented) already
         // instantiates the onboarding window when needed. We just need
@@ -539,6 +582,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Self.shouldPresentOnboardingOnLaunch {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// M1 — quit (⌘Q / menu "Quit Zerro") routing. `NSApplication.terminate`
+    /// has no other teardown hook in this app, so without this a quit
+    /// mid-recording would orphan an unfinalized writer (an unplayable `.mov`)
+    /// and a quit mid-processing would strand the working dir. We hand off to
+    /// `AppState.prepareForTermination`, which abandons an in-flight recording
+    /// down the SAME recoverable path sleep uses (offered on next launch) and
+    /// cancels + cleans an in-flight generation, then return `.terminateNow`:
+    /// the abandon/cleanup are prompt (no async wait), so quit is never blocked.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Self.appState?.prepareForTermination()
+        return .terminateNow
     }
 
     @MainActor
