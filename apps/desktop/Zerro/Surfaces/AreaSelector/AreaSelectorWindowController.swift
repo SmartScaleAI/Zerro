@@ -377,6 +377,7 @@ final class AreaSelectorWindowController {
         let selection = SelectionRect(
             rect: global,
             screenLocalizedName: window.screen?.localizedName,
+            screenDisplayID: window.screen?.displayID,
             target: .area
         )
         // Phase 17: this is record-start — commit the toolbar's mode
@@ -399,6 +400,7 @@ final class AreaSelectorWindowController {
         let selection = SelectionRect(
             rect: global,
             screenLocalizedName: window.screen?.localizedName,
+            screenDisplayID: window.screen?.displayID,
             target: .window(id: candidate.id, title: candidate.title)
         )
         // Phase 17: record-start — commit the toolbar's mode selection as

@@ -46,6 +46,19 @@ struct SelectionRect: Equatable, Sendable {
     /// assume the screen is still attached when it consumes this.
     let screenLocalizedName: String?
 
+    /// L1: the stable, unique `CGDirectDisplayID` of the screen the
+    /// selection was made on. This — NOT `screenLocalizedName` — is what
+    /// the capture layer matches the selected display on at start():
+    /// localizedName is not unique (two identical external monitors share
+    /// it, so a name match can resolve to the wrong panel), whereas the
+    /// hardware display ID is unique. Carried so `RecordingSession` can
+    /// (a) capture the exact display the user picked, and (b) fail cleanly
+    /// if that display has disappeared between selection-confirm and
+    /// capture-start rather than silently falling back to main with this
+    /// selection's (now-wrong) geometry. Optional only because
+    /// `NSScreen.displayID` is — see that property.
+    let screenDisplayID: CGDirectDisplayID?
+
     /// Discriminates area vs. window capture. Defaults to `.area` so the
     /// existing drag-to-select call sites are unchanged.
     var target: Target = .area

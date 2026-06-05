@@ -127,6 +127,23 @@ final class RecordingSession: NSObject {
         /// Distinct from `.noMicrophoneAvailable` (no device at start) and
         /// from `.microphoneRevoked` (a permission, not connectivity).
         case microphoneDisconnected
+        /// L1: the display the user selected (matched by its stable
+        /// CGDirectDisplayID) is not present at start() — it was unplugged
+        /// or otherwise disappeared in the window between selection-confirm
+        /// and capture-start. We deliberately do NOT fall back to the main
+        /// display with the original selection's geometry (which was
+        /// computed for the now-absent display and would record the wrong
+        /// region, possibly out of bounds → clamped/black). Distinct from
+        /// `.noDisplaysAvailable` (no display at all) so the copy can tell
+        /// the user the specific display they picked is gone and to
+        /// re-select.
+        case selectedDisplayUnavailable
+        /// M3: the display being recorded changed mid-session — unplugged,
+        /// or its resolution/size changed such that the sourceRect fixed at
+        /// start() no longer maps to a valid region. Scoped to THE recorded
+        /// display by CGDirectDisplayID, so an unrelated display being added,
+        /// removed, or rearranged does not trip this.
+        case recordedDisplayChanged
     }
 
     // MARK: - Init parameters
@@ -194,6 +211,32 @@ final class RecordingSession: NSObject {
     /// `NotificationCenter.default`), so the matching `removeObserver` in
     /// finalize must use that same center.
     private var sleepObserver: NSObjectProtocol?
+
+    /// M3 observer token for `NSApplication.didChangeScreenParametersNotification`.
+    /// Installed at the end of `start()` (capture is live) and removed at the
+    /// top of `finalize()` / `abandonForSleep()` on every exit path — same
+    /// capture-scoped lifetime as `micDisconnectObserver` / `sleepObserver`,
+    /// so it can't outlive the session or leak one observer per recording.
+    /// `nil` whenever no observer is registered. Registered on
+    /// `NotificationCenter.default` (mirroring the selection-phase observer in
+    /// `AreaSelectorWindowController`), so the matching `removeObserver` uses
+    /// that same center. Only installed when `recordedDisplayID` is known.
+    private var displayChangeObserver: NSObjectProtocol?
+
+    /// M3: the stable hardware identity (`CGDirectDisplayID`) and point-size
+    /// of the display being recorded, captured at `start()`. The
+    /// display-change observer compares the live display set against these to
+    /// decide whether THE recorded display (not some unrelated one) has gone
+    /// away or had its resolution/size changed in a way that invalidates the
+    /// fixed `sourceRect`. `nil` before start / after finalize. We store the
+    /// size in POINTS (NSScreen.frame.size) — the same space the selection
+    /// geometry math uses — and deliberately do NOT track the frame ORIGIN:
+    /// the capture's `sourceRect` is display-LOCAL, so the recorded region
+    /// stays valid when the display's global origin shifts because the user
+    /// rearranged an unrelated monitor. Only a size/resolution change (or the
+    /// display vanishing) invalidates it.
+    private var recordedDisplayID: CGDirectDisplayID?
+    private var recordedDisplaySize: CGSize?
 
     /// Monotonic anchor for the elapsed publish task. A `SuspendingClock`
     /// instant — NOT wall clock (CFAbsoluteTime) — set in start() once both
@@ -278,15 +321,23 @@ final class RecordingSession: NSObject {
     func start() async throws {
         guard lifecycleState == .idle else { throw SessionError.alreadyStarted }
 
-        // Resolve display. With a `selection`, prefer the screen it
-        // was made on (matched by localized name) and fall back to
-        // main if that screen has since disappeared. Without one,
-        // primary display.
+        // Resolve display. With a `selection`, capture the EXACT display it
+        // was made on, matched by its stable CGDirectDisplayID (L1). If that
+        // display is gone we fail cleanly with `.selectedDisplayUnavailable`
+        // rather than silently capturing main with the original display's
+        // (now-wrong) geometry. Without a selection, the primary display.
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
-        let resolved = Self.resolveDisplay(for: selection, in: content)
-        guard let display = resolved?.scDisplay, let screen = resolved?.nsScreen else {
+        let display: SCDisplay
+        let screen: NSScreen
+        switch Self.resolveDisplay(for: selection, in: content) {
+        case .resolved(let r):
+            display = r.scDisplay
+            screen = r.nsScreen
+        case .selectedDisplayGone:
+            throw SessionError.selectedDisplayUnavailable
+        case .noDisplays:
             throw SessionError.noDisplaysAvailable
         }
 
@@ -510,6 +561,50 @@ final class RecordingSession: NSObject {
             }
         }
 
+        // M3: watch for the recorded display being unplugged or reconfigured
+        // mid-capture. The selection phase already guards itself this way
+        // (AreaSelectorWindowController's didChangeScreenParameters observer);
+        // the capture phase had no equivalent, so it relied entirely on
+        // SCStream voluntarily firing didStopWithError. If SCK instead keeps
+        // delivering black/frozen frames (display gone) or stale-geometry
+        // frames (the sourceRect/width/height are fixed at start() and never
+        // reconfigured), the recording silently produces garbage with no error.
+        //
+        // Captured ONCE here from the resolved display so the observer can
+        // scope strictly to it via CGDirectDisplayID (the L1 identity) — see
+        // `handleScreenParametersChanged`. We only install the observer when
+        // the recorded display's ID is known; without it we couldn't scope the
+        // check and would risk over-firing on unrelated display events.
+        // Installed only now (capture is live) and removed at the top of
+        // finalize() / abandonForSleep() on every exit path, mirroring the mic
+        // + sleep observers' capture-scoped lifetime so it can't leak.
+        //
+        // On fire we route through `failSession` — the SAME machinery
+        // didStopWithError / the mic-disconnect observer use (failSession →
+        // finalize(deletingFile: true) → onFinish(.failed)) — so the partial
+        // .mov is discarded (the latter portion is black/wrong-geometry, so
+        // the file is corrupt rather than "complete up to the interruption")
+        // and the state machine reaches .failed through the existing guarded
+        // transitions. A display change can ALSO trip SCStream
+        // didStopWithError; whichever lands first flips lifecycleState to
+        // .finishing and the other is a guarded no-op (failSession's
+        // `== .running` guard, plus the observer being removed at finalize's
+        // top). Registered on NotificationCenter.default — teardown removes it
+        // from that same center.
+        if let displayID = screen.displayID {
+            self.recordedDisplayID = displayID
+            self.recordedDisplaySize = screen.frame.size
+            displayChangeObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleScreenParametersChanged()
+                }
+            }
+        }
+
         // Anchor the UI-facing elapsed clock AND the 150s/180s cap on a
         // SuspendingClock instant (see `sessionStartInstant`). NOT video PTS:
         // SCStream's minimumFrameInterval is a CAP, not a floor — when the
@@ -559,6 +654,52 @@ final class RecordingSession: NSObject {
         Log.capture.error("failSession: \(error.localizedDescription, privacy: .private)")
         lifecycleState = .finishing
         finalize(deletingFile: true, failureError: error)
+    }
+
+    /// M3: a display-parameters change fired while we were recording. Decide
+    /// whether it affects the SPECIFIC display being recorded — and only that
+    /// display — before tearing anything down. Over-firing here would kill a
+    /// valid recording when the user merely plugs in or rearranges an
+    /// unrelated monitor, so the scoping discipline matches M4's pinned-device
+    /// observer: identity-checked, never "any event of this kind".
+    ///
+    /// Invalidating changes (→ fail cleanly):
+    ///   • The recorded display is no longer in `NSScreen.screens` — unplugged.
+    ///   • Its point-size changed — a resolution/mode change that makes the
+    ///     `sourceRect`/width/height fixed at start() wrong (a region that was
+    ///     in bounds can now be partly/fully outside the display).
+    /// Non-invalidating (→ ignore): the recorded display's frame ORIGIN moved
+    /// but its size is unchanged. The capture's `sourceRect` is display-LOCAL,
+    /// so the recorded region is still valid; the origin only shifts because
+    /// the user rearranged some OTHER monitor. Likewise any change confined to
+    /// a different display.
+    ///
+    /// Guarded by `== .running` (via `failSession`) so a concurrent
+    /// didStopWithError / sleep / mic-disconnect that already moved us off
+    /// `.running` makes this a no-op — same double-fire convergence as the
+    /// other terminal paths.
+    private func handleScreenParametersChanged() {
+        guard lifecycleState == .running,
+              let recordedDisplayID,
+              let recordedDisplaySize else { return }
+
+        guard let screen = NSScreen.screens.first(where: { $0.displayID == recordedDisplayID }) else {
+            // The recorded display is gone.
+            Log.capture.notice(
+                "recorded display \(recordedDisplayID, privacy: .public) disappeared mid-capture — failing cleanly"
+            )
+            failSession(with: SessionError.recordedDisplayChanged)
+            return
+        }
+        // Present but resized/reconfigured — the fixed sourceRect no longer
+        // maps to a valid region. Compare size only (not origin); see the doc
+        // comment above for why an origin-only shift is benign.
+        if screen.frame.size != recordedDisplaySize {
+            Log.capture.notice(
+                "recorded display \(recordedDisplayID, privacy: .public) size changed mid-capture — failing cleanly"
+            )
+            failSession(with: SessionError.recordedDisplayChanged)
+        }
     }
 
     /// M2 (rev 2): sleep teardown that deliberately does NOT finalize the
@@ -631,6 +772,14 @@ final class RecordingSession: NSObject {
             NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
         }
         self.sleepObserver = nil
+        // M3: the display-change observer lives on NotificationCenter.default
+        // (mirroring the selection-phase observer) — remove it from there.
+        if let displayChangeObserver {
+            NotificationCenter.default.removeObserver(displayChangeObserver)
+        }
+        self.displayChangeObserver = nil
+        self.recordedDisplayID = nil
+        self.recordedDisplaySize = nil
     }
 
     // MARK: - Finalize
@@ -952,37 +1101,62 @@ final class RecordingSession: NSObject {
         let nsScreen: NSScreen
     }
 
+    /// Outcome of resolving the display to capture. Split into three so
+    /// `start()` can map "the display you picked is gone" to a distinct,
+    /// actionable failure (L1) rather than collapsing it into
+    /// "no displays at all" or — worse — silently capturing the wrong one.
+    private enum DisplayResolution {
+        case resolved(ResolvedDisplay)
+        /// A selection was made on a specific display (by CGDirectDisplayID)
+        /// that is no longer present at start().
+        case selectedDisplayGone
+        /// No display is available at all (the no-selection primary path
+        /// found nothing).
+        case noDisplays
+    }
+
+    /// L1: match the selected display by its stable, unique
+    /// `CGDirectDisplayID` — never by `localizedName` (not unique across
+    /// two identical external monitors) and never with a silent fall back
+    /// to `NSScreen.main`. If the selection's display is gone, return
+    /// `.selectedDisplayGone` so the caller fails cleanly instead of
+    /// applying the original display's geometry to the wrong panel.
     private static func resolveDisplay(
         for selection: SelectionRect?,
         in content: SCShareableContent
-    ) -> ResolvedDisplay? {
-        if let name = selection?.screenLocalizedName,
-           let screen = NSScreen.screens.first(where: { $0.localizedName == name }),
-           let screenNumberKey = screen.deviceDescription[
-               NSDeviceDescriptionKey("NSScreenNumber")
-           ] as? NSNumber {
-            let displayID = CGDirectDisplayID(screenNumberKey.uint32Value)
-            if let scDisplay = content.displays.first(where: { $0.displayID == displayID }) {
-                return ResolvedDisplay(scDisplay: scDisplay, nsScreen: screen)
+    ) -> DisplayResolution {
+        if let selection {
+            // A selection without a display ID predates L1 (or had no
+            // backing screen at confirm time). We refuse to guess a display
+            // and apply this selection's geometry to it — that IS the
+            // stale-geometry bug. Treat it as "selected display gone".
+            guard let displayID = selection.screenDisplayID else {
+                Log.capture.notice(
+                    "selection carries no display ID — cannot match a display, failing cleanly"
+                )
+                return .selectedDisplayGone
             }
-            // Display name is .private — it's the user's monitor name
-            // (e.g. "Colin's MacBook Pro Display"), an identifier they
-            // chose or that their hardware vendor set.
-            Log.capture.notice(
-                "selection screen '\(name, privacy: .private)' found in NSScreen but not in SCShareableContent — falling back to main"
-            )
-        } else if let name = selection?.screenLocalizedName {
-            Log.capture.notice(
-                "selection screen '\(name, privacy: .private)' no longer present — falling back to main"
-            )
+            guard let scDisplay = content.displays.first(where: { $0.displayID == displayID }),
+                  let screen = NSScreen.screens.first(where: { $0.displayID == displayID }) else {
+                // The selected display disappeared between selection-confirm
+                // and now (unplugged, etc.). Do NOT fall back to main with
+                // this selection's sourceRect — it was computed for the
+                // original display's geometry and would record the wrong
+                // region (possibly out of bounds → SCK clamps or blacks).
+                Log.capture.notice(
+                    "selected display \(displayID, privacy: .public) no longer present — failing cleanly"
+                )
+                return .selectedDisplayGone
+            }
+            return .resolved(ResolvedDisplay(scDisplay: scDisplay, nsScreen: screen))
         }
-        // Fallback: NSScreen.main paired with the first SCDisplay
-        // (which is the primary display per ScreenCaptureKit ordering).
+        // No selection: full primary display — NSScreen.main paired with the
+        // first SCDisplay (the primary display per ScreenCaptureKit ordering).
         guard let mainScreen = NSScreen.main,
               let scDisplay = content.displays.first else {
-            return nil
+            return .noDisplays
         }
-        return ResolvedDisplay(scDisplay: scDisplay, nsScreen: mainScreen)
+        return .resolved(ResolvedDisplay(scDisplay: scDisplay, nsScreen: mainScreen))
     }
 
     /// Single conversion site for SelectionRect.rect (points, global

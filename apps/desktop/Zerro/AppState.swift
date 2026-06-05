@@ -83,6 +83,18 @@ public enum RecordingFailureReason: Equatable {
     case streamStartFailed
     case writerStartFailed
     case captureInterrupted
+    /// L1 — the display the user selected was gone by the time capture
+    /// started (unplugged between selection-confirm and start). Distinct
+    /// from `.streamStartFailed` so the copy can name the cause and point
+    /// the user to re-select. Not retryable: there are no processed
+    /// artifacts to re-run — the user records again.
+    case displayUnavailable
+    /// M3 — the display being recorded changed mid-session (unplugged, or
+    /// its resolution/size changed so the fixed capture region went wrong).
+    /// Distinct from `.captureInterrupted` so the copy can say specifically
+    /// that the display changed. Not retryable, for the same reason as
+    /// `.displayUnavailable`.
+    case displayChanged
 
     // Phase 8 — local processing failures
     /// The local processing pipeline (audio isolation / frame extraction /
@@ -164,6 +176,7 @@ public enum RecordingFailureReason: Equatable {
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneUnavailable,
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
+             .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth,
              .outOfCredits, .subscriptionInactive,
@@ -188,6 +201,10 @@ public enum RecordingFailureReason: Equatable {
             return "Couldn\u{2019}t open the recording file."
         case .captureInterrupted:
             return "Recording was interrupted."
+        case .displayUnavailable:
+            return "The display you selected is no longer available."
+        case .displayChanged:
+            return "The display you were recording changed."
         case .processingFailed:
             return "Couldn\u{2019}t process the recording."
         case .recordingTooShort:
@@ -1662,6 +1679,7 @@ final class AppState {
              .providerError:
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneDisconnected,
+             .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
              .outOfCredits, .subscriptionInactive,
@@ -1699,6 +1717,10 @@ final class AppState {
                 return .microphoneUnavailable
             case .microphoneDisconnected:
                 return .microphoneDisconnected
+            case .selectedDisplayUnavailable:
+                return .displayUnavailable
+            case .recordedDisplayChanged:
+                return .displayChanged
             case .writerFailedToStart:
                 return .writerStartFailed
             }
