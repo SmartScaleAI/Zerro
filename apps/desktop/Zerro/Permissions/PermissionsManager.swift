@@ -112,6 +112,14 @@ final class PermissionsManager {
     /// inside `computeScreenRecordingStatus`.
     @ObservationIgnored private var screenRecordingGrantedViaShareable: Bool = false
 
+    /// True while a `reactivateApp` boost/revert cycle is outstanding —
+    /// from the moment we snapshot window levels until the pending revert
+    /// runs. Guards against an overlapping `reactivateApp` (e.g. granting
+    /// multiple permissions in quick succession) snapshotting windows that
+    /// are already `.floating`, which would record the boosted level as the
+    /// "original" and strand the window above everything on revert.
+    @ObservationIgnored private var boostInProgress = false
+
     /// UserDefaults key used to distinguish "never asked" from "asked and
     /// denied" for Screen Recording, since CGPreflight returns Bool only.
     /// Sticky — once true, it never resets, which matches the OS behavior
@@ -460,6 +468,18 @@ final class PermissionsManager {
     func reactivateApp() {
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in
+            // If a prior boost/revert cycle is still outstanding, its windows
+            // are already `.floating` and a revert is pending. Re-grabbing
+            // focus above is enough; snapshotting now would capture `.floating`
+            // as the "original" level and strand the window on revert. The
+            // in-flight cycle's own `becomeKey`/timeout revert still fires.
+            // The guard read and flag set must stay suspension-free (no `await`
+            // between them) so two calls can't both pass the guard before either
+            // sets the flag — inserting an await here silently reopens the race.
+            guard !boostInProgress else { return }
+            boostInProgress = true
+            defer { boostInProgress = false }
+
             let titledWindows = NSApp.windows.filter {
                 $0.isVisible && $0.styleMask.contains(.titled)
             }
