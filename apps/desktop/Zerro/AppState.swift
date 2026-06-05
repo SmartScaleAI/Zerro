@@ -1493,9 +1493,18 @@ final class AppState {
     /// Recording is checked first — it's the dominant track, so if it's
     /// gone the mic state is moot — via PermissionsManager's canonical
     /// check (CGPreflight + CGWindowList) so dev-time CGPreflight drift
-    /// doesn't misreport a mic revocation as a screen-recording one. The
-    /// mic's `.denied`/`.restricted` state is reported reliably, so a
-    /// direct authorizationStatus read is enough there.
+    /// doesn't misreport a mic revocation as a screen-recording one. For
+    /// the mic, any state other than `.authorized` means the capture the
+    /// SCStream was configured for couldn't run, so all of
+    /// `.denied`/`.restricted`/`.notDetermined` route to `.microphoneRevoked`.
+    /// `.notDetermined` is included specifically for the start-time path:
+    /// the mic is captured THROUGH ScreenCaptureKit
+    /// (`config.captureMicrophone`), which doesn't always drive
+    /// AVFoundation's own TCC prompt, so a start blocked on the mic can
+    /// land here with the status still `.notDetermined` rather than
+    /// `.denied`. Without `.notDetermined`, that case fell through to the
+    /// generic `.captureInterrupted` ("Recording was interrupted.") — a
+    /// dead end that never points the user at the mic permission.
     private static func captureFailureReason() -> RecordingFailureReason {
         // Use the dev-drift-tolerant variant here: at this point we
         // just had an active SCStream (we got far enough to fail
@@ -1507,9 +1516,11 @@ final class AppState {
             return .screenRecordingRevoked
         }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .denied, .restricted:
+        case .denied, .restricted, .notDetermined:
             return .microphoneRevoked
-        default:
+        case .authorized:
+            return .captureInterrupted
+        @unknown default:
             return .captureInterrupted
         }
     }
