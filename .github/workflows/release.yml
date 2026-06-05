@@ -114,13 +114,10 @@ jobs:
           "$RUNNER_TEMP/sparkle/bin/generate_appcast" --version || true
 
       # ----------------------------------------------------------------------
-      - name: Set version numbers
-        run: |
-          set -euo pipefail
-          xcrun agvtool new-version -all "${{ steps.ver.outputs.build }}"
-          xcrun agvtool new-marketing-version "${{ steps.ver.outputs.marketing }}"
-
-      # ----------------------------------------------------------------------
+      # Versions are passed directly to xcodebuild below (command-line build
+      # settings always override the pbxproj). agvtool is NOT used: without
+      # VERSIONING_SYSTEM=apple-generic it silently no-ops on the marketing
+      # version, which shipped v1.0.4 binaries that identified as 1.0.1.
       - name: Archive
         run: |
           set -euo pipefail
@@ -131,7 +128,9 @@ jobs:
             -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
             archive \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$TEAM_ID"
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}"
 
       - name: Export Developer ID app
         run: |
@@ -141,6 +140,18 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "Scripts/ExportOptions.plist"
           test -d "$RUNNER_TEMP/export/$APP_NAME.app"
+
+      # Fail fast if the built app's versions don't match the tag — this is
+      # what generate_appcast reads, so a mismatch here ships a bad appcast.
+      - name: Verify app version matches tag
+        run: |
+          set -euo pipefail
+          PLIST="$RUNNER_TEMP/export/$APP_NAME.app/Contents/Info.plist"
+          GOT_MARKETING="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$PLIST")"
+          GOT_BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$PLIST")"
+          echo "App reports: $GOT_MARKETING (build $GOT_BUILD); expected ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
+          [ "$GOT_MARKETING" = "${{ steps.ver.outputs.marketing }}" ] || { echo "::error::Marketing version mismatch"; exit 1; }
+          [ "$GOT_BUILD" = "${{ steps.ver.outputs.build }}" ] || { echo "::error::Build number mismatch"; exit 1; }
 
       - name: Verify signature + hardened runtime
         run: |
