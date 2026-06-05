@@ -1,20 +1,30 @@
-name: Release
+name: Release (macOS app)
 
-# Trigger: push a version tag like v1.0.2
-#   git tag v1.0.2 && git push origin v1.0.2
+# Trigger: push a version tag like app-v1.0.7
+#   git tag app-v1.0.7 && git push origin app-v1.0.7
 on:
   push:
     tags:
-      - "v*"
+      - "app-v*"
   # Allow manually re-running for a given version from the Actions tab.
   workflow_dispatch:
     inputs:
       version:
-        description: "Marketing version (e.g. 1.0.2). Used only for manual runs."
+        description: "Marketing version (e.g. 1.0.7). Used only for manual runs."
         required: true
 
 permissions:
-  contents: write          # needed to create a GitHub Release in this repo
+  contents: write          # create the GitHub Release + push the appcast commit
+
+# Never run two releases at once: both would push an appcast commit to main.
+concurrency:
+  group: release-app
+  cancel-in-progress: false
+
+# All build/sign steps run from the app directory inside the monorepo.
+defaults:
+  run:
+    working-directory: apps/desktop
 
 env:
   SCHEME: Zerro
@@ -22,10 +32,8 @@ env:
   APP_NAME: Zerro
   BUNDLE_ID: com.cbreeding.Zerro
   TEAM_ID: H6NWCRRAHV
-  # The site repo that serves getzerro.app (Vercel auto-deploys it).
-  SITE_REPO: SmartScaleAI/smartscale-zerro-website  # the website repo (serves getzerro.app)
-  SITE_BRANCH: production                            # Vercel production branch for getzerro.app
-  SITE_APPCAST_PATH: public/appcast.xml              # where appcast.xml lives in the site repo
+  # The website lives in this same repo; Vercel deploys apps/web on push to main.
+  SITE_APPCAST_PATH: apps/web/public/appcast.xml     # where the Sparkle appcast is served from
   # Where the dmg download lives (a GitHub Release asset URL is filled in at runtime).
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
 
@@ -49,7 +57,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MARKETING="${{ github.event.inputs.version }}"
           else
-            MARKETING="${GITHUB_REF_NAME#v}"
+            MARKETING="${GITHUB_REF_NAME#app-v}"
           fi
           BUILD="$(git rev-list --count HEAD)"
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
@@ -209,7 +217,7 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME:-v${{ steps.ver.outputs.marketing }}}"
+          TAG="${GITHUB_REF_NAME:-app-v${{ steps.ver.outputs.marketing }}}"
           DL_PREFIX="https://github.com/${{ github.repository }}/releases/download/${TAG}/"
           echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
             --ed-key-file - \
@@ -228,28 +236,35 @@ jobs:
           name: ${{ steps.ver.outputs.marketing }}
           fail_on_unmatched_files: true
           files: |
-            dist/${{ env.APP_NAME }}.dmg
+            apps/desktop/dist/${{ env.APP_NAME }}.dmg
 
       # ----------------------------------------------------------------------
-      # Publish the appcast to the site repo. Vercel auto-deploys on push.
-      - name: Publish appcast to site repo
-        env:
-          SITE_REPO_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+      # Publish the appcast to the website (same repo). The push to main
+      # touches apps/web/, so Vercel auto-deploys it. checkout@v4 leaves the
+      # workflow's GITHUB_TOKEN configured for pushes; permissions.contents:
+      # write covers it.
+      - name: Publish appcast to website (apps/web)
+        working-directory: .
         run: |
           set -euo pipefail
-          git clone --branch "$SITE_BRANCH" "https://x-access-token:${SITE_REPO_TOKEN}@github.com/${SITE_REPO}.git" "$RUNNER_TEMP/site"
-          mkdir -p "$(dirname "$RUNNER_TEMP/site/$SITE_APPCAST_PATH")"
-          cp "dist/appcast.xml" "$RUNNER_TEMP/site/$SITE_APPCAST_PATH"
-          cd "$RUNNER_TEMP/site"
+          # The runner checked out the release tag (detached HEAD); the appcast
+          # commit must land on main.
+          git fetch origin main
+          git switch main
+          cp "apps/desktop/dist/appcast.xml" "$SITE_APPCAST_PATH"
           git config user.name "Zerro Release Bot"
           git config user.email "release-bot@users.noreply.github.com"
           git add "$SITE_APPCAST_PATH"
           if git diff --cached --quiet; then
             echo "Appcast unchanged — nothing to commit."
           else
-            git commit -m "Update appcast for ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
-            git push
+            git commit -m "chore(web): update appcast for ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
+            # Rebase-retry in case main moved during the ~15 min build.
+            for i in 1 2 3; do
+              git push origin main && break
+              git pull --rebase origin main
+            done
           fi
 
       - name: Done
-        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). Vercel will deploy the updated appcast shortly."
+        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). The appcast commit on main triggers a Vercel deploy of apps/web shortly."
