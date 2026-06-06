@@ -8,6 +8,16 @@ xcuserdata/
 # Build / release artifacts (regenerated on build & packaging)
 dist/
 
+# Eval corpus + outputs — local-only. Raw screen recordings (source.mov / audio
+# / frame JPEGs) are large binaries AND may contain sensitive on-screen content,
+# so they never belong in the repo; eval scorecards are regenerated per run.
+# Re-create a corpus with Scripts/capture-recording.sh; re-extract with
+# Scripts/zerro-extract.sh. (Trailing-* variants are per-phase scratch dirs.)
+eval-recordings/
+eval-recordings-*/
+eval-results/
+eval-results-*/
+
 # Secrets / local env — never commit. (Backend secrets live in Supabase, not the repo.)
 .env
 .env.*

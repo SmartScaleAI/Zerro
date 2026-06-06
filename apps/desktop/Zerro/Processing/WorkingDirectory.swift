@@ -27,6 +27,14 @@
 //    re-throwing, so a mid-pipeline failure doesn't leak a half-built
 //    directory the user has to wait for sweep to clear.
 //
+//  DEBUG eval retention (Phase 0)
+//  ------------------------------
+//  In DEBUG builds, the `-RetainEvalArtifacts YES` launch arg makes every
+//  `remove(at:)` a no-op (see `retainEvalArtifacts`), so a recording's raw
+//  `.mov` and working dir both survive for the eval corpus. `sweep()` is
+//  intentionally left ungated, so the next launch still reclaims tmp.
+//  Compiled out of RELEASE — production cleanup is unchanged.
+//
 
 import Foundation
 import os
@@ -61,12 +69,49 @@ enum WorkingDirectory {
         return url
     }
 
+    #if DEBUG
+    /// DEBUG-only eval switch (Phase 0). When set — via the Xcode "Zerro"
+    /// scheme launch arg `-RetainEvalArtifacts YES`, which lands in
+    /// `UserDefaults` under this key — EVERY routine per-artifact delete
+    /// routed through `remove(at:)` is skipped, so a recording's raw
+    /// `zerro-<UUID>.mov` AND its `zerro-work-<UUID>` working dir both
+    /// survive a full record → generate cycle. That's what lets the eval
+    /// corpus (`Scripts/capture-recording.sh`) grab the source `.mov` and
+    /// re-run `ProcessingPipeline` on it later (`zerro-extract`) when a
+    /// future phase changes sampling/resolution.
+    ///
+    /// Read ONCE at first access (a launch arg can't change mid-run).
+    /// `nonisolated` because `remove(at:)` is, and the project's
+    /// `-default-isolation=MainActor` would otherwise pin this static to
+    /// the main actor; `UserDefaults` reads are thread-safe.
+    ///
+    /// Deliberately scoped to `remove(at:)` and NOTHING else: the
+    /// launch-time orphan `sweep()` calls `FileManager.removeItem`
+    /// directly, so it is NOT gated — tmp is still reclaimed at the next
+    /// launch and retained artifacts can't accumulate unboundedly across
+    /// sessions. The entire mechanism is compiled out of RELEASE builds,
+    /// so production cleanup behaves exactly as before.
+    nonisolated static let retainEvalArtifacts: Bool =
+        UserDefaults.standard.bool(forKey: "RetainEvalArtifacts")
+    #endif
+
     /// Best-effort delete of a URL (file or directory). Silently no-ops
     /// if the path doesn't exist or can't be removed — cleanup is never
     /// load-bearing for correctness, and surfacing a "couldn't delete
     /// tmp" error to the user is worse than leaving the artifact for
     /// the next launch-sweep.
     nonisolated static func remove(at url: URL) {
+        #if DEBUG
+        // Eval-retention escape hatch (DEBUG only). Skip the delete so the
+        // source `.mov` / working dir persist for the eval corpus. Basename
+        // is .public (a `zerro-*` name we generated, no user content).
+        if retainEvalArtifacts {
+            Log.cleanup.notice(
+                "RetainEvalArtifacts: keeping \(url.lastPathComponent, privacy: .public)"
+            )
+            return
+        }
+        #endif
         try? FileManager.default.removeItem(at: url)
     }
 
