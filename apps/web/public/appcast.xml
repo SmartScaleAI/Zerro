@@ -3,12 +3,13 @@
     <channel>
         <title>Zerro</title>
         <item>
-            <title>1.0.1</title>
-            <pubDate>Sun, 31 May 2026 08:58:36 -0400</pubDate>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.4</sparkle:minimumSystemVersion>
-            <enclosure url="https://getzerro.app/Zerro.dmg" length="4216137" type="application/octet-stream" sparkle:edSignature="r34BWNcR5KZblYZKFNb7k76ftRpRNLLqnMUuiBowHfUxpOYV5oIFSWhM5mtPcFc499ycQrms5faCjHHRfajXAQ=="/>
+            <title>1.0.7</title>
+            <pubDate>Fri, 05 Jun 2026 23:32:02 +0000</pubDate>
+            <link>https://getzerro.app/</link>
+            <sparkle:version>81</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/SmartScaleAI/smartscale-zerro/releases/download/app-v1.0.7/Zerro.dmg" length="4790936" type="application/octet-stream" sparkle:edSignature="tD27+C0HIYv9Y2hqrT0HD3Kh+DDSn43EpG5kHzNkXViO+EcFtnempTEd3yez1AsX8dJghuEK1+UWFG7kHaPoDg=="/>
         </item>
     </channel>
 </rss>
