@@ -30,10 +30,15 @@ export interface FrameInput {
    *  data-URL / inline-data wrapping is the chat adapter's job. */
   mime: string;
   base64: string;
+  /** Phase 3 — the frame's redacted on-device-OCR text (the client masks
+   *  secrets before upload; the server trusts it as already-redacted and only
+   *  length-caps it). Omitted/empty → no `on-screen text:` block for this
+   *  frame. */
+  ocrText?: string;
 }
 
 type Item =
-  | { kind: "frame"; start: number; mime: string; base64: string }
+  | { kind: "frame"; start: number; mime: string; base64: string; ocrText?: string }
   | { kind: "speech"; start: number; end: number; text: string };
 
 /** M:SS, seconds TRUNCATED not rounded, clamped at 0. Mirrors Swift `mmss`. */
@@ -62,7 +67,7 @@ export function buildInterleavedContent(
 ): TimelineBlock[] {
   const items: Item[] = [];
   for (const f of frames) {
-    items.push({ kind: "frame", start: f.timestamp, mime: f.mime, base64: f.base64 });
+    items.push({ kind: "frame", start: f.timestamp, mime: f.mime, base64: f.base64, ocrText: f.ocrText });
   }
   for (const s of segments) {
     items.push({ kind: "speech", start: s.start, end: s.end, text: s.text });
@@ -76,6 +81,12 @@ export function buildInterleavedContent(
     if (item.kind === "frame") {
       content.push({ type: "text", text: `\n[${mmss(item.start)}] ` });
       content.push({ type: "image", mime: item.mime, base64: item.base64 });
+      // Phase 3: the frame's redacted on-screen text rides right AFTER its image
+      // block, only when present. Byte-identical to the BYOK (encodeBody) and
+      // eval (eval-models.mjs) renderings — KEEP IN SYNC if you touch this.
+      if (item.ocrText) {
+        content.push({ type: "text", text: `\n[${mmss(item.start)}] on-screen text: ${item.ocrText}` });
+      }
     } else {
       const tag = `[${mmss(item.start)}–${mmss(item.end)}]`;
       content.push({ type: "text", text: `\n${tag} "${item.text}"` });

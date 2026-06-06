@@ -29,6 +29,8 @@ struct CaptureSection: View {
             MicrophoneRow()
             SettingsRowDivider()
             HotkeyRow()
+            SettingsRowDivider()
+            RedactSecretsRow()
         }
     }
 }
@@ -122,6 +124,33 @@ private struct HotkeyRow: View {
             description: "Press anywhere to start a recording."
         ) {
             HotkeyDisplay(name: .toggleRecording)
+        }
+    }
+}
+
+// MARK: - Redact Secrets
+//
+// Phase 3: on-device OCR scans each kept keyframe for high-confidence secrets
+// (API keys, tokens, private-key headers, passwords, cards). When ON (the
+// default), it paints opaque boxes over them in the frame AND masks them as
+// [REDACTED] in the on-screen text sent alongside — the two stay in lock step,
+// so nothing hidden in pixels leaks via text. Read fresh at recording start
+// (ZerroApp) so a change here applies to the next recording.
+
+private struct RedactSecretsRow: View {
+    @Environment(PreferencesStore.self) private var preferences
+
+    var body: some View {
+        @Bindable var preferences = preferences
+
+        SettingsRow(
+            label: "Redact Detected Secrets",
+            description: "Scans each captured frame on-device and blacks out API keys, tokens, passwords, and card numbers \u{2014} in both the image and the extracted text \u{2014} before anything is sent."
+        ) {
+            Toggle("Redact Detected Secrets", isOn: $preferences.redactSecrets)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Color.vfSuccessGreen)
         }
     }
 }

@@ -52,7 +52,10 @@ struct InterleavedTimeline: Sendable {
 // MARK: - TimelineItem
 
 enum TimelineItem: Sendable {
-    case frame(timestamp: TimeInterval, imageURL: URL)
+    /// `ocrText` (Phase 3) is the frame's redacted on-device-OCR text, attached
+    /// after the image block when non-empty. `nil`/empty → no `on-screen text:`
+    /// block is emitted for this frame.
+    case frame(timestamp: TimeInterval, imageURL: URL, ocrText: String?)
     case speech(start: TimeInterval, end: TimeInterval, text: String)
 
     /// The sort key for chronological merge. Speech uses its start
@@ -61,7 +64,7 @@ enum TimelineItem: Sendable {
     /// nearby frame is most likely relevant.
     var startTime: TimeInterval {
         switch self {
-        case .frame(let t, _):       return t
+        case .frame(let t, _, _):    return t
         case .speech(let s, _, _):   return s
         }
     }
@@ -72,7 +75,7 @@ enum TimelineItem: Sendable {
     /// BYOK `encodeBody` can render tags off the main actor.
     nonisolated var timestampTag: String {
         switch self {
-        case .frame(let t, _):
+        case .frame(let t, _, _):
             return "[\(Self.mmss(t))]"
         case .speech(let s, let e, _):
             return "[\(Self.mmss(s))\u{2013}\(Self.mmss(e))]"
@@ -108,7 +111,8 @@ enum Interleaver {
         for frame in frames {
             items.append(.frame(
                 timestamp: CMTimeGetSeconds(frame.timestamp),
-                imageURL: frame.url
+                imageURL: frame.url,
+                ocrText: frame.ocrText
             ))
         }
         for seg in transcript.segments {
@@ -151,8 +155,13 @@ extension InterleavedTimeline {
         var frameIndex = 0
         for item in items {
             switch item {
-            case .frame:
+            case .frame(_, _, let ocrText):
                 lines.append("\(item.timestampTag) {frame_\(frameIndex)}")
+                // Mirror the payload: the `on-screen text:` block lands right
+                // after the frame when OCR found something (Phase 3).
+                if let ocrText, !ocrText.isEmpty {
+                    lines.append("\(item.timestampTag) on-screen text: \(ocrText)")
+                }
                 frameIndex += 1
             case .speech(_, _, let text):
                 lines.append("\(item.timestampTag) \"\(text)\"")

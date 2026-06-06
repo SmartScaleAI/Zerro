@@ -69,6 +69,7 @@ final class PreferencesStore {
     enum Keys {
         static let microphoneDeviceID = "vf.microphone.deviceID"
         static let defaultOutputMode = "defaultOutputMode"
+        static let redactSecrets = "redactSecrets"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -78,6 +79,7 @@ final class PreferencesStore {
         static let resettable: [String] = [
             microphoneDeviceID,
             defaultOutputMode,
+            redactSecrets,
         ]
     }
 
@@ -101,6 +103,15 @@ final class PreferencesStore {
         didSet { defaults.set(defaultOutputMode.rawValue, forKey: Keys.defaultOutputMode) }
     }
 
+    /// Phase 3 — when on (the default), each keyframe's on-device OCR pass
+    /// paints opaque boxes over any detected secret AND masks it as
+    /// `[REDACTED]` in the text attached to the payload. Read fresh at
+    /// recording-start time (like `microphoneDeviceID`) and carried to the
+    /// processing pipeline, so a Settings change applies to the next recording.
+    var redactSecrets: Bool {
+        didSet { defaults.set(redactSecrets, forKey: Keys.redactSecrets) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -112,6 +123,10 @@ final class PreferencesStore {
         } else {
             self.defaultOutputMode = .instruct
         }
+        // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
+        // the privacy-on default instead of UserDefaults' false-for-missing.
+        self.redactSecrets = defaults.object(forKey: Keys.redactSecrets) as? Bool
+            ?? ProcessingConfig.redactSecretsDefault
     }
 
     // MARK: - Reset
@@ -129,5 +144,6 @@ final class PreferencesStore {
         // immediately, even before the next launch.
         microphoneDeviceID = ""
         defaultOutputMode = .instruct
+        redactSecrets = ProcessingConfig.redactSecretsDefault
     }
 }

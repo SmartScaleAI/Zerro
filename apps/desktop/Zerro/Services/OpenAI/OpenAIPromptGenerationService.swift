@@ -150,7 +150,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         var userContent: [UserContentBlock] = []
         for item in timeline.items {
             switch item {
-            case .frame(_, let imageURL):
+            case .frame(_, let imageURL, let ocrText):
                 let dataURL: String
                 do {
                     dataURL = try Self.base64DataURL(from: imageURL)
@@ -162,6 +162,13 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
                 }
                 userContent.append(.text("\n\(item.timestampTag) "))
                 userContent.append(.imageURL(url: dataURL, detail: "high"))
+                // Phase 3: the frame's redacted on-screen text rides right AFTER
+                // its image block, only when OCR found something. Byte-identical
+                // to the Managed (interleave.ts) and eval (eval-models.mjs)
+                // renderings — KEEP IN SYNC if you touch this format.
+                if let ocr = ocrText, !ocr.isEmpty {
+                    userContent.append(.text("\n\(item.timestampTag) on-screen text: \(ocr)"))
+                }
 
             case .speech(_, _, let text):
                 userContent.append(.text("\n\(item.timestampTag) \"\(text)\""))

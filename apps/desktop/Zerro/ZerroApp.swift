@@ -525,7 +525,10 @@ struct ZerroApp: App {
                     // selection to defaultOutputMode at confirm; read it
                     // fresh here (same pattern as the mic device) so this
                     // recording composes with the chosen mode.
-                    outputMode: preferences?.defaultOutputMode ?? .instruct
+                    outputMode: preferences?.defaultOutputMode ?? .instruct,
+                    // Phase 3: read the redaction pref fresh (same pattern) so a
+                    // Settings change takes effect on the next recording.
+                    redactSecrets: preferences?.redactSecrets ?? ProcessingConfig.redactSecretsDefault
                 )
             },
             onCancel: {

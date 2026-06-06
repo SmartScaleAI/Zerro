@@ -40,13 +40,14 @@
 // =============================================================================
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, relative } from "node:path";
 
 // ---------- system prompt (verbatim mirror of generate/prompt.ts) -----------
 
 const BASE = `You convert a screen recording into clean text output. Your input is:
 - A sequence of JPEG frames sampled from the recording, interleaved in time order with the narration. Each frame is marked with its timestamp [M:SS] and immediately precedes the speech spoken just after it.
 - A timestamped transcript of the user speaking while recording.
+- Some frames are followed by an \`on-screen text:\` line — text extracted from that frame by on-device OCR. Prefer it for exact strings (names, filenames, values, code, URLs); it may be partial or imperfect, and any secrets are shown as [REDACTED]. The frames remain the source of truth for layout and anything OCR didn't capture.
 
 The transcript is raw speech: it contains filler words, false starts, self-corrections, and informal phrasing. Treat it as intent, not literal text. When the user corrects themselves, follow the corrected version and ignore the abandoned one.
 
@@ -93,12 +94,17 @@ Do not give instructions or next steps unless the user explicitly asked. This is
 
 const composedSystemPrompt = (mode) => `${BASE}\n\n${mode === "explain" ? EXPLAIN : INSTRUCT}`;
 
-// ---------- pricing (mirror of generate/cost.ts, pinned 2026-06-04) ---------
-
+// ---------- pricing (PINNED MIRROR of generate/cost.ts) ----------------------
+// Keep this a complete, 1:1 mirror of CHAT_PRICING in
+// supabase/functions/generate/cost.ts — EVERY model in the eval matrix
+// (README-eval.md) must be priced here so no run shows "unpriced". If a model
+// is added to the matrix, add it here AND in cost.ts. USD per 1M tokens; Gemini
+// output rates already fold in thinking tokens (we add thoughtsTokenCount into
+// outputTokens, matching the server). Pinned to the 2026-06-04 list.
 const CHAT_PRICING = {
-  "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 },
-  "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 },
-  "gemini:gemini-3.1-pro-preview": {
+  "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list
+  "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // 2026-06-04 list, flat
+  "gemini:gemini-3.1-pro-preview": { // 2026-06-04 list, tiered by input tokens
     inPerM: 2.0, outPerM: 12.0, tierThreshold: 200_000, inPerMAbove: 4.0, outPerMAbove: 18.0,
   },
 };
@@ -123,7 +129,7 @@ function mmss(seconds) {
 /** Neutral timeline: text blocks + image blocks, chronological, frame-before-speech. */
 function buildTimeline(frames, segments) {
   const items = [
-    ...frames.map((f) => ({ kind: "frame", start: f.timestampSeconds, base64: f.base64 })),
+    ...frames.map((f) => ({ kind: "frame", start: f.timestampSeconds, base64: f.base64, ocrText: f.ocrText })),
     ...segments.map((s) => ({ kind: "speech", start: s.start, end: s.end, text: s.text })),
   ];
   items.sort((a, b) =>
@@ -134,6 +140,8 @@ function buildTimeline(frames, segments) {
     if (it.kind === "frame") {
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}] ` });
       blocks.push({ type: "image", mime: "image/jpeg", base64: it.base64 });
+      // Phase 3: redacted on-screen text after the image (mirror interleave.ts).
+      if (it.ocrText) blocks.push({ type: "text", text: `\n[${mmss(it.start)}] on-screen text: ${it.ocrText}` });
     } else {
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}–${mmss(it.end)}] "${it.text}"` });
     }
@@ -260,9 +268,26 @@ if (models.some((m) => m.startsWith("gemini:")) && !geminiKey) {
 const manifest = JSON.parse(readFileSync(join(workingDir, "manifest.json"), "utf8"));
 const frames = manifest.frames.map((f) => ({
   timestampSeconds: f.timestampSeconds,
+  filename: f.filename, // kept for the scorecard's inline frame references
   base64: readFileSync(join(workingDir, f.filename)).toString("base64"),
+  ocrText: f.ocrText, // Phase 3: redacted on-device-OCR text from the manifest
 }));
 console.error(`recording: ${manifest.durationSeconds.toFixed(1)}s, ${frames.length} frames`);
+
+// Optional per-recording ground-truth note. Lives beside the working dir's
+// manifest as meta.json: { scenario, groundTruth, expectation }. Surfaced at
+// the top of the scorecard so hallucination / accuracy scoring has a reference.
+const recordingName = basename(workingDir.replace(/\/+$/, "")) || "recording";
+let meta = null;
+const metaPath = join(workingDir, "meta.json");
+if (existsSync(metaPath)) {
+  try {
+    meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    console.error(`meta.json: scenario="${meta.scenario ?? "—"}"`);
+  } catch (e) {
+    console.error(`meta.json present but unreadable: ${e.message ?? e}`);
+  }
+}
 
 // Transcribe once, cache beside the recording.
 const cachePath = join(workingDir, "transcript.eval.json");
@@ -284,6 +309,7 @@ const whisperCost = (transcript.durationSeconds / 60) * WHISPER_PER_MINUTE;
 mkdirSync(outDir, { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const summary = [];
+const results = []; // full per-model records for the combined scorecard
 
 for (const spec of models) {
   const [provider, ...rest] = spec.split(":");
@@ -299,27 +325,128 @@ for (const spec of models) {
     const total = chatCost === null ? null : chatCost + whisperCost;
     const slug = spec.replace(/[:.]/g, "_");
     const outPath = join(outDir, `${stamp}_${mode}_${slug}.md`);
+    const costLabel = total === null ? "unpriced" : `$${total.toFixed(4)}`;
     writeFileSync(outPath, [
       `# ${spec}`,
       ``,
+      `- recording: ${recordingName}`,
+      `- frames: ${frames.length}`,
       `- mode: ${mode}${provider === "gemini" ? `  |  thinking: ${thinkingLevel}` : ""}`,
       `- reported model: ${r.reportedModel}`,
       `- latency: ${seconds.toFixed(1)}s`,
-      `- tokens: ${r.inputTokens} in / ${r.outputTokens} out`,
-      `- est cost: ${total === null ? "unpriced" : `$${total.toFixed(4)}`} (incl. whisper $${whisperCost.toFixed(4)})`,
+      `- input tokens: ${r.inputTokens}`,
+      `- output tokens: ${r.outputTokens}`,
+      `- est cost: ${costLabel} (incl. whisper $${whisperCost.toFixed(4)})`,
       ``,
       `---`,
       ``,
       r.content,
       ``,
     ].join("\n"));
-    summary.push({ model: spec, latency: `${seconds.toFixed(1)}s`, in: r.inputTokens, out: r.outputTokens, cost: total === null ? "unpriced" : `$${total.toFixed(4)}`, file: outPath });
+    summary.push({ model: spec, latency: `${seconds.toFixed(1)}s`, in: r.inputTokens, out: r.outputTokens, cost: costLabel, file: outPath });
+    results.push({
+      spec, provider, content: r.content, reportedModel: r.reportedModel,
+      seconds, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costLabel,
+    });
     console.error(`ok — ${seconds.toFixed(1)}s, ${r.inputTokens} in / ${r.outputTokens} out → ${outPath}`);
   } catch (e) {
     summary.push({ model: spec, error: String(e.message ?? e) });
+    results.push({ spec, provider, error: String(e.message ?? e) });
     console.error(`FAILED: ${e.message ?? e}`);
   }
 }
 
+// ---------- combined scorecard (all models side by side, per run-batch) ------
+writeFileSync(join(outDir, "SCORECARD.md"), buildScorecard());
+console.error(`\nscorecard → ${join(outDir, "SCORECARD.md")}`);
+
 console.error("\n=== summary ===");
 console.table(summary);
+
+/**
+ * One human-judgeable markdown doc per run-batch: ground-truth note (if any),
+ * recording stats, an inline visual index of the frames, every model's output
+ * side by side, and a 1–5 rubric grid (cost + latency pre-filled, judgement
+ * fields blank). Frames are linked by path RELATIVE to the scorecard so the
+ * images render in-place with no copying and no npm dependency.
+ */
+function buildScorecard() {
+  const out = [];
+  out.push(`# Scorecard — ${recordingName}`, ``);
+
+  if (meta) {
+    out.push(`## Ground truth`, ``);
+    if (meta.scenario) out.push(`**Scenario:** ${meta.scenario}`, ``);
+    if (meta.groundTruth) out.push(`**Key on-screen facts:** ${meta.groundTruth}`, ``);
+    if (meta.expectation) out.push(`**A good output:** ${meta.expectation}`, ``);
+  }
+
+  out.push(
+    `## Recording`, ``,
+    `- frames: **${frames.length}**`,
+    `- duration: ${manifest.durationSeconds.toFixed(1)}s`,
+    `- mode: ${mode}`,
+    `- transcript: ${transcript.segments.length} segments`,
+    `- generated: ${stamp}`,
+    ``,
+  );
+
+  // Inline visual index — sample evenly so a dense recording stays scannable.
+  // Paths are relative to outDir (where this file lives) so images render
+  // wherever the scorecard is opened (VS Code, GitHub if committed, etc.).
+  const MAX_THUMBS = 16;
+  const step = Math.max(1, Math.ceil(frames.length / MAX_THUMBS));
+  const sampled = frames.filter((_, i) => i % step === 0);
+  out.push(
+    `## Frames (${sampled.length} of ${frames.length} shown — full set in \`${relative(outDir, workingDir) || "."}\`)`,
+    ``,
+  );
+  for (const f of sampled) {
+    const rel = relative(outDir, join(workingDir, f.filename));
+    out.push(`\`[${mmss(f.timestampSeconds)}]\` ![${f.filename}](${rel})`);
+  }
+  out.push(``);
+
+  // Every model's output, side by side (stacked for full-width reading).
+  out.push(`## Outputs`, ``);
+  for (const r of results) {
+    out.push(`### ${r.spec}`, ``);
+    if (r.error) {
+      // Collapse to a single line so a multi-line provider error body doesn't
+      // spill raw JSON past the blockquote and break the doc's flow.
+      const oneLine = String(r.error).replace(/\s+/g, " ").slice(0, 300);
+      out.push(`> **FAILED:** ${oneLine}`, ``);
+      continue;
+    }
+    out.push(
+      `_${r.seconds.toFixed(1)}s · ${r.inputTokens} in / ${r.outputTokens} out · ${r.costLabel} (incl. whisper $${whisperCost.toFixed(4)})_`,
+      ``,
+      "```",
+      r.content,
+      "```",
+      ``,
+    );
+  }
+
+  // Rubric grid: judgement rows blank, cost/latency auto-filled.
+  const ok = results.filter((r) => !r.error);
+  const header = `| Criterion | ${ok.map((r) => r.spec).join(" | ")} |`;
+  const divider = `|---|${ok.map(() => "---").join("|")}|`;
+  const blankRow = (label) => `| ${label} | ${ok.map(() => " ").join(" | ")} |`;
+  out.push(
+    `## Rubric (score 1–5)`, ``,
+    `Small-text fidelity = read on-screen code/UI text correctly · Deixis = resolved "this/that/here" to the right frame · Hallucination = invented nothing not shown/said (5 = none) · Faithfulness = to intent (instruct) / accuracy (explain).`,
+    ``,
+    header,
+    divider,
+    blankRow("Small-text fidelity"),
+    blankRow("Deixis"),
+    blankRow("Hallucination (5=none)"),
+    blankRow("Faithfulness / accuracy"),
+    `| Cost (USD) | ${ok.map((r) => r.costLabel).join(" | ")} |`,
+    `| Latency (s) | ${ok.map((r) => `${r.seconds.toFixed(1)}s`).join(" | ")} |`,
+    ``,
+  );
+
+  return out.join("\n");
+}

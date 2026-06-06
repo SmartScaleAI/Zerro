@@ -25,6 +25,7 @@ import {
   MAX_AUDIO_BYTES,
   MAX_AUDIO_SECONDS,
   MAX_FRAMES,
+  MAX_OCR_TEXT_CHARS,
 } from "./config.ts";
 
 export interface ParsedRequest {
@@ -110,9 +111,18 @@ export function validateBody(body: unknown): ValidationResult {
     if (!Number.isFinite(ts) || ts < 0) return reject(400, "invalid_frame_timestamp");
     const data = f.data;
     if (typeof data !== "string" || data.length === 0) return reject(400, "missing_frame_data");
+    // Phase 3: optional redacted OCR text. Already masked client-side — we DON'T
+    // re-scan (the server trusts the client's redaction). Defensively length-cap
+    // it so a forged body can't bloat the prompt the server's key pays for; an
+    // empty/absent value becomes undefined so no `on-screen text:` block emits.
+    let ocrText: string | undefined;
+    const rawOcr = f.ocr_text;
+    if (typeof rawOcr === "string" && rawOcr.length > 0) {
+      ocrText = rawOcr.length > MAX_OCR_TEXT_CHARS ? rawOcr.slice(0, MAX_OCR_TEXT_CHARS) : rawOcr;
+    }
     // Pass the raw base64 + MIME through (no decode round-trip). The chat adapter
     // wraps it for its wire format (OpenAI data-URL, Gemini inlineData, …).
-    frames.push({ timestamp: ts, mime: frameMime, base64: data });
+    frames.push({ timestamp: ts, mime: frameMime, base64: data, ocrText });
   }
 
   return {

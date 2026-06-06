@@ -287,6 +287,64 @@ Deno.test("client-supplied transcript/system_prompt/messages fields are IGNORED 
   assert(!contentJson.includes("arbitrary attacker text"));
 });
 
+// ---- Phase 3: on-screen OCR text -------------------------------------------
+Deno.test("frame ocr_text is interleaved as an `on-screen text:` block right after its image", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const ocr = `login.ts  const API_BASE = "https://api.example.com"`;
+  const body = makeBody({
+    frames: [
+      { timestamp: 0, mime: "image/jpeg", data: btoa("frame0"), ocr_text: ocr },
+      { timestamp: 5, mime: "image/jpeg", data: btoa("frame1") }, // no ocr_text
+    ],
+  });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+
+  const blocks = openai.lastContent;
+  // The block immediately AFTER frame 0's image is its on-screen text, in the
+  // exact byte format shared with BYOK (encodeBody) + eval (eval-models.mjs).
+  const firstImageIdx = blocks.findIndex((b) => b.type === "image");
+  assert(firstImageIdx >= 0);
+  assertEquals(blocks[firstImageIdx + 1], { type: "text", text: `\n[0:00] on-screen text: ${ocr}` });
+
+  // Frame 1 carried no ocr_text → exactly ONE on-screen text block total.
+  const onScreen = blocks.filter((b) => b.type === "text" && b.text.includes("on-screen text:"));
+  assertEquals(onScreen.length, 1);
+});
+
+Deno.test("server TRUSTS the client's redaction: ocr_text is interleaved verbatim, not re-scanned", async () => {
+  // The trust boundary (Phase 3): the CLIENT owns redaction — it has the pixels
+  // and runs Vision, masking secrets to [REDACTED] before upload. The server
+  // does NOT re-scan ocr_text; it interleaves whatever arrives, only length-
+  // capping it. So this test asserts a client-masked value flows through
+  // unchanged — and documents that an UNMASKED value would too, which is why
+  // redaction must happen client-side, not here.
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const body = makeBody({
+    frames: [{ timestamp: 0, mime: "image/jpeg", data: btoa("f"), ocr_text: "api key: [REDACTED]" }],
+  });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+  assert(JSON.stringify(openai.lastContent).includes("on-screen text: api key: [REDACTED]"));
+});
+
+Deno.test("oversized ocr_text is length-capped (forged-body defense, no prompt bloat)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const huge = "x".repeat(20_000); // far above MAX_OCR_TEXT_CHARS (8 KB)
+  const body = makeBody({
+    frames: [{ timestamp: 0, mime: "image/jpeg", data: btoa("f"), ocr_text: huge }],
+  });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+  const block = openai.lastContent.find((b) => b.type === "text" && b.text.includes("on-screen text:"));
+  assert(block && block.type === "text");
+  // Capped near 8 KB (+ the short tag prefix), nowhere near the forged 20 KB.
+  assert(block.text.length <= 8 * 1024 + 64, `not capped: ${block.text.length}`);
+});
+
 Deno.test("past_due still generates on remaining credits", async () => {
   const store = new InMemoryStore();
   store.seed({ id: "sub-1", tier: "starter", status: "past_due", credits_limit: 100 }, 40);

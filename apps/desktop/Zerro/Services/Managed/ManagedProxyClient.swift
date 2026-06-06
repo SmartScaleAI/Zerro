@@ -130,7 +130,7 @@ final class ManagedProxyClient {
         // the UI (the BYOK `OpenAIPromptGenerationService.encodeBody` encodes
         // off-main the same way). The same bytes are reused on the post-refresh
         // retry.
-        let uploads = frames.map { FrameUpload(url: $0.url, timestamp: CMTimeGetSeconds($0.timestamp)) }
+        let uploads = frames.map { FrameUpload(url: $0.url, timestamp: CMTimeGetSeconds($0.timestamp), ocrText: $0.ocrText) }
         let body = try await Task.detached(priority: .userInitiated) {
             try Self.encodeBody(
                 audioURL: audioURL,
@@ -206,6 +206,10 @@ final class ManagedProxyClient {
     struct FrameUpload: Sendable {
         let url: URL
         let timestamp: Double
+        /// Phase 3 — the frame's redacted on-device-OCR text (secrets already
+        /// masked client-side). Sent as `ocr_text`; the server trusts it as
+        /// already-redacted and only length-caps it defensively.
+        let ocrText: String?
     }
 
     /// Builds the `/generate` JSON body. Audio + each frame are read off disk
@@ -248,6 +252,10 @@ final class ManagedProxyClient {
                 "timestamp": frame.timestamp,
                 "mime": ManagedBackend.frameMime,
                 "data": frameData.base64EncodedString(),
+                // Phase 3: the frame's redacted OCR text ("" when none). The
+                // server parses `ocr_text` defensively (length-capped) and
+                // interleaves it after the image; secrets are already masked here.
+                "ocr_text": frame.ocrText ?? "",
             ])
         }
 

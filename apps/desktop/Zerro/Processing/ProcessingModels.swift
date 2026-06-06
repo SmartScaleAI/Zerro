@@ -60,6 +60,21 @@ struct ExtractedFrame: Sendable {
     let url: URL
     let timestamp: CMTime
     let index: Int
+    /// Phase 3 — the on-device-OCR text recognized in this frame, with any
+    /// detected secrets masked as `[REDACTED]`. `nil`/empty when OCR found no
+    /// text or failed (best-effort). The interleaver attaches it after the
+    /// frame's image block so the model can prefer it for exact strings.
+    let ocrText: String?
+
+    /// Explicit init with an `ocrText` default so the (many) existing
+    /// 3-argument construction sites — tests, fixtures — keep compiling while
+    /// the pipeline's Pass-2 path supplies the recognized text.
+    init(url: URL, timestamp: CMTime, index: Int, ocrText: String? = nil) {
+        self.url = url
+        self.timestamp = timestamp
+        self.index = index
+        self.ocrText = ocrText
+    }
 }
 
 // MARK: - RecordingManifest
@@ -76,6 +91,11 @@ struct RecordingManifest: Codable {
         let index: Int
         let filename: String
         let timestampSeconds: Double
+        /// Phase 3 — the frame's redacted on-device-OCR text. Omitted from the
+        /// JSON when absent (`nil`) so older manifests/readers stay valid and a
+        /// no-text frame doesn't carry an empty key. Lives in the LOCAL manifest
+        /// so the eval harness can mirror the exact text the live payload sends.
+        let ocrText: String?
     }
 }
 

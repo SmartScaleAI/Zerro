@@ -85,6 +85,7 @@ struct ProcessingPipeline {
     /// failure pill via `.processingFailed`.
     func process(
         sourceURL: URL,
+        redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
         onStage: @MainActor (Stage) -> Void = { _ in }
     ) async throws -> ProcessedRecording {
         let workingDirectory = try WorkingDirectory.make()
@@ -113,7 +114,7 @@ struct ProcessingPipeline {
             Log.processing.info("isolated audio: \(audioURL.lastPathComponent, privacy: .public)")
 
             await MainActor.run { onStage(.extractingFrames) }
-            let frames = try await extractFrames(from: sourceURL, into: workingDirectory)
+            let frames = try await extractFrames(from: sourceURL, into: workingDirectory, redactSecrets: redactSecrets)
             // Frame basenames are `frame-NNN.jpg` (our own format), .public.
             Log.processing.info(
                 "extracted \(frames.count, privacy: .public) frames (first=\(frames.first?.url.lastPathComponent ?? "—", privacy: .public), last=\(frames.last?.url.lastPathComponent ?? "—", privacy: .public))"
@@ -165,15 +166,23 @@ struct ProcessingPipeline {
         return outputURL
     }
 
-    /// Pulls a downsampled JPEG for each sampled time in `sourceURL`,
-    /// writes them as `frame-NNN.jpg` into `workingDirectory`, and
-    /// returns the ordered list. Throws on systemic failures (no video
-    /// track, a too-short/empty recording that yields no sample times,
-    /// every frame failed) — single keyframe misses are logged + skipped
-    /// so a 3-minute recording is never doomed by one bad sample. Never
-    /// returns an empty array: zero frames is always a thrown failure so
-    /// the downstream API step can't run on nothing.
-    func extractFrames(from sourceURL: URL, into workingDirectory: URL) async throws -> [ExtractedFrame] {
+    /// Extracts content-driven keyframes from `sourceURL`, writes them as
+    /// `frame-NNN.jpg` into `workingDirectory`, and returns the ordered list.
+    /// Two passes (Phase 2): Pass 1 (`analyzeCandidates`) decodes tiny
+    /// thumbnails and measures change + a fingerprint per candidate; the pure
+    /// `FrameSelector` picks the times worth keeping (settled, changed,
+    /// non-duplicate, floored/capped); Pass 2 (the loop below) decodes only
+    /// those at full resolution and reuses the existing `processFrame` /
+    /// `downsample` (1536) / `encodeJPEG` (0.82) path. The manifest schema,
+    /// `frame-NNN.jpg` naming, chronological order, and per-frame `actualTime`
+    /// timestamps are all unchanged — downstream is untouched.
+    ///
+    /// Throws on systemic failures (no video track, a too-short/empty
+    /// recording that yields no times, every frame failed) — single keyframe
+    /// misses are logged + skipped so a 3-minute recording is never doomed by
+    /// one bad sample. Never returns an empty array: zero frames is always a
+    /// thrown failure so the downstream API step can't run on nothing.
+    func extractFrames(from sourceURL: URL, into workingDirectory: URL, redactSecrets: Bool = ProcessingConfig.redactSecretsDefault) async throws -> [ExtractedFrame] {
         let asset = AVURLAsset(url: sourceURL)
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard !videoTracks.isEmpty else {
@@ -186,33 +195,61 @@ struct ProcessingPipeline {
             throw ProcessingError.emptyRecording
         }
 
-        let interval = Self.effectiveSampleInterval()
-        // Clamp the stride's upper bound to the recording cap. The asset
+        // Clamp the analyzed/encoded span to the recording cap. The asset
         // is read back from disk (untrusted file I/O): a malformed or
         // sleep-inflated container could report a duration far beyond the
-        // 3-minute cap, and the frame count scales linearly with it. A
-        // legitimate recording is already ≤ the cap (auto-stop at 180s),
-        // so `min` is a no-op for real content and only bites the
-        // abnormal over-cap case.
+        // 3-minute cap, and the work scales linearly with it. A legitimate
+        // recording is already ≤ the cap (auto-stop at 180s), so `min` is a
+        // no-op for real content and only bites the abnormal over-cap case.
         let cappedDurationSeconds = min(durationSeconds, ProcessingConfig.maxRecordingSeconds)
-        // Start at `interval` (not 0) — first-frame keyframes in a
-        // fresh capture are reliably present but their content is the
-        // session pre-roll (cursor mid-click, half-rendered surface).
-        // Stepping to `interval` lands on a settled image.
-        let strided: [CMTime] = stride(from: interval, through: cappedDurationSeconds, by: interval)
-            .map { CMTime(seconds: $0, preferredTimescale: 600) }
-        // Absolute ceiling on emitted frames, independent of the reported
-        // duration: the most a legitimate 3-minute recording could yield
-        // at the configured per-minute rate. Belt-and-braces with the
-        // duration clamp above — even if the stride somehow over-produced,
-        // the emitted set can't exceed this.
-        let maxFrames = ProcessingConfig.maxFramesPerMinute * 3
-        let times = Array(strided.prefix(maxFrames))
+
+        // --- Pass 1: cheap analysis ------------------------------------------
+        // Decode tiny thumbnails on a fast clock and measure, per candidate,
+        // how much changed since the last one (motion) plus a dHash. This is
+        // the signal the pure FrameSelector keyframes on; the full-res decode
+        // (Pass 2) only touches the winners.
+        let candidates = await analyzeCandidates(
+            asset: asset,
+            cappedDurationSeconds: cappedDurationSeconds
+        )
+
+        // --- Selector: pick the winners --------------------------------------
+        let params = SelectionParams(
+            startOffsetSeconds: ProcessingConfig.startOffsetSeconds,
+            changeThreshold: ProcessingConfig.changeThreshold,
+            stabilityThreshold: ProcessingConfig.motionStabilityThreshold,
+            dedupHamming: ProcessingConfig.dedupHammingThreshold,
+            maxKeyframes: ProcessingConfig.effectiveMaxKeyframes(forDurationSeconds: cappedDurationSeconds),
+            minKeyframes: ProcessingConfig.minKeyframes(forDurationSeconds: cappedDurationSeconds)
+        )
+        let selectedIndices = FrameSelector.select(candidates, config: params)
+
+        // Map the chosen candidate indices back to their (settled) actualTime
+        // seconds — those are the times Pass 2 encodes at full resolution.
+        let byIndex = Dictionary(uniqueKeysWithValues: candidates.map { ($0.index, $0.timestampSeconds) })
+        var selectedSeconds = selectedIndices.compactMap { byIndex[$0] }.sorted()
+
+        if selectedSeconds.isEmpty {
+            // Pass 1 produced no usable candidates (e.g. every tiny decode
+            // failed). Fall back to the legacy fixed-interval cadence so a
+            // valid recording still yields frames rather than throwing here —
+            // a genuinely unreadable asset still fails below when every
+            // full-res decode also fails. The absolute frame ceiling guards
+            // against an over-cap duration slipping past the clamp above.
+            let interval = Self.effectiveSampleInterval()
+            let maxFrames = ProcessingConfig.maxFramesPerMinute * 3
+            selectedSeconds = Array(
+                stride(from: interval, through: cappedDurationSeconds, by: interval).prefix(maxFrames)
+            )
+            Log.processing.error("frame analysis produced no candidates — falling back to fixed-interval sampling")
+        }
+
+        let times = selectedSeconds.map { CMTime(seconds: $0, preferredTimescale: 600) }
 
         guard !times.isEmpty else {
-            // Duration is positive but shorter than one sample interval,
-            // so stride produced no times. Too short to analyze — fail
-            // rather than land on a zero-frame "success".
+            // Duration is positive but too short to yield even one candidate
+            // or fallback time. Too short to analyze — fail rather than land
+            // on a zero-frame "success".
             throw ProcessingError.emptyRecording
         }
 
@@ -228,9 +265,12 @@ struct ProcessingPipeline {
 
         // Resolve the config clamps once, here on the main actor, so the
         // detached per-frame work captures plain Sendable scalars and
-        // never reaches back into main-isolated config.
+        // never reaches back into main-isolated config. `redactSecrets` is
+        // threaded in the same way (resolved at the call site from the
+        // capture preference) rather than read inside the nonisolated task.
         let maxDimension = ProcessingConfig.maxFrameDimension
         let jpegQuality = ProcessingConfig.jpegQuality
+        let redact = redactSecrets
 
         var frames: [ExtractedFrame] = []
         var index = 0
@@ -259,6 +299,7 @@ struct ProcessingPipeline {
                         actualTime: actualTime,
                         maxDimension: maxDimension,
                         jpegQuality: jpegQuality,
+                        redact: redact,
                         into: workingDirectory
                     )
                 }.value
@@ -307,6 +348,146 @@ struct ProcessingPipeline {
         return ProcessingConfig.sampleIntervalSeconds
     }
 
+    /// Pass 1: decode tiny thumbnails every `analysisIntervalSeconds` across
+    /// the capped duration and turn each into a `Candidate` (motion vs the
+    /// previous thumbnail + a dHash fingerprint). Returns them in time order;
+    /// returns `[]` (not a throw) if the analysis decode produces nothing —
+    /// the caller falls back to fixed-interval sampling so a one-off thumbnail
+    /// failure doesn't doom an otherwise-valid recording.
+    ///
+    /// Uses a SEPARATE generator with `maximumSize` ≈
+    /// `analysisThumbnailDimension` so candidates decode tiny and fast, and a
+    /// tolerance smaller than the analysis interval so requested times don't
+    /// all snap onto the same keyframe. The per-thumbnail pixel work (two
+    /// small grayscale draws) is handed to a detached task to keep it off the
+    /// main actor, exactly as the full-res path does.
+    private func analyzeCandidates(
+        asset: AVURLAsset,
+        cappedDurationSeconds: Double
+    ) async -> [Candidate] {
+        let analysisGenerator = AVAssetImageGenerator(asset: asset)
+        analysisGenerator.appliesPreferredTrackTransform = true
+        let dimension = ProcessingConfig.analysisThumbnailDimension
+        analysisGenerator.maximumSize = CGSize(width: dimension, height: dimension)
+        // Tolerance < analysisInterval (0.2s vs 0.5s) so requested times stay
+        // distinct rather than collapsing onto a shared keyframe.
+        let tolerance = CMTime(seconds: 0.2, preferredTimescale: 600)
+        analysisGenerator.requestedTimeToleranceBefore = tolerance
+        analysisGenerator.requestedTimeToleranceAfter = tolerance
+
+        let analysisTimes: [CMTime] = stride(
+            from: 0.0, through: cappedDurationSeconds, by: ProcessingConfig.analysisIntervalSeconds
+        ).map { CMTime(seconds: $0, preferredTimescale: 600) }
+        guard !analysisTimes.isEmpty else { return [] }
+
+        // Square grayscale side used for the motion buffer — resolved once so
+        // the detached work captures a plain Int, not main-isolated config.
+        let madSide = max(1, Int(dimension))
+
+        var candidates: [Candidate] = []
+        var previousGray: [UInt8]? = nil
+        var index = 0
+
+        for await item in analysisGenerator.images(for: analysisTimes) {
+            guard let cgImage = try? item.image, let actualTime = try? item.actualTime else {
+                // A single thumbnail miss is non-fatal — skip it. The motion of
+                // the NEXT successful candidate is then measured against the
+                // last good one, which is the intended "since the previous
+                // kept sample" semantics anyway.
+                continue
+            }
+
+            let analysis = await Task.detached(priority: .userInitiated) { () -> (gray: [UInt8], hash: UInt64)? in
+                guard let gray = Self.grayscaleBuffer(cgImage, width: madSide, height: madSide) else {
+                    return nil
+                }
+                return (gray, Self.dHash(cgImage))
+            }.value
+            guard let analysis else { continue }
+
+            // First candidate has no predecessor → motion 0 (matches Candidate's
+            // contract and seeds the selector's settled-frame search).
+            let motion = previousGray.map { Self.meanAbsoluteDifference(analysis.gray, $0) } ?? 0.0
+            candidates.append(
+                Candidate(
+                    index: index,
+                    timestampSeconds: CMTimeGetSeconds(actualTime),
+                    motion: motion,
+                    hash: analysis.hash
+                )
+            )
+            previousGray = analysis.gray
+            index += 1
+        }
+
+        return candidates
+    }
+
+    /// Draws `image` into a fixed `width`×`height` 8-bit grayscale buffer and
+    /// returns the raw bytes (row-major, `bytesPerRow == width`). The aspect
+    /// ratio is intentionally NOT preserved — every candidate is stretched into
+    /// the same box, so the distortion is identical frame-to-frame and the
+    /// motion diff / dHash stay comparable. `nonisolated` so it runs inside the
+    /// analysis pass's detached task. Returns `nil` if the context can't be
+    /// created. Low interpolation: the target is tiny and we want speed, not
+    /// fidelity.
+    nonisolated private static func grayscaleBuffer(_ image: CGImage, width: Int, height: Int) -> [UInt8]? {
+        guard width > 0, height > 0 else { return nil }
+        let colorSpace = CGColorSpaceCreateDeviceGray()
+        var data = [UInt8](repeating: 0, count: width * height)
+        let ok = data.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress,
+                  let context = CGContext(
+                    data: base,
+                    width: width,
+                    height: height,
+                    bitsPerComponent: 8,
+                    bytesPerRow: width,
+                    space: colorSpace,
+                    bitmapInfo: CGImageAlphaInfo.none.rawValue
+                  ) else { return false }
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return ok ? data : nil
+    }
+
+    /// Normalized mean-absolute-difference of two equal-length grayscale
+    /// buffers, in 0…1 (sum of |a−b| over bytes, divided by count×255). The
+    /// per-candidate "motion" signal. `nonisolated` — pure arithmetic.
+    nonisolated private static func meanAbsoluteDifference(_ a: [UInt8], _ b: [UInt8]) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var sum = 0
+        for i in a.indices {
+            sum += abs(Int(a[i]) - Int(b[i]))
+        }
+        return Double(sum) / (Double(a.count) * 255.0)
+    }
+
+    /// 64-bit difference hash: draw `image` into a 9×8 grayscale grid and set
+    /// one bit per row per adjacent-pixel pair where the left pixel is brighter
+    /// than the right (8 comparisons × 8 rows = 64 bits). A robust perceptual
+    /// fingerprint for the selector's near-duplicate dedup. `nonisolated` so it
+    /// runs in the analysis pass's detached task. Returns 0 if the tiny decode
+    /// fails — two failed hashes then read as identical (Hamming 0), which the
+    /// selector treats as a near-duplicate; acceptable for a degenerate frame.
+    nonisolated private static func dHash(_ image: CGImage) -> UInt64 {
+        guard let buffer = grayscaleBuffer(image, width: 9, height: 8) else { return 0 }
+        var hash: UInt64 = 0
+        var bit: UInt64 = 0
+        for row in 0..<8 {
+            let rowStart = row * 9
+            for col in 0..<8 {
+                if buffer[rowStart + col] > buffer[rowStart + col + 1] {
+                    hash |= (1 << bit)
+                }
+                bit += 1
+            }
+        }
+        return hash
+    }
+
     /// Downsamples one decoded frame and writes it to disk as
     /// `frame-NNN.jpg`, returning the `ExtractedFrame` on success or `nil`
     /// (after logging) when the downsample or JPEG encode fails — the same
@@ -324,6 +505,7 @@ struct ProcessingPipeline {
         actualTime: CMTime,
         maxDimension: CGFloat,
         jpegQuality: CGFloat,
+        redact: Bool,
         into workingDirectory: URL
     ) -> ExtractedFrame? {
         guard let downsampled = downsample(image, maxDimension: maxDimension) else {
@@ -331,14 +513,26 @@ struct ProcessingPipeline {
             return nil
         }
 
+        // Phase 3: one on-device Vision OCR pass over the (downsampled) frame,
+        // AFTER downsample and BEFORE encode. It returns the image to encode
+        // (with opaque boxes painted over any detected secret when `redact`) and
+        // the recognized text (secrets masked as [REDACTED]) to attach to the
+        // frame. Best-effort — never throws; a no-text/failed frame yields "".
+        // We encode the RETURNED image so the redaction lands in the JPEG bytes
+        // that actually egress.
+        let recognized = Redactor.process(downsampled, redact: redact)
+
         let filename = String(format: "frame-%03d.jpg", index)
         let url = workingDirectory.appendingPathComponent(filename)
-        guard encodeJPEG(downsampled, quality: jpegQuality, to: url) else {
+        guard encodeJPEG(recognized.image, quality: jpegQuality, to: url) else {
             Log.processing.error("JPEG encode failed at index \(index, privacy: .public)")
             return nil
         }
 
-        return ExtractedFrame(url: url, timestamp: actualTime, index: index)
+        // Empty OCR text is carried as nil (not "") so the manifest omits the
+        // key and the interleaver emits no `on-screen text:` block for it.
+        let ocrText = recognized.text.isEmpty ? nil : recognized.text
+        return ExtractedFrame(url: url, timestamp: actualTime, index: index, ocrText: ocrText)
     }
 
     /// Scales `image` so its longest edge equals `maxDimension`,
@@ -397,7 +591,8 @@ struct ProcessingPipeline {
                 RecordingManifest.FrameEntry(
                     index: frame.index,
                     filename: frame.url.lastPathComponent,
-                    timestampSeconds: CMTimeGetSeconds(frame.timestamp)
+                    timestampSeconds: CMTimeGetSeconds(frame.timestamp),
+                    ocrText: frame.ocrText
                 )
             }
         )

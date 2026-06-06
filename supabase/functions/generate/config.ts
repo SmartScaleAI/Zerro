@@ -40,6 +40,14 @@ export const MAX_AUDIO_BYTES = optionalEnvInt("GENERATE_MAX_AUDIO_BYTES", 12 * 1
 export const ALLOWED_AUDIO_MIME = ["audio/mp4", "audio/m4a", "audio/x-m4a"];
 export const ALLOWED_FRAME_MIME = ["image/jpeg"];
 
+// Per-frame cap on the client-supplied `ocr_text` (Phase 3). The app sends at
+// most a screenful of recognized text (a few hundred chars); this generous
+// ~8 KB/frame ceiling only stops a FORGED body from bloating the prompt the
+// server's key pays for. Capped by characters (a cheap proxy for bytes — OCR
+// text is near-ASCII). The text is already redacted client-side; the server
+// trusts it and does not re-scan.
+export const MAX_OCR_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_OCR_TEXT_CHARS", 8 * 1024);
+
 // ---- Concurrency cap (=1 in flight) — backs the credit-ordering guard -------
 // Slot stale-reclaim window. MUST exceed the worst-case OpenAI round-trip so a
 // slow-but-live request is never reclaimed out from under itself; small enough

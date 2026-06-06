@@ -274,6 +274,15 @@ final class AppState {
     /// sites that don't pass a mode still compose a valid prompt.
     var recordingOutputMode: OutputMode = .instruct
 
+    /// Phase 3: whether to redact detected secrets (pixels + OCR text) for THIS
+    /// recording. Captured at `startRecording` time from
+    /// `PreferencesStore.redactSecrets` (same fresh-read pattern as the mic
+    /// device / output mode) and handed to the processing pipeline in
+    /// `runProcessing`, so a Settings change applies to the next recording.
+    /// Defaults to the privacy-on config default for call sites that don't pass
+    /// one (tests, menu-bar paths).
+    var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
+
     /// Phase 17: the mode a pill override actually ran with, when the user
     /// tapped "Switch" on the confirmation pill. Transient and per-recording
     /// — it drives the menu-bar "ran as X" indicator and is cleared on every
@@ -507,7 +516,8 @@ final class AppState {
     func startRecording(
         selection: SelectionRect? = nil,
         microphoneDeviceID: String = "",
-        outputMode: OutputMode = .instruct
+        outputMode: OutputMode = .instruct,
+        redactSecrets: Bool = ProcessingConfig.redactSecretsDefault
     ) {
         guard state == .idle else {
             // State name is .public — RecordingState case names contain
@@ -545,6 +555,7 @@ final class AppState {
         isResultExpanded = false
         activeSelection = selection
         recordingOutputMode = outputMode
+        recordingRedactSecrets = redactSecrets
         effectiveOutputMode = nil
         pendingGeneration = nil
         lastRecordingURL = nil
@@ -1067,6 +1078,7 @@ final class AppState {
             do {
                 let result = try await ProcessingPipeline().process(
                     sourceURL: sourceURL,
+                    redactSecrets: self.recordingRedactSecrets,
                     onStage: { [weak self] stage in
                         self?.processingStageLabel = stage.userMessage
                     }

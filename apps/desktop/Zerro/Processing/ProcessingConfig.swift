@@ -14,30 +14,127 @@ import Foundation
 
 enum ProcessingConfig {
 
-    /// Baseline seconds between sampled frames. Time-based sampling is
-    /// the Phase 8 approach; real change-detection is deferred (see the
-    /// frames-per-minute clamp below, which scaffolds that future work's
-    /// safety net). Start at 2.0 — one frame every 2 seconds.
+    /// Fallback/top-up cadence, in seconds. No longer the primary sampler:
+    /// Phase 2 keyframes on real visual change (see the analysis tunables
+    /// below), not a fixed clock. This value now serves two narrower roles —
+    /// the evenly-spaced floor top-up when a static screen yields too few
+    /// keyframes (via `minKeyframes`), and the legacy fixed-interval fallback
+    /// if Pass-1 analysis produces no usable candidates at all. Still clamped
+    /// by the frames-per-minute bounds below.
     static let sampleIntervalSeconds: Double = 2.0
 
-    /// Longest-edge pixel cap for downsampled frames. Tradeoff: small UI
-    /// text must survive legibly so the model can read it, but we are NOT
-    /// shipping full Retina screenshots to a paid API. 1024 keeps typical
-    /// code/UI text readable while bounding the per-frame payload.
-    static let maxFrameDimension: CGFloat = 1024
+    /// Longest-edge pixel cap for downsampled frames. The key insight: a
+    /// frame's per-image TOKEN cost is set by the model's resolution
+    /// *level*, not its pixel count. Gemini bills an image part at a fixed
+    /// count per media_resolution level (we send media_resolution_high,
+    /// ~1120 tokens) no matter the dimensions; OpenAI's detail:"high"
+    /// normalizes to a 768px short side and bills in 512px tiles, so a
+    /// 16:9 frame is ~6 tiles whether it's 1024px or 1536px wide. So 1536
+    /// recovers small-text legibility (code, terminals, UI labels) that
+    /// 1024 was throwing away at effectively NO added token cost. Still
+    /// well below a full-Retina screenshot, so the payload BYTES stay
+    /// bounded (the per-frame JPEG, not the token bill, is what this caps).
+    static let maxFrameDimension: CGFloat = 1536
 
     /// JPEG compression quality (0.0–1.0). Failure mode to watch: JPEG
-    /// artifacts smearing small text into illegibility. 0.6 is the
-    /// starting balance of payload size vs. text fidelity.
-    static let jpegQuality: CGFloat = 0.6
+    /// artifacts smearing small/monospace text into illegibility — exactly
+    /// the content the model most needs to read. 0.82 keeps that text crisp
+    /// while still compressing hard enough that frame bytes stay bounded
+    /// (the resolution bump above only helps if the encoder doesn't smear
+    /// it back away). Quality sets payload bytes, not token cost.
+    static let jpegQuality: CGFloat = 0.82
 
-    /// Clamp bounds so future change-detection sampling can neither drop
-    /// a static screen to zero frames (min) nor let a busy/scrolling page
-    /// explode the frame budget and the cost cap (max). Wired now even
-    /// though pure time-based sampling at 2.0s (= 30 frames/min) sits
-    /// comfortably inside these and won't usually trigger the clamp.
+    // MARK: - Phase 2: content-driven keyframing
+    //
+    // Pass 1 decodes tiny thumbnails on a fast clock and measures, per
+    // candidate, how much changed since the last one (motion) plus a dHash
+    // fingerprint; FrameSelector turns those into the times worth encoding at
+    // full res; Pass 2 encodes only the winners through the EXISTING
+    // downsample (1536) / JPEG (0.82) path. All of the thresholds below are
+    // STARTING POINTS to tune against the eval harness (Scripts/zerro-extract.sh
+    // → eval-models.mjs) — expect to revisit them once we see frame counts and
+    // cost across the baseline corpus.
+
+    /// How often Pass 1 samples a candidate thumbnail, in seconds (0.5 = 2fps).
+    /// Finer = more responsive change detection but more tiny decodes; 2fps is
+    /// plenty to catch a scene settling without drowning in samples.
+    static let analysisIntervalSeconds: Double = 0.5
+
+    /// Longest-edge pixel cap for Pass-1 analysis thumbnails. Deliberately
+    /// tiny: motion (mean-abs-diff) and dHash only need coarse structure, and
+    /// a ~96px decode is fast and cheap, so the analysis pass stays well under
+    /// the cost of decoding full frames we'd then throw away.
+    static let analysisThumbnailDimension: CGFloat = 96
+
+    /// Accumulated inter-frame change (sum of per-candidate motion since the
+    /// last kept frame) needed to trigger a new keyframe. Higher = fewer,
+    /// more-distinct frames; lower = denser sampling of subtle change.
+    /// Tuned 0.10 → 0.05 after the first Phase 2 eval: at 0.10 the low-motion
+    /// work clips never accumulated enough change and 3 of 4 fell back to the
+    /// `minKeyframes` floor (over-pruned). 0.05 lets genuine section-to-section
+    /// changes register while still collapsing static stretches. Re-tune
+    /// against the eval harness if frame counts drift from the ~7–9/min target.
+    static let changeThreshold: Double = 0.05
+
+    /// A candidate must be ≤ this motion (vs the previous candidate) to count
+    /// as "settled" and be eligible to keep. This is the scroll-settle gate:
+    /// during motion it stays above the bar so nothing is emitted until the
+    /// view comes to rest. Lower = stricter (waits for a stiller frame).
+    static let motionStabilityThreshold: Double = 0.03
+
+    /// Drop a keyframe whose dHash is within this Hamming distance (out of 64
+    /// bits) of the last kept frame's — i.e. a near-duplicate end-state.
+    /// Higher = more aggressive dedup.
+    static let dedupHammingThreshold: Int = 8
+
+    /// Hard ceiling on kept keyframes for a whole recording. Sized so the
+    /// heaviest models stay near the ~$0.07 cost cap; the per-minute clamp
+    /// below can lower the EFFECTIVE ceiling for short clips.
+    static let maxKeyframes: Int = 28
+
+    /// Skip this much session pre-roll before considering keyframes — the
+    /// opening moment is usually a cursor mid-click or a half-rendered surface.
+    static let startOffsetSeconds: Double = 1.0
+
+    /// Clamp bounds, retained as the Phase 2 safety net. The floor
+    /// (`minKeyframes`) and the effective per-clip ceiling
+    /// (`effectiveMaxKeyframes`) are DERIVED from these so a static screen
+    /// can't drop to zero frames and a short/busy clip can't be flooded.
     static let minFramesPerMinute: Int = 6
     static let maxFramesPerMinute: Int = 60
+
+    /// Floor on kept keyframes for a clip of `seconds`, derived from
+    /// `minFramesPerMinute`. Lets a fully static, narrated screen still yield
+    /// a few evenly-spaced frames to interleave. Never below 2 (a one-frame
+    /// "multimodal" prompt is barely that) and never above the hard
+    /// `maxKeyframes` ceiling.
+    static func minKeyframes(forDurationSeconds seconds: Double) -> Int {
+        let minutes = max(seconds, 0) / 60.0
+        let floor = Int((Double(minFramesPerMinute) * minutes).rounded())
+        return min(maxKeyframes, max(2, floor))
+    }
+
+    /// Effective per-clip ceiling on kept keyframes: the smaller of the
+    /// absolute `maxKeyframes` cap and a per-minute ceiling from
+    /// `maxFramesPerMinute`, so a 15s clip can't claim the full 28-frame
+    /// budget. Never below the floor.
+    static func effectiveMaxKeyframes(forDurationSeconds seconds: Double) -> Int {
+        let minutes = max(seconds, 0) / 60.0
+        let perMinuteCeiling = Int((Double(maxFramesPerMinute) * minutes).rounded())
+        return max(minKeyframes(forDurationSeconds: seconds),
+                   min(maxKeyframes, perMinuteCeiling))
+    }
+
+    // MARK: - Phase 3: on-device OCR → secret redaction
+
+    /// Default for the "Redact detected secrets" capture preference (privacy-on
+    /// by default). Controls BOTH halves of redaction together — the opaque
+    /// pixel boxes over a secret AND the `[REDACTED]` masking of that secret in
+    /// the OCR text attached to the payload — so the frame and its text can
+    /// never disagree about what was hidden. Surfaced as a toggle in
+    /// Settings → Capture (PreferencesStore.redactSecrets); this constant is the
+    /// fallback when no preference is threaded (e.g. the eval extraction runner).
+    static let redactSecretsDefault = true
 
     /// Hard ceiling on real recorded content, in seconds — the 3-minute
     /// auto-stop cap (the `.autoStopped` transition in
