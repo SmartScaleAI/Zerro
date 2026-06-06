@@ -163,11 +163,40 @@ final class SessionTokenManager: ProxyTokenProviding {
         let snapshot: ManagedEntitlementSnapshot
     }
 
+    /// The license key to exchange at `/session`: the activated key from the
+    /// Keychain, or — in DEBUG only — the `ZERRO_DEV_LICENSE_KEY` scheme env var
+    /// when no key is on file.
+    ///
+    /// The env fallback lets a debug build authenticate against a local
+    /// `supabase functions serve` WITHOUT a real LemonSqueezy purchase: seed the
+    /// local `subscriptions` mirror with this key (see `supabase/test/
+    /// run-curl-tests.sh`), then force a Managed entitlement in the dev panel and
+    /// record. It is honored ONLY when `ZERRO_FUNCTIONS_BASE_URL` is also set
+    /// (i.e. the backend is overridden away from production), so a throwaway test
+    /// key can never be sent to the live `/session`. Compiled OUT of release.
+    private func resolveLicenseKey() throws -> String {
+        #if DEBUG
+        // When the backend is overridden to a local stack, the dev key WINS over
+        // any activated key in the Keychain — otherwise a stale prod key would be
+        // sent to the local `/session` and 403. Both env vars must be set, so the
+        // throwaway test key can never reach the production `/session`.
+        let env = ProcessInfo.processInfo.environment
+        if env["ZERRO_FUNCTIONS_BASE_URL"] != nil,
+           let devKey = env["ZERRO_DEV_LICENSE_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !devKey.isEmpty {
+            Log.billing.notice("session exchange using ZERRO_DEV_LICENSE_KEY (DEBUG — local backend)")
+            return devKey
+        }
+        #endif
+        if case .found(let key) = licenseKeySlot.readResult(), !key.isEmpty {
+            return key
+        }
+        throw ManagedSessionError.noLicenseKey
+    }
+
     /// POST /session { license_key } → cache the token + return the snapshot.
     private func exchange() async throws -> ExchangeResult {
-        guard case .found(let key) = licenseKeySlot.readResult(), !key.isEmpty else {
-            throw ManagedSessionError.noLicenseKey
-        }
+        let key = try resolveLicenseKey()
 
         var request = URLRequest(url: ManagedBackend.sessionURL)
         request.httpMethod = "POST"
