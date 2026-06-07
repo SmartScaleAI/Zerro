@@ -1226,6 +1226,10 @@ final class AppState {
                     mode: mode,
                     durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
                     clicks: processed.clicks,
+                    // Phase 6: tell the server whether to bother with Whisper. On
+                    // false it short-circuits STT (empty segments) — no transcript
+                    // round-trip — and composes from frames/OCR/clicks alone.
+                    hasSpeech: processed.hasSpeech,
                     tokenProvider: tokenProvider,
                     // M1: the recording's stable key — reused across every retry
                     // (here and `retryFailedPrompt`) so a charged-but-dropped
@@ -1363,21 +1367,34 @@ final class AppState {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage
-                // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
-                // failure can be triaged by the breadcrumb sequence
-                // alone, without having to look at the failure event.
-                Log.breadcrumb(category: .pipelineStage, message: "transcription started")
-                let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
-                let transcript = try await OpenAITranscriptionService().transcribe(
-                    audioFileURL: audioURL
-                )
-                // Counts are .public — segment count and char count
-                // are metrics, not content. The transcript TEXT itself
-                // never enters a log call anywhere.
-                Log.transcription.info(
-                    "segments=\(transcript.segments.count, privacy: .public) fullText.count=\(transcript.fullText.count, privacy: .public)"
-                )
+                // Phase 6 no-speech gate: when the pipeline detected no
+                // speech-level energy in the audio, skip the Whisper call
+                // entirely (saves the round-trip + its cost) and proceed on an
+                // empty transcript. The timeline is then frames + OCR + clicks
+                // only; Phase 5 + the existing empty-transcript handling cover
+                // the output (instruct declines, explain describes the screen).
+                let transcript: Transcript
+                if processed.hasSpeech {
+                    self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage
+                    // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
+                    // failure can be triaged by the breadcrumb sequence
+                    // alone, without having to look at the failure event.
+                    Log.breadcrumb(category: .pipelineStage, message: "transcription started")
+                    let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
+                    transcript = try await OpenAITranscriptionService().transcribe(
+                        audioFileURL: audioURL
+                    )
+                    // Counts are .public — segment count and char count
+                    // are metrics, not content. The transcript TEXT itself
+                    // never enters a log call anywhere.
+                    Log.transcription.info(
+                        "segments=\(transcript.segments.count, privacy: .public) fullText.count=\(transcript.fullText.count, privacy: .public)"
+                    )
+                } else {
+                    Log.breadcrumb(category: .pipelineStage, message: "transcription skipped (no speech)")
+                    Log.transcription.info("skipped — no detectable speech (Phase 6 gate)")
+                    transcript = Transcript(segments: [], fullText: "")
+                }
                 guard self.state == .processing else { return }
 
                 let timeline = Interleaver.merge(

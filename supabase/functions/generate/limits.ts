@@ -11,6 +11,7 @@
 // prompt; the server transcribes and owns the prompt):
 //   {
 //     "mode": "instruct" | "explain",
+//     "has_speech": true,                                          // optional (Phase 6); false → skip STT
 //     "audio": { "mime": "audio/m4a", "filename": "rec.m4a",
 //                "data": "<base64>", "duration_seconds": 42.0 },   // duration optional
 //     "frames": [ { "timestamp": 0.0, "mime": "image/jpeg", "data": "<base64>" }, … ]
@@ -39,6 +40,12 @@ export interface ParsedRequest {
   clicks: ClickInput[];
   /** Client-declared seconds, if any — a cheap pre-call sanity gate only. */
   declaredAudioSeconds: number | null;
+  /** Phase 6 — client's no-speech hint. `false` ONLY when the client detected
+   *  no speech-level energy; the server then skips the Whisper call. Defaults
+   *  to `true` (transcribe) for any other / absent value, so an older app or a
+   *  forged body never silently suppresses transcription. A cost hint only —
+   *  it never influences the (server-owned) system prompt. */
+  hasSpeech: boolean;
 }
 
 export type ValidationResult =
@@ -153,8 +160,13 @@ export function validateBody(body: unknown): ValidationResult {
     }
   }
 
+  // Phase 6 — no-speech hint. Skip Whisper ONLY on an explicit `false`; every
+  // other value (true / absent / non-boolean from an older or forged body)
+  // defaults to transcribing, the safe direction.
+  const hasSpeech = b.has_speech !== false;
+
   return {
     ok: true,
-    value: { mode, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds },
+    value: { mode, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
   };
 }

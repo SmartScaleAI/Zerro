@@ -20,6 +20,16 @@
 //  implementation one. Edits should be intentional and dated, with the
 //  before/after impact on a real recording captured in the commit.
 //
+//  2026-06-06 (Phase 5): added the anti-fabrication paragraph to `base`
+//  — when the narration carries no actionable request, the model must not
+//  manufacture a task from the frames; the per-mode layer defines the
+//  handling. Mirrored in generate/prompt.ts and Scripts/eval-models.mjs.
+//
+//  2026-06-06 (Phase 5 fix): narrowed the anti-fabrication clause so
+//  review/assess/explain/analyze/ask requests are explicitly actionable
+//  and only genuinely empty input declines — the prior "on-screen change"
+//  wording over-tripped and declined real review requests. Mirror update.
+//
 
 import Foundation
 
@@ -43,9 +53,11 @@ enum PromptGenerationSystemPrompt {
 
     Resolving a vague reference to what the frames clearly show is correct and expected. Inventing specifics that are neither shown nor stated is not. When the user gestures at something without naming the exact mechanism, stay at the level of detail the frames and speech support — do not fabricate precise values, names, or settings the user never provided. If a reference is genuinely ambiguous and the frames cannot resolve it, note the ambiguity briefly rather than guessing.
 
-    The user may speak mostly about what they want changed or done, rather than describing what is on screen. Capture their actual intent regardless of how it is phrased; do not let the form of their speech distort the output format.
+    Never invent a request, task, or goal the user did not actually express. A request to review, assess, explain, summarize, analyze, or ask about what is shown is itself an actionable request — handle it normally. Only when the narration contains no request of any kind — a bare sign-off (e.g. "thanks for watching", "like and subscribe"), filler or boilerplate (including transcription artifacts on near-silent audio), or talk unrelated to the screen — do not manufacture a request from what happens to be on screen; how to handle that empty case is defined by the selected output mode below.
 
-    Output ONLY the final result. No preamble, no "Here is...", no closing remarks, no markdown fences around the whole thing. The output goes straight to the clipboard.
+    The user may speak mostly about what they want changed or done, rather than describing what is on screen. Capture their actual intent regardless of how it is phrased; do not let the form of their speech distort the output format. A single recording may contain more than one request, or a sequence of related changes — capture every distinct one; do not merge them into a single vague ask or drop the later ones.
+
+    Output ONLY the final result. No preamble, no "Here is...", no closing remarks, and never wrap the whole output in a code fence. Markdown structure within the output — short headings, lists, inline code — is welcome where it makes the result clearer. The output goes straight to the clipboard.
 
     OUTPUT MODE: The user has selected an output mode (provided below). Treat it as the default. Only override it if the user's speech contains a direct, explicit request for a different output format (e.g. "actually, just explain this" or "write this as instructions instead"). Do NOT switch modes because format-related words happen to appear while the user is describing their screen or content. When in doubt, follow the selected mode.
     """

@@ -19,6 +19,7 @@
 //    POST /generate   Authorization: Bearer <session token>
 //    {
 //      "mode": "instruct" | "explain",
+//      "has_speech": true,                 // Phase 6: false → server skips Whisper
 //      "audio":  { "mime": "audio/m4a", "filename": "recording.m4a",
 //                  "data": "<base64>", "duration_seconds": 42.0 },
 //      "frames": [ { "timestamp": 0.0, "mime": "image/jpeg", "data": "<base64>" }, … ]
@@ -121,6 +122,7 @@ final class ManagedProxyClient {
         mode: OutputMode,
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
+        hasSpeech: Bool = true,
         tokenProvider: ProxyTokenProviding? = nil,
         idempotencyKey: String = UUID().uuidString
     ) async throws -> ManagedGenerationResult {
@@ -138,7 +140,8 @@ final class ManagedProxyClient {
                 frames: uploads,
                 mode: mode,
                 durationSeconds: durationSeconds,
-                clicks: clicks
+                clicks: clicks,
+                hasSpeech: hasSpeech
             )
         }.value
 
@@ -224,7 +227,8 @@ final class ManagedProxyClient {
         frames: [FrameUpload],
         mode: OutputMode,
         durationSeconds: Double?,
-        clicks: [ResolvedClick] = []
+        clicks: [ResolvedClick] = [],
+        hasSpeech: Bool = true
     ) throws -> Data {
         let audioData: Data
         do {
@@ -271,12 +275,15 @@ final class ManagedProxyClient {
         }
 
         // `mode` is the ONLY field that steers the server-owned prompt — no
-        // transcript, no system prompt (§6.1).
+        // transcript, no system prompt (§6.1). Phase 6: `has_speech` is a cost
+        // hint, not prompt input — `false` tells the server to skip the Whisper
+        // call (empty segments); it never influences the system prompt.
         let payload: [String: Any] = [
             "mode": mode.rawValue,
             "audio": audio,
             "frames": frameObjects,
             "clicks": clickObjects,
+            "has_speech": hasSpeech,
         ]
 
         do {

@@ -54,7 +54,7 @@ import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
 import { CHAT_MODEL, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { validateBody } from "./limits.ts";
-import { type ChatClient, ProviderError, type SttClient } from "./providers/types.ts";
+import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
   GENERATE_RATE_LIMIT_PER_SUB,
@@ -148,7 +148,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { mode, audio, frames, clicks, declaredAudioSeconds } = parsed.value;
+  const { mode, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
 
   // 6. Coarse per-identity rate limit (reuses D1's check_rate_limit).
   const withinRate = await deps.store.rateLimitOk(
@@ -185,21 +185,32 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     if (remaining <= 0) return json({ error: "out_of_credits" }, 402);
 
     // 9. Transcribe with the server-held key. A failure here charges NOTHING.
+    //    Phase 6 no-speech gate: when the client signalled `has_speech:false`,
+    //    SKIP the Whisper call entirely — no STT round-trip, no STT cost — and
+    //    compose from frames + OCR + clicks on empty segments. This is the ONLY
+    //    behavioural change of the gate on the server; the credit gate, the
+    //    concurrency slot, and idempotency below are untouched. The true-seconds
+    //    gate (step 10) still runs against the client-declared duration.
     let durationSeconds: number;
-    let segments;
-    try {
-      const tr = await deps.stt.transcribe(audio);
-      segments = tr.segments;
-      durationSeconds = tr.durationSeconds;
-    } catch (e) {
-      await deps.store.logGeneration({
-        subscriptionId: account.logSubscriptionId,
-        tokensIn: null,
-        tokensOut: null,
-        estCostUsd: null, // no usable transcription → nothing billable recorded
-        success: false,
-      });
-      return providerErrorResponse(e);
+    let segments: SpeechSegment[];
+    if (!hasSpeech) {
+      segments = [];
+      durationSeconds = declaredAudioSeconds ?? 0;
+    } else {
+      try {
+        const tr = await deps.stt.transcribe(audio);
+        segments = tr.segments;
+        durationSeconds = tr.durationSeconds;
+      } catch (e) {
+        await deps.store.logGeneration({
+          subscriptionId: account.logSubscriptionId,
+          tokensIn: null,
+          tokensOut: null,
+          estCostUsd: null, // no usable transcription → nothing billable recorded
+          success: false,
+        });
+        return providerErrorResponse(e);
+      }
     }
 
     // 10. TRUE seconds gate on Whisper's measured duration, BEFORE the expensive

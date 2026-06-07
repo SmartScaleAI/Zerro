@@ -81,6 +81,14 @@ struct ProcessedRecording {
     /// harness can rebuild the same timeline.
     let clicks: [ResolvedClick]
 
+    /// Phase 6 — whether the isolated audio carries any detectable speech
+    /// (`AudioActivity.hasSpeech`), computed post-hoc from `audio.m4a`. `false`
+    /// means a silent/screen-only clip: the generation paths skip the Whisper
+    /// call entirely (BYOK locally; Managed by sending `has_speech:false` so the
+    /// server short-circuits STT) and compose from frames + OCR + clicks alone.
+    /// Mirrored into the manifest so the eval harness makes the same skip.
+    let hasSpeech: Bool
+
     /// Stable per-recording idempotency key (M1). Minted ONCE here, when the
     /// processed recording is produced, and carried unchanged across every
     /// generation retry of THIS recording — `retryFailedPrompt` re-runs against
@@ -145,6 +153,12 @@ struct ExtractedFrame: Sendable {
 struct RecordingManifest: Codable {
     let audioFilename: String
     let durationSeconds: Double
+    /// Phase 6 — whether the isolated audio carried detectable speech
+    /// (`AudioActivity.hasSpeech`). Mirrored from `ProcessedRecording.hasSpeech`
+    /// so the eval harness can make the SAME no-speech skip the live paths do
+    /// (skip Whisper when `false`). Additive: older manifests/readers that lack
+    /// the key default to "has speech" (transcribe), the safe direction.
+    let hasSpeech: Bool
     let frames: [FrameEntry]
     /// Phase 4 — the recording's resolved clicks, mirrored into the LOCAL
     /// manifest so the eval harness can rebuild the exact `[M:SS] clicked

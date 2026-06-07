@@ -177,9 +177,11 @@ final class ManagedProxyClientTests: XCTestCase {
         let body = try XCTUnwrap(req.httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
-        // Exactly mode + audio + frames + clicks — nothing else.
-        XCTAssertEqual(Set(json.keys), ["mode", "audio", "frames", "clicks"])
+        // Exactly mode + audio + frames + clicks + has_speech — nothing else.
+        XCTAssertEqual(Set(json.keys), ["mode", "audio", "frames", "clicks", "has_speech"])
         XCTAssertEqual(json["mode"] as? String, "instruct")
+        // Phase 6: the no-speech hint defaults to true when not specified.
+        XCTAssertEqual(json["has_speech"] as? Bool, true)
         // No transcript / prompt / system prompt smuggled in.
         let raw = String(data: body, encoding: .utf8) ?? ""
         XCTAssertFalse(raw.contains("transcript"))
@@ -201,6 +203,28 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(clickArr.count, 1)
         XCTAssertEqual(clickArr[0]["timestamp"] as? Double, 1.5)
         XCTAssertEqual(clickArr[0]["label"] as? String, "Save")
+    }
+
+    /// Phase 6: a no-speech recording sends `has_speech:false`, the flag the
+    /// server keys on to skip Whisper.
+    func testRequestSendsHasSpeechFalseWhenNoSpeech() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateJSON(), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen, key: "SECRET-KEY")
+
+        _ = try await proxy.generate(
+            audioURL: ManagedFixtures.tempFile(),
+            frames: frames(),
+            mode: .instruct,
+            durationSeconds: 7,
+            hasSpeech: false
+        )
+
+        let body = try XCTUnwrap(gen.requests[0].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["has_speech"] as? Bool, false)
     }
 
     // MARK: - Helpers

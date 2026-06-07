@@ -253,6 +253,46 @@ Deno.test("happy path: charges exactly one credit, logs cost (no content), retur
   );
 });
 
+// ---- Phase 6: no-speech gate skips STT, credit path unchanged ---------------
+Deno.test("has_speech:false skips STT (no transcribe, empty segments) but still chats + charges normally", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ has_speech: false })),
+    deps(store, openai),
+  );
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.prompt, "GENERATED PROMPT");
+  // Credit path is byte-for-byte unchanged: exactly one credit charged.
+  assertEquals(json.credits_remaining, 99);
+
+  // Whisper was NEVER called; chat still ran exactly once.
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(openai.chatCalls, 1);
+
+  // The model saw frames only — no speech segment in the interleaved content.
+  const contentJson = JSON.stringify(openai.lastContent);
+  assert(!contentJson.includes("hello world"));
+
+  // Still logged as a normal successful, charged generation.
+  assertEquals(store.log.length, 1);
+  assertEquals(store.log[0].success, true);
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("has_speech omitted → transcribes as before (default is speech)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+
+  assertEquals(res.status, 200);
+  // No hint → unchanged behavior: Whisper runs.
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1);
+});
+
 // ---- key-repurposing defense (§14.1 / §1.2): the server owns the prompt -----
 Deno.test("client-supplied transcript/system_prompt/messages fields are IGNORED — server transcribes + composes", async () => {
   const store = activeStore(0);

@@ -51,13 +51,18 @@ struct ProcessingPipeline {
     /// 9 will add new stages for STT + model calls and adjust these
     /// to match the perceived flow.
     /// Stages the .processing pill cycles through during a full
-    /// recording → result flow. The first three (.isolatingAudio,
-    /// .extractingFrames, .writingManifest) fire from inside
-    /// `process()` here. The last two (.transcribing, .writingPrompt)
-    /// fire from AppState.runPromptGeneration AFTER process() returns
-    /// — they live in this enum so the pill label has a single source
-    /// of truth, even though they're driven by Phase 9 API work and
-    /// not by the pipeline itself.
+    /// recording → result flow. `process()` here fires
+    /// `.extractingFrames` (the umbrella for the Phase 6 concurrent
+    /// isolate-audio + extract-frames block) then `.writingManifest`.
+    /// `.isolatingAudio` is retained for its label/source-of-truth role
+    /// but no longer fired as its own stage — audio isolation now runs
+    /// concurrently under the `.extractingFrames` umbrella, so the pill
+    /// shows one coherent label instead of racing between two. The last
+    /// two (.transcribing, .writingPrompt) fire from
+    /// AppState.runPromptGeneration AFTER process() returns — they live
+    /// in this enum so the pill label has a single source of truth, even
+    /// though they're driven by Phase 9 API work and not by the pipeline
+    /// itself.
     enum Stage {
         case isolatingAudio
         case extractingFrames
@@ -109,13 +114,24 @@ struct ProcessingPipeline {
                 throw ProcessingError.emptyRecording
             }
 
-            await MainActor.run { onStage(.isolatingAudio) }
-            let audioURL = try await isolateAudio(from: sourceURL, into: workingDirectory)
+            // Phase 6: audio isolation and frame extraction each open their own
+            // `AVURLAsset` and write disjoint files (audio.m4a vs frame-NNN.jpg),
+            // so they run CONCURRENTLY — wall-time drops from
+            // sum(isolate, extract+OCR) to max(isolate, extract+OCR). Frame
+            // extraction (now also Vision OCR + redaction per keyframe) is the
+            // dominant cost, so a SINGLE umbrella stage covers the block:
+            // `.extractingFrames` ("Capturing key moments…"). The two stages can
+            // no longer fire in sequence, so we don't flicker the pill between
+            // them — `.isolatingAudio` is retained in the enum but no longer
+            // fired here. If either child throws, `try await` rethrows and the
+            // sibling is cancelled on scope exit; the catch below removes the
+            // partial working dir exactly as before.
+            await MainActor.run { onStage(.extractingFrames) }
+            async let audioURLTask = isolateAudio(from: sourceURL, into: workingDirectory)
+            async let framesTask = extractFrames(from: sourceURL, into: workingDirectory, redactSecrets: redactSecrets)
+            let (audioURL, frames) = try await (audioURLTask, framesTask)
             // Basename is .public — "audio.m4a" is our own constant.
             Log.processing.info("isolated audio: \(audioURL.lastPathComponent, privacy: .public)")
-
-            await MainActor.run { onStage(.extractingFrames) }
-            let frames = try await extractFrames(from: sourceURL, into: workingDirectory, redactSecrets: redactSecrets)
             // Frame basenames are `frame-NNN.jpg` (our own format), .public.
             Log.processing.info(
                 "extracted \(frames.count, privacy: .public) frames (first=\(frames.first?.url.lastPathComponent ?? "—", privacy: .public), last=\(frames.last?.url.lastPathComponent ?? "—", privacy: .public))"
@@ -130,12 +146,24 @@ struct ProcessingPipeline {
                 "resolved \(resolvedClicks.count, privacy: .public) click(s) from \(clicks.count, privacy: .public) captured"
             )
 
+            // Phase 6: post-hoc no-speech check on the isolated audio. Computed
+            // from the written file (not capture-time state) so re-extraction in
+            // the eval harness gets the same answer. Run in a detached task to
+            // keep the AVAudioFile decode + RMS scan off the main actor. A silent
+            // clip (false) lets the downstream paths skip Whisper entirely; a
+            // decode failure conservatively returns true (transcribe anyway).
+            let hasSpeech = await Task.detached(priority: .userInitiated) {
+                AudioActivity.hasSpeech(in: audioURL)
+            }.value
+            Log.processing.info("audio activity: hasSpeech=\(hasSpeech, privacy: .public)")
+
             await MainActor.run { onStage(.writingManifest) }
             try writeManifest(
                 audioURL: audioURL,
                 frames: frames,
                 duration: duration,
                 clicks: resolvedClicks,
+                hasSpeech: hasSpeech,
                 into: workingDirectory
             )
             Log.processing.info("manifest written")
@@ -145,7 +173,8 @@ struct ProcessingPipeline {
                 frames: frames,
                 duration: duration,
                 workingDirectory: workingDirectory,
-                clicks: resolvedClicks
+                clicks: resolvedClicks,
+                hasSpeech: hasSpeech
             )
         } catch {
             // Mid-pipeline failure: tear down the partial working dir
@@ -597,11 +626,13 @@ struct ProcessingPipeline {
         frames: [ExtractedFrame],
         duration: CMTime,
         clicks: [ResolvedClick] = [],
+        hasSpeech: Bool = true,
         into workingDirectory: URL
     ) throws {
         let manifest = RecordingManifest(
             audioFilename: audioURL.lastPathComponent,
             durationSeconds: CMTimeGetSeconds(duration),
+            hasSpeech: hasSpeech,
             frames: frames.map { frame in
                 RecordingManifest.FrameEntry(
                     index: frame.index,

@@ -153,4 +153,23 @@ enum ProcessingConfig {
     /// surprise (read by AppState.handleElapsedUpdate). Derived from the cap
     /// (30s before it) so the two thresholds always track together.
     static let wrappingUpSeconds: Double = maxRecordingSeconds - 30
+
+    // MARK: - Phase 6: no-speech gate (skip Whisper on silent audio)
+
+    /// Per-window RMS energy a normalized (−1…1) audio sample window must
+    /// EXCEED for the window to count as speech (`AudioActivity.hasSpeech`).
+    /// 0.01 ≈ −40 dBFS — comfortably above the noise floor of a muted mic or
+    /// near-silent room tone, while well below conversational narration
+    /// (typically −12…−30 dBFS, RMS ≈ 0.03–0.25). Tunable: raise it if quiet
+    /// room tone is misread as speech, lower it if soft narration is missed.
+    /// The gate is conservative by construction — any single window over the
+    /// bar marks the clip as having speech, so it errs toward transcribing.
+    static let speechRMSThreshold: Float = 0.01
+
+    /// Window size, in samples, over which `AudioActivity.hasSpeech` computes
+    /// each RMS measurement. At a 44.1 kHz export ~2048 samples ≈ 46 ms — long
+    /// enough to average out a single click/pop, short enough that a brief
+    /// utterance still lands inside one window. Sample-count (not seconds) so
+    /// the helper stays sample-rate-agnostic and trivially unit-testable.
+    static let speechWindowSamples: Int = 2048
 }
