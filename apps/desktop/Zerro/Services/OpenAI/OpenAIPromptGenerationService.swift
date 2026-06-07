@@ -172,6 +172,12 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
 
             case .speech(_, _, let text):
                 userContent.append(.text("\n\(item.timestampTag) \"\(text)\""))
+
+            case .click(_, let label):
+                // Phase 4: a click line — `\n[M:SS] clicked "<label>"`.
+                // Byte-identical to the Managed (interleave.ts) and eval
+                // (eval-models.mjs) renderings — KEEP IN SYNC if you touch this.
+                userContent.append(.text("\n\(item.timestampTag) clicked \"\(label)\""))
             }
         }
 

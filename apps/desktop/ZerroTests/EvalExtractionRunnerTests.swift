@@ -63,6 +63,18 @@ final class EvalExtractionRunnerTests: XCTestCase {
             fm.fileExists(atPath: inputURL.path),
             "input .mov not found at \(inputURL.path)")
 
+        // Phase 4: replay the clicks sidecar (`<stem>.clicks.json`) if present, so
+        // re-extraction rebuilds the same `[M:SS] clicked "…"` lines the live run
+        // produced. Absent (old baseline .mov, or a clickless recording) → zero
+        // click lines, which the pipeline handles gracefully.
+        let clicksSidecarURL = inputURL.deletingPathExtension().appendingPathExtension("clicks.json")
+        var replayClicks: [RecordedClick] = []
+        if let data = try? Data(contentsOf: clicksSidecarURL),
+           let decoded = try? JSONDecoder().decode([RecordedClick].self, from: data) {
+            replayClicks = decoded
+            print("zerro-extract: replaying \(replayClicks.count) click(s) from \(clicksSidecarURL.lastPathComponent)")
+        }
+
         // --- run the REAL pipeline (with a launch-sweep retry) ---------------
         // The pipeline writes its working dir under the system temp dir with a
         // `zerro-work-` prefix. The test HOST is the full Zerro.app, and its
@@ -78,7 +90,7 @@ final class EvalExtractionRunnerTests: XCTestCase {
         var lastError: Error?
         for attempt in 1...4 {
             do {
-                processed = try await ProcessingPipeline().process(sourceURL: inputURL)
+                processed = try await ProcessingPipeline().process(sourceURL: inputURL, clicks: replayClicks)
                 if attempt > 1 {
                     print("zerro-extract: succeeded on attempt \(attempt) "
                         + "(earlier attempt lost its working dir to the host app's launch sweep)")

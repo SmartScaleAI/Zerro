@@ -896,7 +896,7 @@ final class AppState {
         }
         permissions?.stopMonitoring()
         switch outcome {
-        case .finished(let url):
+        case .finished(let url, let clicks):
             lastRecordingURL = url
             // Phase 8 Step 1: run real audio isolation in place of the
             // old mock 4s sleep. Frame extraction (Step 2), manifest
@@ -906,7 +906,7 @@ final class AppState {
             // existing placeholder result. The working-dir path is
             // logged so the isolated audio can be played + verified.
             state = .processing
-            runProcessing(sourceURL: url)
+            runProcessing(sourceURL: url, clicks: clicks)
         case .interrupted:
             // M2 (rev 2): the recording was abandoned for sleep WITHOUT
             // finalizing, leaving a recoverable fragmented `.mov` on disk
@@ -1064,7 +1064,7 @@ final class AppState {
     /// defense, the `state == .processing` guards after each await mean
     /// a cancel that resets to .idle wins — we never stomp a newer state
     /// with a late-arriving pipeline result, even if the abort raced.
-    private func runProcessing(sourceURL: URL) {
+    private func runProcessing(sourceURL: URL, clicks: [RecordedClick] = []) {
         // Reset the placeholder explicitly — handleSessionFinish set
         // state = .processing before this Task starts running, so for
         // ~ms before the pipeline fires its first onStage the pill
@@ -1078,6 +1078,7 @@ final class AppState {
             do {
                 let result = try await ProcessingPipeline().process(
                     sourceURL: sourceURL,
+                    clicks: clicks,
                     redactSecrets: self.recordingRedactSecrets,
                     onStage: { [weak self] stage in
                         self?.processingStageLabel = stage.userMessage
@@ -1224,6 +1225,7 @@ final class AppState {
                     frames: processed.frames,
                     mode: mode,
                     durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
+                    clicks: processed.clicks,
                     tokenProvider: tokenProvider,
                     // M1: the recording's stable key — reused across every retry
                     // (here and `retryFailedPrompt`) so a charged-but-dropped
@@ -1380,7 +1382,8 @@ final class AppState {
 
                 let timeline = Interleaver.merge(
                     frames: processed.frames,
-                    transcript: transcript
+                    transcript: transcript,
+                    clicks: processed.clicks
                 )
 
                 // Phase 17: decide the effective mode BEFORE composing the

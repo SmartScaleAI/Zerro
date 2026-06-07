@@ -33,11 +33,14 @@ import os
 enum Redactor {
 
     /// The result of the Vision pass: the image to ENCODE (boxed if any secret
-    /// was found and redaction is on) and the TEXT to attach (secret substrings
-    /// masked as `[REDACTED]` when redaction is on).
+    /// was found and redaction is on), the TEXT to attach (secret substrings
+    /// masked as `[REDACTED]` when redaction is on), and the per-line boxes
+    /// (Phase 4 — `text` already masked, `box` = Vision's normalized bottom-left
+    /// `boundingBox`) the pipeline hit-tests clicks against.
     struct Output {
         let image: CGImage
         let text: String
+        let lines: [OCRTextLine]
     }
 
     /// Run OCR once and return the (possibly redacted) image + text. See the
@@ -59,15 +62,20 @@ enum Redactor {
         } catch {
             // OCR is best-effort — a Vision failure must not derail extraction.
             Log.processing.error("OCR failed: \(error.localizedDescription, privacy: .private)")
-            return Output(image: image, text: "")
+            return Output(image: image, text: "", lines: [])
         }
 
         guard let observations = request.results, !observations.isEmpty else {
-            return Output(image: image, text: "")
+            return Output(image: image, text: "", lines: [])
         }
 
         var lines: [String] = []
         lines.reserveCapacity(observations.count)
+        // Per-line boxes (Phase 4) — the FINAL (possibly masked) text + Vision's
+        // normalized bottom-left bounding box, one per recognized line. The click
+        // resolver hit-tests against these.
+        var lineBoxes: [OCRTextLine] = []
+        lineBoxes.reserveCapacity(observations.count)
         // Normalized (bottom-left origin) boxes of lines containing a secret.
         var secretBoxes: [CGRect] = []
 
@@ -75,30 +83,33 @@ enum Redactor {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let line = candidate.string
 
-            guard redact else {
-                lines.append(line)
-                continue
+            let finalLine: String
+            if redact {
+                let secrets = SecretDetector.sensitiveSubstrings(in: line)
+                if secrets.isEmpty {
+                    finalLine = line
+                } else {
+                    secretBoxes.append(observation.boundingBox)
+                    var masked = line
+                    for secret in secrets {
+                        masked = masked.replacingOccurrences(of: secret, with: "[REDACTED]")
+                    }
+                    finalLine = masked
+                }
+            } else {
+                finalLine = line
             }
 
-            let secrets = SecretDetector.sensitiveSubstrings(in: line)
-            if secrets.isEmpty {
-                lines.append(line)
-            } else {
-                secretBoxes.append(observation.boundingBox)
-                var masked = line
-                for secret in secrets {
-                    masked = masked.replacingOccurrences(of: secret, with: "[REDACTED]")
-                }
-                lines.append(masked)
-            }
+            lines.append(finalLine)
+            lineBoxes.append(OCRTextLine(text: finalLine, box: observation.boundingBox))
         }
 
         let text = lines.joined(separator: "\n")
 
         // No redaction needed (off, or no secrets seen) → return the original
-        // pixels untouched alongside the (raw or already-masked) text.
+        // pixels untouched alongside the (raw or already-masked) text + boxes.
         guard redact, !secretBoxes.isEmpty else {
-            return Output(image: image, text: text)
+            return Output(image: image, text: text, lines: lineBoxes)
         }
 
         guard let boxed = paintOpaqueBoxes(over: image, normalizedBoxes: secretBoxes) else {
@@ -107,9 +118,9 @@ enum Redactor {
             // original image rather than throwing — a near-impossible path
             // (CGContext alloc), logged so it's visible if it ever happens.
             Log.processing.error("OCR redaction compositing failed — \(secretBoxes.count, privacy: .public) box(es) not painted")
-            return Output(image: image, text: text)
+            return Output(image: image, text: text, lines: lineBoxes)
         }
-        return Output(image: boxed, text: text)
+        return Output(image: boxed, text: text, lines: lineBoxes)
     }
 
     // MARK: - Compositing

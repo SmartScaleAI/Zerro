@@ -345,6 +345,61 @@ Deno.test("oversized ocr_text is length-capped (forged-body defense, no prompt b
   assert(block.text.length <= 8 * 1024 + 64, `not capped: ${block.text.length}`);
 });
 
+// ---- Phase 4: clicks --------------------------------------------------------
+Deno.test("clicks are interleaved as `clicked \"<label>\"` lines, frame<click<speech tie-break", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const body = makeBody({
+    frames: [{ timestamp: 0, mime: "image/jpeg", data: btoa("frame0") }],
+    clicks: [{ timestamp: 0, label: "Book a Free Demo" }],
+  });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+
+  const blocks = openai.lastContent;
+  // Exactly one click line, byte-identical to BYOK (encodeBody) + eval.
+  const clickBlocks = blocks.filter((b) => b.type === "text" && b.text.includes("clicked"));
+  assertEquals(clickBlocks.length, 1);
+  assertEquals(clickBlocks[0], { type: "text", text: `\n[0:00] clicked "Book a Free Demo"` });
+
+  // Tie-break at t=0: frame image precedes the click precedes the speech.
+  const flat = blocks.map((b) => (b.type === "image" ? "<image>" : b.text));
+  const imageIdx = flat.indexOf("<image>");
+  const clickIdx = flat.findIndex((t) => t.includes("clicked"));
+  const speechIdx = flat.findIndex((t) => t.includes("hello world"));
+  assert(imageIdx < clickIdx && clickIdx < speechIdx, `order: img=${imageIdx} click=${clickIdx} speech=${speechIdx}`);
+});
+
+Deno.test("clicks are count-capped and label-capped (forged-body defense)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const manyClicks = Array.from({ length: 250 }, (_, i) => ({ timestamp: i * 0.01, label: `c${i}` }));
+  manyClicks.push({ timestamp: 5, label: "y".repeat(500) }); // over-long label
+  const body = makeBody({ clicks: manyClicks });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+
+  const clickBlocks = openai.lastContent.filter((b) => b.type === "text" && b.text.includes("clicked"));
+  // Count capped at MAX_CLICKS (200) — the 251 sent are sliced down.
+  assert(clickBlocks.length <= 200, `not count-capped: ${clickBlocks.length}`);
+  // No single click line carries the forged 500-char label (capped near 200).
+  for (const b of clickBlocks) {
+    if (b.type !== "text") continue;
+    assert(b.text.length <= 200 + 32, `label not capped: ${b.text.length}`);
+  }
+});
+
+Deno.test("empty-label clicks render nothing; absent clicks are backward-compatible", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  // An empty label is dropped; a body with no `clicks` key at all is fine.
+  const body = makeBody({ clicks: [{ timestamp: 1, label: "" }] });
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+  const clickBlocks = openai.lastContent.filter((b) => b.type === "text" && b.text.includes("clicked"));
+  assertEquals(clickBlocks.length, 0);
+});
+
 Deno.test("past_due still generates on remaining credits", async () => {
   const store = new InMemoryStore();
   store.seed({ id: "sub-1", tier: "starter", status: "past_due", credits_limit: 100 }, 40);

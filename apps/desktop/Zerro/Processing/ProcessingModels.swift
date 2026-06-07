@@ -14,8 +14,53 @@
 //  reads; the zero-padded frame filenames are for human inspection.
 //
 
+import CoreGraphics
 import CoreMedia
 import Foundation
+
+// MARK: - RecordedClick
+
+/// Phase 4 — one mouse click captured LIVE during recording (clicks are not in
+/// the `.mov`, so they're carried out-of-band). `x`/`y` are NORMALIZED to
+/// `[0,1]` within the CAPTURED region, with a TOP-LEFT origin so they match the
+/// frame images (and Vision's OCR boxes after a y-flip). `seconds` is the
+/// click's offset from session start (the same clock the timeline tags use).
+///
+/// `Codable` so the eval loop can persist a `<stem>.clicks.json` sidecar beside
+/// the source `.mov` and replay the exact clicks on re-extraction; `Sendable`
+/// because RecordingSession appends to an array read at finalize across the
+/// main-actor boundary.
+struct RecordedClick: Codable, Sendable, Equatable {
+    let seconds: Double
+    let x: Double
+    let y: Double
+}
+
+// MARK: - ResolvedClick
+
+/// Phase 4 — a `RecordedClick` after its on-screen label has been resolved from
+/// the nearest keyframe's OCR line boxes (the pipeline's job). Carries only what
+/// the timeline needs: the click's `seconds` and the resolved `label` (the
+/// on-screen element text under the cursor). Clicks that resolve to no label are
+/// dropped by the resolver, so every `ResolvedClick` is labeled. The raw
+/// coordinates are dropped here — they've done their job.
+struct ResolvedClick: Sendable, Equatable {
+    let seconds: Double
+    let label: String
+}
+
+// MARK: - OCRTextLine
+
+/// Phase 4 — one OCR-recognized line with its bounding box, surfaced by the
+/// Redactor so the click resolver can hit-test a click against the on-screen
+/// text. `box` is Vision's `boundingBox`: normalized `[0,1]`, BOTTOM-LEFT origin
+/// (the resolver flips a top-left click into this space). Carried in-memory only
+/// (never persisted) — `Sendable` so it rides out of the detached per-frame task
+/// on `ExtractedFrame`.
+struct OCRTextLine: Sendable, Equatable {
+    let text: String
+    let box: CGRect
+}
 
 // MARK: - ProcessedRecording
 
@@ -28,6 +73,13 @@ struct ProcessedRecording {
     let frames: [ExtractedFrame]
     let duration: CMTime
     let workingDirectory: URL
+    /// Phase 4 — clicks captured during recording, each already resolved to the
+    /// on-screen label under the cursor (from the nearest keyframe's OCR). Empty
+    /// for an old recording with no clicks sidecar, or one where nothing was
+    /// clicked. The interleaver merges these into the timeline as
+    /// `[M:SS] clicked "<label>"` lines; the manifest mirrors them so the eval
+    /// harness can rebuild the same timeline.
+    let clicks: [ResolvedClick]
 
     /// Stable per-recording idempotency key (M1). Minted ONCE here, when the
     /// processed recording is produced, and carried unchanged across every
@@ -66,14 +118,22 @@ struct ExtractedFrame: Sendable {
     /// frame's image block so the model can prefer it for exact strings.
     let ocrText: String?
 
-    /// Explicit init with an `ocrText` default so the (many) existing
+    /// Phase 4 — the frame's OCR line boxes (text + normalized bottom-left box),
+    /// carried IN-MEMORY only (never written to the manifest). The pipeline uses
+    /// them to resolve a click's on-screen label by hit-testing the click point
+    /// against this frame's lines. Empty when OCR found nothing or for the many
+    /// construction sites that don't supply it.
+    let lines: [OCRTextLine]
+
+    /// Explicit init with `ocrText`/`lines` defaults so the (many) existing
     /// 3-argument construction sites — tests, fixtures — keep compiling while
-    /// the pipeline's Pass-2 path supplies the recognized text.
-    init(url: URL, timestamp: CMTime, index: Int, ocrText: String? = nil) {
+    /// the pipeline's Pass-2 path supplies the recognized text + boxes.
+    init(url: URL, timestamp: CMTime, index: Int, ocrText: String? = nil, lines: [OCRTextLine] = []) {
         self.url = url
         self.timestamp = timestamp
         self.index = index
         self.ocrText = ocrText
+        self.lines = lines
     }
 }
 
@@ -86,6 +146,12 @@ struct RecordingManifest: Codable {
     let audioFilename: String
     let durationSeconds: Double
     let frames: [FrameEntry]
+    /// Phase 4 — the recording's resolved clicks, mirrored into the LOCAL
+    /// manifest so the eval harness can rebuild the exact `[M:SS] clicked
+    /// "<label>"` timeline the live payload sends. Omitted from the JSON when
+    /// empty (older manifests/readers stay valid; a clickless recording carries
+    /// no key).
+    let clicks: [ClickEntry]?
 
     struct FrameEntry: Codable {
         let index: Int
@@ -96,6 +162,14 @@ struct RecordingManifest: Codable {
         /// no-text frame doesn't carry an empty key. Lives in the LOCAL manifest
         /// so the eval harness can mirror the exact text the live payload sends.
         let ocrText: String?
+    }
+
+    /// Phase 4 — one resolved click in the manifest. `timestampSeconds` matches
+    /// the `FrameEntry` naming; `label` is the on-screen element under the cursor
+    /// (always present — unlabeled clicks are dropped by the resolver).
+    struct ClickEntry: Codable {
+        let timestampSeconds: Double
+        let label: String
     }
 }
 

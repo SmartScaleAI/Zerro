@@ -48,6 +48,15 @@ export const ALLOWED_FRAME_MIME = ["image/jpeg"];
 // trusts it and does not re-scan.
 export const MAX_OCR_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_OCR_TEXT_CHARS", 8 * 1024);
 
+// Phase 4 — click caps. A real 3-min recording produces at most a few dozen
+// clicks with short on-screen labels; these generous fuses only stop a FORGED
+// body from bloating the prompt the server's key pays for. Clicks past the count
+// cap are DROPPED (not a reject — a real recording can't hit it); each label is
+// length-capped. Labels are already redacted client-side; the server trusts and
+// length-caps only.
+export const MAX_CLICKS = optionalEnvInt("GENERATE_MAX_CLICKS", 200);
+export const MAX_CLICK_LABEL_CHARS = optionalEnvInt("GENERATE_MAX_CLICK_LABEL_CHARS", 200);
+
 // ---- Concurrency cap (=1 in flight) — backs the credit-ordering guard -------
 // Slot stale-reclaim window. MUST exceed the worst-case OpenAI round-trip so a
 // slow-but-live request is never reclaimed out from under itself; small enough

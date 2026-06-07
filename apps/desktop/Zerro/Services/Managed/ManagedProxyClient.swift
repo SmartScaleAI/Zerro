@@ -120,6 +120,7 @@ final class ManagedProxyClient {
         frames: [ExtractedFrame],
         mode: OutputMode,
         durationSeconds: Double?,
+        clicks: [ResolvedClick] = [],
         tokenProvider: ProxyTokenProviding? = nil,
         idempotencyKey: String = UUID().uuidString
     ) async throws -> ManagedGenerationResult {
@@ -129,14 +130,15 @@ final class ManagedProxyClient {
         // and base64-ing a multi-MB audio + frame payload would otherwise hitch
         // the UI (the BYOK `OpenAIPromptGenerationService.encodeBody` encodes
         // off-main the same way). The same bytes are reused on the post-refresh
-        // retry.
+        // retry. Clicks are already-Sendable value types, passed straight in.
         let uploads = frames.map { FrameUpload(url: $0.url, timestamp: CMTimeGetSeconds($0.timestamp), ocrText: $0.ocrText) }
         let body = try await Task.detached(priority: .userInitiated) {
             try Self.encodeBody(
                 audioURL: audioURL,
                 frames: uploads,
                 mode: mode,
-                durationSeconds: durationSeconds
+                durationSeconds: durationSeconds,
+                clicks: clicks
             )
         }.value
 
@@ -221,7 +223,8 @@ final class ManagedProxyClient {
         audioURL: URL,
         frames: [FrameUpload],
         mode: OutputMode,
-        durationSeconds: Double?
+        durationSeconds: Double?,
+        clicks: [ResolvedClick] = []
     ) throws -> Data {
         let audioData: Data
         do {
@@ -259,12 +262,21 @@ final class ManagedProxyClient {
             ])
         }
 
+        // Phase 4: the resolved clicks (timestamp + on-screen label). The label
+        // came from the client's OCR, already redaction-safe; the server
+        // defensively caps the count + label length and interleaves them as
+        // `clicked "<label>"` lines. Empty array when nothing was clicked.
+        let clickObjects: [[String: Any]] = clicks.map {
+            ["timestamp": $0.seconds, "label": $0.label]
+        }
+
         // `mode` is the ONLY field that steers the server-owned prompt — no
         // transcript, no system prompt (§6.1).
         let payload: [String: Any] = [
             "mode": mode.rawValue,
             "audio": audio,
             "frames": frameObjects,
+            "clicks": clickObjects,
         ]
 
         do {

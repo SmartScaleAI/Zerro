@@ -85,6 +85,7 @@ struct ProcessingPipeline {
     /// failure pill via `.processingFailed`.
     func process(
         sourceURL: URL,
+        clicks: [RecordedClick] = [],
         redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
         onStage: @MainActor (Stage) -> Void = { _ in }
     ) async throws -> ProcessedRecording {
@@ -120,11 +121,21 @@ struct ProcessingPipeline {
                 "extracted \(frames.count, privacy: .public) frames (first=\(frames.first?.url.lastPathComponent ?? "—", privacy: .public), last=\(frames.last?.url.lastPathComponent ?? "—", privacy: .public))"
             )
 
+            // Phase 4: resolve each captured click to the on-screen label under
+            // the cursor, using the nearest keyframe's OCR boxes. Empty `clicks`
+            // (old recording with no sidecar, or nothing clicked) → no click
+            // lines; downstream is graceful.
+            let resolvedClicks = ClickResolver.resolve(clicks: clicks, frames: frames)
+            Log.processing.info(
+                "resolved \(resolvedClicks.count, privacy: .public) click(s) from \(clicks.count, privacy: .public) captured"
+            )
+
             await MainActor.run { onStage(.writingManifest) }
             try writeManifest(
                 audioURL: audioURL,
                 frames: frames,
                 duration: duration,
+                clicks: resolvedClicks,
                 into: workingDirectory
             )
             Log.processing.info("manifest written")
@@ -133,7 +144,8 @@ struct ProcessingPipeline {
                 audioURL: audioURL,
                 frames: frames,
                 duration: duration,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                clicks: resolvedClicks
             )
         } catch {
             // Mid-pipeline failure: tear down the partial working dir
@@ -532,7 +544,9 @@ struct ProcessingPipeline {
         // Empty OCR text is carried as nil (not "") so the manifest omits the
         // key and the interleaver emits no `on-screen text:` block for it.
         let ocrText = recognized.text.isEmpty ? nil : recognized.text
-        return ExtractedFrame(url: url, timestamp: actualTime, index: index, ocrText: ocrText)
+        // Phase 4: the OCR line boxes ride along in-memory so the click resolver
+        // can name a click from this frame's on-screen text (never persisted).
+        return ExtractedFrame(url: url, timestamp: actualTime, index: index, ocrText: ocrText, lines: recognized.lines)
     }
 
     /// Scales `image` so its longest edge equals `maxDimension`,
@@ -582,6 +596,7 @@ struct ProcessingPipeline {
         audioURL: URL,
         frames: [ExtractedFrame],
         duration: CMTime,
+        clicks: [ResolvedClick] = [],
         into workingDirectory: URL
     ) throws {
         let manifest = RecordingManifest(
@@ -594,6 +609,11 @@ struct ProcessingPipeline {
                     timestampSeconds: CMTimeGetSeconds(frame.timestamp),
                     ocrText: frame.ocrText
                 )
+            },
+            // Phase 4: omit the key entirely when there are no clicks so older
+            // readers + clickless recordings stay clean (nil → no `clicks` field).
+            clicks: clicks.isEmpty ? nil : clicks.map {
+                RecordingManifest.ClickEntry(timestampSeconds: $0.seconds, label: $0.label)
             }
         )
 

@@ -64,6 +64,12 @@
             ReferencedContainer = "container:Zerro.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <CommandLineArguments>
+         <CommandLineArgument
+            argument = "-RetainEvalArtifacts YES"
+            isEnabled = "YES">
+         </CommandLineArgument>
+      </CommandLineArguments>
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "ZERRO_FUNCTIONS_BASE_URL"

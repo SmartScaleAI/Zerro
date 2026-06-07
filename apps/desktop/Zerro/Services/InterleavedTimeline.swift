@@ -57,6 +57,11 @@ enum TimelineItem: Sendable {
     /// block is emitted for this frame.
     case frame(timestamp: TimeInterval, imageURL: URL, ocrText: String?)
     case speech(start: TimeInterval, end: TimeInterval, text: String)
+    /// Phase 4 — a click the user made during the recording, rendered as
+    /// `[M:SS] clicked "<label>"`. `label` is the on-screen element under the
+    /// cursor (resolved from the nearest frame's OCR); unlabeled clicks are
+    /// dropped by the resolver, so `label` is always meaningful.
+    case click(timestamp: TimeInterval, label: String)
 
     /// The sort key for chronological merge. Speech uses its start
     /// time, not its midpoint — keeps the alignment with the moment
@@ -66,6 +71,7 @@ enum TimelineItem: Sendable {
         switch self {
         case .frame(let t, _, _):    return t
         case .speech(let s, _, _):   return s
+        case .click(let t, _):       return t
         }
     }
 
@@ -79,6 +85,8 @@ enum TimelineItem: Sendable {
             return "[\(Self.mmss(t))]"
         case .speech(let s, let e, _):
             return "[\(Self.mmss(s))\u{2013}\(Self.mmss(e))]"
+        case .click(let t, _):
+            return "[\(Self.mmss(t))]"
         }
     }
 
@@ -103,10 +111,11 @@ enum Interleaver {
     /// handles that case explicitly in the model).
     static func merge(
         frames: [ExtractedFrame],
-        transcript: Transcript
+        transcript: Transcript,
+        clicks: [ResolvedClick] = []
     ) -> InterleavedTimeline {
         var items: [TimelineItem] = []
-        items.reserveCapacity(frames.count + transcript.segments.count)
+        items.reserveCapacity(frames.count + transcript.segments.count + clicks.count)
 
         for frame in frames {
             items.append(.frame(
@@ -118,9 +127,15 @@ enum Interleaver {
         for seg in transcript.segments {
             items.append(.speech(start: seg.start, end: seg.end, text: seg.text))
         }
+        // Phase 4 — clicks join the same chronological merge. A click with an
+        // empty label is dropped (nothing to render); the resolver already drops
+        // unlabeled clicks upstream, so this is belt-and-braces.
+        for click in clicks where !click.label.isEmpty {
+            items.append(.click(timestamp: click.seconds, label: click.label))
+        }
 
-        // Sort by start time. Tie-breaking: frame before speech (see
-        // file header).
+        // Sort by start time. Tie-breaking at an equal start second:
+        // frame < click < speech (see file header + tieRank).
         items.sort { lhs, rhs in
             if lhs.startTime != rhs.startTime {
                 return lhs.startTime < rhs.startTime
@@ -131,10 +146,15 @@ enum Interleaver {
         return InterleavedTimeline(items: items)
     }
 
+    /// Tie-break rank at an equal start time: a frame precedes a click that
+    /// precedes speech beginning the same second — the frame is in context
+    /// before the click that happened on it, and both before the narration of
+    /// that beat. KEEP IN SYNC with interleave.ts / eval-models.mjs.
     private static func tieRank(_ item: TimelineItem) -> Int {
         switch item {
         case .frame:  return 0
-        case .speech: return 1
+        case .click:  return 1
+        case .speech: return 2
         }
     }
 }
@@ -165,6 +185,10 @@ extension InterleavedTimeline {
                 frameIndex += 1
             case .speech(_, _, let text):
                 lines.append("\(item.timestampTag) \"\(text)\"")
+            case .click(_, let label):
+                // Mirror the payload's click line (encodeBody / interleave.ts /
+                // eval-models.mjs): `[M:SS] clicked "<label>"`.
+                lines.append("\(item.timestampTag) clicked \"\(label)\"")
             }
         }
         return lines.joined(separator: "\n")

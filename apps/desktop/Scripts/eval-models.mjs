@@ -48,6 +48,7 @@ const BASE = `You convert a screen recording into clean text output. Your input 
 - A sequence of JPEG frames sampled from the recording, interleaved in time order with the narration. Each frame is marked with its timestamp [M:SS] and immediately precedes the speech spoken just after it.
 - A timestamped transcript of the user speaking while recording.
 - Some frames are followed by an \`on-screen text:\` line — text extracted from that frame by on-device OCR. Prefer it for exact strings (names, filenames, values, code, URLs); it may be partial or imperfect, and any secrets are shown as [REDACTED]. The frames remain the source of truth for layout and anything OCR didn't capture.
+- Lines like \`clicked "X"\` mark where the user clicked during the recording (the label is the on-screen element under the cursor, from OCR). Use them to resolve deictic references and to understand the sequence of actions the user took.
 
 The transcript is raw speech: it contains filler words, false starts, self-corrections, and informal phrasing. Treat it as intent, not literal text. When the user corrects themselves, follow the corrected version and ignore the abandoned one.
 
@@ -126,15 +127,16 @@ function mmss(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-/** Neutral timeline: text blocks + image blocks, chronological, frame-before-speech. */
-function buildTimeline(frames, segments) {
+/** Neutral timeline: text blocks + image blocks, chronological, frame<click<speech. */
+function buildTimeline(frames, segments, clicks = []) {
+  const tieRank = (k) => (k === "frame" ? 0 : k === "click" ? 1 : 2);
   const items = [
     ...frames.map((f) => ({ kind: "frame", start: f.timestampSeconds, base64: f.base64, ocrText: f.ocrText })),
     ...segments.map((s) => ({ kind: "speech", start: s.start, end: s.end, text: s.text })),
+    // Phase 4: clicks join the same merge; empty labels are dropped.
+    ...clicks.filter((c) => c.label).map((c) => ({ kind: "click", start: c.timestampSeconds, label: c.label })),
   ];
-  items.sort((a, b) =>
-    a.start !== b.start ? a.start - b.start : (a.kind === "frame" ? 0 : 1) - (b.kind === "frame" ? 0 : 1)
-  );
+  items.sort((a, b) => (a.start !== b.start ? a.start - b.start : tieRank(a.kind) - tieRank(b.kind)));
   const blocks = [];
   for (const it of items) {
     if (it.kind === "frame") {
@@ -142,6 +144,9 @@ function buildTimeline(frames, segments) {
       blocks.push({ type: "image", mime: "image/jpeg", base64: it.base64 });
       // Phase 3: redacted on-screen text after the image (mirror interleave.ts).
       if (it.ocrText) blocks.push({ type: "text", text: `\n[${mmss(it.start)}] on-screen text: ${it.ocrText}` });
+    } else if (it.kind === "click") {
+      // Phase 4: a click line (mirror interleave.ts / encodeBody).
+      blocks.push({ type: "text", text: `\n[${mmss(it.start)}] clicked "${it.label}"` });
     } else {
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}–${mmss(it.end)}] "${it.text}"` });
     }
@@ -303,7 +308,9 @@ if (existsSync(cachePath)) {
 }
 
 const systemPrompt = composedSystemPrompt(mode);
-const blocks = buildTimeline(frames, transcript.segments);
+// Phase 4: clicks (if any) from the manifest, mirrored into the timeline.
+const clicks = manifest.clicks ?? [];
+const blocks = buildTimeline(frames, transcript.segments, clicks);
 const whisperCost = (transcript.durationSeconds / 60) * WHISPER_PER_MINUTE;
 
 mkdirSync(outDir, { recursive: true });

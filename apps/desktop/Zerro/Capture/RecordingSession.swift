@@ -96,7 +96,12 @@ final class RecordingSession: NSObject {
     // MARK: - Public types
 
     enum Outcome {
-        case finished(URL)
+        /// `clicks` (Phase 4) are the left-clicks captured live during the
+        /// recording, normalized into the captured region — handed to the
+        /// pipeline, which resolves each to the on-screen label under the cursor.
+        /// Only the success path carries clicks; `.interrupted` (recovered later,
+        /// clicks lost on sleep) and the failure/cancel paths carry none.
+        case finished(URL, clicks: [RecordedClick])
         case cancelled
         /// M2 (rev 2): the recording was abandoned because the system was
         /// about to sleep — deliberately WITHOUT finalizing the writer (a
@@ -237,6 +242,24 @@ final class RecordingSession: NSObject {
     /// display vanishing) invalidates it.
     private var recordedDisplayID: CGDirectDisplayID?
     private var recordedDisplaySize: CGSize?
+
+    /// Phase 4 — global monitor token for left-mouse-down events, and the clicks
+    /// it has appended. A GLOBAL NSEvent monitor for MOUSE events needs NO
+    /// Accessibility / Input-Monitoring permission (only KEY-event monitors do),
+    /// so this adds no entitlement. Installed at the end of `start()` (capture is
+    /// live) and removed in `removeCaptureMonitors()` on every exit path, exactly
+    /// mirroring the mic/sleep/display observers' capture-scoped lifetime. The
+    /// handler only APPENDS to `recordedClicks` on the main actor; the array is
+    /// read once at finalize. NEITHER touches the capture queues.
+    private var clickMonitor: Any?
+    private var recordedClicks: [RecordedClick] = []
+
+    /// Phase 4 — the captured region in GLOBAL AppKit coords (points, bottom-left
+    /// origin) that a click is normalized against: the selection rect when one
+    /// was made, else the recorded display's full frame. Captured at `start()`
+    /// from the same geometry `displayLocalSourceRect(global:on:)` uses; `nil`
+    /// before start / after finalize.
+    private var captureRegionGlobalRect: CGRect?
 
     /// Monotonic anchor for the elapsed publish task. A `SuspendingClock`
     /// instant — NOT wall clock (CFAbsoluteTime) — set in start() once both
@@ -617,6 +640,33 @@ final class RecordingSession: NSObject {
         // SuspendingClock keeps sleep from inflating it. The file's actual
         // duration still comes from video PTS via the writer.
         sessionStartInstant = SuspendingClock().now
+
+        // Phase 4: capture left-clicks LIVE (they're not in the .mov). The region
+        // to normalize against is the SAME geometry the capture uses — the
+        // selection rect when one was made, else the recorded display's full
+        // frame (both global, points, bottom-left). A GLOBAL mouse-event monitor
+        // needs no permission. The handler runs on the main actor and only
+        // appends to `recordedClicks`; it never touches the capture queues. We
+        // install it last (capture is live, sessionStartInstant is set) and tear
+        // it down in removeCaptureMonitors() like the other capture observers.
+        captureRegionGlobalRect = selection?.rect ?? screen.frame
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            // Read the cursor location on the main actor and convert it into the
+            // normalized region coords frames use (top-left origin). Clicks
+            // outside the captured region are dropped.
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let start = self.sessionStartInstant,
+                      let region = self.captureRegionGlobalRect,
+                      let normalized = Self.normalizedClick(global: NSEvent.mouseLocation, in: region)
+                else { return }
+                let t = Self.seconds(since: start) * self.clockMultiplier
+                self.recordedClicks.append(
+                    RecordedClick(seconds: t, x: normalized.x, y: normalized.y)
+                )
+            }
+        }
+
         elapsedPublishTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
@@ -781,6 +831,14 @@ final class RecordingSession: NSObject {
         self.displayChangeObserver = nil
         self.recordedDisplayID = nil
         self.recordedDisplaySize = nil
+        // Phase 4: the global click monitor is removed via NSEvent (NOT a
+        // NotificationCenter). `recordedClicks` is deliberately NOT cleared — it
+        // is read once at finalize, after this runs.
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+        }
+        self.clickMonitor = nil
+        self.captureRegionGlobalRect = nil
     }
 
     // MARK: - Finalize
@@ -865,7 +923,12 @@ final class RecordingSession: NSObject {
                         switch writer.status {
                         case .completed:
                             self.lifecycleState = .finished
-                            self.onFinish(.finished(outputURL))
+                            // Phase 4: persist the clicks sidecar beside the .mov
+                            // (eval re-extraction replays it) and hand the live
+                            // clicks to the pipeline via the Outcome.
+                            let clicks = self.recordedClicks
+                            Self.writeClicksSidecar(clicks, beside: outputURL)
+                            self.onFinish(.finished(outputURL, clicks: clicks))
                         default:
                             let err = writer.error
                                 ?? SessionError.writerFailedToStart(underlying: nil)
@@ -1179,6 +1242,40 @@ final class RecordingSession: NSObject {
             width: selectionRect.width,
             height: selectionRect.height
         )
+    }
+
+    /// Phase 4 — normalizes a GLOBAL cursor point (points, AppKit bottom-left
+    /// origin, as `NSEvent.mouseLocation` returns) into `[0,1]` within the
+    /// captured `region` (also global/points/bottom-left), with a TOP-LEFT origin
+    /// so the result matches the frame images. Returns `nil` for a click outside
+    /// the region (dropped) or a degenerate region. Mirrors the bottom-left→
+    /// top-left flip in `displayLocalSourceRect`. `nonisolated` + static so it's
+    /// pure and unit-testable.
+    nonisolated static func normalizedClick(global point: CGPoint, in region: CGRect) -> (x: Double, y: Double)? {
+        guard region.width > 0, region.height > 0 else { return nil }
+        let nx = (point.x - region.minX) / region.width
+        let nyTop = (region.maxY - point.y) / region.height // flip y to top-left origin
+        guard nx >= 0, nx <= 1, nyTop >= 0, nyTop <= 1 else { return nil }
+        return (Double(nx), Double(nyTop))
+    }
+
+    /// Phase 4 — writes the `<stem>.clicks.json` sidecar (a `[RecordedClick]`
+    /// array) beside the finished `.mov` so the eval loop (`zerro-extract`) can
+    /// replay the exact clicks on re-extraction. Local-only + gitignored, like
+    /// the `.mov`. Best-effort: a failure is logged, never thrown — a missing
+    /// sidecar just means re-extraction yields zero click lines (graceful).
+    /// `nonisolated` so it can be called off the success branch without isolation
+    /// friction; it only touches its arguments.
+    nonisolated static func writeClicksSidecar(_ clicks: [RecordedClick], beside movURL: URL) {
+        guard !clicks.isEmpty else { return }
+        let sidecarURL = movURL.deletingPathExtension().appendingPathExtension("clicks.json")
+        do {
+            let data = try JSONEncoder().encode(clicks)
+            try data.write(to: sidecarURL, options: .atomic)
+            Log.capture.info("wrote \(clicks.count, privacy: .public) click(s) sidecar")
+        } catch {
+            Log.capture.error("clicks sidecar write failed: \(error.localizedDescription, privacy: .private)")
+        }
     }
 
     /// Resolves the user's stored mic preference to a concrete

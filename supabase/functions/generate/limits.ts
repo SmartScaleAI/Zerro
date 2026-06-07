@@ -17,13 +17,15 @@
 //   }
 // =============================================================================
 
-import type { FrameInput } from "./interleave.ts";
+import type { ClickInput, FrameInput } from "./interleave.ts";
 import type { OutputMode } from "./prompt.ts";
 import {
   ALLOWED_AUDIO_MIME,
   ALLOWED_FRAME_MIME,
   MAX_AUDIO_BYTES,
   MAX_AUDIO_SECONDS,
+  MAX_CLICK_LABEL_CHARS,
+  MAX_CLICKS,
   MAX_FRAMES,
   MAX_OCR_TEXT_CHARS,
 } from "./config.ts";
@@ -32,6 +34,9 @@ export interface ParsedRequest {
   mode: OutputMode;
   audio: { bytes: Uint8Array; mime: string; filename: string };
   frames: FrameInput[];
+  /** Phase 4 — resolved clicks (already redacted client-side; count + label
+   *  length capped here). Empty array when none were sent. */
+  clicks: ClickInput[];
   /** Client-declared seconds, if any — a cheap pre-call sanity gate only. */
   declaredAudioSeconds: number | null;
 }
@@ -125,8 +130,31 @@ export function validateBody(body: unknown): ValidationResult {
     frames.push({ timestamp: ts, mime: frameMime, base64: data, ocrText });
   }
 
+  // clicks (Phase 4) — OPTIONAL (older apps omit it → none). Not a hard reject:
+  // a malformed/oversized clicks array can't come from a real recording, so we
+  // defensively DROP bad/excess entries rather than failing the whole request.
+  // The count is capped (excess sliced off) and each label length-capped; labels
+  // are already redacted client-side, so we trust + cap only.
+  const clicks: ClickInput[] = [];
+  const rawClicks = b.clicks;
+  if (Array.isArray(rawClicks)) {
+    for (const raw of rawClicks) {
+      if (clicks.length >= MAX_CLICKS) break;
+      if (typeof raw !== "object" || raw === null) continue;
+      const c = raw as Record<string, unknown>;
+      const ts = Number(c.timestamp);
+      if (!Number.isFinite(ts) || ts < 0) continue;
+      const rawLabel = c.label;
+      if (typeof rawLabel !== "string" || rawLabel.length === 0) continue;
+      const label = rawLabel.length > MAX_CLICK_LABEL_CHARS
+        ? rawLabel.slice(0, MAX_CLICK_LABEL_CHARS)
+        : rawLabel;
+      clicks.push({ timestamp: ts, label });
+    }
+  }
+
   return {
     ok: true,
-    value: { mode, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, declaredAudioSeconds },
+    value: { mode, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds },
   };
 }

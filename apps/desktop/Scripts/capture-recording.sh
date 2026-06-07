@@ -79,7 +79,16 @@ while true; do
       if [ -n "$mov" ]; then
         cp "$mov" "$DEST/$name/source.mov"
         claimed="$claimed $mov"
-        echo "captured: $DEST/$name ($frames frames + source.mov)"
+        # Phase 4: carry the clicks sidecar (<stem>.clicks.json) next to the
+        # source so zerro-extract can replay the exact clicks on re-extraction.
+        # Absent for a clickless recording (or an old build) — that's fine.
+        clicks="${mov%.mov}.clicks.json"
+        if [ -f "$clicks" ]; then
+          cp "$clicks" "$DEST/$name/source.clicks.json"
+          echo "captured: $DEST/$name ($frames frames + source.mov + clicks)"
+        else
+          echo "captured: $DEST/$name ($frames frames + source.mov)"
+        fi
       else
         echo "captured: $DEST/$name ($frames frames; source.mov: not found — set -RetainEvalArtifacts YES)"
       fi

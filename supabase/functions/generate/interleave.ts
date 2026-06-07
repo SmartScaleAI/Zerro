@@ -37,9 +37,18 @@ export interface FrameInput {
   ocrText?: string;
 }
 
+export interface ClickInput {
+  /** Seconds from recording start. */
+  timestamp: number;
+  /** Phase 4 — the on-screen label under the cursor, resolved client-side from
+   *  OCR (already redaction-safe). Length-capped upstream; empty → dropped. */
+  label: string;
+}
+
 type Item =
   | { kind: "frame"; start: number; mime: string; base64: string; ocrText?: string }
-  | { kind: "speech"; start: number; end: number; text: string };
+  | { kind: "speech"; start: number; end: number; text: string }
+  | { kind: "click"; start: number; label: string };
 
 /** M:SS, seconds TRUNCATED not rounded, clamped at 0. Mirrors Swift `mmss`. */
 function mmss(seconds: number): string {
@@ -50,9 +59,13 @@ function mmss(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-/** Frames render BEFORE speech that starts at the same second (Swift tieRank). */
+/** Tie-break at an equal start second: frame < click < speech (Swift tieRank). */
 function tieRank(item: Item): number {
-  return item.kind === "frame" ? 0 : 1;
+  switch (item.kind) {
+    case "frame": return 0;
+    case "click": return 1;
+    case "speech": return 2;
+  }
 }
 
 /**
@@ -64,6 +77,7 @@ function tieRank(item: Item): number {
 export function buildInterleavedContent(
   frames: FrameInput[],
   segments: SpeechSegment[],
+  clicks: ClickInput[] = [],
 ): TimelineBlock[] {
   const items: Item[] = [];
   for (const f of frames) {
@@ -72,8 +86,12 @@ export function buildInterleavedContent(
   for (const s of segments) {
     items.push({ kind: "speech", start: s.start, end: s.end, text: s.text });
   }
+  // Phase 4: clicks join the same chronological merge; an empty label is dropped.
+  for (const c of clicks) {
+    if (c.label) items.push({ kind: "click", start: c.timestamp, label: c.label });
+  }
 
-  // Sort by start time; ties broken frame-before-speech (file header).
+  // Sort by start time; ties broken frame < click < speech (file header).
   items.sort((a, b) => (a.start !== b.start ? a.start - b.start : tieRank(a) - tieRank(b)));
 
   const content: TimelineBlock[] = [];
@@ -87,6 +105,10 @@ export function buildInterleavedContent(
       if (item.ocrText) {
         content.push({ type: "text", text: `\n[${mmss(item.start)}] on-screen text: ${item.ocrText}` });
       }
+    } else if (item.kind === "click") {
+      // Phase 4: a click line — `\n[M:SS] clicked "<label>"`. Byte-identical to
+      // the BYOK (encodeBody) + eval (eval-models.mjs) renderings — KEEP IN SYNC.
+      content.push({ type: "text", text: `\n[${mmss(item.start)}] clicked "${item.label}"` });
     } else {
       const tag = `[${mmss(item.start)}–${mmss(item.end)}]`;
       content.push({ type: "text", text: `\n${tag} "${item.text}"` });

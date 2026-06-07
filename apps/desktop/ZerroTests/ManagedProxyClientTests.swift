@@ -166,7 +166,8 @@ final class ManagedProxyClientTests: XCTestCase {
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
             mode: .instruct,
-            durationSeconds: 7
+            durationSeconds: 7,
+            clicks: [ResolvedClick(seconds: 1.5, label: "Save")]
         )
 
         let req = gen.requests[0]
@@ -176,8 +177,8 @@ final class ManagedProxyClientTests: XCTestCase {
         let body = try XCTUnwrap(req.httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
-        // Exactly mode + audio + frames — nothing else.
-        XCTAssertEqual(Set(json.keys), ["mode", "audio", "frames"])
+        // Exactly mode + audio + frames + clicks — nothing else.
+        XCTAssertEqual(Set(json.keys), ["mode", "audio", "frames", "clicks"])
         XCTAssertEqual(json["mode"] as? String, "instruct")
         // No transcript / prompt / system prompt smuggled in.
         let raw = String(data: body, encoding: .utf8) ?? ""
@@ -194,6 +195,12 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(frameArr.count, 1)
         XCTAssertEqual(frameArr[0]["mime"] as? String, "image/jpeg")
         XCTAssertNotNil(frameArr[0]["data"] as? String)
+
+        // Phase 4: the clicks ride as { timestamp, label } objects.
+        let clickArr = try XCTUnwrap(json["clicks"] as? [[String: Any]])
+        XCTAssertEqual(clickArr.count, 1)
+        XCTAssertEqual(clickArr[0]["timestamp"] as? Double, 1.5)
+        XCTAssertEqual(clickArr[0]["label"] as? String, "Save")
     }
 
     // MARK: - Helpers

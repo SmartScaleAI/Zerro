@@ -148,7 +148,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { mode, audio, frames, declaredAudioSeconds } = parsed.value;
+  const { mode, audio, frames, clicks, declaredAudioSeconds } = parsed.value;
 
   // 6. Coarse per-identity rate limit (reuses D1's check_rate_limit).
   const withinRate = await deps.store.rateLimitOk(
@@ -221,7 +221,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     // 11. Compose the system prompt SERVER-SIDE (server owns base + mode; the
     //     client supplied only the mode enum), interleave, and call chat.
     const systemPrompt = composedSystemPrompt(mode);
-    const userContent = buildInterleavedContent(frames, segments);
+    const userContent = buildInterleavedContent(frames, segments, clicks);
 
     let chat;
     try {

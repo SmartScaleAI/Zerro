@@ -98,6 +98,17 @@ final class SecretDetectorTests: XCTestCase {
         assertCatches("contact alice.smith@example.com for access", "alice.smith@example.com")
     }
 
+    func testTruncatedEmail() {
+        // A UI-elided address whose TLD is cut off (the real-world leak) — the
+        // full-email rule can't fire, the truncated-email rule must.
+        assertCatches("Owner colin@smartaiscaling.c... edit", "colin@smartaiscaling.c...")
+        // Ellipsis directly after the domain (no dot), `...` and `…` forms.
+        assertCatches("from name@domain... here", "name@domain...")
+        assertCatches("from name@domain… here", "name@domain…")
+        // The FULL address still matches even when a truncated one is also nearby.
+        assertCatches("name@domain.com and name@domain.c...", "name@domain.com")
+    }
+
     func testLuhnValidCard() {
         // 4242 4242 4242 4242 is the canonical Luhn-valid test card.
         assertCatches("card 4242424242424242 on file", "4242424242424242")
@@ -127,6 +138,18 @@ final class SecretDetectorTests: XCTestCase {
     func testIgnoresShortSkPrefix() {
         // `sk-` with a short tail isn't an OpenAI key.
         assertIgnores("the sk-12 abbreviation means something else")
+    }
+
+    func testIgnoresEmailLookAlikes() {
+        // A bare `@handle` mention (no local part) is not an email — even elided.
+        assertIgnores("mention @handle in the thread")
+        assertIgnores("ping @handle... later")
+        // Too-short `local@domain` with no real TLD is not an email.
+        assertIgnores("see a@b for details")
+        // An ellipsis with a 1-char domain head must not trip the truncated rule.
+        assertIgnores("wait a@b... really")
+        // Ordinary prose with an ellipsis stays untouched.
+        assertIgnores("and so it goes on... and on")
     }
 
     // MARK: - Luhn helper

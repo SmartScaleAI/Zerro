@@ -163,6 +163,14 @@ enum SecretDetector {
         ),
         // Email addresses (PII).
         Pattern(regex: re(#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#), group: 0),
+        // Truncated / ellipsis-elided emails: a UI-clipped address whose TLD is
+        // incomplete (`colin@smartaiscaling.c…`, `name@domain…`) so the full-email
+        // rule above can't fire. Anchored on `local@domain` + a trailing ellipsis
+        // (`…` U+2026 or `...`); a ≥2-char domain head keeps precision — it won't
+        // grab `a@b…` or a bare `@handle` mention. Shared by OCR-text redaction
+        // (Phase 3) and click labels — important because admin/dashboard screens
+        // are full of (often UI-truncated) customer emails.
+        Pattern(regex: re(#"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]{2,}(?:\.[A-Za-z0-9-]*)*(?:…|\.\.\.)"#), group: 0),
     ]
 
     /// A contiguous 13–19 digit run, word-boundaried so it isn't a slice of a
