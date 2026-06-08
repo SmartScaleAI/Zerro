@@ -210,15 +210,34 @@ jobs:
           xcrun stapler validate "dist/$APP_NAME.dmg"
 
       # ----------------------------------------------------------------------
-      # Generate the signed appcast. The download URL points at the GitHub
-      # Release asset that the next step will create for this tag.
+      # Upload the notarized + stapled dmg to the public Supabase Storage
+      # bucket. The repo is private, so GitHub Release assets 404 for anyone
+      # not signed in; the public download is served from Supabase instead.
+      # x-upsert overwrites Zerro.dmg so the public URL stays stable across
+      # releases. Must run AFTER stapling so the stapled dmg is what ships.
+      - name: Upload notarized dmg to Supabase Storage
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -X POST \
+            "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads/${APP_NAME}.dmg" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/${APP_NAME}.dmg"
+
+      # ----------------------------------------------------------------------
+      # Generate the signed appcast. The download URL points at the public
+      # Supabase Storage asset uploaded above. generate_appcast computes the
+      # length + edSignature from the actual build, so the appcast can never
+      # drift from the shipped dmg.
       - name: Generate signed appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME:-app-v${{ steps.ver.outputs.marketing }}}"
-          DL_PREFIX="https://github.com/${{ github.repository }}/releases/download/${TAG}/"
+          DL_PREFIX="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
           echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
             --ed-key-file - \
             --download-url-prefix "$DL_PREFIX" \

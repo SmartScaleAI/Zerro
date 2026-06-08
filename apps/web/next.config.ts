@@ -6,14 +6,18 @@ const nextConfig: NextConfig = {
     return [
       {
         // Keep the stable public download link working across releases by
-        // redirecting it to GitHub's "latest release" asset. Temporary (307)
+        // redirecting it to the public Supabase Storage asset. Temporary (307)
         // so the target is re-resolved on every request, never cached.
         //
+        // The repo is private, so GitHub release assets 404 for anyone not
+        // signed in. The .dmg is hosted in the public `downloads` bucket
+        // instead; CI overwrites Zerro.dmg there on each release.
+        //
         // NOTE: a real file at `public/Zerro.dmg` takes precedence over this
-        // redirect on Vercel — remove it once the GitHub release is live.
+        // redirect on Vercel — never commit the dmg into apps/web/public.
         source: "/Zerro.dmg",
         destination:
-          "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/Zerro.dmg",
+          "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro.dmg",
         permanent: false,
       },
     ]

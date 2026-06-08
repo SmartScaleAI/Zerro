@@ -9,7 +9,7 @@
             <sparkle:version>87</sparkle:version>
             <sparkle:shortVersionString>1.0.8</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/SmartScaleAI/smartscale-zerro/releases/download/app-v1.0.8/Zerro.dmg" length="4863938" type="application/octet-stream" sparkle:edSignature="MtnGGlfg8CmEQFP6WHZCmosX5BEZhxn3jtdamj+LVtVMvsYwDxSl9MlfQ2hEfenQaqwjAt/gC0WMDPaRLDVsAg=="/>
+            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro.dmg" length="4790936" type="application/octet-stream" sparkle:edSignature="tD27+C0HIYv9Y2hqrT0HD3Kh+DDSn43EpG5kHzNkXViO+EcFtnempTEd3yez1AsX8dJghuEK1+UWFG7kHaPoDg=="/>
         </item>
     </channel>
 </rss>
