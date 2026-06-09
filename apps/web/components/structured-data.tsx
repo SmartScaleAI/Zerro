@@ -65,12 +65,12 @@ export function SoftwareApplicationJsonLd() {
         operatingSystem: "macOS",
         url: SITE_URL,
         description:
-          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns a structured Markdown prompt ready to paste into Cursor, Windsurf, v0, or any AI coding agent. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI key.",
+          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns a structured Markdown prompt ready to paste into Cursor, Windsurf, v0, or any AI coding agent. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
         featureList: [
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
           "Local-first processing — audio isolation and frame downsampling run on your machine",
-          "Managed plans handle the AI for you, or bring your own OpenAI key stored in macOS Keychain",
-          "15 free generations to start — no card, no key, no time limit",
+          "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
+          "40 free credits to start — no card, no key, no time limit",
           "3-minute recording cap keeps each request fast and predictable",
           "Signed & notarized .dmg distribution",
           "Sparkle auto-updates",
@@ -78,29 +78,20 @@ export function SoftwareApplicationJsonLd() {
         offers: [
           {
             "@type": "Offer",
-            name: "Starter",
-            price: "12",
+            name: "Managed",
+            price: "15",
             priceCurrency: "USD",
             description:
-              "Managed plan — we handle the AI, no keys or setup. About 100 recordings per month. $12/mo or $120/yr.",
-            availability: "https://schema.org/InStock",
-          },
-          {
-            "@type": "Offer",
-            name: "Pro",
-            price: "29",
-            priceCurrency: "USD",
-            description:
-              "Managed plan for heavy or daily use. About 300 recordings per month. $29/mo or $290/yr.",
+              "Managed plan — we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 6 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
             availability: "https://schema.org/InStock",
           },
           {
             "@type": "Offer",
             name: "BYOK",
-            price: "39",
+            price: "69",
             priceCurrency: "USD",
             description:
-              "Pay once. Bring your own OpenAI key; recordings stay fully on your Mac. Includes all features and future updates.",
+              "Pay once. Bring your own OpenAI, Gemini & Anthropic keys; recordings stay fully on your Mac. Includes 1 year of updates.",
             availability: "https://schema.org/InStock",
           },
         ],
