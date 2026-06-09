@@ -22,7 +22,7 @@ const WhatIsZerro = () => {
       <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-2 lg:gap-16">
         {/* Left — definition */}
         <div className="flex flex-col gap-5 text-center lg:text-left">
-          <p className="text-xs font-medium tracking-[0.18em] text-primary uppercase">
+          <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
             What is Zerro?
           </p>
 
@@ -62,7 +62,7 @@ const WhatIsZerro = () => {
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
                   <Icon className="h-4 w-4" strokeWidth={1.8} />
                 </div>
-                <span className="text-xs leading-snug text-white/55">
+                <span className="text-sm leading-snug text-white/55">
                   {label}
                 </span>
               </div>
@@ -71,7 +71,7 @@ const WhatIsZerro = () => {
 
           {/* Works with */}
           <div className="rounded-2xl border border-white/10 bg-[#202022] p-6">
-            <p className="text-xs font-medium tracking-[0.18em] text-white/40 uppercase">
+            <p className="text-sm font-medium tracking-[0.18em] text-white/40 uppercase">
               Works with
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -91,7 +91,7 @@ const WhatIsZerro = () => {
 
           {/* Use it for */}
           <div className="rounded-2xl border border-white/10 bg-[#202022] p-6">
-            <p className="text-xs font-medium tracking-[0.18em] text-white/40 uppercase">
+            <p className="text-sm font-medium tracking-[0.18em] text-white/40 uppercase">
               Use it for
             </p>
             <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">

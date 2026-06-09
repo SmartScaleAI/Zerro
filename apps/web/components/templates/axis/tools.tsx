@@ -65,7 +65,7 @@ export default function ToolFeature() {
             className="relative mx-auto w-full max-w-7xl px-4"
         >
             <div className="mb-12 lg:mb-16 flex flex-col items-center gap-3 text-center">
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
                     The output
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">
@@ -94,7 +94,7 @@ export default function ToolFeature() {
                 {/* Example switcher — frames the card as a marketing illustration of the
                     two modes (same recording), NOT a live control on a user's result. */}
                 <div className="relative z-10 mb-5 flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                    <p className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
                         Same recording, two modes
                     </p>
                     <div
@@ -160,14 +160,14 @@ export default function ToolFeature() {
                     {/* Sub-header — file label (reflects active mode) */}
                     <div className="flex items-center gap-2 border-t border-white/[0.07] px-5 py-3">
                         <FileText className="h-3.5 w-3.5 text-white/40" />
-                        <span className="font-mono text-[11px] uppercase tracking-wider text-white/40">
+                        <span className="font-mono text-sm uppercase tracking-wider text-white/40">
                             {FORMAT_LABELS[mode]}
                         </span>
                     </div>
 
                     {/* Body — inset near-black panel framed by the gray chrome */}
                     <div className="px-3 pb-3">
-                        <div className="space-y-5 rounded-xl bg-[#0a0a0b] px-6 py-7 font-mono text-[13px] leading-relaxed text-white/80 ring-1 ring-white/[0.06] lg:px-8">
+                        <div className="space-y-5 rounded-xl bg-[#0a0a0b] px-6 py-7 font-mono text-sm leading-relaxed text-white/80 ring-1 ring-white/[0.06] lg:px-8">
                             {isInstruct ? (
                                 <>
                                     <p className="text-white/80">{intro}</p>
@@ -189,7 +189,7 @@ export default function ToolFeature() {
                     </div>
                 </div>
 
-                <p className="mt-6 text-center text-xs text-muted-foreground">
+                <p className="mt-6 text-center text-sm text-muted-foreground">
                     Example output. Every prompt is generated from your real recording.
                 </p>
             </div>

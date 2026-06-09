@@ -34,7 +34,7 @@ const SelectRegionVisual = () => (
       <div className="absolute -bottom-1 -left-1 h-2 w-2 bg-white/70" />
       <div className="absolute -right-1 -bottom-1 h-2 w-2 bg-white/70" />
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="rounded bg-black/60 px-1.5 py-0.5 font-mono text-[8px] text-white/80">
+        <div className="rounded bg-black/60 px-1.5 py-0.5 font-mono text-sm text-white/80">
           480 × 320
         </div>
       </div>
@@ -47,7 +47,7 @@ const NarrateVisual = () => (
     {/* Recording pill mockup */}
     <div className="flex items-center gap-2 rounded-full bg-neutral-800 px-3 py-2 shadow-lg ring-1 ring-white/10">
       <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-      <span className="font-mono text-[10px] text-white/90 tabular-nums">
+      <span className="font-mono text-sm text-white/90 tabular-nums">
         0:59 / 3:00
       </span>
       <div className="flex h-3 items-end gap-[1px]">
@@ -78,7 +78,7 @@ const ProcessingVisual = () => (
         transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
         className="h-3 w-3 rounded-full border-2 border-white/15 border-t-white/70"
       />
-      <span className="text-[10px] font-medium text-white/90">
+      <span className="text-sm font-medium text-white/90">
         Building your prompt…
       </span>
     </div>
@@ -92,13 +92,13 @@ const PastePromptVisual = () => (
       <div className="flex items-center justify-between border-b border-white/10 px-2 py-1">
         <div className="flex items-center gap-1">
           <Check className="h-2.5 w-2.5 text-white/80" strokeWidth={3} />
-          <span className="font-mono text-[8px] tracking-wider text-white/50 uppercase">
+          <span className="font-mono text-sm tracking-wider text-white/50 uppercase">
             Ready
           </span>
         </div>
-        <span className="text-[8px] text-white/50">⌘V</span>
+        <span className="text-sm text-white/50">⌘V</span>
       </div>
-      <div className="space-y-1 p-2 font-mono text-[7px] leading-tight">
+      <div className="space-y-1 p-2 font-mono text-sm leading-tight">
         <div className="font-semibold text-white/90">## Context</div>
         <div className="h-1 w-full rounded bg-white/10" />
         <div className="h-1 w-3/4 rounded bg-white/10" />
@@ -156,7 +156,7 @@ const Feature = () => {
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <div className="mb-12 text-center lg:mb-20">
-        <p className="mb-3 text-xs font-medium tracking-[0.18em] text-primary uppercase">
+        <p className="mb-3 text-sm font-medium tracking-[0.18em] text-primary uppercase">
           How it works
         </p>
         <h2 className="mx-auto max-w-2xl text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">
@@ -186,7 +186,7 @@ const Feature = () => {
               className="relative flex flex-col gap-6 bg-background p-6 lg:p-8"
             >
               <div className="flex items-center justify-between">
-                <span className="font-mono text-xs tracking-wider text-muted-foreground">
+                <span className="font-mono text-sm tracking-wider text-muted-foreground">
                   {step.n}
                 </span>
                 <Icon className="h-5 w-5 text-primary" strokeWidth={1.6} />

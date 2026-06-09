@@ -72,7 +72,7 @@ const Faq = () => {
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <div className="mb-12 flex flex-col items-center gap-3 text-center lg:mb-16">
-        <p className="text-xs font-medium tracking-[0.18em] text-primary uppercase">
+        <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
           FAQ
         </p>
         <h2 className="text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">

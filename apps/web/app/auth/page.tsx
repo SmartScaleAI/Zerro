@@ -75,7 +75,7 @@ const Page = () => {
 
                     <div className="my-6 flex flex-row items-center gap-2">
                         <Separator className="flex-1" />
-                        <span className="px-2 text-muted-foreground text-xs uppercase">
+                        <span className="px-2 text-muted-foreground text-sm uppercase">
                             Or continue with
                         </span>
                         <Separator className="flex-1" />
@@ -128,7 +128,7 @@ const Page = () => {
                 </CardContent>
             </Card>
 
-            <p className="relative z-10 max-w-xs text-center text-xs text-muted-foreground">
+            <p className="relative z-10 max-w-xs text-center text-sm text-muted-foreground">
                 By clicking continue, you agree to our{" "}
                 <Link
                     href="/terms"

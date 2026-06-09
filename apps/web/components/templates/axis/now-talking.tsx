@@ -83,7 +83,7 @@ const SpeedContrast = () => {
       ref={ref}
       className="flex w-full flex-col gap-7 rounded-2xl border border-border bg-card p-8 lg:p-10"
     >
-      <p className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
+      <p className="text-sm font-medium tracking-[0.18em] text-muted-foreground uppercase">
         Words per minute
       </p>
       <SpeedRow
@@ -125,7 +125,7 @@ const NowTalking = () => {
       <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
         {/* Left column — copy */}
         <div className="flex flex-col gap-5 text-center lg:text-left">
-          <p className="text-xs font-medium tracking-[0.18em] text-primary uppercase">
+          <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
             The shift
           </p>
 

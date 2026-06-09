@@ -82,7 +82,7 @@ const FinalCTA = () => {
                             <AppleIcon className="h-4 w-4" />
                             Download for macOS
                         </Button>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-sm text-muted-foreground">
                             v1.0 · Apple Silicon · Signed &amp; notarized
                         </p>
                     </div>

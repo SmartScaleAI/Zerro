@@ -111,7 +111,7 @@ const Comparison = () => {
   return (
     <section id="comparison" className="relative mx-auto max-w-5xl px-4">
       <div className="flex flex-col items-center gap-3 text-center">
-        <p className="text-xs font-medium tracking-[0.18em] text-primary uppercase">
+        <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
           How it compares
         </p>
         <h2 className="max-w-2xl text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">
@@ -204,7 +204,7 @@ const Comparison = () => {
                   >
                     {row.label}
                     {row.sub && (
-                      <span className="mt-1 block text-xs font-normal text-white/40">
+                      <span className="mt-1 block text-sm font-normal text-white/40">
                         {row.sub}
                       </span>
                     )}
@@ -225,7 +225,7 @@ const Comparison = () => {
         </div>
       </div>
 
-      <p className="text-center text-xs text-muted-foreground">
+      <p className="text-center text-sm text-muted-foreground">
         Comparison reflects Zerro&apos;s positioning. Competitor capabilities
         change over time — check each product for current details.
       </p>

@@ -198,7 +198,7 @@ const Hero = () => {
             Watch it work
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           v1.0 · Apple Silicon · Signed &amp; notarized
         </p>
       </section>

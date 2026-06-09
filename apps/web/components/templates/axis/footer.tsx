@@ -61,7 +61,7 @@ const Footer = () => {
         >
           support@getzerro.app
         </a>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           &copy; {new Date().getFullYear()} Zerro. All rights reserved.
         </p>
       </div>

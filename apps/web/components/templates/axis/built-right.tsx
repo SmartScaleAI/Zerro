@@ -59,7 +59,7 @@ const BuiltRight = () => {
             transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
         >
             <div className="mb-12 lg:mb-16 flex flex-col items-center gap-3 text-center">
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
                     Built right
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">

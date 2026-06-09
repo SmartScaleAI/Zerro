@@ -95,7 +95,7 @@ const Pricing = () => {
             />
 
             <div className="relative z-10 mb-8 lg:mb-10 flex flex-col items-center gap-3 text-center">
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
                     Pricing
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">
@@ -134,7 +134,7 @@ const Pricing = () => {
                         </button>
                     ))}
                 </div>
-                <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
+                <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-sm font-medium text-primary">
                     Save ~17%
                 </span>
             </div>
@@ -197,7 +197,7 @@ const Pricing = () => {
                                     </h3>
                                     <span
                                         className={cn(
-                                            "shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+                                            "shrink-0 rounded-full px-2.5 py-0.5 text-sm font-medium uppercase tracking-wider",
                                             tier.highlight
                                                 ? "bg-neutral-900 text-white"
                                                 : "border border-border bg-muted text-muted-foreground"
@@ -224,7 +224,7 @@ const Pricing = () => {
                                     </AnimatePresence>
                                     <span className={cn("text-sm", tier.highlight ? "text-neutral-600" : "text-foreground/65")}>{cadence}</span>
                                     {showYearly && (
-                                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-sm font-medium text-primary">
                                             {tier.monthly!.yearlyNote}
                                         </span>
                                     )}
@@ -288,7 +288,7 @@ const Pricing = () => {
                 Bring-your-own-key stays fully on your Mac — recordings never leave your machine.
             </p>
 
-            <p className="relative z-10 mt-4 text-center text-xs text-foreground/60">
+            <p className="relative z-10 mt-4 text-center text-sm text-foreground/60">
                 Prices listed in USD. The one-time BYOK purchase includes all v1 features and updates.
             </p>
         </motion.section>
