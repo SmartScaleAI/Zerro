@@ -15,10 +15,15 @@ measured through production code instead of a reimplementation.
 ## One-time setup
 
 ```bash
-export OPENAI_API_KEY=sk-...    # always required (whisper STT)
+export OPENAI_API_KEY=sk-...    # always required (whisper STT) + openai:* models
 export GEMINI_API_KEY=...       # required for gemini:* models
+export ANTHROPIC_API_KEY=sk-ant-...  # required for anthropic:* models (Phase 0)
 chmod +x Scripts/capture-recording.sh Scripts/zerro-extract.sh
 ```
+
+> The three keys live in `supabase/.env.local` (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
+> `ANTHROPIC_API_KEY`). Export them into your shell before running, e.g.
+> `set -a; source ../../supabase/.env.local; set +a` from `apps/desktop/`.
 
 Requires Node 18+ (uses built-in fetch/FormData). No npm installs.
 `zerro-extract` additionally needs Xcode command-line tools.
@@ -86,16 +91,24 @@ It's surfaced at the top of the scorecard.
 ```bash
 node Scripts/eval-models.mjs eval-recordings/<name> \
   --mode instruct \
-  --models gemini:gemini-3.5-flash,gemini:gemini-3.1-pro-preview,openai:gpt-4o
+  --models gemini:gemini-3.5-flash,anthropic:claude-opus-4-7,openai:gpt-5.5
 ```
 
 Flags:
 - `--mode instruct|explain` (default instruct)
-- `--models provider:model,...` — must be priced in the script's table to get
-  cost estimates; unpriced models still run, cost shows "unpriced"
-- `--thinking low|high` — Gemini only (default low). For the Pro A/B run it at
-  BOTH levels so model quality is isolated from thinking depth.
+- `--models provider:model,...` — `provider` is one of `openai`, `gemini`,
+  `anthropic`; must be priced in the script's table to get cost estimates;
+  unpriced models still run, cost shows "unpriced"
+- `--thinking low|high` — Gemini only (default low; ignored by openai/anthropic).
+  For the Pro A/B run it at BOTH levels so model quality is isolated from
+  thinking depth.
 - `--out dir` (default `eval-results/`)
+
+Anthropic models run with **thinking off** and no sampling params — the minimal
+Messages-API shape (`model` + `max_tokens` + `system` + one user turn). That is
+the cleanest test of whether the model obeys "Output ONLY the final result"
+without a thinking scaffold doing the work, and it mirrors what Phase 3's
+`providers/anthropic.ts` is expected to send.
 
 ### 5. Compare
 
@@ -119,24 +132,66 @@ captured dir), so re-running against more models costs only the chat calls.
 - **Faithfulness** — to intent (instruct mode) / accuracy (explain mode)
 - **Cost (USD)** and **Latency (s)** — recorded automatically.
 
-## Suggested eval matrix before rollout
+## Phase 0 eval matrix (multi-model gate)
 
-3–5 recordings covering your real use cases (dense code on screen, small UI
-text, mixed app windows), each through:
+The six candidate models from the multi-model plan §1.1, run on ≥5 real
+recordings spanning dense code/terminal text, small UI text, and mixed windows
+(`eval-recordings/` already has these). Run EVERY model in BOTH modes
+(`--mode instruct` and `--mode explain`):
 
-| run | model | thinking |
-|---|---|---|
-| 1 | gemini:gemini-3.5-flash | low |
-| 2 | gemini:gemini-3.1-pro-preview | low |
-| 3 | gemini:gemini-3.1-pro-preview | high |
-| 4 | openai:gpt-4o | — |
+| # | provider:model | tier (by cost) | thinking |
+|---|---|---|---|
+| 1 | `openai:gpt-5.4-mini` ⚠️ | Lowest cost | — |
+| 2 | `gemini:gemini-3.5-flash` ⭐ | Lowest cost | low |
+| 3 | `gemini:gemini-3.1-pro-preview` | Mid | low |
+| 4 | `gemini:gemini-3.1-pro-preview` | Mid | high |
+| 5 | `anthropic:claude-sonnet-4-6` | Mid | off |
+| 6 | `anthropic:claude-opus-4-7` | Highest cost | off |
+| 7 | `openai:gpt-5.5` | Highest cost | — |
 
-Whichever wins becomes `CHAT_MODEL` at rollout — no code change.
+⚠️ **`gpt-5-mini` (plan §1.1) does not exist** at OpenAI. `gpt-5.4-mini` is the
+current cheapest GPT-5-family mini and stands in for it pending Colin's
+confirmation of the intended id. ⭐ Gemini 3.5 Flash is the plan's recommended
+model. Gemini Pro is run at BOTH thinking levels so model quality is isolated
+from thinking depth.
+
+One full pass per recording is two invocations (instruct + explain), e.g.:
+
+```bash
+REC=eval-recordings/zerro-work-6C25EA65-1546-410F-8C93-565AF2E30670
+MODELS=openai:gpt-5.4-mini,gemini:gemini-3.5-flash,gemini:gemini-3.1-pro-preview,anthropic:claude-sonnet-4-6,anthropic:claude-opus-4-7,openai:gpt-5.5
+node Scripts/eval-models.mjs "$REC" --mode instruct --models "$MODELS" --out eval-results/<rec>/instruct
+node Scripts/eval-models.mjs "$REC" --mode explain  --models "$MODELS" --out eval-results/<rec>/explain
+# then a separate Gemini-Pro high-thinking pass for run #4:
+node Scripts/eval-models.mjs "$REC" --mode instruct --models gemini:gemini-3.1-pro-preview --thinking high --out eval-results/<rec>/instruct-pro-high
+```
+
+### Phase 0 pass criteria
+
+A model **PASSES** the gate if it reliably produces valid, contract-compliant
+output: output-ONLY (no preamble, no "Here is…", no closing remarks), never
+wraps the whole result in a code fence, no fabrication of values/names not
+shown or said, and it reads frames/on-screen text correctly. A model that
+produces *differently-styled but valid* output PASSES (user preference decides).
+A model that breaks the output contract (preamble, refusals, fabrication, can't
+read frames) **FAILS and is dropped** from the menu. Pay special attention to
+Opus 4.7's documented tendency to add preamble/caveats and "argue" with the
+"Output ONLY" instruction — verify it on real clips, both modes.
 
 ## Keep in sync
 
 The system prompt, interleaving, wire formats, and pricing are mirrored from:
 `supabase/functions/generate/{prompt,interleave,cost}.ts` and
 `providers/{openai,gemini}.ts`. If those change, update `eval-models.mjs`. The
-`CHAT_PRICING` table must price every model in the matrix above (a 1:1 mirror of
-`cost.ts`) so no run shows "unpriced".
+`CHAT_PRICING` table must price every model in the matrix above so no run shows
+"unpriced".
+
+Phase 0 sync status (2026-06-09):
+- `prompt.ts` (BASE/INSTRUCT/EXPLAIN) — **in sync**, verified verbatim.
+- `interleave.ts` (mmss, tiebreak, tags, OCR/click lines) — **in sync**.
+- `providers/openai.ts`, `providers/gemini.ts` wire shapes — **in sync**.
+- `providers/anthropic.ts` — does not exist yet (Phase 3); the harness's
+  `chatAnthropic` is the reference shape for it.
+- `cost.ts` `CHAT_PRICING` — **intentionally behind** the harness this phase.
+  cost.ts still prices only `gpt-4o` + the two Gemini models; the six-model
+  table here is ahead of it and must be mirrored INTO cost.ts in Phase 2.
