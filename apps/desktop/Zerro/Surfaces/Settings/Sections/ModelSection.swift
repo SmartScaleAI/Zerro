@@ -130,7 +130,12 @@ struct ModelSection: View {
 }
 
 // MARK: - Previews
+//
+// `EntitlementStore.preview` pins the state via the dev override (DEBUG-only),
+// so these previews are `#if DEBUG`-guarded — `#Preview` bodies otherwise
+// compile in Release too and would fail on the missing symbol.
 
+#if DEBUG
 #Preview("Managed") {
     ModelSection()
         .environment(PreferencesStore())
@@ -150,3 +155,4 @@ struct ModelSection: View {
         .frame(width: 720)
         .background(Color.vfPanelBackground)
 }
+#endif
