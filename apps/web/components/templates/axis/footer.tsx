@@ -5,11 +5,14 @@ import Link from "next/link"
 import { motion } from "motion/react"
 
 const Footer = () => {
+  // "/#section" (not "#section") so the links work from /privacy and /terms too.
   const links = [
-    { name: "How it works", href: "#how-it-works" },
-    { name: "Output", href: "#output" },
-    { name: "Built right", href: "#built-right" },
-    { name: "Pricing", href: "#pricing" },
+    { name: "How it works", href: "/#how-it-works" },
+    { name: "Output", href: "/#output" },
+    { name: "Built right", href: "/#built-right" },
+    { name: "Pricing", href: "/#pricing" },
+    { name: "Privacy", href: "/privacy" },
+    { name: "Terms", href: "/terms" },
   ]
 
   return (
