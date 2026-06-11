@@ -49,9 +49,16 @@ final class AreaSelectorWindowController {
 
     /// Builds and shows the overlay on the screen containing the
     /// cursor. `onConfirm` fires when the user accepts a selection
-    /// (Checkpoint 3); `onCancel` fires on ESC. Either callback is
-    /// invoked exactly once per presentation; both implicitly
-    /// dismiss the overlay before invocation.
+    /// (Checkpoint 3) — its second argument is the generation model
+    /// chosen on the toolbar for THIS recording (the Preferences
+    /// default unless the user changed the chip; never persisted
+    /// here). `onCancel` fires on ESC. Either callback is invoked
+    /// exactly once per presentation; both implicitly dismiss the
+    /// overlay before invocation.
+    ///
+    /// `entitlements` feeds the model dropdown's per-row credit detail
+    /// (Managed/Trial) and BYOK key-gating; nil (tests) renders plain
+    /// model names.
     ///
     /// DEFERRED for Phase 7 handoff: multi-monitor coverage. Today
     /// we present a single overlay on the screen under the cursor;
@@ -61,7 +68,8 @@ final class AreaSelectorWindowController {
     /// meaningful weight without a Phase 6 user need.
     func present(
         preferences: PreferencesStore,
-        onConfirm: @escaping (SelectionRect) -> Void,
+        entitlements: EntitlementStore? = nil,
+        onConfirm: @escaping (SelectionRect, String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         Log.ui.debug("AreaSelector present() called")
@@ -95,9 +103,21 @@ final class AreaSelectorWindowController {
         // overlay doesn't silently change the default.
         state.setOutputMode(preferences.defaultOutputMode)
 
+        // Multi-model: seed the model chip from the Preferences default.
+        // Unlike mic/mode, a dropdown pick here is a PER-RECORDING
+        // override — it is handed to onConfirm but NEVER written back to
+        // PreferencesStore, so the next recording starts on the default.
+        state.setModels(
+            Self.modelMenuItems(entitlements: entitlements),
+            selectedID: preferences.selectedModelID
+        )
+
         state.onConfirm = { [weak self] rect in
+            // Read the toolbar's model pick BEFORE dismiss() nils the
+            // state. Fallback can only fire if confirm raced dismiss.
+            let modelID = self?.state?.selectedModelID ?? preferences.selectedModelID
             self?.dismiss()
-            onConfirm(rect)
+            onConfirm(rect, modelID)
         }
         state.onCancel = { [weak self] in
             self?.dismiss()
@@ -243,10 +263,14 @@ final class AreaSelectorWindowController {
             let micFrame = selectionRect.map {
                 AreaSelectorView.micChipFrame(forSelection: $0, in: size)
             }
+            let modelFrame = selectionRect.map {
+                AreaSelectorView.modelChipFrame(forSelection: $0, in: size)
+            }
 
             if event.type == .mouseMoved {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
+                state.setModelChipHovered(modelFrame?.contains(point) ?? false)
                 // Phase 17: hover tint for the mode toggle's non-selected
                 // segment.
                 state.setHoveredOutputMode(selectionRect.flatMap {
@@ -256,6 +280,12 @@ final class AreaSelectorWindowController {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
                         itemCount: state.micMenuItems.count
+                    ))
+                }
+                if state.isModelMenuOpen, let rect = selectionRect {
+                    state.setHighlightedModelIndex(AreaSelectorView.modelMenuRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        itemCount: state.models.count
                     ))
                 }
             }
@@ -274,9 +304,38 @@ final class AreaSelectorWindowController {
                     state.setOutputMode(mode)
                     return nil
                 }
+                // Model chip — open/close the model dropdown (closing the
+                // mic menu; one dropdown at a time).
+                if let modelFrame, modelFrame.contains(point) {
+                    state.toggleModelMenu()
+                    return nil
+                }
                 // Mic chip — open/close the dropdown.
                 if let micFrame, micFrame.contains(point) {
                     state.toggleMicMenu()
+                    return nil
+                }
+                // Model dropdown open — a click selects the (non-gated) row
+                // under the cursor or, if outside, dismisses. PER-RECORDING
+                // override: state only, never PreferencesStore (the mic
+                // dropdown below persists; this one deliberately doesn't).
+                if state.isModelMenuOpen {
+                    if let rect = selectionRect,
+                       let idx = AreaSelectorView.modelMenuRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        itemCount: state.models.count
+                       ) {
+                        let item = state.models[idx]
+                        if !item.gated {
+                            state.selectModel(id: item.id)
+                        } else {
+                            // Gated row (BYOK, keyless provider): ignore the
+                            // click but keep the menu open — mirrors the
+                            // menu-bar picker's disabled rows.
+                            return nil
+                        }
+                    }
+                    state.closeModelMenu()
                     return nil
                 }
                 // Dropdown open — a click selects the row under the cursor
@@ -334,11 +393,15 @@ final class AreaSelectorWindowController {
             }
             switch event.keyCode {
             case 53: // ESC
-                // ESC closes the mic dropdown first if it's open, so the
-                // first press dismisses the menu and only a second press
-                // cancels the whole overlay.
+                // ESC closes an open toolbar dropdown first (mic or model),
+                // so the first press dismisses the menu and only a second
+                // press cancels the whole overlay.
                 if state.isMicMenuOpen {
                     state.closeMicMenu()
+                    return nil
+                }
+                if state.isModelMenuOpen {
+                    state.closeModelMenu()
                     return nil
                 }
                 state.cancel()
@@ -452,6 +515,57 @@ final class AreaSelectorWindowController {
             height: viewLocal.height
         )
         return windowLocal.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+    }
+
+    // MARK: - Model picker rows
+    //
+    // Display data for the toolbar's model dropdown, computed once at
+    // present time (same lifecycle as the mic list). Mirrors the menu-bar
+    // ModelPickerSubmenu's mode rules: Managed/Trial rows carry the credit
+    // price + live "~N left" (CreditDisplay); BYOK rows carry NO credit
+    // text and key-gate by provider; an unknown entitlement (nil store —
+    // tests/previews) renders plain names.
+    private static func modelMenuItems(
+        entitlements: EntitlementStore?
+    ) -> [AreaSelectorState.ModelMenuItem] {
+        // The spendable balance, or nil when credits don't apply — the
+        // same resolution the menu-bar picker uses.
+        let balance: Int?
+        var gatedProviders: Set<ModelProvider> = []
+        switch entitlements?.state {
+        case .managed:
+            balance = entitlements?.managedSnapshot?.creditsRemaining
+        case .trial(let creditsRemaining):
+            balance = creditsRemaining
+        case .byok:
+            balance = nil
+            let available = ProviderKeys.availableProviders()
+            gatedProviders = Set(ModelProvider.allCases).subtracting(available)
+        case .expired, nil:
+            balance = nil
+        }
+
+        return ModelRegistry.enabled.map { model in
+            let gated = gatedProviders.contains(model.provider)
+            let detail: String?
+            if gated {
+                detail = "Add \(model.provider.displayName) key"
+            } else if let balance {
+                let left = CreditDisplay.estimatedLeft(
+                    balance: balance, creditPrice: model.creditPrice
+                )
+                detail = "\(model.creditPrice) cr \u{00B7} ~\(left) left"
+            } else {
+                detail = nil
+            }
+            return .init(
+                id: model.id,
+                name: model.displayName,
+                detail: detail,
+                recommended: model.recommended,
+                gated: gated
+            )
+        }
     }
 
     // MARK: - Microphone picker

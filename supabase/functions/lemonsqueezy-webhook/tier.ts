@@ -28,6 +28,61 @@ export interface TierVariantConfig {
   starterVariantIds: string;
   /** Raw comma-separated pro variant ids (monthly + yearly). */
   proVariantIds: string;
+  /** Raw comma-separated YEARLY variant ids across all tiers (LS_VARIANT_YEARLY).
+   *  Drives billing_interval only — both intervals share the tier's allowance
+   *  and 30-day reset cadence. */
+  yearlyVariantIds: string;
+}
+
+export type BillingInterval = "monthly" | "yearly";
+
+/**
+ * Derive billing_interval from which variant matched. The LS subscription
+ * payload carries no interval field (the interval lives on the variant, which
+ * webhooks don't expand), so the yearly variant ids are configured explicitly.
+ * A tier-mapped variant not in the yearly list is monthly; an UNMAPPED variant
+ * returns null (interval unknown — never guess; the column is nullable).
+ */
+export function resolveBillingInterval(
+  attrs: LsSubscriptionAttributes,
+  config: TierVariantConfig,
+): BillingInterval | null {
+  const variant = attrs.variant_id !== undefined ? String(attrs.variant_id) : "";
+  if (!variant) return null;
+  if (parseVariantList(config.yearlyVariantIds).includes(variant)) return "yearly";
+  const mapped = parseVariantList(config.proVariantIds).includes(variant) ||
+    parseVariantList(config.starterVariantIds).includes(variant);
+  return mapped ? "monthly" : null;
+}
+
+// ---- Top-up packs (one-time orders, plan §1.4) -------------------------------
+
+export interface TopupVariantConfig {
+  /** Raw comma-separated Boost variant ids (LS_VARIANT_TOPUP_BOOST). */
+  boostVariantIds: string;
+  /** Raw comma-separated Power variant ids (LS_VARIANT_TOPUP_POWER). */
+  powerVariantIds: string;
+  boostCredits: number;
+  powerCredits: number;
+}
+
+/**
+ * Match an order's variant id to a top-up pack, or null when the order is not
+ * a recognized top-up product (e.g. the BYOK license order — the caller falls
+ * through to the existing ignored-unhandled path; never a default grant).
+ */
+export function resolveTopupPack(
+  variantId: string,
+  config: TopupVariantConfig,
+): { pack: "boost" | "power"; credits: number } | null {
+  if (!variantId) return null;
+  if (parseVariantList(config.boostVariantIds).includes(variantId)) {
+    return { pack: "boost", credits: config.boostCredits };
+  }
+  if (parseVariantList(config.powerVariantIds).includes(variantId)) {
+    return { pack: "power", credits: config.powerCredits };
+  }
+  return null;
 }
 
 /**

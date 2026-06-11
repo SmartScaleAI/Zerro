@@ -12,14 +12,13 @@
 export const DOWNLOAD_URL = "https://getzerro.app/Zerro.dmg";
 
 /**
- * Direct LemonSqueezy subscription checkout links for the Managed tiers.
+ * Direct LemonSqueezy subscription checkout link for the Managed plan.
  *
  * Not used yet: every pricing CTA currently points to DOWNLOAD_URL, since users
- * download the app, get 15 free generations, then subscribe in-app. These are
- * placeholders for if/when the Starter/Pro cards link straight to checkout.
+ * download the app, get 40 free credits, then subscribe in-app. This is a
+ * placeholder for if/when the Managed card links straight to checkout.
  *
- * TODO(Colin): paste the LemonSqueezy checkout URLs (the same ones used in the
- * app's BillingLinks) and wire the Starter/Pro CTAs in pricing.tsx to them.
+ * TODO(Colin): paste the LemonSqueezy checkout URL (the same one used in the
+ * app's BillingLinks) and wire the Managed CTA in pricing.tsx to it.
  */
-export const STARTER_CHECKOUT_URL = ""; // TODO: LemonSqueezy Starter checkout
-export const PRO_CHECKOUT_URL = ""; // TODO: LemonSqueezy Pro checkout
+export const MANAGED_CHECKOUT_URL = ""; // TODO: LemonSqueezy Managed checkout

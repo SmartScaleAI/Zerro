@@ -8,10 +8,12 @@
 import { optionalEnv, optionalEnvInt } from "../_shared/env.ts";
 
 // ---- The trial credit grant -------------------------------------------------
-// How many server-funded generations a verified trial email gets, total. Capped
-// here and enforced server-side (consume_trial_credit), keyed to the verified
-// email so reinstalling can't farm a fresh grant. Default 15 (§6.4).
-export const TRIAL_CREDITS = optionalEnvInt("TRIAL_CREDITS", 15);
+// How many server-funded CREDITS a verified trial email gets, total (variable
+// per-model spend — see multi-model plan §1.2/§1.3; the unit is credits, never
+// a flat generation count). Capped here and enforced server-side
+// (consume_trial_credit), keyed to the verified email so reinstalling can't
+// farm a fresh grant. Default 40 (multi-model plan §1.3).
+export const TRIAL_CREDITS = optionalEnvInt("TRIAL_CREDITS", 40);
 
 // ---- Verification code ------------------------------------------------------
 // 6-digit numeric code, hashed (never stored raw), short TTL, attempt-limited.

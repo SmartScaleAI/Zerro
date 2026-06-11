@@ -23,6 +23,21 @@ export const CHAT_MODEL = optionalEnv("CHAT_MODEL", "gpt-4o");
 // Only consulted when CHAT_PROVIDER=gemini.
 export const GEMINI_THINKING_LEVEL = optionalEnv("GEMINI_THINKING_LEVEL", "low");
 
+// ---- Credit economics (multi-model plan §1.2) -------------------------------
+// 1 credit = $0.01 of real provider cost. This is the UNIT DEFINITION the whole
+// credit system is denominated in — deliberately NOT env-tunable, because
+// changing it would silently re-price every model at once; retuning happens per
+// model via creditPrice in models.ts.
+export const USD_PER_CREDIT = 0.01;
+// Anti-abuse circuit-breaker: when a single generation's REAL est_cost_usd
+// exceeds CIRCUIT_BREAKER_MULTIPLIER × the model's fixed price (in dollars),
+// charge the metered amount instead of the fixed price (plan §1.2). Normal
+// users never trigger it; env-tunable for emergencies without a redeploy.
+export const CIRCUIT_BREAKER_MULTIPLIER = optionalEnvInt(
+  "GENERATE_CIRCUIT_BREAKER_MULTIPLIER",
+  3,
+);
+
 // ---- Server-side input limits — the "generous fuse" (§ input limits) -------
 // Set ABOVE anything a real recording can produce (app hard-caps at 3 min,
 // ~90–120 frames). They only reject a BYPASSED / FORGED oversized payload before

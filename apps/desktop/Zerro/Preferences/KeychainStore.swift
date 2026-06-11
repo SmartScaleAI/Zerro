@@ -96,6 +96,16 @@ protocol KeychainSlot {
     func delete()
 }
 
+extension KeychainSlot {
+    /// Convenience: the stored string, or `nil` for either "absent" or a
+    /// read failure — sufficient for the API-key flows, which treat both
+    /// the same way. (KeychainStore's own `read()` predates this and stays.)
+    func read() -> String? {
+        if case .found(let value) = readResult() { return value }
+        return nil
+    }
+}
+
 struct KeychainStore: KeychainSlot {
     let service: String
     let account: String
@@ -175,9 +185,17 @@ struct KeychainStore: KeychainSlot {
 extension KeychainStore {
     private static let defaultService = Bundle.main.bundleIdentifier ?? "com.zerro.app"
 
-    /// The single API-key slot we store today. When multi-provider support
-    /// lands, swap callers to a parameterized factory.
+    // MARK: - Provider API-key slots (multi-model 6C: one per provider)
+    //
+    // BYOK is multi-provider: the user may store any subset of the three
+    // keys. `ProviderKeys` is the canonical resolver (slot lookup, trimmed
+    // read, availability set for the key-gated picker). The OpenAI key is
+    // ALSO the transcription key — Whisper stays OpenAI regardless of the
+    // chat model, so every BYOK recording needs it.
+
     static let openAIAPIKey = KeychainStore(service: defaultService, account: "openai_api_key")
+    static let geminiAPIKey = KeychainStore(service: defaultService, account: "gemini_api_key")
+    static let anthropicAPIKey = KeychainStore(service: defaultService, account: "anthropic_api_key")
 
     // MARK: - BYOK license slots (Phase C)
     //
@@ -210,6 +228,16 @@ extension KeychainStore {
     /// license values share one store and one lifecycle (written together on
     /// activate/validate, deleted together on deactivate/revocation).
     static let byokLastValidated = KeychainStore(service: defaultService, account: "byok_last_validated")
+
+    /// Epoch-seconds string of the license's `created_at` (purchase/issue
+    /// instant from the LemonSqueezy License API) — the START of the BYOK
+    /// "1 year of updates" window (E7/Appendix F). Written on every successful
+    /// activate/validate (so pre-E7 activations backfill on their next
+    /// throttled re-validation) and cleared with the license. NOT a secret and
+    /// NOT license validity: it gates which appcast items the updater offers
+    /// (`UpdateWindowPolicy`), never activation, validation, or generation.
+    /// Absent/unreadable → the updater FAILS OPEN (updates offered normally).
+    static let byokLicenseCreatedAt = KeychainStore(service: defaultService, account: "byok_license_created_at")
 
     // MARK: - License product disambiguation (Phase E)
     //

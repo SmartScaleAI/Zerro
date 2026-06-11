@@ -98,7 +98,7 @@ Be thorough: cover the full picture the recording supports — components, behav
 If the user voices a wish or intention without asking you to do or answer anything ("I want to fix this", "make it do X"), do not turn it into an instruction — render it as a described characteristic of the subject (e.g. "the error handling is currently fragile," as an observed property). Surface what the user emphasized as notable.
 
 Structure:
-- Open with a one-sentence framing: what this is, what process it shows, or — for a question — the direct answer.
+- Open directly with the substance — the first sentence should BE the answer, the title of what this is, or the first real point, not a meta lead-in. Do NOT open with "This recording shows...", "The recording shows...", "Based on the recording...", "Here is...", "In this video...", or any framing-about-the-recording phrasing; begin with the actual content.
 - If the recording is mainly a process or how-to (steps in sequence), lay it out as those ordered steps so the reader could follow them; otherwise explain the components and behavior in plain language, in the depth the recording supports.
 - Include any characteristic the user clearly treated as important.
 
@@ -112,13 +112,35 @@ const composedSystemPrompt = (mode) => `${BASE}\n\n${mode === "explain" ? EXPLAI
 // (README-eval.md) must be priced here so no run shows "unpriced". If a model
 // is added to the matrix, add it here AND in cost.ts. USD per 1M tokens; Gemini
 // output rates already fold in thinking tokens (we add thoughtsTokenCount into
-// outputTokens, matching the server). Pinned to the 2026-06-04 list.
+// outputTokens, matching the server). Anthropic output rates likewise fold in
+// any thinking tokens that ride in output_tokens.
+//
+// PHASE 0 NOTE (multi-model gate): cost.ts has NOT been updated yet — that lands
+// in Phase 2. This table is ahead of cost.ts on purpose so the harness can price
+// the six candidate models now. Re-sync cost.ts against this block in Phase 2.
+//
+// Rates verified against provider docs 2026-06-09:
+//   OpenAI    https://developers.openai.com/api/docs/pricing
+//   Gemini    https://ai.google.dev/gemini-api/docs/pricing
+//   Anthropic https://platform.claude.com/docs/en/about-claude/models/overview
+//
+// ⚠️ FLAG: the plan's §1.1 "GPT-5 mini" placeholder model id `gpt-5-mini` does
+// NOT exist at OpenAI (confirmed against the pricing/models docs above). The
+// current cheapest GPT-5-family mini is `gpt-5.4-mini` ($0.75/$4.50), priced
+// below as the stand-in "Lowest cost" OpenAI model. Confirm the intended id with
+// Colin before Phase 2 wires the registry.
 const CHAT_PRICING = {
+  // — legacy / prior eval baseline —
   "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list
-  "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // 2026-06-04 list, flat
-  "gemini:gemini-3.1-pro-preview": { // 2026-06-04 list, tiered by input tokens
+  // — the six Phase 0 candidates —
+  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 }, // stand-in for plan's "gpt-5-mini" (does not exist)
+  "openai:gpt-5.5": { inPerM: 5.0, outPerM: 30.0 },
+  "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // flat
+  "gemini:gemini-3.1-pro-preview": { // tiered by input tokens (>200k raises both rates)
     inPerM: 2.0, outPerM: 12.0, tierThreshold: 200_000, inPerMAbove: 4.0, outPerMAbove: 18.0,
   },
+  "anthropic:claude-sonnet-4-6": { inPerM: 3.0, outPerM: 15.0 },
+  "anthropic:claude-opus-4-7": { inPerM: 5.0, outPerM: 25.0 },
 };
 const WHISPER_PER_MINUTE = 0.006;
 
@@ -191,13 +213,31 @@ async function transcribe(audioPath, openaiKey) {
 
 // ---------- chat adapters (mirror providers/openai.ts + gemini.ts) -----------
 
+// One retry on a transient fault (429 / 5xx), mirroring the single retry the
+// production openai.ts / gemini.ts adapters do. Keeps a flaky 503 from one
+// provider on one clip from torpedoing a whole matrix run.
+async function fetchRetry(url, init) {
+  try {
+    const res = await fetch(url, init);
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return await fetch(url, init);
+    }
+    return res;
+  } catch {
+    // Network-level throw (DNS, reset, "fetch failed") — retry once before giving up.
+    await new Promise((r) => setTimeout(r, 1500));
+    return await fetch(url, init);
+  }
+}
+
 async function chatOpenAI(model, systemPrompt, blocks, key) {
   const content = blocks.map((b) =>
     b.type === "text"
       ? { type: "text", text: b.text }
       : { type: "image_url", image_url: { url: `data:${b.mime};base64,${b.base64}`, detail: "high" } }
   );
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -225,7 +265,7 @@ async function chatGemini(model, systemPrompt, blocks, key, thinkingLevel) {
         mediaResolution: { level: "media_resolution_high" },
       }
   );
-  const res = await fetch(
+  const res = await fetchRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
@@ -256,6 +296,65 @@ async function chatGemini(model, systemPrompt, blocks, key, thinkingLevel) {
   };
 }
 
+// chatAnthropic — Phase 0 mirror of what Phase 3's providers/anthropic.ts will
+// send on the Messages API. Maps the neutral interleaved blocks to Anthropic
+// content blocks: text → {type:"text"}, image → {type:"image", source:{base64}}.
+// The system prompt rides the top-level `system` field (Anthropic's analog of
+// OpenAI's system message / Gemini's systemInstruction), so `model` never
+// influences the prompt — same invariant as the other two adapters.
+//
+// Request shape notes (verified against the Messages API, 2026-06-09):
+//   - `max_tokens` is REQUIRED (unlike OpenAI/Gemini here). 8192 is ample for
+//     this workload (~966 output tokens typical) and stays well under the
+//     non-streaming ceiling.
+//   - NO sampling params and NO `thinking` field: on Opus 4.7 `temperature`/
+//     `top_p`/`top_k` and `budget_tokens` all 400, and an absent `thinking`
+//     field means thinking is OFF — the cleanest minimal mirror, and the right
+//     way to test whether the model obeys "Output ONLY the final result" without
+//     a thinking scaffold doing the work. Sonnet 4.6 accepts the same shape.
+async function chatAnthropic(model, systemPrompt, blocks, key) {
+  const content = blocks.map((b) =>
+    b.type === "text"
+      ? { type: "text", text: b.text }
+      : { type: "image", source: { type: "base64", media_type: b.mime, data: b.base64 } }
+  );
+  const res = await fetchRetry("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 8192,
+      system: systemPrompt,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  // A safety refusal yields stop_reason "refusal" (and usually no text) — surface
+  // it as a failure so the scorecard records a contract break, not empty output.
+  if (json?.stop_reason === "refusal") {
+    throw new Error(`anthropic refusal (stop_reason: refusal)`);
+  }
+  const text = (json?.content ?? [])
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("");
+  if (!text) throw new Error(`anthropic empty content (stop_reason: ${json?.stop_reason})`);
+  const usage = json?.usage ?? {};
+  return {
+    content: text,
+    inputTokens: usage.input_tokens ?? 0,
+    // Anthropic bills thinking tokens inside output_tokens already; thinking is
+    // off here, so output_tokens is just the visible text — mirror it directly.
+    outputTokens: usage.output_tokens ?? 0,
+    reportedModel: json?.model ?? model,
+  };
+}
+
 // ---------- main -------------------------------------------------------------
 
 function arg(name, fallback) {
@@ -276,9 +375,13 @@ const outDir = arg("out", "eval-results");
 
 const openaiKey = process.env.OPENAI_API_KEY;
 const geminiKey = process.env.GEMINI_API_KEY;
+const anthropicKey = process.env.ANTHROPIC_API_KEY;
 if (!openaiKey) { console.error("OPENAI_API_KEY required (whisper STT)"); process.exit(1); }
 if (models.some((m) => m.startsWith("gemini:")) && !geminiKey) {
   console.error("GEMINI_API_KEY required for gemini models"); process.exit(1);
+}
+if (models.some((m) => m.startsWith("anthropic:")) && !anthropicKey) {
+  console.error("ANTHROPIC_API_KEY required for anthropic models"); process.exit(1);
 }
 
 const manifest = JSON.parse(readFileSync(join(workingDir, "manifest.json"), "utf8"));
@@ -346,6 +449,8 @@ for (const spec of models) {
   try {
     const r = provider === "gemini"
       ? await chatGemini(model, systemPrompt, blocks, geminiKey, thinkingLevel)
+      : provider === "anthropic"
+      ? await chatAnthropic(model, systemPrompt, blocks, anthropicKey)
       : await chatOpenAI(model, systemPrompt, blocks, openaiKey);
     const seconds = (Date.now() - t0) / 1000;
     const chatCost = chatCostUsd(spec, r.inputTokens, r.outputTokens);

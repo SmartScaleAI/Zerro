@@ -56,6 +56,11 @@ struct MenuBarPanelView: View {
     @State private var showMicrophonePicker = false
     @State private var micRowHovered = false
     @State private var micPanelHovered = false
+    /// Drives the Model picker side panel (multi-model 6A) — same
+    /// hover-driven submenu shape as Microphone.
+    @State private var showModelPicker = false
+    @State private var modelRowHovered = false
+    @State private var modelPanelHovered = false
 
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
@@ -108,6 +113,19 @@ struct MenuBarPanelView: View {
             // keeps working on remaining credits while past-due.
             if let nudge = managedNudge {
                 managedStatusLine(nudge)
+            }
+
+            // Multi-model 6B.4: when the balance can't cover the SELECTED
+            // model's next generation (CreditDisplay.isLowBalance — the same
+            // threshold the billing card uses; deliberately not "exactly
+            // zero"), surface the top-up packs (Managed) or the upgrade path
+            // (Trial — trials can't buy top-ups).
+            if isBalanceLowForSelectedModel {
+                if case .trial = entitlements.state {
+                    trialUpgradeRow
+                } else {
+                    topupPackRow
+                }
             }
 
             // Phase 17: transient indicator that the LAST result ran with a
@@ -165,6 +183,38 @@ struct MenuBarPanelView: View {
             menuDivider
 
             primaryRecordingRow
+            // Multi-model 6A: the model picker — mode-aware (credit column in
+            // Managed/Trial; names only in BYOK). Writes the selection to
+            // PreferencesStore.selectedModelID; the generation path reads it
+            // fresh at request time.
+            MenuRow(
+                label: "Model",
+                trailing: .submenu,
+                forceSelected: showModelPicker
+            ) {
+                showModelPicker = true
+            }
+            .onHover { hovering in
+                modelRowHovered = hovering
+                updatePanelVisibility(
+                    hovered: modelRowHovered || modelPanelHovered,
+                    isStillHovered: { modelRowHovered || modelPanelHovered },
+                    setVisible: { showModelPicker = $0 }
+                )
+            }
+            .popover(isPresented: $showModelPicker, arrowEdge: .trailing) {
+                ModelPickerSubmenu()
+                    .environment(preferences)
+                    .environment(entitlements)
+                    .onHover { hovering in
+                        modelPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: modelRowHovered || modelPanelHovered,
+                            isStillHovered: { modelRowHovered || modelPanelHovered },
+                            setVisible: { showModelPicker = $0 }
+                        )
+                    }
+            }
             MenuRow(
                 label: "Microphone",
                 trailing: .submenu,
@@ -530,13 +580,95 @@ struct MenuBarPanelView: View {
         .padding(.vertical, 2)
     }
 
-    /// The trial is a pool of server-funded generations with no time limit, so
-    /// the line shows the remaining count — the only thing that bounds it.
-    /// "1 free generation left" is singularized.
+    /// The trial is a pool of server-funded CREDITS with no time limit, so the
+    /// line shows the remaining balance — the only thing that bounds it. The
+    /// unit is credits, never a flat generation count (§1.5): a generation's
+    /// cost varies by model, so "N generations" would mislead.
     private static func trialLineText(credits: Int) -> String {
         credits == 1
-            ? "1 free generation left"
-            : "\(credits) free generations left"
+            ? "1 free trial credit left"
+            : "\(credits) free trial credits left"
+    }
+
+    // MARK: - Low-balance top-up / upgrade (multi-model 6B.4)
+
+    /// True when the spendable balance can't cover the SELECTED model's next
+    /// generation. Managed reads the snapshot's combined plan+top-up balance
+    /// (F4 — the same number the server's spend gate checks); BYOK/expired
+    /// have no balance to be low on.
+    private var isBalanceLowForSelectedModel: Bool {
+        guard let price = ModelRegistry.entry(id: preferences.selectedModelID)?.creditPrice else {
+            return false
+        }
+        switch entitlements.state {
+        case .managed:
+            guard let snapshot = entitlements.managedSnapshot else { return false }
+            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining, selectedModelPrice: price)
+        case .trial(let credits):
+            guard let credits else { return false }
+            return CreditDisplay.isLowBalance(balance: credits, selectedModelPrice: price)
+        case .byok, .expired:
+            return false
+        }
+    }
+
+    /// Managed low-balance escalation: the two top-up packs (plan §1.4) as
+    /// compact checkout chips. A pack whose checkout link isn't configured yet
+    /// resolves to `nil` and its chip is simply absent (the BillingLinks
+    /// placeholder pattern), leaving the amber line as a plain notice.
+    private var topupPackRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Running low \u{2014} top up to keep going")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfWarningAmber)
+                .fixedSize()
+            HStack(spacing: VFSpacing.sm) {
+                topupChip("Boost \u{00B7} 200 credits \u{00B7} $10", url: BillingLinks.boostTopupCheckoutURL)
+                topupChip("Power \u{00B7} 500 credits \u{00B7} $22", url: BillingLinks.powerTopupCheckoutURL)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func topupChip(_ label: String, url: URL?) -> some View {
+        if let url {
+            Button {
+                NSWorkspace.shared.open(url)
+                MenuBarExtraDismiss.dismiss()
+            } label: {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Trial low-balance escalation: trials can't buy top-ups, so the
+    /// affordance is the Managed subscription checkout instead.
+    private var trialUpgradeRow: some View {
+        HStack(spacing: 0) {
+            Text("Running low \u{2014} upgrade to Managed for monthly credits")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfWarningAmber)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let url = BillingLinks.subscriptionCheckoutURL(tier: .pro) else { return }
+            NSWorkspace.shared.open(url)
+            MenuBarExtraDismiss.dismiss()
+        }
     }
 
     /// Phase 17 — transient "this result was switched" note. Echoes the
@@ -1023,9 +1155,10 @@ private struct MicrophonePickerRow: View {
 // Phase A debug surface, presented as the Entitlement row's trailing
 // popover — the same hover-driven submenu shape as Recent Prompts and the
 // Microphone picker. One row per forceable `EntitlementState` (sourced
-// from `EntitlementStore.devStates` so this and the paywall dev panel stay
-// in sync), the active one checkmarked. Selecting a state sets the shared
-// store and dismisses the panel.
+// from `EntitlementStore.devStates`), the active one checkmarked. This is
+// the ONLY force-entitlement surface — the paywall's copy was removed as
+// redundant. Selecting a state sets the shared store and dismisses the
+// panel.
 
 private struct EntitlementDebugPicker: View {
     @Environment(EntitlementStore.self) private var entitlements

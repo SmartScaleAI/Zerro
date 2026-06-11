@@ -29,6 +29,14 @@
 //  saying so instead of inventing a task. EXPLAIN is intentionally
 //  unchanged. Mirrored in generate/prompt.ts and Scripts/eval-models.mjs.
 //
+//  2026-06-09 (Phase 0.5): rewrote EXPLAIN's first Structure bullet so the
+//  opening is the substance (answer / title / first real point), not a meta
+//  lead-in — resolving the conflict with BASE's "no 'Here is...'" rule, which
+//  the Phase 0 eval surfaced (OpenAI/Gemini opened explain output with a
+//  framing line; Gemini occasionally with the banned "Here is..."). BASE is
+//  unchanged. INSTRUCT is unchanged. Mirrored in generate/prompt.ts and
+//  Scripts/eval-models.mjs (the EXPLAIN string stays byte-identical across all).
+//
 
 import Foundation
 
@@ -81,7 +89,7 @@ enum PromptModes {
     If the user voices a wish or intention without asking you to do or answer anything ("I want to fix this", "make it do X"), do not turn it into an instruction — render it as a described characteristic of the subject (e.g. "the error handling is currently fragile," as an observed property). Surface what the user emphasized as notable.
 
     Structure:
-    - Open with a one-sentence framing: what this is, what process it shows, or — for a question — the direct answer.
+    - Open directly with the substance — the first sentence should BE the answer, the title of what this is, or the first real point, not a meta lead-in. Do NOT open with "This recording shows...", "The recording shows...", "Based on the recording...", "Here is...", "In this video...", or any framing-about-the-recording phrasing; begin with the actual content.
     - If the recording is mainly a process or how-to (steps in sequence), lay it out as those ordered steps so the reader could follow them; otherwise explain the components and behavior in plain language, in the depth the recording supports.
     - Include any characteristic the user clearly treated as important.
 

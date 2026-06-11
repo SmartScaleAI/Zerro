@@ -20,14 +20,31 @@
 
 import { verifyLemonSqueezySignature } from "../_shared/ls-signature.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
-import { creditsForTier, LS_VARIANT_PRO, LS_VARIANT_STARTER } from "../_shared/config.ts";
+import {
+  creditsForTier,
+  LS_VARIANT_PRO,
+  LS_VARIANT_STARTER,
+  LS_VARIANT_TOPUP_BOOST,
+  LS_VARIANT_TOPUP_POWER,
+  LS_VARIANT_YEARLY,
+  TOPUP_BOOST_CREDITS,
+  TOPUP_EXPIRY_MONTHS,
+  TOPUP_POWER_CREDITS,
+} from "../_shared/config.ts";
 import type {
   LsLicenseKeyAttributes,
+  LsOrderAttributes,
   LsSubscriptionAttributes,
   LsSubscriptionInvoiceAttributes,
   LsWebhook,
 } from "../_shared/types.ts";
-import { resolveTier, type TierVariantConfig } from "./tier.ts";
+import {
+  resolveBillingInterval,
+  resolveTier,
+  resolveTopupPack,
+  type TierVariantConfig,
+  type TopupVariantConfig,
+} from "./tier.ts";
 import type { Status, WebhookStore } from "./store.ts";
 
 export interface WebhookResult {
@@ -46,6 +63,14 @@ export interface WebhookDeps {
 const TIER_CONFIG: TierVariantConfig = {
   starterVariantIds: LS_VARIANT_STARTER,
   proVariantIds: LS_VARIANT_PRO,
+  yearlyVariantIds: LS_VARIANT_YEARLY,
+};
+
+const TOPUP_CONFIG: TopupVariantConfig = {
+  boostVariantIds: LS_VARIANT_TOPUP_BOOST,
+  powerVariantIds: LS_VARIANT_TOPUP_POWER,
+  boostCredits: TOPUP_BOOST_CREDITS,
+  powerCredits: TOPUP_POWER_CREDITS,
 };
 
 function logAction(event: string, subscriptionId: string | null, action: string) {
@@ -144,6 +169,8 @@ async function handleEvent(deps: WebhookDeps, eventName: string, payload: LsWebh
     case "subscription_payment_refunded":
       return await handleInvoiceStatusChange(deps, payload as LsWebhook<LsSubscriptionInvoiceAttributes>, "expired");
 
+    case "order_created":
+      return await handleOrderCreated(deps, payload as LsWebhook<LsOrderAttributes>);
     case "order_refunded":
       return await handleOrderRefund(deps, payload);
 
@@ -171,6 +198,7 @@ async function handleSubscriptionUpsert(
   const lsSubId = payload.data.id;
   const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
   const creditsLimit = creditsForTier(tier);
+  const billingInterval = resolveBillingInterval(attrs, TIER_CONFIG);
   const renewsAt = attrs.renews_at ?? null;
 
   const existing = await deps.store.getSubByLsId(lsSubId);
@@ -188,6 +216,7 @@ async function handleSubscriptionUpsert(
     status: opts.status,
     current_period_end: renewsAt,
     credits_limit: creditsLimit,
+    billing_interval: billingInterval,
     ls_updated_at: attrs.updated_at ?? null,
   });
 
@@ -207,6 +236,7 @@ async function handleSubscriptionUpdated(deps: WebhookDeps, payload: LsWebhook) 
   const lsSubId = payload.data.id;
   const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
   const creditsLimit = creditsForTier(tier);
+  const billingInterval = resolveBillingInterval(attrs, TIER_CONFIG);
 
   const existing = await deps.store.getSubByLsId(lsSubId);
   if (!existing) {
@@ -224,6 +254,7 @@ async function handleSubscriptionUpdated(deps: WebhookDeps, payload: LsWebhook) 
     tier,
     credits_limit: creditsLimit,
     current_period_end: attrs.renews_at ?? null,
+    billing_interval: billingInterval,
     ls_updated_at: attrs.updated_at ?? null,
   });
 
@@ -314,7 +345,96 @@ async function handleInvoiceStatusChange(
   logAction("invoice_status", row.id, `status=${status}`);
 }
 
-// ---- order_refunded → expired (match by order id) --------------------------
+// ---- order_created → top-up pack purchase (plan §1.4) -----------------------
+// Top-ups are ONE-TIME orders, not subscription events. Only orders whose
+// variant matches a configured top-up pack are handled; everything else (e.g.
+// the BYOK license order) falls through to the same ignored-unhandled no-op the
+// default case always produced — normal order flow is unaffected.
+//
+// Double-credit protection is TWO independent layers: the composite
+// recordEvent key dedupes an exact redelivery before we get here, and
+// topup_credits.ls_order_id is UNIQUE so even a same-order event with a
+// different composite key (e.g. a later updated_at) inserts at most one row.
+
+async function handleOrderCreated(deps: WebhookDeps, payload: LsWebhook<LsOrderAttributes>) {
+  const attrs = payload.data.attributes;
+  const orderId = payload.data.id;
+  const variantId = attrs.first_order_item?.variant_id !== undefined
+    ? String(attrs.first_order_item.variant_id)
+    : "";
+
+  const pack = resolveTopupPack(variantId, TOPUP_CONFIG);
+  if (!pack) {
+    logAction("order_created", null, "ignored_unhandled");
+    return;
+  }
+
+  // Only a PAID order grants credits. LS normally fires order_created on a
+  // successful checkout, but the status field is the contract — a pending or
+  // failed order must never credit. (Absent status → treat as paid; some test
+  // payloads omit it.)
+  if (attrs.status !== undefined && attrs.status !== "paid") {
+    logAction("order_created", null, `topup_skipped_status_${attrs.status}`);
+    return;
+  }
+
+  // Attach to the buyer's existing subscription via the LS customer id — the
+  // same linkage subscription_created mirrors into ls_customer_id. A buyer with
+  // NO spendable subscription (BYOK-only or trial user buying a Managed top-up)
+  // gets NOTHING credited: there is no bucket to attach to, and topup_credits
+  // requires a subscription FK. Logged loudly for manual follow-up/refund — the
+  // store page should not offer top-ups to non-Managed users in the first place.
+  const customerId = attrs.customer_id !== undefined ? String(attrs.customer_id) : null;
+  if (!customerId) {
+    logAction("order_created", null, "topup_no_customer_id");
+    return;
+  }
+  const sub = await deps.store.getActiveSubByCustomerId(customerId);
+  if (!sub) {
+    console.warn(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      warn: "topup_order_without_active_subscription",
+      order_id: orderId,
+      ls_customer_id: customerId,
+      pack: pack.pack,
+    }));
+    logAction("order_created", null, "topup_no_active_subscription");
+    return;
+  }
+
+  // 12-month shelf life from the purchase moment (the order's own created_at,
+  // falling back to the injectable clock only if LS omitted it).
+  const purchasedAt = attrs.created_at ?? nowIso(deps);
+  const expiresAt = addMonths(purchasedAt, TOPUP_EXPIRY_MONTHS);
+
+  const result = await deps.store.insertTopup({
+    subscriptionId: sub.id,
+    credits: pack.credits,
+    expiresAt,
+    lsOrderId: orderId,
+  });
+  logAction(
+    "order_created",
+    sub.id,
+    result === "duplicate" ? "topup_duplicate_order" : `topup_${pack.pack}_credited_${pack.credits}`,
+  );
+}
+
+/** ISO timestamp `months` calendar months after `iso` (UTC; clamps the rare
+ *  month-end overflow forward, e.g. Feb 30 → Mar 2 — fine for a shelf life). */
+function addMonths(iso: string, months: number): string {
+  const d = new Date(iso);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString();
+}
+
+// ---- order_refunded → revoke (top-up pack OR subscription, by order id) -----
+// An order id belongs to EITHER a top-up pack (topup_credits.ls_order_id) or a
+// subscription purchase (subscriptions.ls_order_id) — never both. Try the pack
+// first: a refunded top-up must stop being spendable (money leak otherwise),
+// but only its UNSPENT remainder dies — credits already consumed stay consumed
+// (no claw-back, no touching other packs). Unknown order ids fall through both
+// branches as the same no-op as before.
 
 async function handleOrderRefund(deps: WebhookDeps, payload: LsWebhook) {
   const orderId = payload.data.id;
@@ -322,6 +442,13 @@ async function handleOrderRefund(deps: WebhookDeps, payload: LsWebhook) {
     logAction("order_refunded", null, "no_order_id");
     return;
   }
+
+  const revoked = await deps.store.revokeTopupByOrderId(orderId, nowIso(deps));
+  if (revoked > 0) {
+    logAction("order_refunded", null, `topup_revoked_${revoked}_pack(s)`);
+    return;
+  }
+
   const ids = await deps.store.setStatusByOrderId(orderId, "expired");
   logAction("order_refunded", ids[0] ?? null, `expired_${ids.length}_subscription(s)`);
 }

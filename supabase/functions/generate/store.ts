@@ -35,6 +35,11 @@ export interface GenerationLogRow {
   tokensOut: number | null;
   estCostUsd: number | null;
   success: boolean;
+  /** Phase 4 — the VALIDATED selected model + its provider (non-content
+   *  attribution metadata, §14.5-compatible). Known from validation on, so
+   *  failure rows are attributable too (per-model failure-rate calibration). */
+  model: string;
+  provider: string;
 }
 
 /** A cached generation result, replayed verbatim for a retry carrying the same
@@ -44,14 +49,22 @@ export interface IdempotentResult {
   prompt: string;
   usage: { input_tokens: number; output_tokens: number; model: string };
   creditsRemaining: number;
+  /** Credits charged for the ORIGINAL generation (D2) — replayed verbatim so a
+   *  retry reports the same charge (0 on the uncharged-race path). */
+  creditsCharged: number;
 }
 
 export interface BillingStore {
   loadSubscription(id: string): Promise<SubRow | null>;
-  /** Remaining credits on the subscription's LATEST period (consume_credit's target). */
+  /** COMBINED remaining balance: the latest plan period + non-expired top-up
+   *  packs (Phase 4 / F4) — the same definition the 2-arg consume_credit spends
+   *  against, so the availability check and the spend can't disagree. */
   creditsRemaining(subId: string, creditsLimit: number): Promise<number>;
-  /** Atomic spend; remaining after, or null if none could be spent. */
-  consumeCredit(subId: string): Promise<number | null>;
+  /** Atomically spend `credits` (plan first, then top-ups FIFO by expiry —
+   *  Phase 1's consume_credit(uuid, integer)). All-or-nothing: COMBINED
+   *  remaining after the spend, or null with NOTHING spent if the combined
+   *  balance can't cover it. */
+  consumeCredit(subId: string, credits: number): Promise<number | null>;
   acquireSlot(subId: string, staleSeconds: number): Promise<boolean>;
   releaseSlot(subId: string): Promise<void>;
   /** TRUE if within the limit for the current window (fail-open on infra error). */
@@ -82,10 +95,11 @@ export interface BillingStore {
   // trial_grants row id instead of a subscription id.
   /** The trial grant for `grantId`, or null if it doesn't exist. */
   loadTrialGrant(grantId: string): Promise<TrialGrantRow | null>;
-  /** Remaining trial credits on the grant. */
+  /** Remaining trial credits on the grant (single bucket — no top-ups). */
   trialCreditsRemaining(grantId: string): Promise<number>;
-  /** Atomic single-credit trial spend; remaining after, or null if none spendable. */
-  consumeTrialCredit(grantId: string): Promise<number | null>;
+  /** Atomically spend `credits` from the grant (Phase 1's 2-arg RPC).
+   *  All-or-nothing: remaining after, or null with nothing spent. */
+  consumeTrialCredit(grantId: string, credits: number): Promise<number | null>;
   acquireTrialSlot(grantId: string, staleSeconds: number): Promise<boolean>;
   releaseTrialSlot(grantId: string): Promise<void>;
 }
@@ -117,11 +131,34 @@ export class SupabaseBillingStore implements BillingStore {
       .limit(1)
       .maybeSingle();
     const used = data?.credits_used ?? creditsLimit; // no period → exhausted
-    return Math.max(0, creditsLimit - used);
+    const planRemaining = Math.max(0, creditsLimit - used);
+
+    // Plus non-expired top-up packs (Phase 4 / F4) — the same filter the 2-arg
+    // consume_credit spends against. On a read error, count top-ups as 0: the
+    // fail-SAFE direction (undercount → at worst a spurious 402, never a spend
+    // the atomic consume wouldn't also allow; consume_credit stays the guard).
+    const { data: topups, error: topupError } = await this.db
+      .from("topup_credits")
+      .select("credits_total, credits_used")
+      .eq("subscription_id", subId)
+      .gt("expires_at", new Date().toISOString());
+    if (topupError) {
+      console.error(JSON.stringify({ fn: "generate", op: "topupRemaining", error: topupError.message }));
+      return planRemaining;
+    }
+    const topupRemaining = (topups ?? []).reduce(
+      (sum, t) => sum + Math.max(0, Number(t.credits_total) - Number(t.credits_used)),
+      0,
+    );
+    return planRemaining + topupRemaining;
   }
 
-  async consumeCredit(subId: string): Promise<number | null> {
-    const { data, error } = await this.db.rpc("consume_credit", { p_subscription_id: subId });
+  async consumeCredit(subId: string, credits: number): Promise<number | null> {
+    // The 2-arg overload (Phase 1): variable, two-bucket, all-or-nothing.
+    const { data, error } = await this.db.rpc("consume_credit", {
+      p_subscription_id: subId,
+      p_credits: credits,
+    });
     if (error) {
       console.error(JSON.stringify({ fn: "generate", op: "consumeCredit", error: error.message }));
       throw error;
@@ -173,6 +210,8 @@ export class SupabaseBillingStore implements BillingStore {
       tokens_out: row.tokensOut,
       est_cost_usd: row.estCostUsd,
       success: row.success,
+      model: row.model,
+      provider: row.provider,
     });
     if (error) {
       // Logging is best-effort analytics; never fail a paid generation over it.
@@ -190,7 +229,7 @@ export class SupabaseBillingStore implements BillingStore {
     const cutoff = new Date(Date.now() - ttlSeconds * 1000).toISOString();
     const { data, error } = await this.db
       .from("idempotency_cache")
-      .select("prompt, usage, credits_remaining")
+      .select("prompt, usage, credits_remaining, credits_charged")
       .eq("identity_key", identityKey)
       .eq("idempotency_key", idemKey)
       .gt("created_at", cutoff) // ignore rows past the retention window
@@ -207,6 +246,8 @@ export class SupabaseBillingStore implements BillingStore {
       prompt: String(data.prompt),
       usage: data.usage as IdempotentResult["usage"],
       creditsRemaining: Number(data.credits_remaining),
+      // NULL only on pre-D2 rows, which age out within the TTL.
+      creditsCharged: Number(data.credits_charged ?? 0),
     };
   }
 
@@ -222,6 +263,7 @@ export class SupabaseBillingStore implements BillingStore {
       prompt: value.prompt,
       usage: value.usage,
       credits_remaining: value.creditsRemaining,
+      credits_charged: value.creditsCharged,
       created_at: new Date().toISOString(),
     }, { onConflict: "identity_key,idempotency_key" });
     if (error) {
@@ -264,8 +306,12 @@ export class SupabaseBillingStore implements BillingStore {
     return Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
   }
 
-  async consumeTrialCredit(grantId: string): Promise<number | null> {
-    const { data, error } = await this.db.rpc("consume_trial_credit", { p_grant_id: grantId });
+  async consumeTrialCredit(grantId: string, credits: number): Promise<number | null> {
+    // The 2-arg overload (Phase 1): variable all-or-nothing single-bucket spend.
+    const { data, error } = await this.db.rpc("consume_trial_credit", {
+      p_grant_id: grantId,
+      p_credits: credits,
+    });
     if (error) {
       console.error(JSON.stringify({ fn: "generate", op: "consumeTrialCredit", error: error.message }));
       throw error;

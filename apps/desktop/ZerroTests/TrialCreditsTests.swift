@@ -27,13 +27,18 @@ private enum TrialFixtures {
     static func alreadyUsed() -> String { #"{"status":"already_used"}"# }
     /// A `verify`/`resume` success body. The same shape covers both actions, so
     /// `expiresAt` is parameterized for the TTL-gap tests (resume returns a token
-    /// whose expiry is in the future of the ADVANCED clock).
+    /// whose expiry is in the future of the ADVANCED clock). `limit` is the E4
+    /// grant total (`trial_credits_limit`); `nil` omits the field, modeling an
+    /// older server — the default, so pre-E4 tests double as backward-compat
+    /// coverage.
     static func verifyOK(
         token: String = "TRIAL-TOK",
         remaining: Int = 15,
+        limit: Int? = nil,
         expiresAt: String = "2030-01-01T00:00:00.000Z"
     ) -> String {
-        #"{"token":"\#(token)","expires_at":"\#(expiresAt)","trial_credits_remaining":\#(remaining)}"#
+        let limitField = limit.map { #","trial_credits_limit":\#($0)"# } ?? ""
+        return #"{"token":"\#(token)","expires_at":"\#(expiresAt)","trial_credits_remaining":\#(remaining)\#(limitField)}"#
     }
     /// The resume "first-time user" signal — no token, route to email+code.
     static func needsVerification() -> String { #"{"status":"needs_verification"}"# }
@@ -125,6 +130,32 @@ final class TrialCreditsManagerTests: XCTestCase {
         XCTAssertEqual(token, "TRIAL-TOK")
     }
 
+    func testVerifyDecodesAndCachesCreditsLimit() async throws {
+        // E4: `trial_credits_limit` (the grant total) is decoded from the verify
+        // response and cached, so the trial usage meter has a bar denominator.
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(remaining: 34, limit: 40), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        XCTAssertNil(mgr.creditsLimit)
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+        XCTAssertEqual(mgr.creditsRemaining, 34)
+        XCTAssertEqual(mgr.creditsLimit, 40)
+    }
+
+    func testVerifyWithoutCreditsLimitStaysBarless() async throws {
+        // Backward-compat (E4): an older server omits `trial_credits_limit` —
+        // the verify still succeeds and the limit stays nil (bar-less meter),
+        // never a decode failure.
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(remaining: 15), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+        XCTAssertEqual(mgr.creditsRemaining, 15)
+        XCTAssertNil(mgr.creditsLimit)
+    }
+
     func testVerifyInvalidCodeMapped() async {
         let transport = StubManagedTransport()
         transport.enqueue(TrialFixtures.error("invalid_code"), status: 400)
@@ -152,7 +183,7 @@ final class TrialCreditsManagerTests: XCTestCase {
 
     func testClearDropsTokenAndCredits() async throws {
         let transport = StubManagedTransport()
-        transport.enqueue(TrialFixtures.verifyOK(), status: 200)
+        transport.enqueue(TrialFixtures.verifyOK(limit: 40), status: 200)
         let mgr = makeTrialManager(transport)
         _ = try await mgr.verifyCode(email: "a@b.com", code: "123456")
         XCTAssertTrue(mgr.hasActiveTrialToken)
@@ -160,6 +191,7 @@ final class TrialCreditsManagerTests: XCTestCase {
         mgr.clear()
         XCTAssertFalse(mgr.hasActiveTrialToken)
         XCTAssertNil(mgr.creditsRemaining)
+        XCTAssertNil(mgr.creditsLimit)
         // `clear` keeps the remembered email (for re-fill on revocation).
         XCTAssertEqual(mgr.rememberedEmail, "a@b.com")
     }
@@ -252,7 +284,7 @@ final class TrialCreditsManagerTests: XCTestCase {
         )
         // The resumed token is valid for 30 min past the ADVANCED clock.
         transport.enqueue(
-            TrialFixtures.verifyOK(token: "TOK2", remaining: 11, expiresAt: isoString(base.addingTimeInterval(86_400 + 1800))),
+            TrialFixtures.verifyOK(token: "TOK2", remaining: 11, limit: 40, expiresAt: isoString(base.addingTimeInterval(86_400 + 1800))),
             status: 200
         )
         let (mgr, _) = try await staleVerifiedManager(transport)
@@ -261,6 +293,7 @@ final class TrialCreditsManagerTests: XCTestCase {
         XCTAssertEqual(token, "TOK2")
         XCTAssertTrue(mgr.hasActiveTrialToken)
         XCTAssertEqual(mgr.creditsRemaining, 11)         // persisted balance, not 15
+        XCTAssertEqual(mgr.creditsLimit, 40)             // E4: limit cached from resume too
         XCTAssertEqual(mgr.rememberedEmail, "a@b.com")   // unchanged
         // The second POST was a `resume` (no code), not a re-verify.
         let body = try XCTUnwrap(transport.requests[1].httpBody)

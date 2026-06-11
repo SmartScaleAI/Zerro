@@ -131,11 +131,28 @@ enum ManagedStatus: String, Codable, Equatable {
 struct ManagedEntitlementSnapshot: Codable, Equatable {
     let tier: ManagedTier
     let status: ManagedStatus
+    /// COMBINED spendable balance: plan remaining + non-expired top-up packs
+    /// (multi-model F4) — the same number the server's spend gate checks.
+    /// This is the headline/picker balance, NEVER the usage-meter input.
     let creditsRemaining: Int
     let creditsLimit: Int
     /// The current-period end / credit-reset anchor. `nil` if the backend
     /// hasn't set one yet.
     let resetDate: Date?
+    // ---- Plan-vs-top-up breakdown (multi-model F4 / 6F) ----------------------
+    // The usage meter's bar MUST track these plan-only figures: deriving usage
+    // from the combined `creditsRemaining` over-reports consumption for a
+    // top-up holder. Optional — absent from a pre-multi-model backend and from
+    // locally cached snapshots written before this build; the meter degrades
+    // to a bar-less card rather than guessing.
+    /// Plan credits consumed this period (bar numerator).
+    let planCreditsUsed: Int?
+    /// The plan allowance the bar tracks against (== creditsLimit today;
+    /// explicit so the meter never guesses which cap to use).
+    let planCreditsLimit: Int?
+    /// Non-expired top-up balance (survives the monthly reset). 0 when the
+    /// user never bought a pack.
+    let topupCreditsRemaining: Int?
 
     /// True while the subscription is in LemonSqueezy's dunning window — drives
     /// the non-blocking "Payment issue — update your card" nudge (§9.1).
@@ -153,29 +170,52 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
         self.creditsRemaining = dto.creditsRemaining
         self.creditsLimit = dto.creditsLimit
         self.resetDate = ManagedBackend.parseISODate(dto.resetDate)
+        self.planCreditsUsed = dto.planCreditsUsed
+        self.planCreditsLimit = dto.planCreditsLimit
+        self.topupCreditsRemaining = dto.topupCreditsRemaining
     }
 
     /// Returns a copy with `creditsRemaining` replaced — used to reflect a
     /// just-completed generation's `credits_remaining` immediately, before the
-    /// authoritative `/entitlement` refresh lands.
+    /// authoritative `/entitlement` refresh lands. The plan breakdown is
+    /// carried through UNCHANGED (it may be a charge stale until the refresh —
+    /// the meter prefers a briefly-stale bar over a guessed split, since the
+    /// charge may have drawn on the top-up bucket, not the plan).
     func withCreditsRemaining(_ remaining: Int) -> ManagedEntitlementSnapshot {
         ManagedEntitlementSnapshot(
             tier: tier,
             status: status,
             creditsRemaining: max(0, remaining),
             creditsLimit: creditsLimit,
-            resetDate: resetDate
+            resetDate: resetDate,
+            planCreditsUsed: planCreditsUsed,
+            planCreditsLimit: planCreditsLimit,
+            topupCreditsRemaining: topupCreditsRemaining
         )
     }
 
     /// Memberwise init (the DTO path is the usual one; this backs
-    /// `withCreditsRemaining` and test fixtures).
-    init(tier: ManagedTier, status: ManagedStatus, creditsRemaining: Int, creditsLimit: Int, resetDate: Date?) {
+    /// `withCreditsRemaining` and test fixtures). Plan-breakdown fields
+    /// default nil so pre-multi-model call sites (dev overrides, fixtures)
+    /// compile unchanged.
+    init(
+        tier: ManagedTier,
+        status: ManagedStatus,
+        creditsRemaining: Int,
+        creditsLimit: Int,
+        resetDate: Date?,
+        planCreditsUsed: Int? = nil,
+        planCreditsLimit: Int? = nil,
+        topupCreditsRemaining: Int? = nil
+    ) {
         self.tier = tier
         self.status = status
         self.creditsRemaining = creditsRemaining
         self.creditsLimit = creditsLimit
         self.resetDate = resetDate
+        self.planCreditsUsed = planCreditsUsed
+        self.planCreditsLimit = planCreditsLimit
+        self.topupCreditsRemaining = topupCreditsRemaining
     }
 }
 
@@ -190,12 +230,20 @@ struct EntitlementSnapshotDTO: Decodable, Equatable {
     let creditsRemaining: Int
     let creditsLimit: Int
     let resetDate: String?
+    /// Plan-vs-top-up breakdown (multi-model F4) — optional so a pre-multi-
+    /// model backend still decodes during a rollout window.
+    let planCreditsUsed: Int?
+    let planCreditsLimit: Int?
+    let topupCreditsRemaining: Int?
 
     enum CodingKeys: String, CodingKey {
         case tier, status
         case creditsRemaining = "credits_remaining"
         case creditsLimit = "credits_limit"
         case resetDate = "reset_date"
+        case planCreditsUsed = "plan_credits_used"
+        case planCreditsLimit = "plan_credits_limit"
+        case topupCreditsRemaining = "topup_credits_remaining"
     }
 }
 
@@ -220,10 +268,18 @@ struct GenerateResponseDTO: Decodable {
     let prompt: String
     let usage: UsageDTO?
     let creditsRemaining: Int?
+    /// The EXACT credits the server charged for this generation (multi-model
+    /// D2) — usually the model's fixed price, but the anti-abuse circuit
+    /// breaker can meter it higher, and an idempotent replay reports the
+    /// ORIGINAL charge (0 on the rare uncharged-race path). The "−N credits"
+    /// toast reads this, never the local price table. Optional: a pre-D2
+    /// backend omits it and the toast simply doesn't show a charge.
+    let creditsCharged: Int?
 
     enum CodingKeys: String, CodingKey {
         case prompt, usage
         case creditsRemaining = "credits_remaining"
+        case creditsCharged = "credits_charged"
     }
 
     struct UsageDTO: Decodable {
@@ -241,13 +297,17 @@ struct GenerateResponseDTO: Decodable {
 
 /// `/trial-start` response body (Phase F). One shape covers both actions: a
 /// `request` returns `{ status }` ("code_sent" / "already_used"); a `verify`
-/// returns `{ token, expires_at, trial_credits_remaining }` on success or
-/// `{ status: "already_used" }`. `error` carries the typed failure string on a
-/// 4xx/5xx so the client maps it to a `TrialStartError`.
+/// returns `{ token, expires_at, trial_credits_remaining, trial_credits_limit }`
+/// on success or `{ status: "already_used" }`. `error` carries the typed
+/// failure string on a 4xx/5xx so the client maps it to a `TrialStartError`.
+/// `trialCreditsLimit` (E4) is the persisted grant TOTAL — the denominator the
+/// trial usage meter draws its bar against. Optional: an older server omits it
+/// and the meter degrades to the bar-less display.
 struct TrialStartResponseDTO: Decodable {
     let token: String?
     let expiresAt: String?
     let trialCreditsRemaining: Int?
+    let trialCreditsLimit: Int?
     let status: String?
     let error: String?
 
@@ -255,6 +315,7 @@ struct TrialStartResponseDTO: Decodable {
         case token, status, error
         case expiresAt = "expires_at"
         case trialCreditsRemaining = "trial_credits_remaining"
+        case trialCreditsLimit = "trial_credits_limit"
     }
 }
 

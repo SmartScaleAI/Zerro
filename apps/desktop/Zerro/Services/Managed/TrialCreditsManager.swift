@@ -148,6 +148,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
     private let clock: () -> Date
 
     private static let creditsKey = "trial_credits_remaining_v1"
+    private static let limitKey = "trial_credits_limit_v1"
 
     // MARK: - Init
 
@@ -174,6 +175,14 @@ final class TrialCreditsManager: ProxyTokenProviding {
     /// Cached so the menu-bar line is correct at launch before any network call.
     var creditsRemaining: Int? {
         defaults.object(forKey: Self.creditsKey) as? Int
+    }
+
+    /// The grant TOTAL (E4) — the denominator the trial usage meter draws its
+    /// proportional bar against. Cached from the last verify/resume response;
+    /// `nil` before verification or against an older server that doesn't send
+    /// `trial_credits_limit` (the meter then stays bar-less). Display only.
+    var creditsLimit: Int? {
+        defaults.object(forKey: Self.limitKey) as? Int
     }
 
     /// The last verified email, for pre-filling the capture sheet. Never used as
@@ -228,6 +237,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         persistToken(token0) // survive a relaunch / onboarding SIGKILL
         emailSlot.write(email)
         setCreditsRemaining(remaining)
+        setCreditsLimit(dto.trialCreditsLimit)
         Log.billing.notice("trial verified — credits=\(remaining, privacy: .public)")
         return remaining
     }
@@ -296,6 +306,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
             cached = token0
             persistToken(token0) // survive a relaunch
             setCreditsRemaining(remaining)
+            setCreditsLimit(dto.trialCreditsLimit)
             Log.billing.notice("trial token resumed silently — credits=\(remaining, privacy: .public)")
             return token0.token
         }
@@ -327,6 +338,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         cached = nil
         tokenSlot.delete()
         defaults.removeObject(forKey: Self.creditsKey)
+        defaults.removeObject(forKey: Self.limitKey)
     }
 
     /// FULL reset of all locally-cached verification state — the token (memory +
@@ -338,11 +350,19 @@ final class TrialCreditsManager: ProxyTokenProviding {
         cached = nil
         tokenSlot.delete()
         defaults.removeObject(forKey: Self.creditsKey)
+        defaults.removeObject(forKey: Self.limitKey)
         emailSlot.delete()
     }
 
     private func setCreditsRemaining(_ remaining: Int) {
         defaults.set(remaining, forKey: Self.creditsKey)
+    }
+
+    /// Persist the grant total when the server sends one; a `nil` (older
+    /// server) keeps any previously-cached limit rather than erasing it.
+    private func setCreditsLimit(_ limit: Int?) {
+        guard let limit else { return }
+        defaults.set(limit, forKey: Self.limitKey)
     }
 
     // MARK: - Token persistence

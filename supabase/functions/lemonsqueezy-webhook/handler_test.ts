@@ -8,6 +8,7 @@ import type {
   Status,
   SubscriptionPatch,
   SubscriptionUpsert,
+  TopupInsert,
   WebhookStore,
 } from "./store.ts";
 
@@ -24,8 +25,16 @@ interface Sub {
   status: string;
   current_period_end: string | null;
   credits_limit: number;
+  billing_interval: string | null;
   ls_updated_at: string | null;
   license_key_hash: string | null;
+}
+interface Topup {
+  subscription_id: string;
+  credits_total: number;
+  credits_used: number;
+  expires_at: string;
+  ls_order_id: string;
 }
 interface Period {
   subscription_id: string;
@@ -38,6 +47,7 @@ class InMemoryWebhookStore implements WebhookStore {
   events = new Set<string>();
   subs: Sub[] = [];
   periods: Period[] = [];
+  topups: Topup[] = [];
   pending = new Map<string, { license_key_hash: string; ls_customer_id: string | null }>();
   private nextId = 1;
 
@@ -95,6 +105,36 @@ class InMemoryWebhookStore implements WebhookStore {
       this.periods.push({ subscription_id: subscriptionId, period_start: periodStart, period_end: periodEnd, credits_used: 0 });
     }
     return Promise.resolve();
+  }
+  getActiveSubByCustomerId(lsCustomerId: string): Promise<{ id: string } | null> {
+    // Most recent spendable sub for the customer (mirror the SQL: created order
+    // ≈ insertion order here, so take the LAST match).
+    const hit = this.subs.filter(
+      (s) => s.ls_customer_id === lsCustomerId && (s.status === "active" || s.status === "past_due"),
+    ).at(-1);
+    return Promise.resolve(hit ? { id: hit.id } : null);
+  }
+  insertTopup(row: TopupInsert): Promise<"inserted" | "duplicate"> {
+    // ls_order_id UNIQUE — the second dedupe layer.
+    if (this.topups.some((t) => t.ls_order_id === row.lsOrderId)) {
+      return Promise.resolve("duplicate");
+    }
+    this.topups.push({
+      subscription_id: row.subscriptionId,
+      credits_total: row.credits,
+      credits_used: 0,
+      expires_at: row.expiresAt,
+      ls_order_id: row.lsOrderId,
+    });
+    return Promise.resolve("inserted");
+  }
+  revokeTopupByOrderId(orderId: string, revokedAtIso: string): Promise<number> {
+    // Mirror the SQL: expire matching, not-yet-expired packs; counters untouched.
+    const hit = this.topups.filter(
+      (t) => t.ls_order_id === orderId && t.expires_at > revokedAtIso,
+    );
+    for (const t of hit) t.expires_at = revokedAtIso;
+    return Promise.resolve(hit.length);
   }
   getPendingKey(orderId: string): Promise<{ license_key_hash: string } | null> {
     const p = this.pending.get(orderId);
@@ -248,6 +288,30 @@ Deno.test("created → correct tier (Pro) for both Pro variants (variant→tier 
   }
 });
 
+Deno.test("created → billing_interval from the matched variant (monthly vs yearly, same pro tier)", async () => {
+  // 201 = Managed monthly, 202 = Managed yearly (test_setup): SAME tier + 300
+  // credits, only the interval flag differs (F1 — yearly is NOT 12×300 up front).
+  const cases: [number, string][] = [[201, "monthly"], [202, "yearly"]];
+  for (const [variant, interval] of cases) {
+    const store = new InMemoryWebhookStore();
+    await deliver(store, "subscription_created", subPayload({ id: `ls_${variant}`, variant_id: variant }));
+    const s = store.sub(`ls_${variant}`)!;
+    assertEquals(s.tier, "pro");
+    assertEquals(s.credits_limit, 300);
+    assertEquals(s.billing_interval, interval, `variant ${variant} → ${interval}`);
+    // One period, one 300-credit allowance — identical for both intervals.
+    assertEquals(store.periodsFor(s.id).length, 1);
+  }
+});
+
+Deno.test("created with an UNMAPPED variant → billing_interval null (never guessed)", async () => {
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ variant_id: 9999, custom_tier: "pro" }));
+  const s = store.sub("ls_1")!;
+  assertEquals(s.tier, "pro"); // custom_data fallback still resolves the tier
+  assertEquals(s.billing_interval, null);
+});
+
 Deno.test("payment_success (renewal) → new period + credits reset, status active", async () => {
   const store = new InMemoryWebhookStore();
   await deliver(store, "subscription_created", subPayload());
@@ -331,6 +395,166 @@ Deno.test("order_refunded → expired (matched by order id)", async () => {
   };
   await deliver(store, "order_refunded", refund);
   assertEquals(store.sub("ls_1")!.status, "expired");
+});
+
+// ===========================================================================
+// order_created → top-up packs (Phase 5)
+// ===========================================================================
+function orderPayload(over: {
+  orderId?: string;
+  variant_id?: number;
+  customer_id?: number;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+} = {}) {
+  return {
+    meta: { event_name: "order_created" },
+    data: {
+      type: "orders",
+      id: over.orderId ?? "topup_order_1",
+      attributes: {
+        customer_id: over.customer_id ?? 5, // subPayload's customer
+        status: over.status ?? "paid",
+        first_order_item: { product_id: 30, variant_id: over.variant_id ?? 301 },
+        created_at: over.created_at ?? "2026-06-15T00:00:00.000Z",
+        updated_at: over.updated_at ?? "2026-06-15T00:00:00.000Z",
+      },
+    },
+  };
+}
+
+/** A store with one active subscription for customer 5 (the top-up buyer). */
+async function storeWithActiveSub(): Promise<InMemoryWebhookStore> {
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ variant_id: 201 }));
+  return store;
+}
+
+Deno.test("order_created (Boost) → one topup row: 200 credits, 12-month expiry, buyer's sub", async () => {
+  const store = await storeWithActiveSub();
+  const res = await deliver(store, "order_created", orderPayload({ variant_id: 301 }));
+  assertEquals(res.status, 200);
+  assertEquals(store.topups.length, 1);
+  const t = store.topups[0];
+  assertEquals(t.subscription_id, "sub-1"); // attached via ls_customer_id 5
+  assertEquals(t.credits_total, 200);
+  assertEquals(t.ls_order_id, "topup_order_1");
+  assertEquals(t.expires_at, "2027-06-15T00:00:00.000Z"); // purchase + 12 months
+});
+
+Deno.test("order_created (Power) → 500 credits", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload({ variant_id: 302, orderId: "topup_order_2" }));
+  assertEquals(store.topups.length, 1);
+  assertEquals(store.topups[0].credits_total, 500);
+});
+
+Deno.test("redelivered top-up order (exact) → deduped by the composite event key, one row", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload());
+  const r2 = await deliver(store, "order_created", orderPayload()); // exact redelivery
+  assertEquals(r2.body, "ok (duplicate)");
+  assertEquals(store.topups.length, 1);
+});
+
+Deno.test("same order with a DIFFERENT updated_at → second dedupe layer (ls_order_id) holds, one row", async () => {
+  // A changed updated_at gives a fresh composite event id, so recordEvent lets
+  // it through — the topup_credits.ls_order_id unique is what must stop it.
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload());
+  const r2 = await deliver(store, "order_created", orderPayload({ updated_at: "2026-06-15T01:00:00.000Z" }));
+  assertEquals(r2.status, 200); // handled, but credited nothing
+  assertEquals(store.topups.length, 1);
+});
+
+Deno.test("order_created for a NON-top-up variant → ignored, nothing written", async () => {
+  const store = await storeWithActiveSub();
+  const res = await deliver(store, "order_created", orderPayload({ variant_id: 777 }));
+  assertEquals(res.status, 200);
+  assertEquals(store.topups.length, 0);
+});
+
+Deno.test("top-up with NO active subscription for the customer → no row (logged, 200)", async () => {
+  // BYOK-only / trial buyer edge case: nothing to attach the pack to.
+  const store = new InMemoryWebhookStore(); // no subscription at all
+  const res = await deliver(store, "order_created", orderPayload());
+  assertEquals(res.status, 200);
+  assertEquals(store.topups.length, 0);
+});
+
+Deno.test("top-up for a cancelled/expired subscription → no row (status not spendable)", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "subscription_expired", subPayload({ status: "expired", updated_at: "2026-06-10T00:00:00.000Z" }));
+  await deliver(store, "order_created", orderPayload());
+  assertEquals(store.topups.length, 0);
+});
+
+Deno.test("top-up order with a non-paid status → no row", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload({ status: "pending" }));
+  assertEquals(store.topups.length, 0);
+});
+
+// ===========================================================================
+// order_refunded → top-up revocation (Phase 5 follow-up)
+// ===========================================================================
+function refundPayload(orderId: string, updatedAt = "2026-06-20T00:00:00.000Z") {
+  return {
+    meta: { event_name: "order_refunded" },
+    data: { type: "orders", id: orderId, attributes: { updated_at: updatedAt } },
+  };
+}
+
+Deno.test("refund after PARTIAL spend → remainder revoked, spent portion intact, sub untouched", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload()); // Boost 200
+  store.topups[0].credits_used = 50; // 150 unspent
+
+  await deliver(store, "order_refunded", refundPayload("topup_order_1"));
+  const t = store.topups[0];
+  // Revocation = expiry at the refund moment (the spend/balance paths filter
+  // expires_at > now()): nothing further spendable, counters untouched — the
+  // 50 spent stay spent (no claw-back), the 150 remainder is dead.
+  assertEquals(t.expires_at, NOW_ISO);
+  assertEquals(t.credits_used, 50);
+  assertEquals(t.credits_total, 200);
+  // A top-up refund must NOT expire the SUBSCRIPTION (either/or by order id).
+  assertEquals(store.sub("ls_1")!.status, "active");
+});
+
+Deno.test("refund of a fully-unspent pack → revoked (expired), counters untouched", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload());
+
+  await deliver(store, "order_refunded", refundPayload("topup_order_1"));
+  const t = store.topups[0];
+  assertEquals(t.expires_at, NOW_ISO);
+  assertEquals(t.credits_used, 0);
+  assertEquals(t.credits_total, 200);
+});
+
+Deno.test("refund of an UNKNOWN order id → no-op (no pack touched, no sub expired)", async () => {
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload());
+
+  const res = await deliver(store, "order_refunded", refundPayload("some_other_order"));
+  assertEquals(res.status, 200);
+  assertEquals(store.topups[0].expires_at, "2027-06-15T00:00:00.000Z"); // untouched
+  assertEquals(store.sub("ls_1")!.status, "active"); // order_X path also unmatched
+});
+
+Deno.test("redelivered top-up refund (different updated_at) → already-revoked pack is a no-op", async () => {
+  // A changed updated_at gives a fresh composite event id (recordEvent lets it
+  // through); the expires_at > revokedAt guard returns 0 the second time and the
+  // fall-through subscription path matches nothing.
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload());
+  await deliver(store, "order_refunded", refundPayload("topup_order_1"));
+  const r2 = await deliver(store, "order_refunded", refundPayload("topup_order_1", "2026-06-21T00:00:00.000Z"));
+  assertEquals(r2.status, 200);
+  assertEquals(store.topups[0].expires_at, NOW_ISO); // still the first stamp
+  assertEquals(store.sub("ls_1")!.status, "active"); // fall-through expired nothing
 });
 
 // ===========================================================================

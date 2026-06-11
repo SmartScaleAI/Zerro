@@ -52,12 +52,14 @@ final class LicenseServiceTests: XCTestCase {
         keySlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         instanceSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         lastValidatedSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
+        createdAtSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         clock: @escaping () -> Date = { Date() }
     ) -> LicenseService {
         LicenseService(
             licenseKeySlot: keySlot,
             instanceIDSlot: instanceSlot,
             lastValidatedSlot: lastValidatedSlot,
+            licenseCreatedAtSlot: createdAtSlot,
             transport: transport,
             clock: clock,
             instanceNameProvider: { "TestMac-DEADBEEF" }
@@ -319,6 +321,170 @@ final class LicenseServiceTests: XCTestCase {
         )
         XCTAssertEqual(indeterminate.currentLicenseState().presence, .indeterminate)
         XCTAssertTrue(indeterminate.currentLicenseState().grantsBYOK, "a read failure must fail open to .byok")
+    }
+
+    // MARK: - Update window (E7): created_at decode + persist
+
+    /// 2026-01-15T12:00:00Z, the epoch the fixtures below encode.
+    private static let createdAtEpoch = 1_768_478_400
+
+    func testActivationPersistsCreatedAtAndComputesWindowEnd() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        {
+          "activated": true,
+          "license_key": { "id": 1, "status": "active", "created_at": "2026-01-15T12:00:00.000000Z" },
+          "instance": { "id": "inst_E7" }
+        }
+        """), 200)]
+
+        let createdAtSlot = InMemoryKeychainSlot()
+        let service = makeService(transport: transport, createdAtSlot: createdAtSlot)
+        _ = try await service.activate(licenseKey: "KEY-E7")
+
+        XCTAssertEqual(createdAtSlot.readResult(), .found(String(Self.createdAtEpoch)))
+        let createdAt = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch))
+        XCTAssertEqual(service.updateWindowEnd(), LicenseService.updateWindowEnd(createdAt: createdAt))
+    }
+
+    func testValidateBackfillsCreatedAtForPreE7License() async throws {
+        // A license activated before E7 has no persisted window start; the
+        // next good validation must backfill it without re-activating.
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": true, "license_key": { "status": "active", "created_at": "2026-01-15T12:00:00.000000Z" } }
+        """), 200)]
+
+        let createdAtSlot = InMemoryKeychainSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: InMemoryKeychainSlot("KEY-PRE-E7"),
+            instanceSlot: InMemoryKeychainSlot("inst_PRE"),
+            createdAtSlot: createdAtSlot
+        )
+        XCTAssertNil(service.updateWindowEnd(), "pre-E7 license starts with no window")
+
+        let result = try await service.validate()
+        XCTAssertTrue(result.valid)
+        XCTAssertEqual(createdAtSlot.readResult(), .found(String(Self.createdAtEpoch)))
+        XCTAssertNotNil(service.updateWindowEnd())
+    }
+
+    func testActivationWithNewKeyRestartsWindow() async throws {
+        // Renewal = paste-new-key (F.0): activating a fresh key overwrites
+        // the old window start with the new license's created_at.
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        {
+          "activated": true,
+          "license_key": { "status": "active", "created_at": "2027-03-01T00:00:00.000000Z" },
+          "instance": { "id": "inst_RENEWED" }
+        }
+        """), 200)]
+
+        let oldEpoch = String(Self.createdAtEpoch)
+        let createdAtSlot = InMemoryKeychainSlot(oldEpoch)
+        let service = makeService(transport: transport, createdAtSlot: createdAtSlot)
+        _ = try await service.activate(licenseKey: "KEY-RENEWAL")
+
+        if case .found(let raw) = createdAtSlot.readResult() {
+            XCTAssertNotEqual(raw, oldEpoch, "a renewal key must restart the window")
+        } else {
+            XCTFail("expected a persisted window start after renewal activation")
+        }
+    }
+
+    func testMissingCreatedAtKeepsExistingWindowAndFailsOpenWhenAbsent() async throws {
+        // A response WITHOUT created_at (older shape) must not erase a
+        // previously-persisted window start…
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": true, "license_key": { "status": "active" } }
+        """), 200)]
+        let seeded = InMemoryKeychainSlot(String(Self.createdAtEpoch))
+        let service = makeService(
+            transport: transport,
+            keySlot: InMemoryKeychainSlot("KEY-OLD-SHAPE"),
+            instanceSlot: InMemoryKeychainSlot("inst_OLD"),
+            createdAtSlot: seeded
+        )
+        _ = try await service.validate()
+        XCTAssertEqual(seeded.readResult(), .found(String(Self.createdAtEpoch)))
+
+        // …and with nothing persisted at all, the window reads nil (callers
+        // fail OPEN — updates offered normally).
+        let bare = makeService(transport: StubLicenseTransport())
+        XCTAssertNil(bare.updateWindowEnd())
+    }
+
+    func testParseCreatedAtAcceptsKnownFormatsAndRejectsGarbage() {
+        let expected = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch))
+        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15T12:00:00.000000Z"), expected)
+        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15T12:00:00Z"), expected)
+        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15 12:00:00"), expected)
+        XCTAssertNil(LicenseService.parseCreatedAt(nil))
+        XCTAssertNil(LicenseService.parseCreatedAt(""))
+        XCTAssertNil(LicenseService.parseCreatedAt("not-a-date"))
+    }
+
+    func testUpdateWindowEndIsOneCalendarYear() {
+        let createdAt = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch)) // 2026-01-15
+        let end = LicenseService.updateWindowEnd(createdAt: createdAt)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        XCTAssertEqual(calendar.dateComponents([.year], from: createdAt, to: end).year, 1)
+    }
+
+    func testClearLicenseRemovesCreatedAt() async throws {
+        let createdAtSlot = InMemoryKeychainSlot(String(Self.createdAtEpoch))
+        let service = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I"),
+            createdAtSlot: createdAtSlot
+        )
+        service.clearLicense()
+        XCTAssertEqual(createdAtSlot.readResult(), .absent)
+    }
+
+    // MARK: - Update window (E7): the F.2 trap — validity/generation untouched
+
+    func testOutOfWindowLicenseStillValidatesAndGenerates() async throws {
+        // A license purchased >1 year ago is OUT of its update window — and
+        // that must change NOTHING about validity or generation: validate
+        // still completes `valid:true` (no revocation), the entitlement stays
+        // .byok, and the generation gate stays open. Only the updater reads
+        // the window.
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": true, "license_key": { "status": "active", "created_at": "2024-01-15T12:00:00.000000Z" } }
+        """), 200)]
+
+        let twoYearsAgo = Date(timeIntervalSince1970: 1_705_320_000) // 2024-01-15
+        let createdAtSlot = InMemoryKeychainSlot(String(Int(twoYearsAgo.timeIntervalSince1970)))
+        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
+        let keySlot = InMemoryKeychainSlot("KEY-LAPSED-WINDOW")
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: InMemoryKeychainSlot("inst_LAPSED"),
+            lastValidatedSlot: InMemoryKeychainSlot(oldStamp),
+            createdAtSlot: createdAtSlot
+        )
+
+        // The window has lapsed…
+        let windowEnd = try XCTUnwrap(service.updateWindowEnd())
+        XCTAssertLessThan(windowEnd, Date(), "fixture sanity: window must be in the past")
+
+        // …yet validation is a plain non-revoking success…
+        let store = EntitlementStore(licenseService: service)
+        XCTAssertEqual(store.state, .byok)
+        await store.revalidateLicenseIfNeeded()
+        XCTAssertEqual(keySlot.readResult(), .found("KEY-LAPSED-WINDOW"), "out-of-window must never clear the license")
+        XCTAssertEqual(store.state, .byok)
+
+        // …and the generation gate is untouched.
+        XCTAssertTrue(store.canGenerate)
     }
 
     // MARK: - Deactivate

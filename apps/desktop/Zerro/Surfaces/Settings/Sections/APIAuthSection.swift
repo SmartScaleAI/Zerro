@@ -2,43 +2,58 @@
 //  APIAuthSection.swift
 //  Zerro
 //
-//  Created by Colin Breeding on 5/30/26.
+//  Phase 11, generalized for multi-model 6C — the BYOK pane's API-key
+//  section: ONE row per provider (OpenAI / Gemini / Anthropic), each an
+//  independent masked monospace field (eye toggle) + live verification pill,
+//  each backed by its own Keychain slot. Any subset may be filled — a model
+//  is selectable in the picker only when its provider's key is present
+//  (key-gating, 6C.3).
 //
-//  Phase 11 — API & Authentication section of the redesigned single-pane
-//  Settings layout. Two rows:
-//    1. API Key   — masked monospace field (with eye toggle) + pill
-//                   showing the live verification disposition. The pill
-//                   states drive off `OpenAIClient.validateKey`, the
-//                   same validator the onboarding API-key step uses.
-//    2. Revalidate Key — secondary button that re-runs validation
-//                   against the currently-stored key without requiring
-//                   the user to re-type it.
+//  The OpenAI key is special: transcription (Whisper) stays OpenAI no matter
+//  which chat model is selected, so every BYOK recording needs it — the row
+//  copy says so.
 //
-//  The Keychain entry itself is the single source of truth; the field
-//  loads from it on appear and writes on `.valid` results only — a typo'd
-//  key never overwrites a working one. Inconclusive (network) results
-//  still write through because the user's *intent* is to rotate.
+//  Per-provider Keychain entries are the single source of truth; each field
+//  loads from its slot on appear and writes on `.valid` results only — a
+//  typo'd key never overwrites a working one. Inconclusive (network) results
+//  still write through because the user's *intent* is to rotate. A blanked
+//  field deletes the entry (independent remove).
 //
 
 import SwiftUI
 
 struct APIAuthSection: View {
-    @State private var model = APIKeyFieldModel()
+    @State private var openAIModel = APIKeyFieldModel(provider: .openai)
+    @State private var geminiModel = APIKeyFieldModel(provider: .gemini)
+    @State private var anthropicModel = APIKeyFieldModel(provider: .anthropic)
 
     var body: some View {
-        SettingsSection("API & Authentication") {
-            APIKeyRow(model: model)
+        SettingsSection("API Keys") {
+            APIKeyRow(
+                model: openAIModel,
+                description: "Required \u{2014} transcription (Whisper) always runs on OpenAI, whichever chat model you pick. Stored in macOS Keychain."
+            )
             SettingsRowDivider()
-            RevalidateRow(model: model)
+            APIKeyRow(
+                model: geminiModel,
+                description: "Unlocks the Gemini models in the picker. Stored in macOS Keychain."
+            )
+            SettingsRowDivider()
+            APIKeyRow(
+                model: anthropicModel,
+                description: "Unlocks the Claude models in the picker. Stored in macOS Keychain."
+            )
+            SettingsRowDivider()
+            RevalidateRow(models: [openAIModel, geminiModel, anthropicModel])
         }
     }
 }
 
 // MARK: - Shared model
 
-/// One instance shared by both rows so the Revalidate button can act on
-/// whatever the user has currently typed (or whatever's in Keychain),
-/// and so the pill state updates in lockstep on either path.
+/// One field model PER PROVIDER (multi-model 6C). Owns the provider's
+/// Keychain slot + validator; the row binds to it so the pill updates in
+/// lockstep whether validation was triggered by editing or by Revalidate.
 @MainActor
 @Observable
 final class APIKeyFieldModel {
@@ -49,14 +64,27 @@ final class APIKeyFieldModel {
         case invalid
     }
 
+    let provider: ModelProvider
     var rawKey: String = ""
     var isRevealed: Bool = false
     var state: State = .unverified
 
-    @ObservationIgnored private let keychain = KeychainStore.openAIAPIKey
+    @ObservationIgnored private let keychain: KeychainSlot
+    /// Injectable so tests can drive the pill without network.
+    @ObservationIgnored var validator: (String) async -> OpenAIClient.KeyValidationResult
 
-    init() {
-        let stored = keychain.read() ?? ""
+    init(provider: ModelProvider) {
+        self.provider = provider
+        let slot = ProviderKeys.slot(for: provider)
+        self.keychain = slot
+        self.validator = { key in
+            switch provider {
+            case .openai: return await OpenAIClient.validateKey(key)
+            case .gemini: return await GeminiPromptGenerationService.validateKey(key)
+            case .anthropic: return await AnthropicPromptGenerationService.validateKey(key)
+            }
+        }
+        let stored = slot.read() ?? ""
         rawKey = stored
         // A key already in Keychain came from a prior successful
         // validation — render `.verified` so the pill doesn't ask the
@@ -77,8 +105,8 @@ final class APIKeyFieldModel {
     }
 
     /// Save flow used when the user blurs the field or hits return.
-    /// Empty input deletes the Keychain entry; non-empty triggers
-    /// validation against the provider.
+    /// Empty input deletes the Keychain entry (the independent "remove");
+    /// non-empty triggers validation against the provider.
     func saveAndValidate() {
         let trimmed = trimmedKey
         if trimmed.isEmpty {
@@ -112,7 +140,7 @@ final class APIKeyFieldModel {
     private func run(validating candidate: String, writeOnValid: Bool, writeOnInconclusive: Bool) {
         state = .checking
         Task { @MainActor in
-            let result = await OpenAIClient.validateKey(candidate)
+            let result = await validator(candidate)
             guard state == .checking else { return }
             switch result {
             case .valid:
@@ -122,30 +150,25 @@ final class APIKeyFieldModel {
                 state = .invalid
             case .inconclusive:
                 if writeOnInconclusive { keychain.write(candidate) }
-                // We don't have a separate "unverified-saved" pill in
-                // the redesigned single-pane layout; the spec specifies
-                // only Verified / Invalid / Checking / Unverified.
-                // Inconclusive lands on .unverified so the user knows
-                // re-checking is worthwhile.
+                // No separate "unverified-saved" pill — inconclusive lands
+                // on .unverified so the user knows re-checking is worthwhile.
                 state = .unverified
             }
         }
     }
 }
 
-// MARK: - API Key row
+// MARK: - Provider key row
 
 private struct APIKeyRow: View {
     @Bindable var model: APIKeyFieldModel
+    let description: String
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        // Round 4: 18pt vertical padding (vs. the standard 14pt) lets
-        // the field + pill + 2-line description breathe without the
-        // pill feeling squeezed against the row's hairline divider.
         SettingsRow(
-            label: "API Key",
-            description: "Stored in macOS Keychain \u{2014} never sent to our servers.",
+            label: "\(model.provider.displayName) API Key",
+            description: description,
             verticalPadding: RowMetrics.verticalPaddingTall
         ) {
             HStack(spacing: VFSpacing.sm) {
@@ -155,17 +178,21 @@ private struct APIKeyRow: View {
         }
     }
 
+    private var placeholder: String {
+        switch model.provider {
+        case .openai: return "sk-\u{2026}"
+        case .gemini: return "AIza\u{2026}"
+        case .anthropic: return "sk-ant-\u{2026}"
+        }
+    }
+
     private var fieldCapsule: some View {
-        // Round 4: SF Mono 13pt, 10pt corner radius. Fixed height
-        // (36pt) keeps the capsule from inheriting the row's
-        // alignment-driven height and matches the pill's height for
-        // clean horizontal alignment.
         HStack(spacing: VFSpacing.sm) {
             Group {
                 if model.isRevealed {
-                    TextField("sk-\u{2026}", text: $model.rawKey)
+                    TextField(placeholder, text: $model.rawKey)
                 } else {
-                    SecureField("sk-\u{2026}", text: $model.rawKey)
+                    SecureField(placeholder, text: $model.rawKey)
                 }
             }
             .textFieldStyle(.plain)
@@ -217,16 +244,18 @@ private struct APIKeyRow: View {
 // MARK: - Revalidate row
 
 private struct RevalidateRow: View {
-    @Bindable var model: APIKeyFieldModel
+    let models: [APIKeyFieldModel]
 
     var body: some View {
         SettingsRow(
-            label: "Revalidate Key",
-            description: "Re-check your key if requests start failing or you rotated it with your provider."
+            label: "Revalidate Keys",
+            description: "Re-check your stored keys if requests start failing or you rotated one with a provider."
         ) {
-            Button("Revalidate") { model.revalidate() }
-                .buttonStyle(SettingsSecondaryButtonStyle())
-                .disabled(model.state == .checking)
+            Button("Revalidate") {
+                for model in models { model.revalidate() }
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
+            .disabled(models.contains { $0.state == .checking })
         }
     }
 }

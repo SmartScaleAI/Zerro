@@ -247,6 +247,11 @@ private struct PillHostView: View {
             generatedPrompt: appState.generatedPrompt,
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
+            // Multi-model 6B: the "−N credits · M left" toast, formatted once
+            // here so PillView stays a pure renderer of a ready-made string.
+            chargeLine: appState.lastGenerationCharge.map {
+                CreditDisplay.chargeLine(charged: $0.charged, remaining: $0.remaining)
+            },
             audioLevels: appState.audioLevels
         )
         .scaleEffect(flashScale)

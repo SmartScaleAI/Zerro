@@ -69,6 +69,23 @@ enum ManagedFixtures {
         status: String = "active",
         creditsRemaining: Int = 100,
         creditsLimit: Int = 100,
+        resetDate: String = "2026-07-01T00:00:00.000Z",
+        planCreditsUsed: Int = 0,
+        planCreditsLimit: Int = 100,
+        topupCreditsRemaining: Int = 0
+    ) -> String {
+        """
+        {"tier":"\(tier)","status":"\(status)","credits_remaining":\(creditsRemaining),"credits_limit":\(creditsLimit),"reset_date":"\(resetDate)","plan_credits_used":\(planCreditsUsed),"plan_credits_limit":\(planCreditsLimit),"topup_credits_remaining":\(topupCreditsRemaining)}
+        """
+    }
+
+    /// A pre-multi-model entitlement body — no plan-vs-top-up breakdown
+    /// fields. The client must still decode it (older backend / cache).
+    static func entitlementJSONLegacy(
+        tier: String = "pro",
+        status: String = "active",
+        creditsRemaining: Int = 100,
+        creditsLimit: Int = 100,
         resetDate: String = "2026-07-01T00:00:00.000Z"
     ) -> String {
         """
@@ -76,8 +93,20 @@ enum ManagedFixtures {
         """
     }
 
-    /// A `/generate` success body.
+    /// A `/generate` success body (post-D2: carries `credits_charged`).
     static func generateJSON(
+        prompt: String = "Do the thing.",
+        creditsRemaining: Int = 99,
+        creditsCharged: Int = 4
+    ) -> String {
+        """
+        {"prompt":"\(prompt)","usage":{"input_tokens":1200,"output_tokens":300,"model":"gpt-4o"},"credits_remaining":\(creditsRemaining),"credits_charged":\(creditsCharged)}
+        """
+    }
+
+    /// A pre-D2 `/generate` body — no `credits_charged`. The client must
+    /// still parse it (older backend during a rollout window).
+    static func generateJSONPreD2(
         prompt: String = "Do the thing.",
         creditsRemaining: Int = 99
     ) -> String {

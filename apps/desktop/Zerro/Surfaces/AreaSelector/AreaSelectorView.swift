@@ -51,6 +51,7 @@ struct AreaSelectorView: View {
                 }
                 instructionPill(in: bounds)
                 recordButton(in: bounds)
+                modelMenu(in: bounds)
                 micMenu(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
@@ -274,6 +275,9 @@ struct AreaSelectorView: View {
     static let toolbarHeight: CGFloat = 40
     static let recordButtonWidth: CGFloat = 116
     static let micChipWidth: CGFloat = 168
+    /// Multi-model: the per-recording model dropdown chip, between the
+    /// mode toggle and the mic chip.
+    static let modelChipWidth: CGFloat = 168
     /// Phase 17: the Instruct/Explain switch, leftmost in the cluster.
     /// Two equal segments share this width; `modeSegmentFrame` splits it.
     static let modeToggleWidth: CGFloat = 150
@@ -285,9 +289,10 @@ struct AreaSelectorView: View {
     /// for a given selection. Placed `toolbarGap` below the selection,
     /// flipped above if there isn't room, and clamped so it never spills
     /// past the overlay bounds. Cluster order, left → right: mode toggle,
-    /// mic chip, Record button.
+    /// model chip, mic chip, Record button.
     static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
         let width = modeToggleWidth + toolbarItemGap
+            + modelChipWidth + toolbarItemGap
             + micChipWidth + toolbarItemGap + recordButtonWidth
         let size = CGSize(width: width, height: toolbarHeight)
 
@@ -346,11 +351,20 @@ struct AreaSelectorView: View {
         return nil
     }
 
-    /// Mic-picker chip: the middle segment of the toolbar, after the
-    /// mode toggle.
+    /// Model-picker chip: second segment of the toolbar, between the
+    /// mode toggle and the mic chip (multi-model per-recording override).
+    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds)
+        let x = t.minX + modeToggleWidth + toolbarItemGap
+        return CGRect(x: x, y: t.minY, width: modelChipWidth, height: t.height)
+    }
+
+    /// Mic-picker chip: third segment of the toolbar, after the model
+    /// chip.
     static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
         let t = toolbarFrame(forSelection: rect, in: bounds)
         let x = t.minX + modeToggleWidth + toolbarItemGap
+            + modelChipWidth + toolbarItemGap
         return CGRect(x: x, y: t.minY, width: micChipWidth, height: t.height)
     }
 
@@ -403,6 +417,114 @@ struct AreaSelectorView: View {
         return idx
     }
 
+    // MARK: - Model dropdown geometry
+    //
+    // Mirrors the mic dropdown: frame + per-row hit-test in static
+    // helpers so the controller's monitor and this view share the exact
+    // same rects. Wider than its chip so the per-row credit detail
+    // ("4 cr · ~62 left") fits without truncating model names.
+
+    static let modelMenuRowHeight: CGFloat = 30
+    static let modelMenuWidth: CGFloat = 248
+    private static let modelMenuPadding: CGFloat = 6
+    private static let modelMenuGap: CGFloat = 6
+
+    /// View-local frame of the open model dropdown, anchored at the model
+    /// chip's leading edge (flipped above if there isn't room below,
+    /// clamped inside the overlay horizontally).
+    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int) -> CGRect {
+        let chip = modelChipFrame(forSelection: rect, in: bounds)
+        let height = CGFloat(itemCount) * modelMenuRowHeight + modelMenuPadding * 2
+        let width = modelMenuWidth
+
+        var originY = chip.maxY + modelMenuGap
+        if originY + height + toolbarMargin > bounds.height {
+            originY = chip.minY - modelMenuGap - height
+        }
+        if originY < toolbarMargin { originY = toolbarMargin }
+
+        var originX = chip.minX
+        originX = min(max(originX, toolbarMargin), bounds.width - width - toolbarMargin)
+
+        return CGRect(x: originX, y: originY, width: width, height: height)
+    }
+
+    /// Index of the model row under `point`, or nil outside the panel.
+    static func modelMenuRowIndex(
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        itemCount: Int
+    ) -> Int? {
+        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount)
+        guard frame.contains(point) else { return nil }
+        let localY = point.y - frame.minY - modelMenuPadding
+        guard localY >= 0 else { return nil }
+        let idx = Int(localY / modelMenuRowHeight)
+        guard idx >= 0, idx < itemCount else { return nil }
+        return idx
+    }
+
+    @ViewBuilder
+    private func modelMenu(in bounds: CGSize) -> some View {
+        if state.isModelMenuOpen, let rect = state.confirmableSelectionRect {
+            let items = state.models
+            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count)
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    HStack(spacing: VFSpacing.xs) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.vfTextPrimary)
+                            .opacity(item.id == state.selectedModelID ? 1 : 0)
+                            .frame(width: 12)
+                        Text(item.name)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.vfTextPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if item.recommended {
+                            // Compact dot-star stand-in for the picker's
+                            // "Recommended" capsule — the row also carries
+                            // a price column, so the full badge won't fit.
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(Color.vfBrandAccent)
+                        }
+                        Spacer(minLength: VFSpacing.xs)
+                        if let detail = item.detail {
+                            Text(detail)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.vfTextSecondary)
+                                .fixedSize()
+                        }
+                    }
+                    .padding(.horizontal, VFSpacing.sm)
+                    .frame(height: Self.modelMenuRowHeight)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(state.highlightedModelIndex == index && !item.gated
+                                  ? Color.primary.opacity(0.12)
+                                  : Color.clear)
+                    )
+                    .opacity(item.gated ? 0.45 : 1)
+                }
+            }
+            .padding(.vertical, Self.modelMenuPadding)
+            .frame(width: frame.width, height: frame.height)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.regularMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.vfHairline, lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+            .position(x: frame.midX, y: frame.midY)
+        }
+    }
+
     @ViewBuilder
     private func micMenu(in bounds: CGSize) -> some View {
         if state.isMicMenuOpen, let rect = state.confirmableSelectionRect {
@@ -452,12 +574,17 @@ struct AreaSelectorView: View {
     private func recordButton(in bounds: CGSize) -> some View {
         if let rect = state.confirmableSelectionRect {
             let modeFrame = Self.modeToggleFrame(forSelection: rect, in: bounds)
+            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds)
             let micFrame = Self.micChipFrame(forSelection: rect, in: bounds)
             let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds)
 
             modeToggle
                 .frame(width: modeFrame.width, height: modeFrame.height)
                 .position(x: modeFrame.midX, y: modeFrame.midY)
+
+            modelChip
+                .frame(width: modelFrame.width, height: modelFrame.height)
+                .position(x: modelFrame.midX, y: modelFrame.midY)
 
             micChip
                 .frame(width: micFrame.width, height: micFrame.height)
@@ -502,6 +629,39 @@ struct AreaSelectorView: View {
                           : (isHovered ? Color.primary.opacity(0.10) : Color.clear))
                     .padding(2)
             )
+    }
+
+    /// Model-picker chip — same chrome as the mic chip so the toolbar
+    /// reads as one row of controls. Shows the model THIS recording will
+    /// use; clicking opens the in-tree dropdown (see modelMenu).
+    private var modelChip: some View {
+        HStack(spacing: VFSpacing.xs) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+            Text(state.selectedModelName)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.vfTextTertiary)
+                .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            Capsule().fill(.regularMaterial)
+        )
+        .overlay(
+            Capsule().strokeBorder(
+                state.isModelChipHovered ? Color.vfTextSecondary : Color.vfHairline,
+                lineWidth: state.isModelChipHovered ? 1 : 0.5
+            )
+        )
+        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
     }
 
     private var micChip: some View {
@@ -684,10 +844,59 @@ private struct PulseLoginBackdrop: View {
     .frame(width: 640, height: 480)
 }
 
+/// Settled-selection variant: the drag has ENDED, so the full floating
+/// toolbar renders — mode toggle, model chip, mic chip, Record — the
+/// state to eyeball after any frame-math change (the controls must not
+/// overlap and the cluster must stay centered under the selection).
+#Preview("Settled — toolbar") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: makeSettledPreviewState())
+    }
+    .frame(width: 1000, height: 640)
+}
+
+/// Settled + the model dropdown open.
+#Preview("Settled — model menu open") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.toggleModelMenu()
+            return s
+        }())
+    }
+    .frame(width: 1000, height: 640)
+}
+
 @MainActor
 private func makePreviewState() -> AreaSelectorState {
     let s = AreaSelectorState()
     s.beginDrag(at: CGPoint(x: 80, y: 130))
     s.updateDrag(to: CGPoint(x: 560, y: 370))
+    return s
+}
+
+@MainActor
+private func makeSettledPreviewState() -> AreaSelectorState {
+    let s = AreaSelectorState()
+    s.beginDrag(at: CGPoint(x: 160, y: 110))
+    s.updateDrag(to: CGPoint(x: 840, y: 420))
+    s.endDrag(at: CGPoint(x: 840, y: 420))
+    s.setMicrophones(
+        [.init(id: "mic-1", name: "MacBook Pro Microphone")],
+        selectedID: "mic-1"
+    )
+    s.setModels(
+        [
+            .init(id: "gpt-5.4-mini", name: "GPT-5.4 mini", detail: "2 cr \u{00B7} ~124 left", recommended: false, gated: false),
+            .init(id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", detail: "4 cr \u{00B7} ~62 left", recommended: true, gated: false),
+            .init(id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", detail: "5 cr \u{00B7} ~49 left", recommended: false, gated: false),
+            .init(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", detail: "7 cr \u{00B7} ~35 left", recommended: false, gated: false),
+            .init(id: "claude-opus-4-7", name: "Claude Opus 4.7", detail: "10 cr \u{00B7} ~24 left", recommended: false, gated: false),
+            .init(id: "gpt-5.5", name: "GPT-5.5", detail: "11 cr \u{00B7} ~22 left", recommended: false, gated: false),
+        ],
+        selectedID: "gemini-3.5-flash"
+    )
     return s
 }

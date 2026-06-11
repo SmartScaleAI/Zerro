@@ -20,6 +20,7 @@
 
 import type { ClickInput, FrameInput } from "./interleave.ts";
 import type { OutputMode } from "./prompt.ts";
+import { ALLOWED_MODELS, DEFAULT_MODEL_ID } from "./models.ts";
 import {
   ALLOWED_AUDIO_MIME,
   ALLOWED_FRAME_MIME,
@@ -33,6 +34,11 @@ import {
 
 export interface ParsedRequest {
   mode: OutputMode;
+  /** Phase 4 — the validated generation model (always resolved: an absent wire
+   *  field becomes DEFAULT_MODEL_ID). Selects provider + credit price ONLY —
+   *  it never influences the (server-owned) system prompt; `mode` stays the
+   *  single prompt-affecting input. */
+  model: string;
   audio: { bytes: Uint8Array; mime: string; filename: string };
   frames: FrameInput[];
   /** Phase 4 — resolved clicks (already redacted client-side; count + label
@@ -76,6 +82,19 @@ export function validateBody(body: unknown): ValidationResult {
   // mode — the ONLY field that influences the (server-owned) system prompt.
   const mode = b.mode;
   if (mode !== "instruct" && mode !== "explain") return reject(400, "invalid_mode");
+
+  // model (Phase 4) — OPTIONAL. Absent → the registry's recommended default
+  // (backward compatible: a pre-multi-model app sends no model). Present but
+  // not an ENABLED registry entry → 400 before any provider call or credit
+  // work (ALLOWED_MODELS is also the kill switch). No tier gating — every
+  // identity sees all models (Appendix C #6).
+  let model: string = DEFAULT_MODEL_ID;
+  if (b.model !== undefined && b.model !== null) {
+    if (typeof b.model !== "string" || !ALLOWED_MODELS.has(b.model)) {
+      return reject(400, "invalid_model");
+    }
+    model = b.model;
+  }
 
   // audio.
   const audio = b.audio as Record<string, unknown> | undefined;
@@ -167,6 +186,6 @@ export function validateBody(body: unknown): ValidationResult {
 
   return {
     ok: true,
-    value: { mode, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
+    value: { mode, model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
   };
 }

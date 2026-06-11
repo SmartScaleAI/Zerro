@@ -23,27 +23,27 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "Is there a free trial?",
     answer:
-      "Yes — everyone starts with 15 free generations. No credit card, no API key, and no time limit, so there's no clock to race. The free generations run on the Managed pipeline, so you get the zero-setup experience before deciding on a plan.",
+      "Yes — everyone starts with 40 free credits. No credit card, no API key, and no time limit, so there's no clock to race. The free credits run on the Managed pipeline, so you get the zero-setup experience before deciding on a plan. Credits cover your usage; how many a single generation costs depends on the model you pick.",
   },
   {
     question: "How much does Zerro cost?",
     answer:
-      "Everyone starts free with 15 generations. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, comes in two tiers: Starter at $12/month (or $120/year) for about 100 recordings a month, and Pro at $29/month (or $290/year) for about 300 recordings a month. Or BYOK, a one-time $39 purchase where you bring your own OpenAI key and pay once — no subscription.",
+      "Everyone starts free with 40 credits. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, is $15/month — or $12/month billed yearly — and gives you 300 credits a month across 6 models (Claude, GPT & Gemini), with top-ups available anytime if you need more. Credits cover your usage, and the cost per generation varies by model — premium models like Claude Opus use more credits per generation than a fast model like Gemini Flash. Or BYOK, a one-time $69 purchase where you bring your own OpenAI, Gemini & Anthropic keys and pay once — no subscription. BYOK includes 1 year of updates, and your installed version keeps working after that.",
   },
   {
     question: "Do I need my own API keys?",
     answer:
-      "Only if you want to. On the Managed plans (Starter and Pro), Zerro handles the AI for you — no keys, no setup. On the BYOK plan, you add your own OpenAI key, stored securely in the macOS Keychain, and pay once with no subscription.",
+      "Only if you want to. On the Managed plan, Zerro handles the AI for you — no keys, no setup. On the BYOK plan, you add your own OpenAI, Gemini & Anthropic keys, stored securely in the macOS Keychain, and pay once with no subscription.",
   },
   {
     question: "Is my data private?",
     answer:
-      "Audio isolation and frame downsampling always run locally on your Mac before anything leaves it. On the Managed plans (Starter and Pro), your recording is sent to Zerro's server to generate the prompt. On the BYOK plan, Zerro uses your own key and your recordings never leave your Mac — there are no Zerro servers handling them.",
+      "Audio isolation and frame downsampling always run locally on your Mac before anything leaves it. On the Managed plan, your recording is sent to Zerro's server to generate the prompt. On the BYOK plan, Zerro uses your own keys and your recordings never leave your Mac — there are no Zerro servers handling them.",
   },
   {
     question: "Does Zerro need an account?",
     answer:
-      "The BYOK plan requires no account and no subscription — you bring your own OpenAI key and pay once. The Managed plans (Starter and Pro) are subscriptions, so they involve an account and a monthly or yearly bill.",
+      "The BYOK plan requires no account and no subscription — you bring your own OpenAI, Gemini & Anthropic keys and pay once. The Managed plan is a subscription, so it involves an account and a monthly or yearly bill.",
   },
   {
     question: "How long can a recording be?",

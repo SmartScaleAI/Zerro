@@ -165,7 +165,8 @@ Deno.test("verify: correct code creates a grant ONCE and mints a trial token", a
   const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
-  assertEquals(json.trial_credits_remaining, 15);
+  assertEquals(json.trial_credits_remaining, 40); // TRIAL_CREDITS default
+  assertEquals(json.trial_credits_limit, 40); // E4: grant total for the meter bar
   assert(typeof json.token === "string");
 
   // The token is a valid TRIAL token whose sub is the grant id.
@@ -186,15 +187,16 @@ Deno.test("verify: a SECOND verify for the same email does not double-grant / re
   // First verify → grant created, then spend a credit to simulate usage.
   const code1 = await sendAndGetCode(store, email, "a@b.com");
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code1 }), deps(store, email));
-  store.grants.get("a@b.com")!.used = 4; // 11 remaining
+  store.grants.get("a@b.com")!.used = 4; // 36 remaining
 
   // Re-request + re-verify (e.g. after a reinstall lost the token).
   const code2 = await sendAndGetCode(store, email, "a@b.com");
   const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code2 }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
-  // Same grant, credits NOT reset (11 left, not 15).
-  assertEquals(json.trial_credits_remaining, 11);
+  // Same grant, credits NOT reset (36 left, not 40).
+  assertEquals(json.trial_credits_remaining, 36);
+  assertEquals(json.trial_credits_limit, 40); // E4: limit rides along unchanged
   assertEquals(store.grants.size, 1);
 });
 
@@ -258,14 +260,15 @@ Deno.test("resume: verified email re-mints a token with the persisted balance, n
   // Establish a verified grant, then spend some credits.
   const code = await sendAndGetCode(store, email, "a@b.com");
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
-  store.grants.get("a@b.com")!.used = 6; // 9 remaining
+  store.grants.get("a@b.com")!.used = 6; // 34 remaining
   const sentBefore = email.sent.length;
 
   const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
   assert(typeof json.token === "string");
-  assertEquals(json.trial_credits_remaining, 9); // persisted balance, NOT reset to 15
+  assertEquals(json.trial_credits_remaining, 34); // persisted balance, NOT reset to 40
+  assertEquals(json.trial_credits_limit, 40); // E4: the PERSISTED grant total
   assertValidFutureExpiry(json.expires_at);
   // No email sent and no new grant created — resume only reads the grant.
   assertEquals(email.sent.length, sentBefore);

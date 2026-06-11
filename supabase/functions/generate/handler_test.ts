@@ -11,6 +11,8 @@ import {
   type TimelineBlock,
 } from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
+import { creditCostForModel, estimatedCostUsd } from "./cost.ts";
+import { MODEL_REGISTRY } from "./models.ts";
 import type { BillingStore, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
 const SECRET = "test_session_jwt_secret";
@@ -26,6 +28,7 @@ interface TrialGrant {
 class InMemoryStore implements BillingStore {
   subs = new Map<string, SubRow>();
   used = new Map<string, number>(); // subId → credits_used (latest period)
+  topup = new Map<string, number>(); // subId → remaining non-expired top-up credits
   slots = new Set<string>();
   log: GenerationLogRow[] = [];
   rateOk = true;
@@ -45,6 +48,10 @@ class InMemoryStore implements BillingStore {
     this.used.set(sub.id, usedCredits);
   }
 
+  seedTopup(subId: string, credits: number) {
+    this.topup.set(subId, credits);
+  }
+
   seedTrial(id: string, grant: Partial<TrialGrant> = {}) {
     this.trialGrants.set(id, { verified: true, limit: 15, used: 0, ...grant });
   }
@@ -53,17 +60,26 @@ class InMemoryStore implements BillingStore {
     return Promise.resolve(this.subs.get(id) ?? null);
   }
   creditsRemaining(subId: string, limit: number) {
+    // COMBINED balance (Phase 4): plan remaining + non-expired top-up, the same
+    // definition the 2-arg consume_credit spends against.
     const used = this.used.get(subId) ?? limit;
-    return Promise.resolve(Math.max(0, limit - used));
+    const plan = Math.max(0, limit - used);
+    return Promise.resolve(plan + (this.topup.get(subId) ?? 0));
   }
-  consumeCredit(subId: string) {
+  consumeCredit(subId: string, credits: number) {
+    // Mirrors the 2-arg consume_credit RPC: all-or-nothing, plan bucket first,
+    // remainder from top-ups, returns the COMBINED remaining after the spend.
     if (this.forceConsumeNull) return Promise.resolve(null);
     const sub = this.subs.get(subId);
     if (!sub || (sub.status !== "active" && sub.status !== "past_due")) return Promise.resolve(null);
     const used = this.used.get(subId) ?? sub.credits_limit;
-    if (used >= sub.credits_limit) return Promise.resolve(null);
-    this.used.set(subId, used + 1);
-    return Promise.resolve(sub.credits_limit - (used + 1));
+    const planAvail = Math.max(0, sub.credits_limit - used);
+    const topupAvail = this.topup.get(subId) ?? 0;
+    if (planAvail + topupAvail < credits) return Promise.resolve(null); // nothing spent
+    const planSpend = Math.min(credits, planAvail);
+    this.used.set(subId, used + planSpend);
+    this.topup.set(subId, topupAvail - (credits - planSpend));
+    return Promise.resolve(planAvail + topupAvail - credits);
   }
   acquireSlot(subId: string) {
     if (this.slots.has(subId)) return Promise.resolve(false);
@@ -106,11 +122,12 @@ class InMemoryStore implements BillingStore {
     const g = this.trialGrants.get(id);
     return Promise.resolve(g ? Math.max(0, g.limit - g.used) : 0);
   }
-  consumeTrialCredit(id: string) {
+  consumeTrialCredit(id: string, credits: number) {
+    // Mirrors the 2-arg consume_trial_credit RPC: all-or-nothing single bucket.
     if (this.forceTrialConsumeNull) return Promise.resolve(null);
     const g = this.trialGrants.get(id);
-    if (!g || !g.verified || g.used >= g.limit) return Promise.resolve(null);
-    g.used += 1;
+    if (!g || !g.verified || g.used + credits > g.limit) return Promise.resolve(null);
+    g.used += credits;
     return Promise.resolve(g.limit - g.used);
   }
   acquireTrialSlot(id: string) {
@@ -126,7 +143,8 @@ class InMemoryStore implements BillingStore {
 
 // ---- Stub provider transport (no network, no money) -------------------------
 // One stub satisfies BOTH SttClient and ChatClient — it's injected as
-// { stt: stub, chat: stub }, mirroring the single-vendor (OpenAI) deployment.
+// { stt: stub, makeChat: () => stub }, mirroring the single-vendor (OpenAI)
+// deployment (F2: deps carry a chat-client FACTORY, not a prebuilt client).
 class StubProvider implements SttClient, ChatClient {
   transcribeCalls = 0;
   chatCalls = 0;
@@ -135,6 +153,12 @@ class StubProvider implements SttClient, ChatClient {
   failChat: ProviderError | null = null;
   hang = false;
   private hangResolve: (() => void) | null = null;
+  // Phase 4: every makeChat() construction is recorded so tests can assert the
+  // VALIDATED per-request provider+model reached the factory.
+  makeChatCalls: { provider: string; model: string }[] = [];
+  // Configurable usage so the circuit-breaker (cost-driven) path is testable.
+  chatInputTokens = 120;
+  chatOutputTokens = 60;
 
   async transcribe(_audio: AudioInput) {
     this.transcribeCalls++;
@@ -157,8 +181,8 @@ class StubProvider implements SttClient, ChatClient {
     return Promise.resolve({
       provider: "openai",
       content: "GENERATED PROMPT",
-      inputTokens: 120,
-      outputTokens: 60,
+      inputTokens: this.chatInputTokens,
+      outputTokens: this.chatOutputTokens,
       model: "gpt-4o",
     });
   }
@@ -211,7 +235,16 @@ function makeReq(token: string | null, body: unknown, idemKey?: string) {
 }
 
 function deps(store: InMemoryStore, provider: StubProvider): GenerateDeps {
-  return { store, stt: provider, chat: provider, jwtSecret: SECRET, nowSeconds: NOW + 1 };
+  return {
+    store,
+    stt: provider,
+    makeChat: (chatProvider, model) => {
+      provider.makeChatCalls.push({ provider: chatProvider, model });
+      return provider;
+    },
+    jwtSecret: SECRET,
+    nowSeconds: NOW + 1,
+  };
 }
 
 function activeStore(usedCredits = 0): InMemoryStore {
@@ -221,7 +254,7 @@ function activeStore(usedCredits = 0): InMemoryStore {
 }
 
 // ---- happy path -------------------------------------------------------------
-Deno.test("happy path: charges exactly one credit, logs cost (no content), returns prompt", async () => {
+Deno.test("happy path: model absent → default model, charges its fixed price, logs cost (no content)", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
@@ -229,27 +262,35 @@ Deno.test("happy path: charges exactly one credit, logs cost (no content), retur
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(json.prompt, "GENERATED PROMPT");
-  assertEquals(json.credits_remaining, 99); // decremented exactly once (100→99)
+  // No `model` in the body → the registry's recommended default
+  // (gemini-3.5-flash, 4 credits): charged exactly once (100→96).
+  assertEquals(json.credits_remaining, 96);
+  assertEquals(json.credits_charged, 4); // D2: the exact spend, stated explicitly
   assertEquals(json.usage.input_tokens, 120);
   assertEquals(json.usage.output_tokens, 60);
 
-  // exactly one OpenAI round-trip of each.
+  // The chat client was built for the DEFAULT model's provider.
+  assertEquals(openai.makeChatCalls, [{ provider: "gemini", model: "gemini-3.5-flash" }]);
+
+  // exactly one provider round-trip of each.
   assertEquals(openai.transcribeCalls, 1);
   assertEquals(openai.chatCalls, 1);
 
-  // one generation_log row, success, tokens + cost present, slot released.
+  // one generation_log row, success, tokens + cost + model attribution, slot released.
   assertEquals(store.log.length, 1);
   const row = store.log[0];
   assertEquals(row.success, true);
   assertEquals(row.tokensIn, 120);
   assertEquals(row.tokensOut, 60);
+  assertEquals(row.model, "gemini-3.5-flash");
+  assertEquals(row.provider, "gemini");
   assert(row.estCostUsd !== null && row.estCostUsd > 0);
   assertEquals(store.slots.size, 0);
 
-  // NO CONTENT LEAKAGE: the logged row carries only token/cost/success fields.
+  // NO CONTENT LEAKAGE: token/cost/success + non-content model attribution only.
   assertEquals(
     Object.keys(row).sort(),
-    ["estCostUsd", "subscriptionId", "success", "tokensIn", "tokensOut"],
+    ["estCostUsd", "model", "provider", "subscriptionId", "success", "tokensIn", "tokensOut"],
   );
 });
 
@@ -265,8 +306,8 @@ Deno.test("has_speech:false skips STT (no transcribe, empty segments) but still 
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(json.prompt, "GENERATED PROMPT");
-  // Credit path is byte-for-byte unchanged: exactly one credit charged.
-  assertEquals(json.credits_remaining, 99);
+  // Credit path unchanged by the gate: exactly one default-model charge (4).
+  assertEquals(json.credits_remaining, 96);
 
   // Whisper was NEVER called; chat still ran exactly once.
   assertEquals(openai.transcribeCalls, 0);
@@ -447,7 +488,7 @@ Deno.test("past_due still generates on remaining credits", async () => {
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 200);
   const json = await res.json();
-  assertEquals(json.credits_remaining, 59); // 100-40 = 60 available → 59 after spend
+  assertEquals(json.credits_remaining, 56); // 100-40 = 60 available → 56 after the 4-credit spend
   assertEquals(openai.chatCalls, 1);
 });
 
@@ -457,23 +498,27 @@ Deno.test("same Idempotency-Key replays the cached result and charges exactly on
   const openai = new StubProvider();
   const KEY = "rec-uuid-1";
 
-  // First attempt: charges normally (100→99) and caches the result.
+  // First attempt: charges the default model's 4 credits (100→96) and caches.
   const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
   assertEquals(first.status, 200);
   const firstJson = await first.json();
-  assertEquals(firstJson.credits_remaining, 99);
+  assertEquals(firstJson.credits_remaining, 96);
+  assertEquals(firstJson.credits_charged, 4);
 
   // The response was "lost"; the client retries the SAME recording (same key).
   const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
   assertEquals(retry.status, 200);
   const retryJson = await retry.json();
 
-  // Replayed verbatim — same prompt, same (already-charged) balance.
+  // Replayed verbatim — same prompt, same (already-charged) balance, and the
+  // SAME credits_charged (D2): the retry charged nothing new, but the app's
+  // toast must show what this recording cost.
   assertEquals(retryJson.prompt, firstJson.prompt);
-  assertEquals(retryJson.credits_remaining, 99);
+  assertEquals(retryJson.credits_remaining, 96);
+  assertEquals(retryJson.credits_charged, 4);
 
-  // Exactly ONE decrement total, and the retry did NO OpenAI work.
-  assertEquals(store.used.get("sub-1"), 1);
+  // Exactly ONE variable charge total, and the retry did NO provider work.
+  assertEquals(store.used.get("sub-1"), 4);
   assertEquals(openai.transcribeCalls, 1);
   assertEquals(openai.chatCalls, 1);
   // One generation_log row (the original); the replay isn't a fresh generation.
@@ -482,9 +527,9 @@ Deno.test("same Idempotency-Key replays the cached result and charges exactly on
 });
 
 Deno.test("replay returns the cached result even after the first charge zeroed the balance", async () => {
-  // remaining == 1: the first charge brings it to 0. A retry must replay the
-  // cached result, NOT 402 — the cache check sits before the credit gate.
-  const store = activeStore(99); // limit 100, used 99 → 1 remaining
+  // remaining == the model price: the first charge brings it to 0. A retry must
+  // replay the cached result, NOT 402 — the cache check sits before the credit gate.
+  const store = activeStore(96); // limit 100, used 96 → exactly 4 remaining (default price)
   const openai = new StubProvider();
   const KEY = "rec-uuid-last-credit";
 
@@ -499,6 +544,25 @@ Deno.test("replay returns the cached result even after the first charge zeroed t
   assertEquals(openai.chatCalls, 1); // replay did no work
 });
 
+Deno.test("uncharged-race result is cached with credits_charged 0 and replayed as 0", async () => {
+  // The circuit-breaker/race path returns (and caches) an UNCHARGED result; a
+  // retry must replay credits_charged: 0, not the model's price.
+  const store = activeStore(0);
+  store.forceConsumeNull = true;
+  const openai = new StubProvider();
+  const KEY = "rec-uuid-race";
+
+  const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).credits_charged, 0);
+
+  const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  const retryJson = await retry.json();
+  assertEquals(retryJson.credits_charged, 0);
+  assertEquals(openai.chatCalls, 1); // replayed, not re-run
+});
+
 Deno.test("a different Idempotency-Key is a new recording and charges again", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
@@ -507,8 +571,8 @@ Deno.test("a different Idempotency-Key is a new recording and charges again", as
   const second = await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-uuid-B"), deps(store, openai));
 
   assertEquals(second.status, 200);
-  assertEquals((await second.json()).credits_remaining, 98); // 100→99→98
-  assertEquals(store.used.get("sub-1"), 2);
+  assertEquals((await second.json()).credits_remaining, 92); // 100→96→92 (4 each)
+  assertEquals(store.used.get("sub-1"), 8);
   assertEquals(openai.chatCalls, 2);
 });
 
@@ -520,8 +584,8 @@ Deno.test("no Idempotency-Key → no dedup (each request charges; backward compa
   const second = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
 
   assertEquals(second.status, 200);
-  assertEquals((await second.json()).credits_remaining, 98);
-  assertEquals(store.used.get("sub-1"), 2);
+  assertEquals((await second.json()).credits_remaining, 92);
+  assertEquals(store.used.get("sub-1"), 8);
   assertEquals(store.idempotent.size, 0); // nothing cached without a key
 });
 
@@ -532,25 +596,47 @@ Deno.test("trial path dedupes on its own key and charges the grant exactly once"
 
   const first = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), KEY), deps(store, openai));
   assertEquals(first.status, 200);
-  assertEquals((await first.json()).credits_remaining, 14);
+  assertEquals((await first.json()).credits_remaining, 11); // 15 − 4 (default model)
 
   const retry = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), KEY), deps(store, openai));
   assertEquals(retry.status, 200);
-  assertEquals((await retry.json()).credits_remaining, 14); // replayed, not re-charged
-  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
+  assertEquals((await retry.json()).credits_remaining, 11); // replayed, not re-charged
+  assertEquals(store.trialGrants.get("grant-1")?.used, 4);
   assertEquals(openai.chatCalls, 1);
 });
 
 // ---- credit gating ----------------------------------------------------------
-Deno.test("zero credits → 402, no OpenAI call, no decrement, slot released", async () => {
+Deno.test("zero credits → 402 with {credits_remaining, model_price}, no provider call, no decrement", async () => {
   const store = activeStore(100); // used == limit
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 402);
+  // F3: the body carries the numbers the app's top-up prompt needs.
+  const json = await res.json();
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.credits_remaining, 0);
+  assertEquals(json.model_price, 4); // default model (gemini-3.5-flash)
   assertEquals(openai.transcribeCalls, 0);
   assertEquals(openai.chatCalls, 0);
   assertEquals(store.used.get("sub-1"), 100); // unchanged
   assertEquals(store.log.length, 0);
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("balance below the SELECTED model's price → 402 with the model's price, nothing spent", async () => {
+  const store = activeStore(95); // 5 remaining — enough for Flash (4), not Opus (10)
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 402);
+  const json = await res.json();
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.credits_remaining, 5);
+  assertEquals(json.model_price, 10);
+  assertEquals(openai.transcribeCalls, 0); // rejected before any spend
+  assertEquals(store.used.get("sub-1"), 95); // unchanged
   assertEquals(store.slots.size, 0);
 });
 
@@ -674,7 +760,7 @@ Deno.test("expired token → 401", async () => {
   const openai = new StubProvider();
   const { token } = await signSessionToken({ sub: "sub-1", tier: "starter" }, SECRET, 60, NOW);
   // verify with a clock past expiry
-  const res = await handleGenerate(makeReq(token, makeBody()), { store, stt: openai, chat: openai, jwtSecret: SECRET, nowSeconds: NOW + 61 });
+  const res = await handleGenerate(makeReq(token, makeBody()), { store, stt: openai, makeChat: () => openai, jwtSecret: SECRET, nowSeconds: NOW + 61 });
   assertEquals(res.status, 401);
   assertEquals(openai.transcribeCalls, 0);
 });
@@ -688,10 +774,10 @@ Deno.test("trial token: charges exactly one trial credit, logs cost with null su
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(json.prompt, "GENERATED PROMPT");
-  assertEquals(json.credits_remaining, 14); // 15 → 14, decremented once
+  assertEquals(json.credits_remaining, 11); // 15 → 11: one default-model (4-credit) charge
   assertEquals(openai.transcribeCalls, 1);
   assertEquals(openai.chatCalls, 1);
-  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 4);
 
   // Logged with subscription_id = null (no FK for a trial generation), tokens +
   // cost present, slot released.
@@ -743,7 +829,7 @@ Deno.test("trial token: OpenAI chat failure never charges a trial credit", async
 });
 
 Deno.test("trial token: concurrent second request → 429 (concurrency cap), cap not exceeded", async () => {
-  const store = trialStore(14, 15); // exactly 1 trial credit left
+  const store = trialStore(11, 15); // exactly one default-model charge (4) left
   const openai = new StubProvider();
   openai.hang = true; // first request parks inside transcribe, holding the slot
 
@@ -763,8 +849,9 @@ Deno.test("trial token: concurrent second request → 429 (concurrency cap), cap
 });
 
 Deno.test("trial token: cannot exceed the cap across sequential requests", async () => {
-  // 2 credits left; three sequential generations → exactly two succeed, third 402.
-  const store = trialStore(13, 15);
+  // 8 credits left (two 4-credit charges); three sequential generations →
+  // exactly two succeed, third 402.
+  const store = trialStore(7, 15);
   const openai = new StubProvider();
   const a = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
   const b = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
@@ -813,7 +900,7 @@ Deno.test("rate limited → 429, no OpenAI call", async () => {
 
 // ---- concurrency cap (double-spend guard) -----------------------------------
 Deno.test("second concurrent request for same subscriber → 429 (concurrency cap)", async () => {
-  const store = activeStore(99); // exactly 1 credit left
+  const store = activeStore(96); // exactly one default-model charge (4) left
   const openai = new StubProvider();
   openai.hang = true; // first request parks inside transcribe, holding the slot
 
@@ -835,16 +922,165 @@ Deno.test("second concurrent request for same subscriber → 429 (concurrency ca
 });
 
 // ---- consume race edge ------------------------------------------------------
-Deno.test("credit becomes unspendable after the check → result returned once, logged, not double-charged", async () => {
+Deno.test("credit becomes unspendable after the check → result returned once, logged with model, not double-charged", async () => {
   const store = activeStore(0);
   store.forceConsumeNull = true; // simulate a mid-flight state change
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
-  assertEquals(res.status, 200); // we already paid OpenAI → return the result once
+  assertEquals(res.status, 200); // we already paid the provider → return the result once
   const json = await res.json();
   assertEquals(json.prompt, "GENERATED PROMPT");
   assertEquals(json.credits_remaining, 0);
+  assertEquals(json.credits_charged, 0); // D2: nothing was charged on this path
   assertEquals(store.log.length, 1);
   assertEquals(store.log[0].success, true);
+  assertEquals(store.log[0].model, "gemini-3.5-flash"); // the race branch still attributes
   assertEquals(store.slots.size, 0);
+});
+
+// =============================================================================
+// Phase 4 — per-request model selection + variable credits
+// =============================================================================
+
+Deno.test("explicit model: routes to its provider, charges its fixed price, prompt unaffected", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  // Opus price is 10 credits: 100 → 90.
+  assertEquals(json.credits_remaining, 90);
+  assertEquals(json.credits_charged, 10);
+  // The factory received the VALIDATED model's provider+id.
+  assertEquals(openai.makeChatCalls, [{ provider: "anthropic", model: "claude-opus-4-7" }]);
+  // Appendix C #3: the model NEVER affects the system prompt — mode only.
+  assertEquals(openai.lastSystem, composedSystemPrompt("instruct"));
+  // Log attribution carries the selected model.
+  assertEquals(store.log[0].model, "claude-opus-4-7");
+  assertEquals(store.log[0].provider, "anthropic");
+});
+
+Deno.test("each registry model charges exactly its creditPrice", async () => {
+  for (const m of MODEL_REGISTRY.filter((m) => m.enabled)) {
+    const store = activeStore(0);
+    const openai = new StubProvider();
+    const res = await handleGenerate(
+      makeReq(await mintToken(), makeBody({ model: m.id })),
+      deps(store, openai),
+    );
+    assertEquals(res.status, 200, m.id);
+    assertEquals((await res.json()).credits_remaining, 100 - m.creditPrice, m.id);
+    assertEquals(openai.makeChatCalls, [{ provider: m.provider, model: m.id }], m.id);
+  }
+});
+
+Deno.test("invalid model → 400 invalid_model, no provider call, no charge, no log", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "gpt-4o" })), // legacy env default — NOT a registry model
+    deps(store, openai),
+  );
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "invalid_model");
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.used.get("sub-1"), 0);
+  assertEquals(store.log.length, 0);
+});
+
+Deno.test("makeChat throws (provider key unset) → clean 503 provider_unavailable, ZERO side effects", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const d = deps(store, openai);
+  d.makeChat = () => {
+    throw new Error("ANTHROPIC_API_KEY required when CHAT_PROVIDER=anthropic");
+  };
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-sonnet-4-6" })),
+    d,
+  );
+  assertEquals(res.status, 503); // NOT an opaque 500
+  const json = await res.json();
+  assertEquals(json.error, "provider_unavailable");
+  assertEquals(json.retryable, false);
+  // Fails BEFORE any spend: no STT, no chat, no charge, no generation log.
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.used.get("sub-1"), 0);
+  assertEquals(store.log.length, 0);
+  assertEquals(store.slots.size, 0); // slot released on the early exit
+});
+
+Deno.test("circuit-breaker: abusive real cost charges the metered amount, never blocks the result", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.chatOutputTokens = 30_000; // forged/abusive workload → real cost ≫ 3× fixed price
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "gpt-5.4-mini" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200); // the breaker changes the AMOUNT, never the outcome
+
+  // Expected metered charge, computed with the production helpers (duration 10s).
+  const est = estimatedCostUsd(10, "openai", "gpt-5.4-mini", 120, 30_000);
+  const metered = creditCostForModel("gpt-5.4-mini", est);
+  assert(metered > 2, `breaker should exceed the 2-credit fixed price, got ${metered}`);
+
+  const json = await res.json();
+  assertEquals(json.credits_remaining, 100 - metered);
+  // D2: credits_charged reports the METERED amount — exactly why the app must
+  // read it instead of deriving the toast from the fixed price table.
+  assertEquals(json.credits_charged, metered);
+  assertEquals(store.used.get("sub-1"), metered);
+});
+
+Deno.test("plan exhausted but top-up available → generates and spends the top-up bucket", async () => {
+  const store = activeStore(100); // plan fully used
+  store.seedTopup("sub-1", 10); // combined balance = 10
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).credits_remaining, 6); // 10 − 4, combined
+  assertEquals(store.used.get("sub-1"), 100); // plan untouched (already full)
+  assertEquals(store.topup.get("sub-1"), 6); // spend landed on the top-up bucket
+});
+
+Deno.test("spend order: plan credits drain first, remainder overflows into top-up", async () => {
+  const store = activeStore(98); // 2 plan credits left
+  store.seedTopup("sub-1", 10); // combined = 12
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).credits_remaining, 8); // 12 − 4
+  assertEquals(store.used.get("sub-1"), 100); // plan drained to its cap first…
+  assertEquals(store.topup.get("sub-1"), 8); // …then 2 overflowed into top-up
+});
+
+Deno.test("combined balance covers the price only via top-up → no 402 (gate uses combined)", async () => {
+  const store = activeStore(100); // plan 0
+  store.seedTopup("sub-1", 4); // exactly the default price
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).credits_remaining, 0);
+});
+
+Deno.test("chat failure on an explicit model logs that model/provider, charges nothing", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.failChat = new ProviderError("server", true, 500);
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "gpt-5.5" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 503);
+  assertEquals(store.used.get("sub-1"), 0); // failure charges NOTHING (any model)
+  assertEquals(store.log.length, 1);
+  assertEquals(store.log[0].success, false);
+  assertEquals(store.log[0].model, "gpt-5.5"); // failed attempts stay attributable
+  assertEquals(store.log[0].provider, "openai");
 });

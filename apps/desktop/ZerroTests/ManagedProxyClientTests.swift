@@ -44,7 +44,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let session = StubManagedTransport()
         session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
         let gen = StubManagedTransport()
-        gen.enqueue(ManagedFixtures.generateJSON(prompt: "Ship it.", creditsRemaining: 42), status: 200)
+        gen.enqueue(ManagedFixtures.generateJSON(prompt: "Ship it.", creditsRemaining: 42, creditsCharged: 7), status: 200)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
 
         let result = try await proxy.generate(
@@ -58,6 +58,27 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(result.result.usage.inputTokens, 1200)
         XCTAssertEqual(result.result.usage.outputTokens, 300)
         XCTAssertEqual(result.creditsRemaining, 42)
+        // Multi-model D2: the exact server spend for the "−N credits" toast.
+        XCTAssertEqual(result.creditsCharged, 7)
+    }
+
+    /// A pre-D2 backend body (no `credits_charged`) still parses — the toast
+    /// simply has nothing to show during a rollout window.
+    func testPreD2ResponseParsesWithoutCreditsCharged() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateJSONPreD2(creditsRemaining: 12), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        let result = try await proxy.generate(
+            audioURL: ManagedFixtures.tempFile(),
+            frames: frames(),
+            mode: .instruct,
+            durationSeconds: 12
+        )
+        XCTAssertEqual(result.creditsRemaining, 12)
+        XCTAssertNil(result.creditsCharged)
     }
 
     // MARK: - Token expiry → refresh-and-retry once
@@ -177,9 +198,12 @@ final class ManagedProxyClientTests: XCTestCase {
         let body = try XCTUnwrap(req.httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
-        // Exactly mode + audio + frames + clicks + has_speech — nothing else.
-        XCTAssertEqual(Set(json.keys), ["mode", "audio", "frames", "clicks", "has_speech"])
+        // Exactly mode + model + audio + frames + clicks + has_speech — nothing else.
+        XCTAssertEqual(Set(json.keys), ["mode", "model", "audio", "frames", "clicks", "has_speech"])
         XCTAssertEqual(json["mode"] as? String, "instruct")
+        // Multi-model 6B: when no model is passed, the registry default
+        // (the recommended model) rides as the explicit wire value.
+        XCTAssertEqual(json["model"] as? String, ModelRegistry.defaultModelID)
         // Phase 6: the no-speech hint defaults to true when not specified.
         XCTAssertEqual(json["has_speech"] as? Bool, true)
         // No transcript / prompt / system prompt smuggled in.
@@ -225,6 +249,27 @@ final class ManagedProxyClientTests: XCTestCase {
         let body = try XCTUnwrap(gen.requests[0].httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["has_speech"] as? Bool, false)
+    }
+
+    /// Multi-model 6B: the selected model id rides in the body verbatim.
+    func testRequestSendsSelectedModel() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateJSON(), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        _ = try await proxy.generate(
+            audioURL: ManagedFixtures.tempFile(),
+            frames: frames(),
+            mode: .instruct,
+            durationSeconds: 7,
+            model: "claude-opus-4-7"
+        )
+
+        let body = try XCTUnwrap(gen.requests[0].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
     }
 
     // MARK: - Helpers
