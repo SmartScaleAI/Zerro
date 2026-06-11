@@ -46,12 +46,19 @@ import os
 
 struct OpenAIPromptGenerationService: PromptGenerationService {
 
-    /// GPT-4o model id. Pinned here so a future swap to a date-stamped
-    /// variant (e.g. `gpt-4o-2024-08-06`) or a newer model is a
-    /// single-line change with a before/after token-cost diff to back
-    /// the decision. `nonisolated` so `encodeBody` can read it off the
-    /// main actor.
-    nonisolated static let model = "gpt-4o"
+    /// The pre-multi-model BYOK default. Kept as the init default so legacy
+    /// call sites/tests are unchanged; the production path now passes the
+    /// user's REGISTRY selection via BYOKRouting (multi-model 6C), so this
+    /// only applies when no registry model is threaded through.
+    nonisolated static let defaultModel = "gpt-4o"
+
+    /// The model id to run (e.g. "gpt-5.4-mini"). Selected per generation by
+    /// BYOKRouting.
+    let model: String
+
+    init(model: String = OpenAIPromptGenerationService.defaultModel) {
+        self.model = model
+    }
 
     func generatePrompt(
         timeline: InterleavedTimeline,
@@ -70,8 +77,9 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         // `nonisolated`, so the detached task genuinely stays off-main.
         // The base64 body is dropped after the request — never held on
         // the in-memory timeline.
+        let model = self.model
         let bodyData = try await Task.detached(priority: .userInitiated) {
-            try Self.encodeBody(timeline: timeline, systemPrompt: systemPrompt)
+            try Self.encodeBody(timeline: timeline, systemPrompt: systemPrompt, model: model)
         }.value
 
         var request = URLRequest(url: OpenAIClient.baseURL.appendingPathComponent("chat/completions"))
@@ -122,7 +130,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             usage: TokenUsage(
                 inputTokens: decoded.usage?.promptTokens ?? 0,
                 outputTokens: decoded.usage?.completionTokens ?? 0,
-                model: decoded.model ?? Self.model
+                model: decoded.model ?? model
             )
         )
     }
@@ -145,7 +153,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// be implicitly main-isolated and bounce the work right back to main.
     nonisolated static func encodeBody(
         timeline: InterleavedTimeline,
-        systemPrompt: String
+        systemPrompt: String,
+        model: String = OpenAIPromptGenerationService.defaultModel
     ) throws -> Data {
         var userContent: [UserContentBlock] = []
         for item in timeline.items {
@@ -182,7 +191,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         }
 
         let requestBody = ChatRequest(
-            model: Self.model,
+            model: model,
             messages: [
                 .systemMessage(content: systemPrompt),
                 .userMessage(content: userContent)
@@ -241,24 +250,10 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         }
     }
 
-    // MARK: - Cost estimate
-
-    /// gpt-4o list price as of 2026-05-28 (USD per 1M tokens). Update
-    /// when OpenAI changes pricing. Used by AppState's per-session
-    /// cost log; not consumed elsewhere. If we date-stamp the model id
-    /// later (gpt-4o-2024-08-06 etc.), pricing varies per snapshot —
-    /// the response carries the exact model used so the log line is
-    /// always honest about which alias was billed.
-    private static let inputPricePerMillion: Double = 2.50
-    private static let outputPricePerMillion: Double = 10.00
-
-    /// Returns the estimated USD cost for a single completion given
-    /// the reported token usage. Input + output priced separately.
-    static func estimatedCost(usage: TokenUsage) -> Double {
-        let inputCost = Double(usage.inputTokens) / 1_000_000 * inputPricePerMillion
-        let outputCost = Double(usage.outputTokens) / 1_000_000 * outputPricePerMillion
-        return inputCost + outputCost
-    }
+    // Cost estimation moved to `BYOKCostEstimator` (multi-model 6C) — the
+    // single Swift pricing mirror of the server's cost.ts CHAT_PRICING,
+    // covering all three providers (this file's gpt-4o constants would have
+    // been a fourth, drift-prone copy).
 
     // MARK: - Wire types — response
 

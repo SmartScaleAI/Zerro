@@ -254,7 +254,12 @@ final class AreaSelectorState {
 
     func toggleMicMenu() {
         isMicMenuOpen.toggle()
-        if !isMicMenuOpen { highlightedMicIndex = nil }
+        if isMicMenuOpen {
+            // Only one toolbar dropdown at a time (see toggleModelMenu).
+            closeModelMenu()
+        } else {
+            highlightedMicIndex = nil
+        }
     }
 
     func closeMicMenu() {
@@ -264,6 +269,90 @@ final class AreaSelectorState {
 
     func setHighlightedMicIndex(_ index: Int?) {
         if highlightedMicIndex != index { highlightedMicIndex = index }
+    }
+
+    // MARK: - Model selection (multi-model — per-recording override)
+    //
+    // The toolbar carries a model chip so the generation model for THIS
+    // recording can be chosen at capture time. Unlike the mic dropdown
+    // (which persists immediately) and the mode toggle (which persists at
+    // record-start), the model chip is a PER-RECORDING override: it seeds
+    // from `PreferencesStore.selectedModelID` (the Preferences "Default
+    // model") and a change here is handed to `startRecording` WITHOUT
+    // touching the persisted default — the next recording starts back on
+    // the default. Rendering + row hit-testing mirror the mic dropdown
+    // (in-tree menu, controller-owned monitor) for the same .screenSaver
+    // window-level reason.
+
+    /// One row of the model dropdown — display data precomputed by the
+    /// controller at present time (the view stays free of registry +
+    /// entitlement reads).
+    struct ModelMenuItem: Identifiable, Equatable {
+        /// Registry wire id (`ModelEntry.id`).
+        let id: String
+        /// `ModelEntry.displayName`.
+        let name: String
+        /// Trailing detail: "4 cr · ~62 left" (Managed/Trial), "Add
+        /// Gemini key" (BYOK key-gated), or nil (BYOK with key — credits
+        /// are meaningless, no column).
+        let detail: String?
+        /// True for the registry's recommended entry (badge).
+        let recommended: Bool
+        /// BYOK key-gating: rendered dimmed + unselectable.
+        let gated: Bool
+    }
+
+    /// Dropdown rows, cheapest-first (registry order). Set by the
+    /// controller at present time.
+    private(set) var models: [ModelMenuItem] = []
+
+    /// The model THIS recording will use. Seeded from the persisted
+    /// default; a dropdown pick changes only this copy.
+    private(set) var selectedModelID: String = ""
+
+    /// Label for the toolbar chip.
+    var selectedModelName: String {
+        models.first { $0.id == selectedModelID }?.name ?? selectedModelID
+    }
+
+    private(set) var isModelChipHovered: Bool = false
+
+    func setModelChipHovered(_ hovered: Bool) {
+        if isModelChipHovered != hovered { isModelChipHovered = hovered }
+    }
+
+    private(set) var isModelMenuOpen: Bool = false
+
+    /// Row under the cursor while the dropdown is open (hover highlight).
+    private(set) var highlightedModelIndex: Int?
+
+    func setModels(_ items: [ModelMenuItem], selectedID: String) {
+        models = items
+        selectedModelID = selectedID
+    }
+
+    func selectModel(id: String) {
+        selectedModelID = id
+    }
+
+    /// Open/close the model dropdown. Only one toolbar dropdown may be
+    /// open at a time, so opening this one closes the mic menu.
+    func toggleModelMenu() {
+        isModelMenuOpen.toggle()
+        if isModelMenuOpen {
+            closeMicMenu()
+        } else {
+            highlightedModelIndex = nil
+        }
+    }
+
+    func closeModelMenu() {
+        isModelMenuOpen = false
+        highlightedModelIndex = nil
+    }
+
+    func setHighlightedModelIndex(_ index: Int?) {
+        if highlightedModelIndex != index { highlightedModelIndex = index }
     }
 
     // MARK: - Mutations driven by AreaSelectorEventView

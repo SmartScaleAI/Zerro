@@ -4,25 +4,27 @@
 //
 //  Created by Colin Breeding on 6/1/26.
 //
-//  Phase C — Billing & License section of the single-pane Settings layout.
-//  Mirrors `APIAuthSection`'s structure (a shared `@Observable` field model,
-//  masked/plain field + verification pill, secondary/destructive buttons).
-//  Rows:
-//    1. Current plan   — reads `EntitlementStore.state` and renders the live
-//                        standing (Trial — N free generations / Licensed /
-//                        Expired / Managed), with a status pill.
-//    2. License key    — plain field pre-filled from the Keychain if a license
-//                        is on file; Activate / Re-activate → the shared
-//                        `EntitlementStore.activate(...)`. When licensed, a
-//                        "Deactivate this device" button frees the LemonSqueezy
-//                        slot (→ `EntitlementStore.deactivateThisDevice()`).
-//    3. Manage / buy   — links out to the LemonSqueezy hosted checkout (when
-//                        unlicensed) and the customer portal (`BillingLinks`,
-//                        `// TODO:` placeholders until the account is approved).
-//    4. (DEBUG) Force re-validate — bypasses the throttle to exercise the
-//                        refund/revoke + fail-open paths.
+//  Phase C, restructured for multi-model 6E/6F — the MANAGED side of the
+//  either/or Account & Billing pane (AccountBillingPane). Presented as a
+//  subscription + credits, never a "lifetime license":
+//    1. Usage meter    — 6F: combined balance headline, a bar tracking
+//                        PLAN-credit consumption (plan_credits_used/_limit —
+//                        never the combined balance, which over-reports for
+//                        top-up holders, F4), reset date, and the inline
+//                        top-up / upgrade prompt (CreditDisplay.isLowBalance,
+//                        the same threshold as the menu-bar prompt).
+//    2. Current plan   — reads `EntitlementStore.state` and renders the live
+//                        standing (Trial · N credits / Expired / Managed) with
+//                        a status pill. Plan-state strings render ONLY here —
+//                        the BYOK pane never shows them.
+//    3. Subscription key — the LemonSqueezy activation key from the purchase
+//                        email (the entitlement is still key-delivered under
+//                        the hood; it is presented as "your subscription").
+//    4. Subscribe / manage — the Managed checkout or the customer portal.
+//    5. (DEBUG) Force re-validate.
 //
-//  Copy is non-punitive; prices remain `$X` placeholders.
+//  This file also hosts `BYOKLicenseSection` (the BYOK pane's license rows) so
+//  both reuse the same private field model + key row.
 //
 
 import AppKit
@@ -34,7 +36,15 @@ struct BillingSection: View {
     @State private var model = BillingLicenseModel()
 
     var body: some View {
-        SettingsSection("Billing & License") {
+        SettingsSection("Plan & Credits") {
+            // Multi-model 6F: the usage meter leads the card whenever there
+            // is a balance to meter (Managed with a snapshot, or a trial with
+            // a known grant). Expired/pre-snapshot states skip straight to
+            // the plan row.
+            if showsUsageMeter {
+                UsageMeterRow()
+                SettingsRowDivider()
+            }
             CurrentPlanRow()
             // Phase F: persistent "verify your email to start your free trial"
             // affordance for trial users who haven't verified yet (existing
@@ -53,7 +63,7 @@ struct BillingSection: View {
                 PastDueRow()
             }
             SettingsRowDivider()
-            LicenseKeyRow(model: model)
+            LicenseKeyRow(model: model, context: .subscription)
             SettingsRowDivider()
             ManageRow()
             #if DEBUG
@@ -65,6 +75,14 @@ struct BillingSection: View {
         // entitlement if it changes elsewhere (a launch revalidation that
         // revoked the license, or the dev panel forcing a state).
         .onChange(of: entitlements.state) { _, _ in model.syncToEntitlement(entitlements.state) }
+    }
+
+    private var showsUsageMeter: Bool {
+        switch entitlements.state {
+        case .managed: return entitlements.managedSnapshot != nil
+        case .trial(let credits): return credits != nil
+        case .byok, .expired: return false
+        }
     }
 }
 
@@ -188,35 +206,32 @@ private struct CurrentPlanRow: View {
     private var planDescription: String {
         switch entitlements.state {
         case .trial(let creditsRemaining):
+            // §1.5: the unit is CREDITS, never a flat generation count.
             guard let creditsRemaining else { return "Your free trial is active." }
             return creditsRemaining == 1
-                ? "1 free generation left in your trial."
-                : "\(creditsRemaining) free generations left in your trial."
+                ? "1 trial credit left."
+                : "\(creditsRemaining) trial credits left."
         case .expired:
-            return "You\u{2019}ve used your free generations."
+            return "You\u{2019}ve used your trial credits \u{2014} subscribe below to keep going."
         case .byok:
-            return "Lifetime license \u{2014} you fund generation with your own OpenAI key."
+            // Shown only transiently (a `.byok` user previewing the Managed
+            // pane via the switch link); never the lifetime-license framing.
+            return "You\u{2019}re on BYOK \u{2014} subscribe below to switch to Zerro-hosted credits."
         case .managed:
             return managedDescription
         }
     }
 
-    /// Managed copy reads the live snapshot (credits + reset). Falls back to a
-    /// neutral line before the first `/entitlement` refresh lands.
+    /// Managed copy describes the SUBSCRIPTION (price + allowance); the live
+    /// balance lives in the usage meter above, so it isn't duplicated here.
     private var managedDescription: String {
-        guard let snapshot = entitlements.managedSnapshot else {
-            return "Managed plan \u{2014} generation runs on Zerro-hosted credits."
-        }
-        let resetClause = BillingDateFormat.resetClause(snapshot.resetDate)
-        if snapshot.isOutOfCredits {
-            return "Out of credits this month\(resetClause). Your library stays open."
-        }
-        let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
-        return "\(credits) this month\(resetClause)."
+        let limit = entitlements.managedSnapshot.map { $0.planCreditsLimit ?? $0.creditsLimit }
+        let allowance = limit.map { "\($0)" } ?? "300"
+        return "\(allowance) credits every month. $15/month, or $12/month billed yearly."
     }
 
-    /// The compact trial pill text. Shows the remaining free-generation count
-    /// when known, or a bare "Trial" before the user has been granted any
+    /// The compact trial pill text. Shows the remaining credit balance when
+    /// known, or a bare "Trial" before the user has been granted any
     /// (the "Free Trial Credits" verify row sits below for that case).
     private func trialPillText(creditsRemaining: Int?) -> String {
         guard let creditsRemaining else { return "Trial" }
@@ -234,7 +249,7 @@ private struct CurrentPlanRow: View {
         case .expired:
             PlanPill(text: "Expired", tint: Color.vfRecordingRed)
         case .byok:
-            PlanPill(text: "Licensed", tint: Color.vfSuccessGreen)
+            PlanPill(text: "BYOK", tint: Color.vfSuccessGreen)
         case .managed(let tier, _, _):
             // Past-due tints amber (a soft warning, not a block); active is green.
             let pastDue = entitlements.managedSnapshot?.isPastDue == true
@@ -258,7 +273,7 @@ private struct TrialVerifyRow: View {
     var body: some View {
         SettingsRow(
             label: "Free Trial Credits",
-            description: "Verify your email to start your free trial \u{2014} server-funded generations, no API key needed."
+            description: "Verify your email to start your free trial \u{2014} server-funded credits, no API key needed."
         ) {
             Button("Verify email") {
                 AppDelegate.openTrialEmailCapture()
@@ -342,14 +357,26 @@ private struct PlanPill: View {
 // MARK: - License key row
 
 private struct LicenseKeyRow: View {
+    /// Which pane is hosting the row — the SAME activation mechanism (the
+    /// LemonSqueezy key from the purchase email; the server resolves whether
+    /// it's a subscription or a BYOK license), presented in the host pane's
+    /// language. Never "lifetime license".
+    enum Context {
+        case subscription
+        case byokLicense
+    }
+
     @Environment(EntitlementStore.self) private var entitlements
     @Bindable var model: BillingLicenseModel
+    var context: Context = .subscription
     @FocusState private var isFocused: Bool
 
     var body: some View {
         SettingsRow(
-            label: "License Key",
-            description: "Stored in macOS Keychain. Activates online once, then works offline.",
+            label: context == .subscription ? "Subscription Key" : "License Key",
+            description: context == .subscription
+                ? "From your purchase email \u{2014} activates your subscription on this device. Stored in macOS Keychain."
+                : "Your BYOK license key. Stored in macOS Keychain; activates online once, then works offline.",
             verticalPadding: RowMetrics.verticalPaddingTall
         ) {
             VStack(alignment: .trailing, spacing: VFSpacing.sm) {
@@ -427,18 +454,20 @@ private struct LicenseKeyRow: View {
     }
 }
 
-// MARK: - Manage / buy row
+// MARK: - Subscribe / manage row (Managed pane)
 
 private struct ManageRow: View {
     @Environment(EntitlementStore.self) private var entitlements
 
     var body: some View {
         SettingsRow(
-            label: label,
+            label: isManaged ? "Manage Subscription" : "Subscribe",
             description: description
         ) {
-            Button(buttonTitle) { open(buttonURL) }
-                .buttonStyle(SettingsSecondaryButtonStyle())
+            Button(isManaged ? "Manage subscription" : "Subscribe") {
+                openBillingLink(isManaged ? BillingLinks.customerPortalURL : BillingLinks.proCheckoutURL)
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
         }
     }
 
@@ -447,39 +476,229 @@ private struct ManageRow: View {
         return false
     }
 
-    private var label: String {
-        if isManaged { return "Manage Subscription" }
-        return entitlements.state == .byok ? "Manage License" : "Buy a License"
-    }
-
     private var description: String {
         if isManaged {
             // Note: v1 uses the my-orders portal; a per-subscription signed
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return entitlements.state == .byok
-            ? "Manage your devices and order in the LemonSqueezy portal."
-            : "Get a lifetime license, then activate it above."
+        return "$15/month, or $12/month billed yearly \u{2014} 300 credits every month, all six models."
     }
+}
 
-    private var buttonTitle: String {
-        if isManaged { return "Manage subscription" }
-        return entitlements.state == .byok ? "Manage devices" : "Get a license"
+/// Shared open-or-log for the LemonSqueezy links (placeholders resolve nil
+/// until the products exist — the button no-ops with a log line, never a
+/// dead tab).
+private func openBillingLink(_ url: URL?) {
+    guard let url else {
+        Log.billing.notice("settings: billing link not configured yet (placeholder)")
+        return
     }
+    NSWorkspace.shared.open(url)
+}
 
-    private var buttonURL: URL? {
-        if isManaged { return BillingLinks.customerPortalURL }
-        return entitlements.state == .byok ? BillingLinks.customerPortalURL : BillingLinks.byokCheckoutURL
-    }
+// MARK: - Usage meter (multi-model 6F)
 
-    private func open(_ url: URL?) {
-        guard let url else {
-            // Placeholder not filled yet (LS account in review).
-            Log.billing.notice("settings: billing link not configured yet (placeholder)")
-            return
+/// The glanceable usage card at the top of the Managed billing section —
+/// Managed/Trial ONLY (the BYOK pane never composes it).
+///
+/// • Headline: the COMBINED balance (plan + top-up — matches the picker, F4)
+///   against the plan cap. A top-up holder's headline can exceed the cap;
+///   the breakdown line explains it.
+/// • Bar: PLAN-credit consumption only (`plan_credits_used/_limit`) — the
+///   thing that resets. Hidden when the backend/cache predates the breakdown
+///   fields rather than guessed from the combined number.
+/// • Trial: same card against the trial grant. The bar draws against the
+///   grant total (`trial_credits_limit`, cached from verify/resume — E4);
+///   when that's unknown (older server / pre-update cache) the trial
+///   variant degrades to bar-less.
+/// • Inline prompt: the SAME low-balance threshold as the generation-flow
+///   prompt (CreditDisplay.isLowBalance against the SELECTED model's price).
+private struct UsageMeterRow: View {
+    @Environment(EntitlementStore.self) private var entitlements
+    @Environment(PreferencesStore.self) private var preferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+            switch entitlements.state {
+            case .managed:
+                if let snapshot = entitlements.managedSnapshot {
+                    managedMeter(snapshot)
+                }
+            case .trial(let credits):
+                if let credits {
+                    trialMeter(credits)
+                }
+            case .byok, .expired:
+                EmptyView()
+            }
         }
-        NSWorkspace.shared.open(url)
+        .padding(.horizontal, RowMetrics.horizontalPadding)
+        .padding(.vertical, RowMetrics.verticalPaddingTall)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Managed
+
+    @ViewBuilder
+    private func managedMeter(_ snapshot: ManagedEntitlementSnapshot) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+            Text(CreditDisplay.meterHeadline(
+                combined: snapshot.creditsRemaining,
+                planLimit: snapshot.planCreditsLimit ?? snapshot.creditsLimit
+            ))
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(Color.vfTextPrimary)
+            Text("remaining this month")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+            Spacer(minLength: 0)
+            if let reset = BillingDateFormat.resetDate(snapshot.resetDate) {
+                Text("Resets \(reset)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
+        }
+
+        if let used = snapshot.planCreditsUsed, let limit = snapshot.planCreditsLimit {
+            meterBar(fraction: CreditDisplay.planFractionRemaining(planUsed: used, planLimit: limit))
+            if let topup = snapshot.topupCreditsRemaining, topup > 0 {
+                Text("Plan \(max(0, limit - used)) + top-up \(topup). Top-up credits survive the monthly reset and expire 12 months from purchase.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+
+        if let helper = CreditDisplay.translationLine(balance: snapshot.creditsRemaining) {
+            Text(helper)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+        }
+
+        topupPrompt(balance: snapshot.creditsRemaining)
+    }
+
+    // MARK: Trial
+
+    @ViewBuilder
+    private func trialMeter(_ credits: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+            Text(CreditDisplay.creditsHeadline(credits))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.vfTextPrimary)
+            Text("left in your free trial")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+            Spacer(minLength: 0)
+        }
+
+        if let limit = entitlements.trialCreditsLimit, limit > 0 {
+            meterBar(fraction: CreditDisplay.trialFractionRemaining(remaining: credits, limit: limit))
+        }
+
+        if let helper = CreditDisplay.translationLine(balance: credits) {
+            Text(helper)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+        }
+
+        // Trials can't buy top-ups (plan §1.4) — the inline prompt is the
+        // Managed upgrade instead, escalating on the shared low threshold.
+        if isLow(balance: credits) {
+            HStack(spacing: VFSpacing.sm) {
+                Text("Running low \u{2014} upgrade to keep going")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfWarningAmber)
+                Button("Upgrade to Managed") { openBillingLink(BillingLinks.proCheckoutURL) }
+                    .buttonStyle(SettingsSecondaryButtonStyle())
+            }
+        }
+    }
+
+    // MARK: Shared pieces
+
+    private func meterBar(fraction: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.vfPillBackground)
+                Capsule()
+                    .fill(Color.vfBrandAccent)
+                    .frame(width: max(0, geo.size.width * fraction))
+            }
+        }
+        .frame(height: 6)
+    }
+
+    private func isLow(balance: Int) -> Bool {
+        guard let price = ModelRegistry.entry(id: preferences.selectedModelID)?.creditPrice else {
+            return false
+        }
+        return CreditDisplay.isLowBalance(balance: balance, selectedModelPrice: price)
+    }
+
+    /// 6F.4 — comfortable balance: a quiet packs line; low balance: escalate
+    /// in amber. Pack chips whose checkout link isn't configured resolve nil
+    /// and drop out (BillingLinks placeholder pattern); with neither link
+    /// filled, only the low-state notice renders.
+    @ViewBuilder
+    private func topupPrompt(balance: Int) -> some View {
+        let low = isLow(balance: balance)
+        let anyLink = BillingLinks.boostTopupCheckoutURL != nil || BillingLinks.powerTopupCheckoutURL != nil
+        if low || anyLink {
+            HStack(spacing: VFSpacing.sm) {
+                Text(low ? "Running low \u{2014} top up to keep going" : "Need more? Top-up packs:")
+                    .font(.system(size: 12))
+                    .foregroundStyle(low ? Color.vfWarningAmber : Color.vfTextSecondary)
+                if let boost = BillingLinks.boostTopupCheckoutURL {
+                    Button("Boost \u{00B7} 200 \u{00B7} $10") { openBillingLink(boost) }
+                        .buttonStyle(SettingsSecondaryButtonStyle())
+                }
+                if let power = BillingLinks.powerTopupCheckoutURL {
+                    Button("Power \u{00B7} 500 \u{00B7} $22") { openBillingLink(power) }
+                        .buttonStyle(SettingsSecondaryButtonStyle())
+                }
+            }
+        }
+    }
+}
+
+// MARK: - BYOK license section (hosted here to share the private field model)
+
+/// The BYOK pane's license rows (AccountBillingPane composes this below the
+/// API-key section). The $69 one-time BYOK license: activation key field +
+/// get/manage links. No plan/credit/meter UI — that's the Managed pane's.
+struct BYOKLicenseSection: View {
+    @Environment(EntitlementStore.self) private var entitlements
+    @State private var model = BillingLicenseModel()
+
+    var body: some View {
+        SettingsSection("BYOK License") {
+            LicenseKeyRow(model: model, context: .byokLicense)
+            SettingsRowDivider()
+            ByokManageRow()
+        }
+        .onChange(of: entitlements.state) { _, _ in model.syncToEntitlement(entitlements.state) }
+    }
+}
+
+private struct ByokManageRow: View {
+    @Environment(EntitlementStore.self) private var entitlements
+
+    private var isLicensed: Bool { entitlements.state == .byok }
+
+    var body: some View {
+        SettingsRow(
+            label: isLicensed ? "Manage License" : "Get a License",
+            description: isLicensed
+                ? "Manage your devices and order in the LemonSqueezy portal."
+                : "$69 one-time \u{2014} includes 1 year of updates. You pay your providers directly for usage."
+        ) {
+            Button(isLicensed ? "Manage devices" : "Get a license") {
+                openBillingLink(isLicensed ? BillingLinks.customerPortalURL : BillingLinks.byokCheckoutURL)
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
+        }
     }
 }
 
@@ -511,17 +730,29 @@ private struct DevRevalidateRow: View {
 
 // MARK: - Preview
 
-#Preview("Billing · licensed") {
+#Preview("Plan & Credits · managed") {
     BillingSection()
-        .environment(EntitlementStore(licenseService: .inMemory(licensed: true)))
+        .environment(EntitlementStore.preview(
+            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
+        ))
+        .environment(PreferencesStore())
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)
 }
 
-#Preview("Billing · trial") {
+#Preview("Plan & Credits · trial") {
     BillingSection()
-        .environment(EntitlementStore(licenseService: .inMemory()))
+        .environment(EntitlementStore.preview(.trial(creditsRemaining: 34)))
+        .environment(PreferencesStore())
+        .padding()
+        .frame(width: 720)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("BYOK License") {
+    BYOKLicenseSection()
+        .environment(EntitlementStore.preview(.byok))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

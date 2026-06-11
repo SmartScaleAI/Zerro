@@ -94,6 +94,14 @@ final class SessionTokenManager: ProxyTokenProviding {
     private let licenseKeySlot: KeychainSlot
     private let transport: ManagedTransport
     private let clock: () -> Date
+    /// True when no transport was injected (we built the real URLSession
+    /// one) — the ONLY configuration where the DEBUG `ZERRO_DEV_LICENSE_KEY`
+    /// fallback in `resolveLicenseKey` may fire. Unit tests inject stub
+    /// transports and must stay hermetic even though the shared Xcode scheme
+    /// ships the ZERRO_* env vars enabled — without this gate the dev key
+    /// replaced the test's key and deterministically failed 2
+    /// SessionTokenManagerTests (Appendix E9).
+    private let usesRealTransport: Bool
 
     // MARK: - Init
 
@@ -103,6 +111,7 @@ final class SessionTokenManager: ProxyTokenProviding {
         clock: @escaping () -> Date = { Date() }
     ) {
         self.licenseKeySlot = licenseKeySlot ?? KeychainStore.byokLicenseKey
+        self.usesRealTransport = (transport == nil)
         self.transport = transport ?? URLSessionManagedTransport()
         self.clock = clock
     }
@@ -179,9 +188,12 @@ final class SessionTokenManager: ProxyTokenProviding {
         // When the backend is overridden to a local stack, the dev key WINS over
         // any activated key in the Keychain — otherwise a stale prod key would be
         // sent to the local `/session` and 403. Both env vars must be set, so the
-        // throwaway test key can never reach the production `/session`.
+        // throwaway test key can never reach the production `/session`. Gated on
+        // `usesRealTransport` so an injected stub transport (unit tests) never
+        // sees the dev key — the scheme ships these vars enabled.
         let env = ProcessInfo.processInfo.environment
-        if env["ZERRO_FUNCTIONS_BASE_URL"] != nil,
+        if usesRealTransport,
+           env["ZERRO_FUNCTIONS_BASE_URL"] != nil,
            let devKey = env["ZERRO_DEV_LICENSE_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !devKey.isEmpty {
             Log.billing.notice("session exchange using ZERRO_DEV_LICENSE_KEY (DEBUG — local backend)")

@@ -158,13 +158,18 @@ struct SettingsView: View {
                 case .general:
                     CaptureSection()
                     OutputModeSection()
+                    // Multi-model: the persistent default the capture
+                    // toolbar's per-recording model chip seeds from.
+                    ModelSection()
                 case .history:
                     HistorySection(onOpenRecentPrompts: { route = .recentPrompts })
                 case .advanced:
                     AppBehaviorSection()
                 case .accountBilling:
-                    APIAuthSection()
-                    BillingSection()
+                    // Multi-model 6E: ONE mode at a time (Managed or BYOK)
+                    // with a switch link — never the old API-key + license
+                    // stack. The pane owns its internal section rhythm.
+                    AccountBillingPane()
                 case .about:
                     AboutSupportSection()
                 }

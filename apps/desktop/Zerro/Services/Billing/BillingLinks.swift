@@ -21,11 +21,33 @@ import Foundation
 
 enum BillingLinks {
 
+    // MARK: - Test vs. Live checkout switch
+    //
+    // LemonSqueezy test mode and live mode are the SAME store domain
+    // (store.getzerro.app) but each product has a DISTINCT buy-id per mode.
+    // DEBUG builds open the TEST checkouts (test card numbers, no real charge),
+    // so the full purchase → webhook → credits flow can be exercised locally;
+    // Release builds use the live buy-ids. Mirrors the ManagedBackend.baseURL
+    // DEBUG/Release convention. To add/rotate a product, edit BOTH the test and
+    // live id below — keep them paired.
+    private static let checkoutBase = "https://store.getzerro.app/checkout/buy/"
+
+    /// Picks the test buy-id in DEBUG, the live buy-id in Release.
+    private static func checkout(test: String, live: String) -> String {
+        #if DEBUG
+        return checkoutBase + test
+        #else
+        return checkoutBase + live
+        #endif
+    }
+
     /// The LemonSqueezy hosted checkout for the one-time BYOK license.
     /// Opening this in the default browser (NSWorkspace) is the v1 buy flow —
     /// the LS overlay JS is awkward to host in a native app.
-    // checkout link for the BYOK product once the account is approved.
-    static let byokCheckoutURLString = "https://store.getzerro.app/checkout/buy/1e36ae90-2f72-4dcf-9f30-6d763b10cac1"
+    static let byokCheckoutURLString = checkout(
+        test: "1e36ae90-2f72-4dcf-9f30-6d763b10cac1",
+        live: "e31278f5-48b6-4265-8d69-37b8c9628e1f"
+    )
 
     /// The LemonSqueezy customer portal where a buyer manages their license /
     /// devices (used by the at-activation-limit hint and the Settings "Manage"
@@ -46,11 +68,34 @@ enum BillingLinks {
     // BYOK checkout above. Grep `TODO: subscription checkout` to find the two
     // strings to fill once Colin creates the products.
 
-    static let starterCheckoutURLString = "https://store.getzerro.app/checkout/buy/90ffa6e4-5c8a-445a-99d5-80a55ebbffd7"
-    static let proCheckoutURLString = "https://store.getzerro.app/checkout/buy/4ab963c6-7e81-473b-b815-ecc163584539"
+    // Single Managed product; monthly vs yearly is chosen ON the LS page, so
+    // one checkout link covers both intervals. Starter is not sold at launch —
+    // if a Starter tier returns later, give it its own test/live pair here.
+    static let proCheckoutURLString = checkout(
+        test: "4ab963c6-7e81-473b-b815-ecc163584539",
+        live: "889b1ee8-9e71-422f-a714-362a2ca3ff39"
+    )
 
-    static var starterCheckoutURL: URL? { resolvedURL(starterCheckoutURLString) }
     static var proCheckoutURL: URL? { resolvedURL(proCheckoutURLString) }
+
+    // MARK: - Top-up pack checkouts (multi-model Phase 6 / plan §1.4)
+    //
+    // The hosted checkout for each ONE-TIME top-up pack: Boost (200 credits,
+    // $10) and Power (500 credits, $22). Purchased credits attach to the
+    // buyer's subscription server-side (the `order_created` webhook) and
+    // expire 12 months from purchase. Same resolve-to-nil pattern: the
+    // low-balance prompt hides a pack whose link isn't filled in yet.
+    static let boostTopupCheckoutURLString = checkout(
+        test: "f3518fc2-6dff-47e1-bffd-3def5a1c05a6",
+        live: "4bd1167b-a0d8-49ab-b572-e3704fce63fc"
+    )
+    static let powerTopupCheckoutURLString = checkout(
+        test: "48b7b929-7d0f-4a12-9098-a2ed75aceba5",
+        live: "a73f69a9-0e23-470a-bc8d-3b272d0c8df5"
+    )
+
+    static var boostTopupCheckoutURL: URL? { resolvedURL(boostTopupCheckoutURLString) }
+    static var powerTopupCheckoutURL: URL? { resolvedURL(powerTopupCheckoutURLString) }
 
     /// The checkout URL, or `nil` if still a placeholder. `nil` until the
     /// `TODO:` above is filled in (the placeholder isn't a valid absolute URL,
@@ -67,13 +112,18 @@ enum BillingLinks {
     /// on the LemonSqueezy page, not in-app.
     static func subscriptionCheckoutURL(tier: ManagedTier) -> URL? {
         switch tier {
-        case .starter: return starterCheckoutURL
+        case .starter: return proCheckoutURL  // Starter not sold at launch → Managed/Pro checkout
         case .pro:     return proCheckoutURL
         }
     }
 
+    /// `nil` if the URL is still a placeholder. Rejects a bare `TODO` prefix AND
+    /// any URL whose path still contains a `TODO-` token (the test/live buy-id
+    /// switch builds a full URL even from an unfilled id), so a half-filled
+    /// product softens the affordance instead of opening a dead checkout.
     private static func resolvedURL(_ raw: String) -> URL? {
-        guard !raw.hasPrefix("TODO"), let url = URL(string: raw), url.scheme != nil else {
+        guard !raw.hasPrefix("TODO"), !raw.contains("TODO-"),
+              let url = URL(string: raw), url.scheme != nil else {
             return nil
         }
         return url

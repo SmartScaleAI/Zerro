@@ -241,7 +241,18 @@ final class LicenseService {
     private let licenseKeySlot: KeychainSlot
     private let instanceIDSlot: KeychainSlot
     private let lastValidatedSlot: KeychainSlot
+    /// E7: the license's `created_at` (epoch-seconds string), the start of the
+    /// BYOK 1-year update window. Display/update-gating only — never consulted
+    /// by activation, validation, or the generation gate.
+    private let licenseCreatedAtSlot: KeychainSlot
     private let transport: LicenseTransport
+    /// True when no transport was injected (we built the real URLSession
+    /// one) — the ONLY configuration where the DEBUG local-stack bypass in
+    /// `activate` may fire. Unit tests inject stub transports and must stay
+    /// hermetic even though the shared Xcode scheme ships the ZERRO_* env
+    /// vars enabled — without this gate the bypass hijacked the stubs and
+    /// deterministically failed 3 LicenseServiceTests (Appendix E9).
+    private let usesRealTransport: Bool
     /// Injectable wall clock (throttle math + stamping). Production passes
     /// `Date.init`; tests pass a controllable closure.
     private let clock: () -> Date
@@ -258,6 +269,7 @@ final class LicenseService {
         licenseKeySlot: KeychainSlot? = nil,
         instanceIDSlot: KeychainSlot? = nil,
         lastValidatedSlot: KeychainSlot? = nil,
+        licenseCreatedAtSlot: KeychainSlot? = nil,
         transport: LicenseTransport? = nil,
         clock: @escaping () -> Date = { Date() },
         instanceNameProvider: (() -> String)? = nil
@@ -265,6 +277,8 @@ final class LicenseService {
         self.licenseKeySlot = licenseKeySlot ?? KeychainStore.byokLicenseKey
         self.instanceIDSlot = instanceIDSlot ?? KeychainStore.byokInstanceID
         self.lastValidatedSlot = lastValidatedSlot ?? KeychainStore.byokLastValidated
+        self.licenseCreatedAtSlot = licenseCreatedAtSlot ?? KeychainStore.byokLicenseCreatedAt
+        self.usesRealTransport = (transport == nil)
         self.transport = transport ?? URLSessionLicenseTransport()
         self.clock = clock
         self.instanceNameProvider = instanceNameProvider ?? LicenseService.defaultInstanceName
@@ -293,7 +307,11 @@ final class LicenseService {
         // EntitlementStore's step-2 /session probe then runs unchanged against
         // the LOCAL backend and resolves Managed vs BYOK from the local mirror.
         // Compiled out of release builds; inert in debug unless the var is set.
-        if ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"] != nil {
+        // Gated on `usesRealTransport` so an injected stub transport (unit
+        // tests) is NEVER bypassed — the scheme ships the env var enabled,
+        // and without this gate every activation test silently "succeeded".
+        if usesRealTransport,
+           ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"] != nil {
             let instanceID = "local-dev-instance"
             licenseKeySlot.write(key)
             instanceIDSlot.write(instanceID)
@@ -327,6 +345,9 @@ final class LicenseService {
         licenseKeySlot.write(key)
         instanceIDSlot.write(instanceID)
         stampValidated()
+        // E7: a fresh activation (incl. a pasted renewal key) carries the new
+        // license's created_at — the update window restarts from it.
+        persistCreatedAt(response.body.licenseKey?.createdAt)
         Log.billing.notice("license activated — instance=\(instanceID, privacy: .public) status=\(status.rawValue, privacy: .public)")
 
         return ActivationResult(
@@ -359,7 +380,13 @@ final class LicenseService {
         let response = try await perform(path: Self.validatePath, parameters: parameters)
         let valid = response.body.valid ?? false
         let status = response.body.keyStatus
-        if valid { stampValidated() }
+        if valid {
+            stampValidated()
+            // E7: refresh the update-window start on every good validation, so
+            // a pre-E7 activation backfills its window on the next throttled
+            // re-validation without re-activating.
+            persistCreatedAt(response.body.licenseKey?.createdAt)
+        }
         Log.billing.notice("license validate \u{2192} valid=\(valid, privacy: .public) status=\(status?.rawValue ?? "unknown", privacy: .public)")
         return ValidationResult(valid: valid, status: status)
     }
@@ -423,13 +450,74 @@ final class LicenseService {
         return clock().timeIntervalSince(last) >= Self.revalidationInterval
     }
 
-    /// Clears all three license slots. Used on a definitive revocation and on
+    /// Clears all four license slots. Used on a definitive revocation and on
     /// "deactivate this device". Idempotent.
     func clearLicense() {
         licenseKeySlot.delete()
         instanceIDSlot.delete()
         lastValidatedSlot.delete()
+        licenseCreatedAtSlot.delete()
         Log.billing.notice("license cleared from keychain")
+    }
+
+    // MARK: - Update window (E7 / Appendix F)
+    //
+    // The BYOK "1 year of updates" window: starts at the license's
+    // `created_at` (LemonSqueezy), ends one calendar year later. This is
+    // STRICTLY about which appcast items the Sparkle updater offers
+    // (`UpdateWindowPolicy`) — it never touches license validity, activation,
+    // or the generation gate, and it must NEVER be conflated with the LS
+    // key-expiry `expires_at` (the F.2 trap: that flips validate to
+    // `status:"expired"` → `isDefinitiveRevocation` → wrongly blocks
+    // generation). Out-of-window licenses activate, validate, and generate
+    // exactly like in-window ones.
+
+    /// End of this license's update window (`created_at` + 1 year), or `nil`
+    /// when the window start was never persisted (pre-E7 activation that
+    /// hasn't re-validated yet, Keychain read failure) — callers FAIL OPEN on
+    /// `nil` per the F.0 decision.
+    func updateWindowEnd() -> Date? {
+        guard case .found(let raw) = licenseCreatedAtSlot.readResult(),
+              let seconds = TimeInterval(raw) else { return nil }
+        return Self.updateWindowEnd(createdAt: Date(timeIntervalSince1970: seconds))
+    }
+
+    /// `createdAt` + 1 calendar year (Gregorian, so leap years are exact);
+    /// 365 days as a defensive fallback if calendar math ever fails.
+    /// `nonisolated` so the (non-MainActor) updater policy can call it.
+    nonisolated static func updateWindowEnd(createdAt: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return calendar.date(byAdding: .year, value: 1, to: createdAt)
+            ?? createdAt.addingTimeInterval(365 * 24 * 60 * 60)
+    }
+
+    /// Parses the License API's `created_at` string. The documented shape is
+    /// ISO-8601 with fractional seconds ("2026-04-26T13:36:11.000000Z"), but
+    /// LS has historically also emitted plain ISO and the MySQL-style
+    /// "yyyy-MM-dd HH:mm:ss" — accept all three rather than silently dropping
+    /// the window start over a formatting change. `nil` on anything else
+    /// (the window then stays unset → fail-open).
+    nonisolated static func parseCreatedAt(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if let date = ManagedBackend.parseISODate(raw) { return date }
+        return mysqlStyle.date(from: raw)
+    }
+
+    private nonisolated static let mysqlStyle: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// Persists a parseable `created_at` as epoch seconds (the `lastValidated`
+    /// encoding). An absent/unparseable value KEEPS any previously-stored
+    /// window start — never erase good data over a response shape hiccup.
+    private func persistCreatedAt(_ raw: String?) {
+        guard let date = Self.parseCreatedAt(raw) else { return }
+        licenseCreatedAtSlot.write(String(Int(date.timeIntervalSince1970)))
     }
 
     // MARK: - Throttle stamp
@@ -526,6 +614,7 @@ final class LicenseService {
             licenseKeySlot: InMemoryKeychainSlot(licensed ? "PREVIEW-LICENSE-KEY" : nil),
             instanceIDSlot: InMemoryKeychainSlot(licensed ? "preview-instance-id" : nil),
             lastValidatedSlot: InMemoryKeychainSlot(licensed ? String(Int(Date().timeIntervalSince1970)) : nil),
+            licenseCreatedAtSlot: InMemoryKeychainSlot(nil),
             transport: OfflineLicenseTransport(),
             instanceNameProvider: { "Preview-00000000" }
         )
@@ -559,6 +648,11 @@ struct LicenseAPIResponse: Decodable {
         let status: String?
         let activationLimit: Int?
         let activationUsage: Int?
+        /// E7: the license's issue instant (`created_at`) — the update-window
+        /// start. Kept as the raw string here; `LicenseService.parseCreatedAt`
+        /// owns the tolerant parsing. NEVER decode `expires_at` for the
+        /// window — that's LS key-expiry, the F.2 revocation trap.
+        let createdAt: String?
     }
 
     struct InstanceObject: Decodable {

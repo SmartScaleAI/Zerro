@@ -70,6 +70,7 @@ final class PreferencesStore {
         static let microphoneDeviceID = "vf.microphone.deviceID"
         static let defaultOutputMode = "defaultOutputMode"
         static let redactSecrets = "redactSecrets"
+        static let selectedModelID = "selectedModelID"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -80,6 +81,7 @@ final class PreferencesStore {
             microphoneDeviceID,
             defaultOutputMode,
             redactSecrets,
+            selectedModelID,
         ]
     }
 
@@ -112,6 +114,16 @@ final class PreferencesStore {
         didSet { defaults.set(redactSecrets, forKey: Keys.redactSecrets) }
     }
 
+    /// Phase 6 (multi-model) — the user's last-selected generation model, by
+    /// registry wire id. Written by the model picker; read by the generation
+    /// path, which sends it as the `model` field of `/generate`. Defaults to
+    /// `ModelRegistry.defaultModelID` (the recommended model), and re-defaults
+    /// if a persisted id ever drops out of the registry (kill-switched model),
+    /// so the app never sends an id the server would 400.
+    var selectedModelID: String {
+        didSet { defaults.set(selectedModelID, forKey: Keys.selectedModelID) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -127,6 +139,15 @@ final class PreferencesStore {
         // the privacy-on default instead of UserDefaults' false-for-missing.
         self.redactSecrets = defaults.object(forKey: Keys.redactSecrets) as? Bool
             ?? ProcessingConfig.redactSecretsDefault
+        // Validate the persisted model against the registry: an unknown or
+        // since-disabled id falls back to the default rather than riding to
+        // the server as a guaranteed 400.
+        if let storedModel = defaults.string(forKey: Keys.selectedModelID),
+           let entry = ModelRegistry.entry(id: storedModel), entry.enabled {
+            self.selectedModelID = storedModel
+        } else {
+            self.selectedModelID = ModelRegistry.defaultModelID
+        }
     }
 
     // MARK: - Reset
@@ -145,5 +166,6 @@ final class PreferencesStore {
         microphoneDeviceID = ""
         defaultOutputMode = .instruct
         redactSecrets = ProcessingConfig.redactSecretsDefault
+        selectedModelID = ModelRegistry.defaultModelID
     }
 }

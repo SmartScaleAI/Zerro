@@ -108,6 +108,13 @@ struct PillView: View {
     /// via PillWindowController; PillView stays a pure renderer.
     var stoppedBySleep: Bool = false
 
+    /// Multi-model 6B — the pre-formatted "−N credits · M left" toast line
+    /// (CreditDisplay.chargeLine over the server's exact `credits_charged`,
+    /// D2). `nil` for BYOK/local results and pre-D2 backends — the header then
+    /// renders exactly as before. Threaded from AppState.lastGenerationCharge
+    /// via PillWindowController; PillView stays a pure renderer.
+    var chargeLine: String? = nil
+
     /// Live mic-input peak levels for the recording/wrappingUp waveform.
     /// 22-element rolling buffer threaded from AppState.audioLevels.
     /// `nil` falls back to the static sample bars so previews and the
@@ -222,6 +229,7 @@ struct PillView: View {
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
+                chargeLine: chargeLine,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
@@ -232,6 +240,7 @@ struct PillView: View {
                 markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
+                chargeLine: chargeLine,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
@@ -720,6 +729,10 @@ private struct ResultPillContent: View {
     /// complete and valid, so the note stays neutral (no amber header tint) —
     /// it only explains why a result appeared on its own.
     let stoppedBySleep: Bool
+    /// Multi-model 6B — the "−N credits · M left" toast, rendered as a small
+    /// secondary line under "Prompt ready". `nil` (BYOK/local) keeps the
+    /// single-line header exactly as before.
+    let chargeLine: String?
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
@@ -795,10 +808,20 @@ private struct ResultPillContent: View {
                     .font(.system(size: 14))
                     .foregroundStyle(noNarration ? Color.vfWarningAmber : Color.vfSuccessGreen)
 
-                Text("Prompt ready")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .fixedSize()
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Prompt ready")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .fixedSize()
+                    // Multi-model 6B: the exact server charge (D2), quiet and
+                    // secondary so the header keeps its compact footprint.
+                    if let chargeLine {
+                        Text(chargeLine)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.vfTextSecondary)
+                            .fixedSize()
+                    }
+                }
             }
 
             // Collapses to `xxl` when the pill is content-sized (compact);

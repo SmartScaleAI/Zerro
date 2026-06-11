@@ -90,6 +90,10 @@ struct ZerroApp: App {
         state.managedProxyClient = managedProxy
         // Phase F: the trial token provider + trial-credit bookkeeping.
         state.trialCredits = trial
+        // Phase 6 (multi-model): the proxy generation path reads the picker's
+        // selected model from prefs fresh at request time (same lifetime +
+        // weak-ref contract as the refs above; prefs lives in @State below).
+        state.preferences = prefs
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
@@ -510,7 +514,10 @@ struct ZerroApp: App {
         // without restarting the app.
         areaSelector.present(
             preferences: preferences,
-            onConfirm: { [weak state, weak preferences] selection in
+            // Multi-model: feeds the toolbar model dropdown's credit detail
+            // (Managed/Trial) and BYOK key-gating.
+            entitlements: entitlements,
+            onConfirm: { [weak state, weak preferences] selection, modelID in
                 guard let state else { return }
                 // From a visible result/error (done/failed) reset to idle
                 // first so startRecording's `guard state == .idle` passes
@@ -528,7 +535,11 @@ struct ZerroApp: App {
                     outputMode: preferences?.defaultOutputMode ?? .instruct,
                     // Phase 3: read the redaction pref fresh (same pattern) so a
                     // Settings change takes effect on the next recording.
-                    redactSecrets: preferences?.redactSecrets ?? ProcessingConfig.redactSecretsDefault
+                    redactSecrets: preferences?.redactSecrets ?? ProcessingConfig.redactSecretsDefault,
+                    // Multi-model: the toolbar chip's pick, a PER-RECORDING
+                    // override — handed through here, never persisted (unlike
+                    // mode/mic above, by design).
+                    modelID: modelID
                 )
             },
             onCancel: {

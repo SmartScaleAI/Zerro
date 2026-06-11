@@ -19,13 +19,14 @@
 //    POST /generate   Authorization: Bearer <session token>
 //    {
 //      "mode": "instruct" | "explain",
+//      "model": "gemini-3.5-flash",        // multi-model 6B: a ModelRegistry id
 //      "has_speech": true,                 // Phase 6: false → server skips Whisper
 //      "audio":  { "mime": "audio/m4a", "filename": "recording.m4a",
 //                  "data": "<base64>", "duration_seconds": 42.0 },
 //      "frames": [ { "timestamp": 0.0, "mime": "image/jpeg", "data": "<base64>" }, … ]
 //    }
 //  Response (200): { "prompt": "...", "usage": { input_tokens, output_tokens, model },
-//                    "credits_remaining": N }
+//                    "credits_remaining": N, "credits_charged": N }
 //
 //  Token lifecycle: a token that expires mid-use is refreshed transparently —
 //  on a `401` we mint a fresh token and retry ONCE, then fail. The raw license
@@ -84,6 +85,9 @@ struct ManagedGenerationResult {
     let result: PromptGenerationResult
     /// `credits_remaining` from the server, or `nil` if the body omitted it.
     let creditsRemaining: Int?
+    /// `credits_charged` from the server (multi-model D2) — the exact spend
+    /// for the "−N credits" toast. `nil` from a pre-D2 backend.
+    let creditsCharged: Int?
 }
 
 // MARK: - ManagedProxyClient
@@ -116,6 +120,10 @@ final class ManagedProxyClient {
     /// Defaulted to a fresh UUID so callers that don't care (tests, ad-hoc calls)
     /// still get a valid single-use key; the real path passes the recording's
     /// stable `ProcessedRecording.idempotencyKey`.
+    /// `model` (Phase 6 / multi-model): the registry wire id the server
+    /// validates against ALLOWED_MODELS and prices per-model. Defaults to the
+    /// recommended model — the same model the server resolves when the field
+    /// is absent (D1), so the default is a no-op for older test fixtures.
     func generate(
         audioURL: URL,
         frames: [ExtractedFrame],
@@ -123,6 +131,7 @@ final class ManagedProxyClient {
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
         hasSpeech: Bool = true,
+        model: String = ModelRegistry.defaultModelID,
         tokenProvider: ProxyTokenProviding? = nil,
         idempotencyKey: String = UUID().uuidString
     ) async throws -> ManagedGenerationResult {
@@ -141,7 +150,8 @@ final class ManagedProxyClient {
                 mode: mode,
                 durationSeconds: durationSeconds,
                 clicks: clicks,
-                hasSpeech: hasSpeech
+                hasSpeech: hasSpeech,
+                model: model
             )
         }.value
 
@@ -228,7 +238,8 @@ final class ManagedProxyClient {
         mode: OutputMode,
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
-        hasSpeech: Bool = true
+        hasSpeech: Bool = true,
+        model: String = ModelRegistry.defaultModelID
     ) throws -> Data {
         let audioData: Data
         do {
@@ -277,9 +288,13 @@ final class ManagedProxyClient {
         // `mode` is the ONLY field that steers the server-owned prompt — no
         // transcript, no system prompt (§6.1). Phase 6: `has_speech` is a cost
         // hint, not prompt input — `false` tells the server to skip the Whisper
-        // call (empty segments); it never influences the system prompt.
+        // call (empty segments); it never influences the system prompt. `model`
+        // (multi-model 6B) selects the provider adapter + per-model credit
+        // price server-side — it never influences the system prompt either
+        // (Appendix C #3).
         let payload: [String: Any] = [
             "mode": mode.rawValue,
+            "model": model,
             "audio": audio,
             "frames": frameObjects,
             "clicks": clickObjects,
@@ -319,7 +334,8 @@ final class ManagedProxyClient {
             )
             return ManagedGenerationResult(
                 result: PromptGenerationResult(prompt: decoded.prompt, usage: usage),
-                creditsRemaining: decoded.creditsRemaining
+                creditsRemaining: decoded.creditsRemaining,
+                creditsCharged: decoded.creditsCharged
             )
         case 402:
             throw ManagedGenerationError.outOfCredits

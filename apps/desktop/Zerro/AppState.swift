@@ -72,7 +72,18 @@ public enum RecordingFailureReason: Equatable {
     // Phase 7 — capture-side failures
     case screenRecordingRevoked
     case microphoneRevoked
+    /// No usable input device at start (`SessionError.noMicrophoneAvailable`)
+    /// — a Mac mini with nothing plugged in, AirPods out of the case, etc.
+    /// Environment-driven, NOT a Zerro bug; excluded from Sentry capture.
+    /// Split from `.audioSetupFailed` (Phase 13B follow-up) which IS an
+    /// engineering signal.
     case microphoneUnavailable
+    /// A microphone WAS present but wiring it into the capture stack threw
+    /// (`SessionError.audioInputSetupFailed`). Unlike
+    /// `.microphoneUnavailable` this points at our audio-graph setup, so it
+    /// IS reported to Sentry. Same user-facing copy family — the user's
+    /// next step (check the mic, try again) is identical.
+    case audioSetupFailed
     /// M4 — the microphone captured at start disconnected mid-recording
     /// (AirPods removed, USB mic unplugged). Distinct from
     /// `.microphoneRevoked` (a permission flip, not connectivity) and from
@@ -130,11 +141,29 @@ public enum RecordingFailureReason: Equatable {
     /// Provider returned 429 even after our single in-flight retry.
     /// Suggests sustained rate-limiting, not a transient burst.
     case rateLimited
-    /// Catch-all for provider-side failures (5xx, schema drift, empty
-    /// content, decode errors). Single user-facing copy on purpose —
-    /// the user can't act on the distinction between "5xx" and "the
-    /// JSON shape changed"; what matters is "try again later".
+    /// The provider answered but the CONTENT was wrong: decode failures,
+    /// schema drift, empty content, the proxy's `malformedResponse` /
+    /// `inputRejected`. These mean our contract with the provider broke —
+    /// an engineering signal, reported to Sentry. User-facing copy is
+    /// shared with `.providerUnavailable` on purpose: the user can't act
+    /// on the distinction; what matters is "try again later".
     case providerError
+    /// The provider (or the managed proxy) is having an outage: 5xx,
+    /// 502/503, transport-level URLError weather that isn't offline-class.
+    /// Third-party weather, NOT a Zerro bug — excluded from Sentry capture
+    /// so a regional OpenAI outage can't flood the dashboard (Phase 13B
+    /// follow-up: split out of `.providerError`). Same copy + retryability
+    /// as `.providerError`.
+    case providerUnavailable
+    /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
+    /// off disk when building the provider request — the BYOK services
+    /// wrap this in their `.network` case, and the managed client surfaces
+    /// it as `ManagedGenerationError.artifactUnreadable`. Local I/O on
+    /// files Zerro itself wrote, so it IS reported to Sentry, under its
+    /// own errorCode rather than polluting the provider or processing
+    /// buckets. (Out-of-space is detected earlier and routes to
+    /// `.diskFull`.)
+    case artifactUnreadable
 
     // Phase E — Managed proxy failures
     /// Managed: the month's credits are spent (`generate` returned 402).
@@ -171,13 +200,15 @@ public enum RecordingFailureReason: Equatable {
     /// `AppState.maxFailureRetries`.
     var isRetryable: Bool {
         switch self {
-        case .networkOffline, .rateLimited, .providerError,
+        case .networkOffline, .rateLimited, .providerError, .providerUnavailable,
              .microphoneDisconnected:
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneUnavailable,
+             .audioSetupFailed,
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
+             .artifactUnreadable,
              .apiKeyMissing, .apiAuth,
              .outOfCredits, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
@@ -193,6 +224,8 @@ public enum RecordingFailureReason: Equatable {
             return "Microphone permission is off."
         case .microphoneUnavailable:
             return "Selected microphone isn\u{2019}t available."
+        case .audioSetupFailed:
+            return "Couldn\u{2019}t record from your microphone \u{2014} try again."
         case .microphoneDisconnected:
             return "Your microphone disconnected \u{2014} recording stopped."
         case .streamStartFailed:
@@ -212,23 +245,25 @@ public enum RecordingFailureReason: Equatable {
         case .diskFull:
             return "Your Mac is out of storage \u{2014} free up space and try again."
         case .apiKeyMissing:
-            return "Add your OpenAI API key in Settings to generate prompts."
+            return "Add your API keys in Settings to generate prompts \u{2014} an OpenAI key is required for transcription."
         case .apiAuth:
-            return "OpenAI rejected your API key \u{2014} check it in Settings."
+            return "Your API key was rejected \u{2014} check it in Settings."
         case .networkOffline:
             return "Couldn\u{2019}t connect \u{2014} check your connection."
         case .rateLimited:
             return "Hit a rate limit \u{2014} try again in a minute."
-        case .providerError:
+        case .providerError, .providerUnavailable:
             return "Generation failed \u{2014} try again."
+        case .artifactUnreadable:
+            return "Couldn\u{2019}t process the recording."
         case .outOfCredits:
-            return "You\u{2019}re out of credits this month. Your library stays open \u{2014} credits reset on your renewal date."
+            return "Not enough credits for this model. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
         case .subscriptionInactive:
             return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
         case .trialVerificationRequired:
             return "Verify your email to use your free trial generations."
         case .trialCreditsExhausted:
-            return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own OpenAI key to keep going."
+            return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own API keys to keep going."
         }
     }
 }
@@ -282,6 +317,17 @@ final class AppState {
     /// Defaults to the privacy-on config default for call sites that don't pass
     /// one (tests, menu-bar paths).
     var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
+
+    /// Multi-model: the generation model for THIS recording — the capture
+    /// toolbar's chip selection, captured at `startRecording` time. A
+    /// PER-RECORDING override: the toolbar never writes it back to
+    /// `PreferencesStore.selectedModelID`, so the generation path reads
+    /// `recordingModelID ?? preferences.selectedModelID` — the override
+    /// when the recording came through the overlay, else the persisted
+    /// default. Holding it for the session also pins retries to the model
+    /// the recording was priced against. `nil` for call sites that don't
+    /// pass one (tests, recovered recordings).
+    var recordingModelID: String?
 
     /// Phase 17: the mode a pill override actually ran with, when the user
     /// tapped "Switch" on the confirmation pill. Transient and per-recording
@@ -347,6 +393,22 @@ final class AppState {
     /// RecordingSession.abandon.)
     var stoppedBySleep: Bool = false
 
+    /// Multi-model 6B — the SERVER-reported spend of the result currently
+    /// shown: `(credits_charged, credits_remaining)` from the `/generate` 200
+    /// (D2). Drives the result pill's "−N credits · M left" toast line.
+    /// `charged` is exact (the circuit-breaker can meter above the fixed
+    /// price; an idempotent replay reports the original charge) — never
+    /// derived from the local price table. `nil` for BYOK/local results, on a
+    /// pre-D2 backend, and outside `.done`; reset wherever `generatedPrompt`
+    /// is.
+    var lastGenerationCharge: GenerationCharge?
+
+    /// The toast payload, as a value type so the pill stays a pure renderer.
+    struct GenerationCharge: Equatable {
+        let charged: Int
+        let remaining: Int
+    }
+
     // MARK: Recents
     //
     // Phase 11: history moved off AppState onto a dedicated
@@ -367,6 +429,14 @@ final class AppState {
     @ObservationIgnored weak var entitlements: EntitlementStore?
     @ObservationIgnored var managedProxyClient: ManagedProxyClient?
 
+    // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
+    // (same lifetime + weak-ref contract as `entitlements`). The proxy
+    // generation path reads `selectedModelID` fresh at request time — the same
+    // fresh-read pattern as `redactSecrets` — so a picker change applies to
+    // the next generation. `nil` (tests) falls back to the registry default,
+    // which matches what the server resolves for an absent field (D1).
+    @ObservationIgnored weak var preferences: PreferencesStore?
+
     // Phase F (billing): the server-funded trial-credits layer, wired by
     // `ZerroApp.init`. Used as the proxy's token provider for a trial generation
     // and read for trial-credit display. Weak — owned by ZerroApp @State for the
@@ -377,8 +447,11 @@ final class AppState {
 
     /// Whether the user has their own OpenAI key on file — decides whether a
     /// trial user funds generation locally (their key) or via server credits.
-    /// A closure so tests can drive the routing without touching the Keychain;
-    /// production reads the real `KeychainStore.openAIAPIKey` slot.
+    /// DELIBERATELY OpenAI-only even under multi-provider BYOK (6C): the local
+    /// path transcribes via Whisper before any chat call, so without an OpenAI
+    /// key it cannot run at all — a Gemini/Anthropic-only keyholder keeps
+    /// routing through server credits. A closure so tests can drive the
+    /// routing without touching the Keychain.
     @ObservationIgnored var hasOwnAPIKeyProvider: () -> Bool = {
         if case .found(let key) = KeychainStore.openAIAPIKey.readResult() {
             return !key.isEmpty
@@ -517,7 +590,8 @@ final class AppState {
         selection: SelectionRect? = nil,
         microphoneDeviceID: String = "",
         outputMode: OutputMode = .instruct,
-        redactSecrets: Bool = ProcessingConfig.redactSecretsDefault
+        redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
+        modelID: String? = nil
     ) {
         guard state == .idle else {
             // State name is .public — RecordingState case names contain
@@ -556,11 +630,13 @@ final class AppState {
         activeSelection = selection
         recordingOutputMode = outputMode
         recordingRedactSecrets = redactSecrets
+        recordingModelID = modelID
         effectiveOutputMode = nil
         pendingGeneration = nil
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
+        lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
         failureRetryAttempts = 0
@@ -730,6 +806,7 @@ final class AppState {
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
+        lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
         pendingRecoveryURL = nil
@@ -924,7 +1001,22 @@ final class AppState {
         case .failed(let error):
             Log.state.error("session failed: \(error.localizedDescription, privacy: .private)")
             resetTransientRecordingState()
-            state = .failed(reason: Self.failureReason(from: error))
+            let reason = Self.failureReason(from: error)
+            // Phase 13B follow-up: mirror the start-failure path. A
+            // mid-recording writer/stream failure is exactly the class of
+            // capture-stack bug we want to triage; previously this path
+            // never reached Sentry at all. shouldCapture gates out the
+            // user/environment reasons (revocation, disk full, …) the
+            // same way it does everywhere else.
+            if Self.shouldCapture(reason) {
+                CrashReporting.capture(
+                    error,
+                    message: "Recording failed mid-session",
+                    stage: "recording",
+                    context: ["errorCode": Self.errorCodeString(reason)]
+                )
+            }
+            state = .failed(reason: reason)
         }
     }
 
@@ -1230,6 +1322,14 @@ final class AppState {
                     // false it short-circuits STT (empty segments) — no transcript
                     // round-trip — and composes from frames/OCR/clicks alone.
                     hasSpeech: processed.hasSpeech,
+                    // Multi-model 6B: the toolbar's per-recording pick when
+                    // the recording came through the overlay, else the user's
+                    // persisted picker selection (registry-validated in
+                    // PreferencesStore). Selects the provider + per-model
+                    // price SERVER-side; never steers the prompt.
+                    model: self.recordingModelID
+                        ?? self.preferences?.selectedModelID
+                        ?? ModelRegistry.defaultModelID,
                     tokenProvider: tokenProvider,
                     // M1: the recording's stable key — reused across every retry
                     // (here and `retryFailedPrompt`) so a charged-but-dropped
@@ -1243,6 +1343,12 @@ final class AppState {
 
                 guard self.state == .processing else { return }
                 self.generatedPrompt = result.prompt
+                // Multi-model 6B: the exact server spend for the result pill's
+                // "−N credits · M left" line (both fields or no toast — a
+                // pre-D2 backend omits credits_charged).
+                if let charged = managed.creditsCharged, let remaining = managed.creditsRemaining {
+                    self.lastGenerationCharge = GenerationCharge(charged: charged, remaining: remaining)
+                }
                 // The proxy path has no client transcript, so the no-narration
                 // note (a BYOK affordance) doesn't apply — never flag it here.
                 self.resultHadNoNarration = false
@@ -1310,12 +1416,19 @@ final class AppState {
             return .trialVerificationRequired
         case .rateLimited:
             return .rateLimited
-        case .providerUnavailable, .malformedResponse, .inputRejected:
+        case .providerUnavailable:
+            // 502/503 from the proxy or OpenAI — weather, not captured.
+            return .providerUnavailable
+        case .malformedResponse, .inputRejected:
+            // Contract broke between client and proxy — captured.
             return .providerError
-        case .network(let desc):
-            return desc.isEmpty ? .providerError : .networkOffline
+        case .network:
+            // Transport failure (offline/DNS/timeout). The description is
+            // display-only — there's no underlying URLError to classify, so
+            // treat the whole class as connectivity. Not captured.
+            return .networkOffline
         case .artifactUnreadable:
-            return .processingFailed
+            return .artifactUnreadable
         }
     }
 
@@ -1347,16 +1460,22 @@ final class AppState {
             return .subscriptionInactive
         case .rateLimited:
             return .rateLimited
-        case .providerUnavailable, .malformedResponse, .inputRejected, .authFailed:
-            // Server-side / transient-ish — the retryable provider path. (A real
-            // recording can't trip the input fuse; treat a stray one as provider.)
+        case .providerUnavailable:
+            // 502/503 — proxy/OpenAI weather, retryable, not captured.
+            return .providerUnavailable
+        case .malformedResponse, .inputRejected, .authFailed:
+            // Contract/token machinery broke — engineering signal, captured.
+            // (A real recording can't trip the input fuse; a managed-path
+            // authFailed means OUR session plumbing rejected a token the
+            // entitlement layer thought was valid.)
             return .providerError
-        case .network(let desc):
-            // Reuse the offline-class heuristic so a true offline shows the
-            // connectivity copy, everything else the generic provider copy.
-            return desc.isEmpty ? .providerError : .networkOffline
+        case .network:
+            // Transport failure (offline/DNS/timeout). The description is
+            // display-only — there's no underlying URLError to classify, so
+            // treat the whole class as connectivity. Not captured.
+            return .networkOffline
         case .artifactUnreadable:
-            return .processingFailed
+            return .artifactUnreadable
         }
     }
 
@@ -1471,8 +1590,9 @@ final class AppState {
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
                 // Phase 13B: transcription-stage failures worth triaging
-                // (provider decode / 5xx) reach Sentry; user/environment
-                // failures are gated out by shouldCapture.
+                // (provider decode failures, unreadable local artifacts)
+                // reach Sentry; user/environment failures AND provider
+                // 5xx outages are gated out by shouldCapture.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -1504,20 +1624,40 @@ final class AppState {
             do {
                 self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
                 Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
-                let result = try await OpenAIPromptGenerationService().generatePrompt(
+                // Multi-model 6C: route to the selected model's provider,
+                // falling back to the cheapest model whose provider HAS a key
+                // (the persisted selection may point at a keyless provider —
+                // e.g. the recommended Gemini default on an OpenAI-only
+                // setup). No chat key at all → the same missingAPIKey →
+                // .apiKeyMissing pill the single-provider path used.
+                let selectedID = self.recordingModelID
+                    ?? self.preferences?.selectedModelID
+                    ?? ModelRegistry.defaultModelID
+                guard let entry = BYOKRouting.effectiveEntry(
+                    selectedModelID: selectedID,
+                    availableProviders: ProviderKeys.availableProviders()
+                ) else {
+                    throw PromptGenerationError.missingAPIKey
+                }
+                if entry.id != selectedID {
+                    Log.promptGen.notice(
+                        "BYOK fallback: selected \(selectedID, privacy: .public) has no provider key — using \(entry.id, privacy: .public)"
+                    )
+                }
+                let result = try await BYOKRouting.service(for: entry).generatePrompt(
                     timeline: timeline,
                     systemPrompt: PromptGenerationSystemPrompt.composed(for: mode)
                 )
-                // Model name (.public — "gpt-4o", a constant we control)
-                // and token counts (.public — metrics, not content).
-                // result.prompt.count is the LENGTH of the generated
-                // prompt, not the text itself.
+                // Model name (.public — a registry id we control) and token
+                // counts (.public — metrics, not content). result.prompt.count
+                // is the LENGTH of the generated prompt, not the text itself.
                 Log.promptGen.info(
                     "OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public)"
                 )
                 Self.logCost(
                     audioDuration: processed.duration,
-                    usage: result.usage
+                    usage: result.usage,
+                    requestedModelID: entry.id
                 )
 
                 guard self.state == .processing else { return }
@@ -1539,8 +1679,9 @@ final class AppState {
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
                 // Phase 13B: report engineering-signal failures to Sentry.
-                // The remaining .providerError (decode failures, 5xx floods,
-                // empty content) is the bucket we want to triage.
+                // .providerError here is decode failures / empty content —
+                // contract drift we want to triage. 5xx outages map to
+                // .providerUnavailable and are gated out by shouldCapture.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -1654,26 +1795,32 @@ final class AppState {
     /// "what counts as an engineering signal" lives in one place.
     ///
     /// Captured: reasons that indicate Zerro misbehaved (capture stack
-    /// failed to start / interrupted mid-stream, local processing
-    /// pipeline blew up, provider returned malformed/decode-failing
-    /// content). These are the ones we'd want to triage.
+    /// failed to start / interrupted mid-stream, audio-graph setup threw
+    /// with a device present, local processing pipeline blew up, our own
+    /// artifacts wouldn't read back off disk, provider returned
+    /// malformed/decode-failing content). These are the ones we'd want
+    /// to triage.
     ///
     /// NOT captured: reasons that are user- or environment-driven and
     /// already surfaced to the user with actionable copy (permission
-    /// revoked, disk full, recording too short, missing/invalid API
-    /// key, network offline, provider rate-limit). Reporting those
-    /// would be noise — they're not bugs in Zerro.
+    /// revoked, no microphone connected, disk full, recording too short,
+    /// missing/invalid API key, network offline, provider rate-limit,
+    /// provider 5xx outage). Reporting those would be noise — they're
+    /// not bugs in Zerro, and an upstream outage must not be able to
+    /// flood the dashboard.
     private static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
-             .microphoneUnavailable,
-             .processingFailed,
+             .audioSetupFailed,
+             .processingFailed, .artifactUnreadable,
              .providerError:
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneDisconnected,
+             .microphoneUnavailable,
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
+             .providerUnavailable,
              .outOfCredits, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -1705,8 +1852,13 @@ final class AppState {
             switch sessionError {
             case .noDisplaysAvailable, .alreadyStarted:
                 return .streamStartFailed
-            case .noMicrophoneAvailable, .audioInputSetupFailed:
+            case .noMicrophoneAvailable:
+                // No device present — environmental, not captured.
                 return .microphoneUnavailable
+            case .audioInputSetupFailed:
+                // Device present but our audio-graph setup threw —
+                // engineering signal, captured.
+                return .audioSetupFailed
             case .microphoneDisconnected:
                 return .microphoneDisconnected
             case .selectedDisplayUnavailable:
@@ -1727,8 +1879,12 @@ final class AppState {
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
             case .network(let underlying):
-                return Self.isOfflineClass(underlying) ? .networkOffline : .providerError
-            case .server, .decodeFailure:
+                return Self.networkClassReason(underlying)
+            case .server:
+                // 5xx — provider weather, not captured.
+                return .providerUnavailable
+            case .decodeFailure:
+                // Response contract broke — captured.
                 return .providerError
             }
         }
@@ -1738,8 +1894,12 @@ final class AppState {
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
             case .network(let underlying):
-                return Self.isOfflineClass(underlying) ? .networkOffline : .providerError
-            case .server, .decodeFailure, .emptyContent:
+                return Self.networkClassReason(underlying)
+            case .server:
+                // 5xx — provider weather, not captured.
+                return .providerUnavailable
+            case .decodeFailure, .emptyContent:
+                // Response contract broke — captured.
                 return .providerError
             }
         }
@@ -1796,10 +1956,32 @@ final class AppState {
         }
     }
 
+    /// Classifies the `underlying` error of a BYOK service's `.network`
+    /// case. That case is overloaded at the throw sites: URLSession
+    /// transport failures AND local `Data(contentsOf:)` reads of our own
+    /// frame/audio artifacts both arrive here, and they deserve opposite
+    /// Sentry treatment.
+    ///
+    ///   • URLError, offline-class  → `.networkOffline` (user's
+    ///     connectivity; not captured)
+    ///   • URLError, anything else  → `.providerUnavailable` (transport
+    ///     weather between us and the provider; not captured)
+    ///   • not a URLError           → `.artifactUnreadable` (local I/O on
+    ///     files Zerro wrote — `Data(contentsOf:)` throws CocoaErrors,
+    ///     never URLErrors; captured under its own errorCode)
+    ///
+    /// Out-of-space never reaches this: `failureReason` checks
+    /// `isOutOfSpace` before any typed-error branch.
+    private static func networkClassReason(_ underlying: Error) -> RecordingFailureReason {
+        guard underlying is URLError else { return .artifactUnreadable }
+        return isOfflineClass(underlying) ? .networkOffline : .providerUnavailable
+    }
+
     /// Detects URLError codes that mean "the local machine couldn't
     /// reach the network" vs. "the network reached an unhappy server".
     /// Offline-class codes go to .networkOffline (actionable: check
-    /// connection); others fall through to .providerError.
+    /// connection); other URLErrors fall through to .providerUnavailable
+    /// via `networkClassReason`.
     private static func isOfflineClass(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {
@@ -1867,26 +2049,26 @@ final class AppState {
     // MARK: - Cost logging
 
     /// Emits a one-line-per-stage cost estimate to the console after a
-    /// successful run. Whisper is per-minute (round up to nearest
-    /// fractional minute, the OpenAI billing model). GPT-4o is per-
-    /// token (input + output priced separately). Pricing constants
-    /// pinned with a date comment in their respective service files —
-    /// when OpenAI changes pricing, those are the two places to update.
-    private static func logCost(audioDuration: CMTime, usage: TokenUsage) {
+    /// successful run. Whisper is per-minute (round up to nearest fractional
+    /// minute, the OpenAI billing model). Chat is per-token via
+    /// `BYOKCostEstimator`, priced on the REQUESTED registry model id (a
+    /// provider may report a dated alias the table doesn't carry — same rule
+    /// as the server). An unpriced id logs honestly as unpriced.
+    private static func logCost(audioDuration: CMTime, usage: TokenUsage, requestedModelID: String) {
         let durationSeconds = CMTimeGetSeconds(audioDuration)
         let whisperCost = OpenAITranscriptionService.estimatedCost(audioDurationSeconds: durationSeconds)
-        let gptCost = OpenAIPromptGenerationService.estimatedCost(usage: usage)
+        let chatCost = BYOKCostEstimator.chatCostUSD(modelID: requestedModelID, usage: usage)
         // All cost lines: durations, model names, token counts, and
         // dollar amounts are .public — operational metrics with no user
         // content. Pre-format Doubles with String(format:) for terse
         // interpolation that's SDK-stable across Xcode versions.
         let durStr = String(format: "%.1fs", durationSeconds)
         let whisperStr = String(format: "$%.4f", whisperCost)
-        let gptStr = String(format: "$%.4f", gptCost)
-        let totalStr = String(format: "$%.4f", whisperCost + gptCost)
+        let chatStr = chatCost.map { String(format: "$%.4f", $0) } ?? "unpriced"
+        let totalStr = chatCost.map { String(format: "$%.4f", whisperCost + $0) } ?? "unpriced"
         Log.cost.info("whisper-1: audio=\(durStr, privacy: .public) → \(whisperStr, privacy: .public)")
         Log.cost.info(
-            "\(usage.model, privacy: .public): in=\(usage.inputTokens, privacy: .public) out=\(usage.outputTokens, privacy: .public) → \(gptStr, privacy: .public)"
+            "\(usage.model, privacy: .public): in=\(usage.inputTokens, privacy: .public) out=\(usage.outputTokens, privacy: .public) → \(chatStr, privacy: .public)"
         )
         Log.cost.info("total: \(totalStr, privacy: .public)")
     }

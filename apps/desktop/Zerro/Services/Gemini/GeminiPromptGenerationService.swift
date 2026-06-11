@@ -1,0 +1,289 @@
+//
+//  GeminiPromptGenerationService.swift
+//  Zerro
+//
+//  Phase 6 (multi-model 6C) — PromptGenerationService impl backed by the
+//  Gemini generateContent API, for BYOK users running a Gemini chat model on
+//  their own key. Transcription is NOT handled here — Whisper stays OpenAI
+//  regardless of the chat provider (the interleaver needs segment-level
+//  timestamps), so a BYOK user always needs an OpenAI key too.
+//
+//  Wire format ported from the Managed proxy's adapter
+//  (supabase/functions/generate/providers/gemini.ts — verified against
+//  ai.google.dev docs 2026-06-04) and the Phase 0 eval harness. KEEP IN SYNC
+//  with that adapter if either changes:
+//    POST {base}/models/{model}:generateContent
+//    Headers:  x-goog-api-key: <key>   (header, never the URL — it would log)
+//    Body: {
+//      "systemInstruction": {"parts": [{"text": "<composed system prompt>"}]},
+//      "contents": [{"role": "user", "parts": [
+//        {"text": "\n[0:00] "},
+//        {"inlineData": {"mimeType": "image/jpeg", "data": "<base64>"},
+//         "mediaResolution": {"level": "media_resolution_high"}},   // per-part (Gemini 3)
+//        {"text": "\n[0:00–0:08] \"okay so this is...\""}, ...
+//      ]}],
+//      "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"}}
+//    }
+//  Response: candidates[0].content.parts (skip `thought` parts),
+//    usageMetadata {promptTokenCount, candidatesTokenCount, thoughtsTokenCount
+//    — thoughts billed as output, folded in}, modelVersion.
+//
+//  The interleaved text/image rendering (timestamp tags, OCR lines, click
+//  lines) is byte-identical to the OpenAI impl, the Managed interleave.ts,
+//  and the eval harness — KEEP IN SYNC if you touch the format.
+//
+
+import Foundation
+import os
+
+struct GeminiPromptGenerationService: PromptGenerationService {
+
+    // `nonisolated` so the off-main encodeBody/detached task can read them
+    // under the project's MainActor-default isolation (same as the OpenAI
+    // impl's `model` static).
+    private nonisolated static let base = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
+    /// Mirrors the server's GEMINI_THINKING_LEVEL default — the rewrite task
+    /// rarely benefits from deep thinking, and "high" bills thinking tokens.
+    private nonisolated static let thinkingLevel = "low"
+
+    /// The registry model id to run (e.g. "gemini-3.5-flash"). Selected per
+    /// generation by BYOKRouting.
+    let model: String
+
+    func generatePrompt(
+        timeline: InterleavedTimeline,
+        systemPrompt: String
+    ) async throws -> PromptGenerationResult {
+        guard let apiKey = ProviderKeys.resolveKey(for: .gemini) else {
+            throw PromptGenerationError.missingAPIKey
+        }
+
+        // Off-main body build, same discipline as the OpenAI impl: per-frame
+        // disk read + base64 + full JSON encode before the first await.
+        let model = self.model
+        let bodyData = try await Task.detached(priority: .userInitiated) {
+            try Self.encodeBody(timeline: timeline, systemPrompt: systemPrompt)
+        }.value
+
+        var request = URLRequest(
+            url: Self.base.appendingPathComponent("models/\(model):generateContent")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.httpBody = bodyData
+
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            // Generic URLSession + single-retry-on-429 plumbing (despite the
+            // OpenAIClient namespace, nothing in it is OpenAI-specific).
+            (data, response) = try await OpenAIClient.performWithRetry(request)
+        } catch {
+            throw PromptGenerationError.network(underlying: error)
+        }
+
+        switch response.statusCode {
+        case 200...299:
+            break
+        case 401, 403:
+            throw PromptGenerationError.auth
+        case 429:
+            throw PromptGenerationError.rateLimited
+        default:
+            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            Log.promptGen.error("Gemini generateContent non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
+            throw PromptGenerationError.server(status: response.statusCode)
+        }
+
+        let decoded: GenerateContentResponse
+        do {
+            decoded = try JSONDecoder().decode(GenerateContentResponse.self, from: data)
+        } catch {
+            throw PromptGenerationError.decodeFailure(underlying: error)
+        }
+
+        // A prompt-level block (safety/recitation) means no candidate at all;
+        // a non-STOP finish yields no usable text. Both are the model's
+        // choice, not an outage → emptyContent (mirrors the server adapter).
+        if decoded.promptFeedback?.blockReason != nil {
+            throw PromptGenerationError.emptyContent
+        }
+        let candidate = decoded.candidates?.first
+        let finish = candidate?.finishReason
+        let usableFinish = finish == nil || finish == "STOP" || finish == "MAX_TOKENS"
+        let text = (candidate?.content?.parts ?? [])
+            .filter { $0.thought != true }
+            .compactMap(\.text)
+            .joined()
+        guard usableFinish, !text.isEmpty else {
+            throw PromptGenerationError.emptyContent
+        }
+
+        // thoughtsTokenCount is billed at the output rate — fold it into
+        // outputTokens so the cost log matches the bill (server parity).
+        let usage = decoded.usageMetadata
+        return PromptGenerationResult(
+            prompt: text,
+            usage: TokenUsage(
+                inputTokens: usage?.promptTokenCount ?? 0,
+                outputTokens: (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0),
+                model: decoded.modelVersion ?? model
+            )
+        )
+    }
+
+    // MARK: - Body encoding
+
+    /// Builds the generateContent body from the timeline. Rendering rules are
+    /// byte-identical to the OpenAI impl (one "\n[tag] " text part per frame,
+    /// the image part, an optional OCR text part, speech/click lines).
+    nonisolated static func encodeBody(
+        timeline: InterleavedTimeline,
+        systemPrompt: String
+    ) throws -> Data {
+        var parts: [Part] = []
+        for item in timeline.items {
+            switch item {
+            case .frame(_, let imageURL, let ocrText):
+                let base64: String
+                do {
+                    base64 = try Data(contentsOf: imageURL).base64EncodedString()
+                } catch {
+                    throw PromptGenerationError.network(underlying: error)
+                }
+                parts.append(Part(text: "\n\(item.timestampTag) "))
+                parts.append(Part(
+                    inlineData: InlineData(mimeType: "image/jpeg", data: base64),
+                    // Per-part media resolution (Gemini 3) — the analog of
+                    // OpenAI detail:"high"; matches the server adapter.
+                    mediaResolution: MediaResolution(level: "media_resolution_high")
+                ))
+                if let ocr = ocrText, !ocr.isEmpty {
+                    parts.append(Part(text: "\n\(item.timestampTag) on-screen text: \(ocr)"))
+                }
+            case .speech(_, _, let text):
+                parts.append(Part(text: "\n\(item.timestampTag) \"\(text)\""))
+            case .click(_, let label):
+                parts.append(Part(text: "\n\(item.timestampTag) clicked \"\(label)\""))
+            }
+        }
+
+        let body = GenerateContentRequest(
+            systemInstruction: SystemInstruction(parts: [TextPart(text: systemPrompt)]),
+            contents: [Content(role: "user", parts: parts)],
+            generationConfig: GenerationConfig(
+                thinkingConfig: ThinkingConfig(thinkingLevel: thinkingLevel)
+            )
+        )
+        do {
+            return try JSONEncoder().encode(body)
+        } catch {
+            throw PromptGenerationError.decodeFailure(underlying: error)
+        }
+    }
+
+    // MARK: - Key validation (Settings pill)
+
+    /// Cheapest authenticated probe: GET /models with the key header. Same
+    /// semantics as OpenAIClient.validateKey (401/403 → invalid; transient
+    /// trouble → inconclusive, never punitive).
+    static func validateKey(_ apiKey: String) async -> OpenAIClient.KeyValidationResult {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .invalidKey }
+
+        var request = URLRequest(url: base.appendingPathComponent("models"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        request.setValue(trimmed, forHTTPHeaderField: "x-goog-api-key")
+
+        do {
+            let (_, raw) = try await OpenAIClient.session.data(for: request)
+            guard let http = raw as? HTTPURLResponse else { return .inconclusive }
+            switch http.statusCode {
+            case 200...299: return .valid
+            case 400, 401, 403: return .invalidKey // Gemini rejects bad keys as 400
+            default: return .inconclusive
+            }
+        } catch {
+            return .inconclusive
+        }
+    }
+
+    // MARK: - Wire types — request
+
+    private nonisolated struct GenerateContentRequest: Encodable {
+        let systemInstruction: SystemInstruction
+        let contents: [Content]
+        let generationConfig: GenerationConfig
+    }
+
+    private nonisolated struct SystemInstruction: Encodable {
+        let parts: [TextPart]
+    }
+
+    private nonisolated struct TextPart: Encodable {
+        let text: String
+    }
+
+    private nonisolated struct Content: Encodable {
+        let role: String
+        let parts: [Part]
+    }
+
+    private nonisolated struct Part: Encodable {
+        var text: String?
+        var inlineData: InlineData?
+        var mediaResolution: MediaResolution?
+    }
+
+    private nonisolated struct InlineData: Encodable {
+        let mimeType: String
+        let data: String
+    }
+
+    private nonisolated struct MediaResolution: Encodable {
+        let level: String
+    }
+
+    private nonisolated struct GenerationConfig: Encodable {
+        let thinkingConfig: ThinkingConfig
+    }
+
+    private nonisolated struct ThinkingConfig: Encodable {
+        let thinkingLevel: String
+    }
+
+    // MARK: - Wire types — response
+
+    private struct GenerateContentResponse: Decodable {
+        let candidates: [Candidate]?
+        let promptFeedback: PromptFeedback?
+        let usageMetadata: UsageMetadata?
+        let modelVersion: String?
+
+        struct Candidate: Decodable {
+            let content: CandidateContent?
+            let finishReason: String?
+        }
+
+        struct CandidateContent: Decodable {
+            let parts: [ResponsePart]?
+        }
+
+        struct ResponsePart: Decodable {
+            let text: String?
+            let thought: Bool?
+        }
+
+        struct PromptFeedback: Decodable {
+            let blockReason: String?
+        }
+
+        struct UsageMetadata: Decodable {
+            let promptTokenCount: Int?
+            let candidatesTokenCount: Int?
+            let thoughtsTokenCount: Int?
+        }
+    }
+}

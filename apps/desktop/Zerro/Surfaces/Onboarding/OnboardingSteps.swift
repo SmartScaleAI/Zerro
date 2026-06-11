@@ -147,7 +147,7 @@ struct EmailStepView: View {
             return "Your free trial is ready \u{2014} you\u{2019}re good to go."
         }
         if alreadyUsed {
-            return "This email has already used its free trial. You can continue \u{2014} add your own OpenAI key or subscribe anytime."
+            return "This email has already used its free trial. You can continue \u{2014} add your own API keys or subscribe anytime."
         }
         switch step {
         case .email:

@@ -98,6 +98,14 @@ final class EntitlementStore {
     /// only renders them. `nil` whenever the user isn't Managed.
     private(set) var managedSnapshot: ManagedEntitlementSnapshot?
 
+    /// The trial grant TOTAL (E4) — the usage meter's bar denominator,
+    /// forwarded from `TrialCreditsManager`'s cache of the last verify/resume
+    /// response. `nil` before verification, in trial-less constructions, or
+    /// against an older server (the meter then stays bar-less). DISPLAY ONLY.
+    var trialCreditsLimit: Int? {
+        trialCredits?.creditsLimit
+    }
+
     // MARK: - Init
 
     /// `nil` constructs the default real-Keychain dependencies inside the
@@ -685,12 +693,18 @@ final class EntitlementStore {
         // the dev selection. A forced `.managed` synthesizes an `active`
         // snapshot from its associated values; any other state clears it.
         if case .managed(let tier, let credits, let reset) = newState {
+            let limit = max(credits, credits == 0 ? 100 : credits)
             managedSnapshot = ManagedEntitlementSnapshot(
                 tier: tier,
                 status: .active,
                 creditsRemaining: credits,
-                creditsLimit: max(credits, credits == 0 ? 100 : credits),
-                resetDate: reset == .distantFuture ? nil : reset
+                creditsLimit: limit,
+                resetDate: reset == .distantFuture ? nil : reset,
+                // Synthesize a plan breakdown (no top-ups) so the 6F usage
+                // meter renders its bar under a dev-forced state too.
+                planCreditsUsed: max(0, limit - credits),
+                planCreditsLimit: limit,
+                topupCreditsRemaining: 0
             )
         } else {
             managedSnapshot = nil
@@ -767,19 +781,23 @@ final class EntitlementStore {
         await performRevalidation()
     }
 
-    /// The full set of states the dev panel can force, paired with short
-    /// labels. Kept here so the paywall dev panel and the menu-bar debug
-    /// rows iterate one source of truth rather than each hard-coding the
-    /// list. The managed `resetDate` is a plausible ~30-days-out display
-    /// value; nothing gates on it (display-only per `EntitlementState`).
+    /// The states the dev panel can force, paired with short labels — only
+    /// the plans we actually SELL (one Managed plan + BYOK), so the debug
+    /// menu never suggests a tier structure that isn't on the paywall.
+    /// `ManagedTier.starter` deliberately does NOT appear here: the case is
+    /// retained in the model as future-proofing for a possible cheaper tier
+    /// (finding F1), but it's unsold and forcing it would only mislead.
+    /// Consumed by the menu-bar `EntitlementDebugPicker` (the single
+    /// force-entitlement surface; the paywall's copy was removed).
+    /// The managed `resetDate` is a plausible ~30-days-out display value;
+    /// nothing gates on it (display-only per `EntitlementState`).
     static var devStates: [(label: String, state: EntitlementState)] {
         let resetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
         return [
             ("Trial", .trial(creditsRemaining: 15)),
             ("Expired", .expired),
             ("BYOK", .byok),
-            ("Managed · Starter", .managed(tier: .starter, creditsRemaining: 100, resetDate: resetDate)),
-            ("Managed · Pro", .managed(tier: .pro, creditsRemaining: 300, resetDate: resetDate)),
+            ("Managed", .managed(tier: .pro, creditsRemaining: 300, resetDate: resetDate)),
         ]
     }
 

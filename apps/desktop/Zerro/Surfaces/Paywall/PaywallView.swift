@@ -14,14 +14,17 @@
 //  `vfCardBackground`, and spacing tokens — so the two surfaces read as one
 //  app. Copy is non-punitive (the trial ended, here's how to keep going).
 //
-//  Three buy paths (billing-plan §8):
-//    • BYOK — pay once, fund generation with your own OpenAI key. "Get a
+//  Three buy paths (billing-plan §8), laid out to mirror the website's
+//  pricing section (apps/web/…/axis/pricing.tsx): the two plans side by
+//  side — Managed leading left (the recommended path, accent-highlighted,
+//  "Most popular"), BYOK right — with the shared activate row below:
+//    • Managed — THE Zerro-hosted credit subscription (Phase E). Monthly vs
+//      yearly ($12/mo billed annually) is chosen on the LemonSqueezy
+//      checkout page. Sends the recording to Zerro's server for processing —
+//      surfaced honestly in the privacy note below.
+//    • BYOK — pay once, fund generation with your own provider keys. "Get a
 //      license" opens the LemonSqueezy hosted checkout (NSWorkspace). Fully
 //      LOCAL: recordings never leave the Mac.
-//    • Starter / Pro — Zerro-hosted credit subscriptions (Phase E). A
-//      monthly/yearly toggle picks the LemonSqueezy subscription checkout for
-//      that tier+period. Managed sends the recording to Zerro's server for
-//      processing — surfaced honestly in the privacy note below.
 //    • Activate — one shared "enter your key" field (reusing the Phase C
 //      `LicenseService.activate` path) handles BOTH a BYOK license and a
 //      subscription key: `EntitlementStore.activate` probes the backend to
@@ -43,22 +46,21 @@ import SwiftUI
 struct PaywallView: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
-    var body: some View {
-        VStack(spacing: 0) {
-            mainPanel
+    /// Window width. Sized for the two side-by-side plan cards (website
+    /// pricing parity) with comfortable padding — each card gets ~350pt.
+    /// The Window scene uses `.windowResizability(.contentSize)`, so this
+    /// frame IS the window size; nothing else pins it.
+    private static let windowWidth: CGFloat = 760
 
-            #if DEBUG
-            // Mirrors OnboardingDevPanel's placement: a DEBUG-only panel
-            // pinned below the main card so every entitlement state — and
-            // thus every gate branch — can be forced without a real
-            // billing backend. See PaywallDevPanel.
-            PaywallDevPanel()
-                .padding(.horizontal, VFSpacing.xxl)
-                .padding(.bottom, VFSpacing.lg)
-            #endif
-        }
-        .frame(width: 580)
-        .background(Color.vfCardBackground)
+    /// Fixed height of the plan-cards row. Width is fixed, so the wrapped
+    /// card copy is deterministic; the fixed row is what makes the two cards
+    /// EQUAL height with bottom-aligned CTAs (each card fills it).
+    private static let planCardsHeight: CGFloat = 200
+
+    var body: some View {
+        mainPanel
+            .frame(width: Self.windowWidth)
+            .background(Color.vfCardBackground)
     }
 
     // MARK: - Main panel
@@ -82,31 +84,33 @@ struct PaywallView: View {
         } actions: {
             optionStack
         }
-        .frame(minHeight: 520)
+        .frame(minHeight: 600)
     }
 
     // MARK: - Options
 
     private var optionStack: some View {
         VStack(spacing: VFSpacing.md) {
-            // BYOK — one-time license, the user funds generation with their
-            // own OpenAI key. Fully local.
-            BuyOnceCard()
+            // The two plans SIDE BY SIDE (website pricing parity): Managed
+            // leads left — the recommended path, accent-highlighted — BYOK
+            // right. Equal widths (each card maxWidth .infinity), equal
+            // heights (both fill the fixed row), CTAs bottom-aligned.
+            HStack(alignment: .top, spacing: VFSpacing.md) {
+                // Managed — THE plan (multi-model §1.3): Zerro-hosted
+                // credits, all six models, no API keys to manage. Monthly vs
+                // yearly ($12/mo billed annually) is chosen on the
+                // LemonSqueezy page.
+                SubscriptionOptionCard(
+                    tier: .pro,
+                    title: "Managed",
+                    subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
+                )
 
-            // Managed Starter — Zerro-hosted credits, smaller monthly allotment.
-            // Monthly vs yearly is chosen on the LemonSqueezy checkout page.
-            SubscriptionOptionCard(
-                tier: .starter,
-                title: "Starter",
-                subtitle: "We handle the AI. A monthly pool of credits, no API key to manage."
-            )
-
-            // Managed Pro — Zerro-hosted credits, larger monthly allotment.
-            SubscriptionOptionCard(
-                tier: .pro,
-                title: "Pro",
-                subtitle: "Everything in Starter with a larger monthly credit pool for heavy use."
-            )
+                // BYOK — $69 one-time license; the user funds generation with
+                // their own provider API keys. Fully local.
+                BuyOnceCard()
+            }
+            .frame(height: Self.planCardsHeight)
 
             // Honest privacy note (§14.5): Managed transits the server; BYOK
             // stays local. Don't let the local-first claim cover Managed.
@@ -131,17 +135,20 @@ struct PaywallView: View {
 /// page (no in-app period toggle), and `*Yearly` are kept here as the canonical
 /// record of those numbers. One place, no scattered literals.
 private enum Price {
-    static let byok = "$39 one-time"
-    static let starterMonthly = "$12/mo"
-    static let starterYearly = "$120/yr"
-    static let proMonthly = "$29/mo"
-    static let proYearly = "$290/yr"
+    // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
+    // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
+    // The retired Starter tier is not sold (it survives server-side as a
+    // future cheaper tier only).
+    static let byok = "$69 one-time"
+    static let managedMonthly = "$15/mo"
+    static let managedYearly = "$144/yr"
 
     /// The price label shown on a subscription card (the monthly figure).
+    /// Only `.pro` (the Managed plan) is rendered; `.starter` is unsold.
     static func subscription(tier: ManagedTier) -> String {
         switch tier {
-        case .starter: return starterMonthly
-        case .pro:     return proMonthly
+        case .starter: return managedMonthly
+        case .pro:     return managedMonthly
         }
     }
 }
@@ -212,11 +219,13 @@ final class PaywallActivationModel {
 
 // MARK: - Buy-once (BYOK) card
 
-/// The BYOK purchase card: pay once, fund with your own OpenAI key. Activation
-/// of the resulting key happens through the shared `ActivateLicenseCard` below.
+/// The BYOK purchase card: pay once, fund with your own provider keys.
+/// Activation of the resulting key happens through the shared
+/// `ActivateLicenseCard` below. Fills the plan-cards row so it matches the
+/// Managed card's height; the Spacer pins the CTA to the bottom edge.
 private struct BuyOnceCard: View {
     var body: some View {
-        OptionCardChrome {
+        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Bring your own key")
                     .font(.system(size: 15, weight: .semibold))
@@ -227,14 +236,15 @@ private struct BuyOnceCard: View {
                     .foregroundStyle(Color.vfTextPrimary)
             }
 
-            Text("Pay once. Use your own OpenAI API key — no monthly fee. Recordings stay fully on your Mac.")
+            Text("Pay once \u{2014} includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings stay fully on your Mac.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Spacer(minLength: VFSpacing.xs)
+
             OnboardingPrimaryButton("Get a license", action: openCheckout)
-                .padding(.top, VFSpacing.xs)
         }
     }
 
@@ -250,8 +260,10 @@ private struct BuyOnceCard: View {
 
 // MARK: - Subscription (Managed) card
 
-/// One managed subscription option (Starter / Pro). Opens the LemonSqueezy
-/// subscription checkout for the tier in the browser (same pattern as BYOK) —
+/// The Managed subscription card — the recommended path, so it carries the
+/// website pricing section's hierarchy cues: an accent-highlighted chrome
+/// and a "Most popular" badge (pricing.tsx renders the same pair). Opens the
+/// LemonSqueezy subscription checkout in the browser (same pattern as BYOK) —
 /// monthly vs yearly is chosen on the checkout page. The user activates the
 /// issued key afterward via the shared `ActivateLicenseCard`.
 private struct SubscriptionOptionCard: View {
@@ -260,11 +272,12 @@ private struct SubscriptionOptionCard: View {
     let subtitle: String
 
     var body: some View {
-        OptionCardChrome {
-            HStack(alignment: .firstTextBaseline) {
+        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true, highlighted: true) {
+            HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
                 Text(title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
+                MostPopularBadge()
                 Spacer(minLength: VFSpacing.sm)
                 Text(Price.subscription(tier: tier))
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -277,8 +290,9 @@ private struct SubscriptionOptionCard: View {
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Spacer(minLength: VFSpacing.xs)
+
             OnboardingPrimaryButton("Subscribe to \(title)", action: openCheckout)
-                .padding(.top, VFSpacing.xs)
         }
     }
 
@@ -297,7 +311,7 @@ private struct SubscriptionOptionCard: View {
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
 private struct ManagedPrivacyNote: View {
     var body: some View {
-        Text("Starter & Pro send your recording to Zerro\u{2019}s server to generate the prompt. Bring-your-own-key stays fully on your Mac.")
+        Text("Managed sends your recording to Zerro\u{2019}s server to generate the prompt. Bring-your-own-key stays fully on your Mac.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)
@@ -405,25 +419,50 @@ private struct ActivateLicenseCard: View {
 // MARK: - Option card chrome
 
 /// The shared card chrome (background fill + hairline border + padding) every
-/// paywall option uses, so the cards read as one set.
+/// paywall option uses, so the cards read as one set. `fillsHeight` makes the
+/// card stretch to its container (the fixed plan-cards row → equal heights);
+/// `highlighted` is the website pricing section's recommended-plan treatment
+/// (accent border + slightly lifted fill) for the Managed card.
 private struct OptionCardChrome<Content: View>: View {
     var alignment: HorizontalAlignment = .leading
+    var padding: CGFloat = VFSpacing.md
+    var fillsHeight: Bool = false
+    var highlighted: Bool = false
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: alignment, spacing: VFSpacing.sm) {
             content
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(VFSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
+        .padding(padding)
         .background(
             RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.white.opacity(highlighted ? 0.06 : 0.04))
         )
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .strokeBorder(Color.vfHairline, lineWidth: 1)
+                .strokeBorder(
+                    highlighted ? Color.vfBrandAccent.opacity(0.55) : Color.vfHairline,
+                    lineWidth: 1
+                )
         )
+    }
+}
+
+// MARK: - Most-popular badge
+
+/// The Managed card's "Most popular" chip — the same hierarchy cue the
+/// website pricing section puts on its highlighted card.
+private struct MostPopularBadge: View {
+    var body: some View {
+        Text("Most popular")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Color.vfBrandAccent)
+            .padding(.horizontal, VFSpacing.sm)
+            .padding(.vertical, 3)
+            .background(Capsule(style: .continuous).fill(Color.vfBrandAccent.opacity(0.16)))
+            .fixedSize()
     }
 }
 
