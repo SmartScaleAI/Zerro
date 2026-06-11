@@ -62,6 +62,27 @@ export interface LsSubscriptionInvoiceAttributes {
   [k: string]: unknown;
 }
 
+// Order `data.attributes` (order_created / order_refunded — `data.id` is the
+// ORDER id). One-time purchases (the top-up packs, the BYOK license) arrive as
+// orders, not subscription events. For a single-item checkout the purchased
+// variant is `first_order_item.variant_id`; `customer_id` is how a top-up is
+// attached to the buyer's existing subscription.
+export interface LsOrderAttributes {
+  store_id?: number;
+  customer_id?: number;
+  identifier?: string;
+  order_number?: number;
+  status?: string; // pending | failed | paid | refunded
+  first_order_item?: {
+    product_id?: number;
+    variant_id?: number;
+    [k: string]: unknown;
+  } | null;
+  created_at?: string;
+  updated_at?: string;
+  [k: string]: unknown;
+}
+
 // License-key `data.attributes`. LS delivers the raw key HERE, in its OWN
 // `license_key_created` event — NOT in the subscription payload. We hash `key`
 // and link to the subscription by `order_id`.
@@ -83,9 +104,27 @@ export interface LsLicenseKeyAttributes {
 export interface EntitlementSnapshot {
   tier: Tier;
   status: "active" | "past_due" | "cancelled" | "expired";
+  /** COMBINED spendable balance: plan remaining + non-expired top-up (Phase 4 /
+   *  F4). This is the app's headline number and matches what the generate
+   *  spend path (2-arg consume_credit) will actually allow. */
   credits_remaining: number;
+  /** The PLAN allowance for the period (unchanged meaning — top-ups are not
+   *  part of the plan cap). Kept for back-compat with pre-multi-model apps
+   *  that read remaining/limit as a pair. */
   credits_limit: number;
-  reset_date: string | null; // ISO; the current_period_end anchor
+  /** ISO; when the plan allowance next refreshes. Monthly: current_period_end.
+   *  Yearly (E8): the next MONTHLY refresh anchor the cron job will roll
+   *  (latest period_start + 1 month, capped at the annual period end). */
+  reset_date: string | null;
+  // ---- Plan-vs-top-up breakdown (Phase 6F meter + settings view) ------------
+  /** Plan credits consumed this period (the usage bar tracks this against
+   *  plan_credits_limit while the headline shows the combined balance). */
+  plan_credits_used: number;
+  /** = credits_limit; explicit so the meter never guesses which cap to use. */
+  plan_credits_limit: number;
+  /** Non-expired top-up balance (survives the monthly reset; expires 12 months
+   *  from purchase). 0 when the user has never bought a pack. */
+  topup_credits_remaining: number;
 }
 
 export interface SessionResponse {

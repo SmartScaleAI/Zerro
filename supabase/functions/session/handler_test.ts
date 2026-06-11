@@ -49,9 +49,12 @@ class InMemoryStore implements SessionStore {
     return Promise.resolve({
       tier: sub.tier,
       status: sub.status,
-      credits_remaining: this.creditsRemaining,
+      credits_remaining: this.creditsRemaining, // combined plan+topup (Phase 4)
       credits_limit: sub.credits_limit,
       reset_date: sub.current_period_end,
+      plan_credits_used: sub.credits_limit - this.creditsRemaining,
+      plan_credits_limit: sub.credits_limit,
+      topup_credits_remaining: 0,
     });
   }
 }

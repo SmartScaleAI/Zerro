@@ -18,7 +18,15 @@
 //   KEEP IN SYNC with OpenAIPromptGenerationService.swift (input/output PerMillion)
 // =============================================================================
 
-import { CHAT_MODEL, CHAT_PROVIDER, STT_MODEL, STT_PROVIDER } from "./config.ts";
+import {
+  CHAT_MODEL,
+  CHAT_PROVIDER,
+  CIRCUIT_BREAKER_MULTIPLIER,
+  STT_MODEL,
+  STT_PROVIDER,
+  USD_PER_CREDIT,
+} from "./config.ts";
+import { modelById } from "./models.ts";
 
 interface ChatPrice {
   inPerM: number;
@@ -31,8 +39,14 @@ interface ChatPrice {
 
 // USD per 1M tokens. Keyed `${provider}:${model}`. Gemini output rates already
 // include thinking tokens (we fold thoughtsTokenCount into outputTokens upstream).
+// KEEP IN SYNC (F8): this table is mirrored 1:1 in the eval harness
+// (apps/desktop/Scripts/eval-models.mjs CHAT_PRICING) — verified against
+// provider price lists in Phase 0. If a rate changes, update BOTH.
 const CHAT_PRICING: Record<string, ChatPrice> = {
-  "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list
+  "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list (legacy default)
+  // — the six user-selectable models (models.ts registry; rates 2026-06 lists) —
+  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 },
+  "openai:gpt-5.5": { inPerM: 5.0, outPerM: 30.0 },
   "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // 2026-06-04 list, flat
   "gemini:gemini-3.1-pro-preview": { // 2026-06-04 list, tiered by input tokens
     inPerM: 2.0,
@@ -41,6 +55,8 @@ const CHAT_PRICING: Record<string, ChatPrice> = {
     inPerMAbove: 4.0,
     outPerMAbove: 18.0,
   },
+  "anthropic:claude-sonnet-4-6": { inPerM: 3.0, outPerM: 15.0 },
+  "anthropic:claude-opus-4-7": { inPerM: 5.0, outPerM: 25.0 },
 };
 
 // USD per minute of audio. Keyed `${provider}:${model}`.
@@ -95,6 +111,40 @@ export function estimatedCostUsd(
   const chat = chatCostUsd(chatProvider, chatModel, inputTokens, outputTokens);
   if (stt === null || chat === null) return null;
   return stt + chat;
+}
+
+/**
+ * Credits to charge for one generation on `modelId` (multi-model plan §1.2):
+ * the model's FIXED creditPrice, unless the real cost tripped the anti-abuse
+ * circuit-breaker (est cost > CIRCUIT_BREAKER_MULTIPLIER × fixed price in
+ * dollars), in which case the METERED amount `ceil(estCostUsd / USD_PER_CREDIT)`
+ * is charged instead. Normal workloads never trip it.
+ *
+ * Lives HERE (not models.ts) so the $-math stays in one module and the import
+ * graph stays one-directional: models.ts is pure data, cost.ts reads it —
+ * no cycle.
+ *
+ * Edge cases:
+ *  - estCostUsd null/non-finite (unpriced model, missing usage): fall back to
+ *    the FIXED price — pricing problems must never block or overcharge a
+ *    generation (same posture as the null-estimate contract above).
+ *  - Unknown modelId: THROW. By the time credits are charged the handler has
+ *    already validated the model against ALLOWED_MODELS (Phase 4), so an
+ *    unknown id here is a programmer error — fail loud at the bug, matching
+ *    the factory's unknown-provider behavior, rather than invent a price.
+ */
+export function creditCostForModel(modelId: string, estCostUsd: number | null): number {
+  const entry = modelById(modelId);
+  if (!entry) {
+    throw new Error(`creditCostForModel: unknown model '${modelId}' (caller must validate against ALLOWED_MODELS first)`);
+  }
+  const fixed = entry.creditPrice;
+  if (estCostUsd === null || !Number.isFinite(estCostUsd)) return fixed;
+  const breakerUsd = CIRCUIT_BREAKER_MULTIPLIER * fixed * USD_PER_CREDIT;
+  if (estCostUsd > breakerUsd) {
+    return Math.ceil(estCostUsd / USD_PER_CREDIT);
+  }
+  return fixed;
 }
 
 // The chat provider/model the cost table prices against (configured, not the

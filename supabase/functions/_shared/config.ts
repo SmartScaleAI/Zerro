@@ -24,8 +24,38 @@ export function creditsForTier(tier: Tier): number {
 // checkout passes one) is honored as a fallback. If nothing matches we default
 // to 'starter' (the cheaper allowance) and log a warning — never silently
 // over-grant Pro credits.
+//
+// SECRET FORMAT: each is a COMMA-SEPARATED LIST of variant ids, because one
+// product carries a monthly AND a yearly variant (e.g. the Managed plan's
+// $15/mo + $144/yr checkouts). BOTH Managed variants go in LS_VARIANT_PRO —
+// monthly and yearly map to the SAME pro tier / CREDITS_PRO allowance (F1).
+//   LS_VARIANT_PRO="1735329,1735330"   # Managed monthly, Managed yearly
 export const LS_VARIANT_STARTER = optionalEnv("LS_VARIANT_STARTER", "");
 export const LS_VARIANT_PRO = optionalEnv("LS_VARIANT_PRO", "");
+
+// Which of the tier-mapped variant ids are the YEARLY ones (any tier, one
+// combined comma-separated list). Drives subscriptions.billing_interval ONLY —
+// display/analytics metadata, never a credit gate: yearly subs still roll the
+// same 300-credit period every 30 days via subscription_payment_success. A
+// tier-mapped variant NOT in this list is recorded as 'monthly'; an unmapped
+// variant records NULL (never guess).
+//   LS_VARIANT_YEARLY="1735330"        # Managed yearly
+export const LS_VARIANT_YEARLY = optionalEnv("LS_VARIANT_YEARLY", "");
+
+// ---- Top-up packs (multi-model plan §1.4) -----------------------------------
+// One-time products (LS `order_created`, NOT subscription events). The webhook
+// matches the order's variant id against these comma-separated lists and
+// inserts a topup_credits row for the buyer's active subscription. Credits and
+// expiry are env-tunable without a code change; ls_order_id uniqueness makes a
+// redelivered order a no-op.
+//   LS_VARIANT_TOPUP_BOOST="1735340"   # Boost $10 → 200 credits
+//   LS_VARIANT_TOPUP_POWER="1735341"   # Power $22 → 500 credits
+export const LS_VARIANT_TOPUP_BOOST = optionalEnv("LS_VARIANT_TOPUP_BOOST", "");
+export const LS_VARIANT_TOPUP_POWER = optionalEnv("LS_VARIANT_TOPUP_POWER", "");
+export const TOPUP_BOOST_CREDITS = optionalEnvInt("TOPUP_BOOST_CREDITS", 200);
+export const TOPUP_POWER_CREDITS = optionalEnvInt("TOPUP_POWER_CREDITS", 500);
+// Top-up packs expire this many months after purchase (§1.4: 12).
+export const TOPUP_EXPIRY_MONTHS = optionalEnvInt("TOPUP_EXPIRY_MONTHS", 12);
 
 // ---- Session token lifetime ------------------------------------------------
 // §12 open value (15–60 min). Default 30 min. Also the staleness window anchor

@@ -4,8 +4,9 @@ import { assert, assertThrows } from "jsr:@std/assert@1";
 import { makeChatClient, makeSttClient } from "./factory.ts";
 import { OpenAIChatClient, OpenAISttClient } from "./openai.ts";
 import { GeminiChatClient } from "./gemini.ts";
+import { AnthropicChatClient } from "./anthropic.ts";
 
-// All three branches are exercised in ONE process — only possible because the
+// All branches are exercised in ONE process — only possible because the
 // factory takes the provider as an argument rather than reading a frozen
 // config.ts const evaluated at import.
 
@@ -33,11 +34,29 @@ Deno.test("makeChatClient: gemini without GEMINI_API_KEY throws", () => {
   );
 });
 
+Deno.test("makeChatClient: anthropic → AnthropicChatClient (key required)", () => {
+  const c = makeChatClient({
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    openaiKey: "k",
+    anthropicKey: "a",
+  });
+  assert(c instanceof AnthropicChatClient);
+});
+
+Deno.test("makeChatClient: anthropic without ANTHROPIC_API_KEY throws", () => {
+  assertThrows(
+    () => makeChatClient({ provider: "anthropic", model: "claude-sonnet-4-6", openaiKey: "k" }),
+    Error,
+    "ANTHROPIC_API_KEY",
+  );
+});
+
 Deno.test("makeChatClient: unknown provider throws at wiring time", () => {
   assertThrows(
-    () => makeChatClient({ provider: "anthropic", model: "x", openaiKey: "k" }),
+    () => makeChatClient({ provider: "mistral", model: "x", openaiKey: "k" }),
     Error,
-    "Unknown CHAT_PROVIDER: anthropic",
+    "Unknown CHAT_PROVIDER: mistral",
   );
 });
 
@@ -50,8 +69,8 @@ Deno.test("makeSttClient: openai → OpenAISttClient; unknown throws", () => {
   );
 });
 
-// Sanity: the three chat branches resolve to three distinct outcomes in one run.
-Deno.test("makeChatClient: openai / gemini / unknown resolve independently in one process", () => {
+// Sanity: all provider branches resolve to distinct outcomes in one run.
+Deno.test("makeChatClient: openai / gemini / anthropic / unknown resolve independently in one process", () => {
   const a = makeChatClient({ provider: "openai", model: "gpt-4o", openaiKey: "k" });
   const b = makeChatClient({
     provider: "gemini",
@@ -59,7 +78,14 @@ Deno.test("makeChatClient: openai / gemini / unknown resolve independently in on
     openaiKey: "k",
     geminiKey: "g",
   });
+  const c = makeChatClient({
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+    openaiKey: "k",
+    anthropicKey: "a",
+  });
   assert(a instanceof OpenAIChatClient);
   assert(b instanceof GeminiChatClient);
+  assert(c instanceof AnthropicChatClient);
   assertThrows(() => makeChatClient({ provider: "zzz", model: "x", openaiKey: "k" }));
 });

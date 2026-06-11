@@ -16,6 +16,7 @@
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Tier } from "../_shared/config.ts";
+import type { BillingInterval } from "./tier.ts";
 
 export type Status = "active" | "past_due" | "cancelled" | "expired";
 
@@ -34,6 +35,10 @@ export interface SubscriptionUpsert {
   status: Status;
   current_period_end: string | null;
   credits_limit: number;
+  /** 'monthly' | 'yearly' from the matched variant (Phase 5); null when the
+   *  variant is unmapped. Metadata only — both intervals share the tier's
+   *  allowance and 30-day reset cadence. */
+  billing_interval: BillingInterval | null;
   ls_updated_at: string | null;
 }
 
@@ -43,8 +48,20 @@ export interface SubscriptionPatch {
   tier?: Tier;
   credits_limit?: number;
   current_period_end?: string | null;
+  billing_interval?: BillingInterval | null;
   ls_updated_at?: string | null;
   license_key_hash?: string;
+}
+
+/** A top-up pack purchase (order_created → topup_credits row). */
+export interface TopupInsert {
+  subscriptionId: string;
+  credits: number;
+  expiresAt: string;
+  /** The LS order id — the table's UNIQUE column, so a redelivered order
+   *  conflicts instead of double-crediting (second dedupe layer after
+   *  recordEvent). */
+  lsOrderId: string;
 }
 
 export interface WebhookStore {
@@ -66,6 +83,21 @@ export interface WebhookStore {
 
   /** Open (or no-op if already open) a usage period. Idempotent on (sub, start). */
   openPeriod(subscriptionId: string, periodStart: string, periodEnd: string | null): Promise<void>;
+
+  /** Top-up attach point: the buyer's most recent spendable (active|past_due)
+   *  subscription, by LS customer id. Null → nowhere to credit (logged + flagged
+   *  by the handler, not an error). */
+  getActiveSubByCustomerId(lsCustomerId: string): Promise<{ id: string } | null>;
+  /** Insert a purchased top-up pack. "duplicate" on the ls_order_id unique
+   *  conflict (redelivered order) — credited at most once. */
+  insertTopup(row: TopupInsert): Promise<"inserted" | "duplicate">;
+  /** order_refunded for a top-up: kill the pack's UNSPENT remainder by expiring
+   *  it at `revokedAtIso` (spend + balance paths filter expires_at > now(), so
+   *  expiry is the structural off-switch; the credits_total > 0 CHECK forbids
+   *  total=used for an unspent pack). credits_used is untouched — already-spent
+   *  credits stay spent, never clawed back. Returns the number of packs revoked
+   *  (0 when the order id isn't a top-up, or the pack is already revoked/expired). */
+  revokeTopupByOrderId(orderId: string, revokedAtIso: string): Promise<number>;
 
   getPendingKey(orderId: string): Promise<{ license_key_hash: string } | null>;
   upsertPendingKey(row: { orderId: string; keyHash: string; customerId: string | null }): Promise<void>;
@@ -152,6 +184,47 @@ export class SupabaseWebhookStore implements WebhookStore {
         { onConflict: "subscription_id,period_start", ignoreDuplicates: true },
       );
     if (error) throw error;
+  }
+
+  async getActiveSubByCustomerId(lsCustomerId: string): Promise<{ id: string } | null> {
+    // Most recent spendable subscription wins — the same status set the credit
+    // spend path honors (§9.1: past_due still spends remaining credits).
+    const { data, error } = await this.db
+      .from("subscriptions")
+      .select("id")
+      .eq("ls_customer_id", lsCustomerId)
+      .in("status", ["active", "past_due"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { id: string }) ?? null;
+  }
+
+  async insertTopup(row: TopupInsert): Promise<"inserted" | "duplicate"> {
+    const { error } = await this.db.from("topup_credits").insert({
+      subscription_id: row.subscriptionId,
+      credits_total: row.credits,
+      expires_at: row.expiresAt,
+      ls_order_id: row.lsOrderId,
+    });
+    if (!error) return "inserted";
+    if (error.code === "23505") return "duplicate"; // ls_order_id unique → already credited
+    throw error;
+  }
+
+  async revokeTopupByOrderId(orderId: string, revokedAtIso: string): Promise<number> {
+    // One conditional UPDATE: expire the pack as of the refund. The
+    // expires_at > revokedAt guard makes a redelivered refund (or a refund of
+    // an already-expired pack) a 0-row no-op instead of re-stamping.
+    const { data, error } = await this.db
+      .from("topup_credits")
+      .update({ expires_at: revokedAtIso })
+      .eq("ls_order_id", orderId)
+      .gt("expires_at", revokedAtIso)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length;
   }
 
   async getPendingKey(orderId: string): Promise<{ license_key_hash: string } | null> {

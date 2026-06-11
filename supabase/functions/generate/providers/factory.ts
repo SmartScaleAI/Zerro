@@ -15,6 +15,7 @@
 import { type ChatClient, type SttClient } from "./types.ts";
 import { OpenAIChatClient, OpenAISttClient } from "./openai.ts";
 import { GeminiChatClient } from "./gemini.ts";
+import { AnthropicChatClient } from "./anthropic.ts";
 
 export function makeSttClient(opts: { provider: string; openaiKey: string }): SttClient {
   switch (opts.provider) {
@@ -31,6 +32,7 @@ export function makeChatClient(
     model: string;
     openaiKey: string;
     geminiKey?: string;
+    anthropicKey?: string;
     thinkingLevel?: string;
   },
 ): ChatClient {
@@ -40,6 +42,11 @@ export function makeChatClient(
     case "gemini":
       if (!opts.geminiKey) throw new Error("GEMINI_API_KEY required when CHAT_PROVIDER=gemini");
       return new GeminiChatClient(opts.geminiKey, opts.model, opts.thinkingLevel);
+    case "anthropic":
+      if (!opts.anthropicKey) {
+        throw new Error("ANTHROPIC_API_KEY required when CHAT_PROVIDER=anthropic");
+      }
+      return new AnthropicChatClient(opts.anthropicKey, opts.model);
     default:
       throw new Error(`Unknown CHAT_PROVIDER: ${opts.provider}`);
   }

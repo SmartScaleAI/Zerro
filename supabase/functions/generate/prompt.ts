@@ -73,7 +73,7 @@ Be thorough: cover the full picture the recording supports — components, behav
 If the user voices a wish or intention without asking you to do or answer anything ("I want to fix this", "make it do X"), do not turn it into an instruction — render it as a described characteristic of the subject (e.g. "the error handling is currently fragile," as an observed property). Surface what the user emphasized as notable.
 
 Structure:
-- Open with a one-sentence framing: what this is, what process it shows, or — for a question — the direct answer.
+- Open directly with the substance — the first sentence should BE the answer, the title of what this is, or the first real point, not a meta lead-in. Do NOT open with "This recording shows...", "The recording shows...", "Based on the recording...", "Here is...", "In this video...", or any framing-about-the-recording phrasing; begin with the actual content.
 - If the recording is mainly a process or how-to (steps in sequence), lay it out as those ordered steps so the reader could follow them; otherwise explain the components and behavior in plain language, in the depth the recording supports.
 - Include any characteristic the user clearly treated as important.
 

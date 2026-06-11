@@ -17,7 +17,7 @@
 //             constant-time compare the hash, check TTL + attempts, then
 //             create-once the grant (verify_trial_grant) and mint a short-lived
 //             TRIAL session token. Returns { token, expires_at,
-//             trial_credits_remaining }.
+//             trial_credits_remaining, trial_credits_limit }.
 //   resume  — { action:"resume", email } → look up the grant by email_normalized
 //             and, if it's already VERIFIED, mint a FRESH token against the
 //             persisted balance with NO emailed code (the H1 fix: email is
@@ -205,7 +205,13 @@ async function handleVerify(
     return json({ status: "already_used" }, 200);
   }
 
-  return await mintTokenResponse(deps, grantId, creditsRemaining, nowSeconds);
+  // E4: the response carries the grant TOTAL so the app's trial meter has a
+  // denominator. Read it back rather than assuming TRIAL_CREDITS — an existing
+  // grant keeps the limit it was created with even if the env value changed.
+  const grant = await deps.store.loadGrantByEmail(email);
+  const creditsLimit = grant?.trial_credits_limit ?? TRIAL_CREDITS;
+
+  return await mintTokenResponse(deps, grantId, creditsRemaining, creditsLimit, nowSeconds);
 }
 
 // -----------------------------------------------------------------------------
@@ -233,7 +239,7 @@ async function handleResume(deps: TrialStartDeps, email: string): Promise<Respon
   }
 
   const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
-  return await mintTokenResponse(deps, grant.id, remaining, nowSeconds);
+  return await mintTokenResponse(deps, grant.id, remaining, grant.trial_credits_limit, nowSeconds);
 }
 
 // -----------------------------------------------------------------------------
@@ -245,6 +251,7 @@ async function mintTokenResponse(
   deps: TrialStartDeps,
   grantId: string,
   creditsRemaining: number,
+  creditsLimit: number,
   nowSeconds: number,
 ): Promise<Response> {
   // Mint a short-lived TRIAL session token. `sub` is the opaque grant id; no
@@ -274,6 +281,9 @@ async function mintTokenResponse(
       token,
       expires_at: new Date(exp * 1000).toISOString(),
       trial_credits_remaining: creditsRemaining,
+      // E4: the grant total, so the trial usage meter can draw a proportional
+      // bar instead of a bare count (the app must not hardcode 40).
+      trial_credits_limit: creditsLimit,
     },
     200,
   );

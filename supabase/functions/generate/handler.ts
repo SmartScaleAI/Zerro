@@ -52,7 +52,8 @@ import { json } from "../_shared/http.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
-import { CHAT_MODEL, estimatedCostUsd, sttCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
+import { modelById } from "./models.ts";
 import { validateBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
@@ -69,8 +70,12 @@ export interface GenerateDeps {
   store: BillingStore;
   /** Speech-to-text (Whisper) — independent of the chat provider. */
   stt: SttClient;
-  /** Chat / vision generation — OpenAI or Gemini, selected by config. */
-  chat: ChatClient;
+  /** Chat / vision client factory (F2): the model is chosen PER REQUEST, so the
+   *  handler builds the adapter once it knows the validated provider+model.
+   *  Closes over the resolved provider keys in index.ts; tests inject a fake
+   *  factory. May THROW for a provider whose key is unset — the handler maps
+   *  that to a clean 503, never an opaque 500. */
+  makeChat: (provider: string, model: string) => ChatClient;
   jwtSecret: string;
   /** Injectable clock for verifying the session token in tests. */
   nowSeconds?: number;
@@ -84,8 +89,12 @@ interface ResolvedAccount {
   key: string;
   /** generation_log.subscription_id — null for a trial identity. */
   logSubscriptionId: string | null;
+  /** COMBINED spendable balance (plan + non-expired top-up for a subscription;
+   *  the single grant bucket for a trial). */
   creditsRemaining(): Promise<number>;
-  consume(): Promise<number | null>;
+  /** Atomically spend `credits` (all-or-nothing). Combined remaining after,
+   *  or null with NOTHING spent if the balance can't cover it. */
+  consume(credits: number): Promise<number | null>;
   acquireSlot(): Promise<boolean>;
   releaseSlot(): Promise<void>;
 }
@@ -148,7 +157,15 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { mode, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
+  const { mode, model, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
+
+  // 5.5 Resolve the validated model → provider + fixed credit price (Phase 4).
+  //     validateBody already gated on ALLOWED_MODELS, so a miss here is a
+  //     registry/validation drift bug — reject defensively rather than throw.
+  //     The model selects the ADAPTER and the PRICE only; the system prompt is
+  //     composed from `mode` alone (Appendix C #3).
+  const modelEntry = modelById(model);
+  if (!modelEntry) return json({ error: "invalid_model" }, 400);
 
   // 6. Coarse per-identity rate limit (reuses D1's check_rate_limit).
   const withinRate = await deps.store.rateLimitOk(
@@ -174,15 +191,52 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       const cached = await deps.store.getIdempotent(account.key, idemKey, IDEMPOTENCY_TTL_SECONDS);
       if (cached) {
         return json(
-          { prompt: cached.prompt, usage: cached.usage, credits_remaining: cached.creditsRemaining },
+          {
+            prompt: cached.prompt,
+            usage: cached.usage,
+            credits_remaining: cached.creditsRemaining,
+            // D2: the ORIGINAL charge, replayed — the retry itself charged 0,
+            // but the app's toast must reflect what this recording cost.
+            credits_charged: cached.creditsCharged,
+          },
           200,
         );
       }
     }
 
-    // 8. Credit availability (read-only; do NOT decrement yet). Zero → 402.
+    // 7.6 Build the chat client for the selected model — AFTER the idempotent
+    //     replay (a replay needs no provider client, so a since-unset key can
+    //     never block returning an already-charged result) and BEFORE the
+    //     credit check + STT (a misconfigured provider key fails here with
+    //     ZERO side effects: nothing paid, nothing charged, nothing logged as
+    //     a generation). A throw means a key for this model's provider is
+    //     unset in the deployment (Phase 3 reads them optionally) — an ops
+    //     problem, surfaced as a clean 503 rather than an opaque 500.
+    let chatClient: ChatClient;
+    try {
+      chatClient = deps.makeChat(modelEntry.provider, model);
+    } catch (e) {
+      console.error(JSON.stringify({
+        fn: "generate",
+        error: "make_chat_failed",
+        model,
+        provider: modelEntry.provider,
+        detail: String(e),
+      }));
+      return json({ error: "provider_unavailable", retryable: false }, 503);
+    }
+
+    // 8. Credit availability for THIS model's price (read-only; do NOT
+    //    decrement yet). The combined balance must cover the model's fixed
+    //    price; otherwise 402 with the numbers the app's top-up prompt needs
+    //    (F3 — the NULL-stranding → top-up mapping).
     const remaining = await account.creditsRemaining();
-    if (remaining <= 0) return json({ error: "out_of_credits" }, 402);
+    if (remaining < modelEntry.creditPrice) {
+      return json(
+        { error: "out_of_credits", credits_remaining: remaining, model_price: modelEntry.creditPrice },
+        402,
+      );
+    }
 
     // 9. Transcribe with the server-held key. A failure here charges NOTHING.
     //    Phase 6 no-speech gate: when the client signalled `has_speech:false`,
@@ -208,6 +262,8 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
           tokensOut: null,
           estCostUsd: null, // no usable transcription → nothing billable recorded
           success: false,
+          model,
+          provider: modelEntry.provider,
         });
         return providerErrorResponse(e);
       }
@@ -225,6 +281,8 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         tokensOut: null,
         estCostUsd: sttCostUsd(measured),
         success: false,
+        model,
+        provider: modelEntry.provider,
       });
       return json({ error: "audio_too_long" }, 413);
     }
@@ -236,7 +294,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
 
     let chat;
     try {
-      chat = await deps.chat.chat(systemPrompt, userContent);
+      chat = await chatClient.chat(systemPrompt, userContent);
     } catch (e) {
       await deps.store.logGeneration({
         subscriptionId: account.logSubscriptionId,
@@ -244,28 +302,36 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         tokensOut: null,
         estCostUsd: sttCostUsd(measured), // STT was paid; chat failed
         success: false,
+        model,
+        provider: modelEntry.provider,
       });
       return providerErrorResponse(e);
     }
 
-    // 12. Fully successful + usable result → consume exactly one credit.
-    const afterConsume = await account.consume();
-    // Cost keys on the CONFIGURED chat model (CHAT_MODEL), not chat.model — a
-    // provider may report a dated modelVersion the price table doesn't carry.
-    const estCost = estimatedCostUsd(measured, chat.provider, CHAT_MODEL, chat.inputTokens, chat.outputTokens);
+    // 12. Fully successful + usable result → consume the model's credit price.
+    // Cost keys on the VALIDATED selected model, not chat.model — a provider
+    // may report a dated modelVersion the price table doesn't carry. estCost
+    // is computed FIRST so the circuit-breaker (anti-abuse metered charge,
+    // §1.2) can compare it against the fixed price; the breaker only ever
+    // changes the AMOUNT — whether the generation runs was decided long ago.
+    const estCost = estimatedCostUsd(measured, modelEntry.provider, model, chat.inputTokens, chat.outputTokens);
+    const credits = creditCostForModel(model, estCost);
+    const afterConsume = await account.consume(credits);
 
     if (afterConsume === null) {
       // Race edge (near-impossible under the cap=1 slot): the credit became
       // unspendable between step 8 and here. We've ALREADY paid OpenAI, so per
       // the locked default we return the result ONCE and log it; we just
       // couldn't charge. (Reserve-then-commit, Phase G, would avoid the pay.)
-      console.warn(JSON.stringify({ fn: "generate", key: account.key, warn: "uncharged_result_returned" }));
+      console.warn(JSON.stringify({ fn: "generate", key: account.key, warn: "uncharged_result_returned", model }));
       await deps.store.logGeneration({
         subscriptionId: account.logSubscriptionId,
         tokensIn: chat.inputTokens,
         tokensOut: chat.outputTokens,
         estCostUsd: estCost,
         success: true,
+        model,
+        provider: modelEntry.provider,
       });
       // Cache this (uncharged) result too: a retry should replay it, not re-run.
       if (idemKey) {
@@ -273,21 +339,25 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
           prompt: chat.content,
           usage: usageBody(chat),
           creditsRemaining: 0,
+          creditsCharged: 0, // circuit-breaker race: nothing was charged (D2)
         }, IDEMPOTENCY_TTL_SECONDS);
       }
       return json(
-        { prompt: chat.content, usage: usageBody(chat), credits_remaining: 0 },
+        { prompt: chat.content, usage: usageBody(chat), credits_remaining: 0, credits_charged: 0 },
         200,
       );
     }
 
-    // 13. Log token counts + cost + success ONLY (no content, §14.5).
+    // 13. Log token counts + cost + model/provider + success ONLY (no content,
+    //     §14.5 — model/provider are non-content attribution metadata).
     await deps.store.logGeneration({
       subscriptionId: account.logSubscriptionId,
       tokensIn: chat.inputTokens,
       tokensOut: chat.outputTokens,
       estCostUsd: estCost,
       success: true,
+      model,
+      provider: modelEntry.provider,
     });
 
     // 13b. Cache the result for an idempotent retry (M1) — BEFORE the finally
@@ -300,12 +370,15 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         prompt: chat.content,
         usage: usageBody(chat),
         creditsRemaining: afterConsume,
+        creditsCharged: credits,
       }, IDEMPOTENCY_TTL_SECONDS);
     }
 
-    // 14. Return the prompt to the app.
+    // 14. Return the prompt to the app. `credits_charged` is the exact spend
+    //     (D2) — usually the model's fixed price, but the §1.2 circuit-breaker
+    //     can meter it higher, so the app must not derive it from the price.
     return json(
-      { prompt: chat.content, usage: usageBody(chat), credits_remaining: afterConsume },
+      { prompt: chat.content, usage: usageBody(chat), credits_remaining: afterConsume, credits_charged: credits },
       200,
     );
   } finally {
@@ -333,7 +406,7 @@ async function resolveSubscription(deps: GenerateDeps, subId: string): Promise<R
       key: `generate:sub:${sub.id}`,
       logSubscriptionId: sub.id,
       creditsRemaining: () => deps.store.creditsRemaining(sub.id, sub.credits_limit),
-      consume: () => deps.store.consumeCredit(sub.id),
+      consume: (credits) => deps.store.consumeCredit(sub.id, credits),
       acquireSlot: () => deps.store.acquireSlot(sub.id, GENERATE_SLOT_STALE_SECONDS),
       releaseSlot: () => deps.store.releaseSlot(sub.id),
     },
@@ -351,7 +424,7 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
       key: `generate:trial:${grant.id}`,
       logSubscriptionId: null, // trial generations have no subscription FK
       creditsRemaining: () => deps.store.trialCreditsRemaining(grant.id),
-      consume: () => deps.store.consumeTrialCredit(grant.id),
+      consume: (credits) => deps.store.consumeTrialCredit(grant.id, credits),
       acquireSlot: () => deps.store.acquireTrialSlot(grant.id, GENERATE_SLOT_STALE_SECONDS),
       releaseSlot: () => deps.store.releaseTrialSlot(grant.id),
     },
