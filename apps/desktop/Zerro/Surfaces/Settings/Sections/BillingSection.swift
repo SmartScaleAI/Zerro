@@ -729,7 +729,12 @@ private struct DevRevalidateRow: View {
 #endif
 
 // MARK: - Preview
+//
+// `EntitlementStore.preview` pins the state via the dev override (DEBUG-only),
+// so these previews are `#if DEBUG`-guarded — `#Preview` bodies otherwise
+// compile in Release too and would fail on the missing symbol.
 
+#if DEBUG
 #Preview("Plan & Credits · managed") {
     BillingSection()
         .environment(EntitlementStore.preview(
@@ -757,3 +762,4 @@ private struct DevRevalidateRow: View {
         .frame(width: 720)
         .background(Color.vfPanelBackground)
 }
+#endif
