@@ -547,12 +547,12 @@ struct AllSetStepView: View {
                 HStack(spacing: VFSpacing.sm) {
                     OnboardingKeyCapLarge(label: "\u{2318}")
                     Text("+").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.vfTextTertiary)
-                    OnboardingKeyCapLarge(label: "\u{21E7}")
+                    OnboardingKeyCapLarge(label: "\u{2303}")
                     Text("+").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.vfTextTertiary)
                     OnboardingKeyCapLarge(label: "R")
                 }
 
-                Text("Hit \u{2318}\u{21E7}R, select a region, narrate what you want, and we\u{2019}ll do the rest.")
+                Text("Hit \u{2318}\u{2303}R, select a region, narrate what you want, and we\u{2019}ll do the rest.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -698,7 +698,7 @@ struct OnboardingIconTile: View {
     }
 }
 
-/// Large keycap used for the ⌘⇧R hint on the All Set step.
+/// Large keycap used for the ⌘⌃R hint on the All Set step.
 struct OnboardingKeyCapLarge: View {
     let label: String
 

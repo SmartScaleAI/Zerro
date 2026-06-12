@@ -16,6 +16,7 @@
 
 import AppKit
 import AVFoundation
+import KeyboardShortcuts
 import SwiftUI
 
 /// A quiet Managed status nudge shown below the menu-bar header (Phase E).
@@ -46,12 +47,12 @@ struct MenuBarPanelView: View {
     /// reads this same injected store.
     @Environment(EntitlementStore.self) private var entitlements
 
-    /// Drives the Recent Prompts side panel (a trailing popover). Opened on
+    /// Drives the Recent Prompts side panel (a trailing flyout). Opened on
     /// hover via `recentRowHovered` / `recentPanelHovered`.
     @State private var showRecentPrompts = false
     @State private var recentRowHovered = false
     @State private var recentPanelHovered = false
-    /// Drives the Microphone picker side panel (a trailing popover). Opened
+    /// Drives the Microphone picker side panel (a trailing flyout). Opened
     /// on hover via `micRowHovered` / `micPanelHovered`.
     @State private var showMicrophonePicker = false
     @State private var micRowHovered = false
@@ -61,11 +62,19 @@ struct MenuBarPanelView: View {
     @State private var showModelPicker = false
     @State private var modelRowHovered = false
     @State private var modelPanelHovered = false
+    /// Bumped when the Settings recorder finishes a rebind so the
+    /// Start/Stop Recording hotkey hint re-reads the current shortcut
+    /// from KeyboardShortcuts (which persists to UserDefaults — there's
+    /// no SwiftUI binding to subscribe to). Same mechanism as
+    /// HotkeyDisplay, including its caveat: the notification name is
+    /// the library's internal one, and the worst case if a future
+    /// version renames it is a stale hint until the panel reopens.
+    @State private var hotkeyRefreshTick: Int = 0
 
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
-    /// Drives the Entitlement picker side panel (a trailing popover),
+    /// Drives the Entitlement picker side panel (a trailing flyout),
     /// opened on hover via `entitlementRowHovered` / `entitlementPanelHovered`
     /// — same hover-driven submenu shape as Recent Prompts / Microphone.
     @State private var showEntitlementPicker = false
@@ -161,13 +170,15 @@ struct MenuBarPanelView: View {
                     setVisible: { showRecentPrompts = $0 }
                 )
             }
-            // Side panel of recent prompts with per-row Copy buttons. A
-            // trailing popover is the closest native shape to an NSMenu
-            // submenu under MenuBarExtra(.window) (which can't host real
-            // submenus). Opens on hover of the row or the panel; the content
-            // reads RecentPromptStore from the environment, passed explicitly
-            // so it resolves inside the popover's separate hosting context.
-            .popover(isPresented: $showRecentPrompts, arrowEdge: .trailing) {
+            // Side panel of recent prompts with per-row Copy buttons,
+            // presented as a chromeless trailing flyout (SubmenuFlyout.swift)
+            // styled like a native NSMenu submenu — MenuBarExtra(.window)
+            // can't host real submenus, and the popover chrome (beak +
+            // glass) read wrong. Opens on hover of the row or the panel; the
+            // content reads RecentPromptStore from the environment, passed
+            // explicitly so it resolves inside the flyout's separate hosting
+            // context.
+            .submenuFlyout(isPresented: $showRecentPrompts) {
                 RecentPromptsSubmenu()
                     .environment(recentPrompts)
                     .onHover { hovering in
@@ -202,7 +213,7 @@ struct MenuBarPanelView: View {
                     setVisible: { showModelPicker = $0 }
                 )
             }
-            .popover(isPresented: $showModelPicker, arrowEdge: .trailing) {
+            .submenuFlyout(isPresented: $showModelPicker) {
                 ModelPickerSubmenu()
                     .environment(preferences)
                     .environment(entitlements)
@@ -230,9 +241,9 @@ struct MenuBarPanelView: View {
                     setVisible: { showMicrophonePicker = $0 }
                 )
             }
-            // Same hover-opened trailing popover as Recent Prompts — the
+            // Same hover-opened trailing flyout as Recent Prompts — the
             // input device list with the current selection checked.
-            .popover(isPresented: $showMicrophonePicker, arrowEdge: .trailing) {
+            .submenuFlyout(isPresented: $showMicrophonePicker) {
                 MicrophonePicker()
                     .environment(preferences)
                     .onHover { hovering in
@@ -254,7 +265,7 @@ struct MenuBarPanelView: View {
             // out of the environment so the controller stays alive
             // when the dropdown closes.
             CheckForUpdatesView()
-            MenuRow(label: "Preferences\u{2026}", trailing: .hotkey("\u{2318},")) {
+            MenuRow(label: "Settings\u{2026}", trailing: .hotkey("\u{2318},")) {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsScene.windowID)
                 MenuBarExtraDismiss.dismiss()
@@ -292,7 +303,8 @@ struct MenuBarPanelView: View {
             // Phase A: entitlement state forcing, collapsed into a single
             // hover-driven submenu (same shape as Recent Prompts /
             // Microphone) to keep the debug block compact. Force "Expired"
-            // in the side panel, then ⌘⇧R (or Start Recording) to drive the
+            // in the side panel, then the recording hotkey (⌘⌃R by
+            // default, or Start Recording) to drive the
             // paywall gate; the paywall window's own dev panel can flip
             // between states once it's open.
             MenuRow(
@@ -310,7 +322,7 @@ struct MenuBarPanelView: View {
                     setVisible: { showEntitlementPicker = $0 }
                 )
             }
-            .popover(isPresented: $showEntitlementPicker, arrowEdge: .trailing) {
+            .submenuFlyout(isPresented: $showEntitlementPicker) {
                 EntitlementDebugPicker()
                     .environment(entitlements)
                     .onHover { hovering in
@@ -388,7 +400,7 @@ struct MenuBarPanelView: View {
             debugPollRow
             #endif
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, MenuMetrics.containerVerticalPadding)
         .frame(width: 260)
         .onAppear {
             // Register the SwiftUI openWindow action with the AppDelegate
@@ -401,6 +413,18 @@ struct MenuBarPanelView: View {
                 openWindow(id: OnboardingScene.windowID)
             }
         }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: Notification.Name(rawValue: "KeyboardShortcuts_recorderActiveStatusDidChange")
+            )
+        ) { note in
+            // Recorder finished (success or cancel) — re-read the binding
+            // so the hotkey hint reflects a rebind made while this panel
+            // is alive, without waiting for a relaunch.
+            if let isActive = note.userInfo?["isActive"] as? Bool, !isActive {
+                hotkeyRefreshTick &+= 1
+            }
+        }
     }
 
     // MARK: - Primary action row
@@ -408,23 +432,37 @@ struct MenuBarPanelView: View {
     // Single row that flips between "Start Recording" / "Stop Recording"
     // based on `AppState.isRecordingActive`, and disables itself during
     // `.processing` so the user can't kick off a new session while one
-    // is in flight. The hotkey hint stays put — `⌘⇧R` is the binding
-    // for both halves of the toggle.
+    // is in flight. The hotkey hint stays put — the toggleRecording
+    // binding (⌘⌃R by default, user-rebindable) covers both halves of
+    // the toggle.
+
+    /// Trailing hint for the Start/Stop Recording rows, derived from the
+    /// user's current toggleRecording binding rather than a hardcoded
+    /// string. `.none` (no hint) when the user has cleared the shortcut.
+    private var recordingHotkeyTrailing: RowTrailing {
+        // Read the tick so a recorder-finished bump invalidates this view
+        // and the hint re-reads the new binding.
+        _ = hotkeyRefreshTick
+        guard let shortcut = KeyboardShortcuts.getShortcut(for: .toggleRecording) else {
+            return .none
+        }
+        return .hotkey(shortcut.symbolsDisplay)
+    }
 
     @ViewBuilder
     private var primaryRecordingRow: some View {
         if appState.isRecordingActive {
-            MenuRow(label: "Stop Recording", trailing: .hotkey("\u{2318}\u{21E7}R")) {
+            MenuRow(label: "Stop Recording", trailing: recordingHotkeyTrailing) {
                 appState.stopRecording()
             }
         } else if appState.state == .processing {
             MenuRow(
                 label: "Processing\u{2026}",
-                trailing: .hotkey("\u{2318}\u{21E7}R"),
+                trailing: recordingHotkeyTrailing,
                 isDisabled: true
             )
         } else {
-            MenuRow(label: "Start Recording", trailing: .hotkey("\u{2318}\u{21E7}R")) {
+            MenuRow(label: "Start Recording", trailing: recordingHotkeyTrailing) {
                 // Route through the same entry point as the global hotkey so
                 // the area-selector overlay (with its mode toggle + mic
                 // picker) is presented first — recording starts on confirm,
@@ -826,6 +864,47 @@ enum MenuBarExtraDismiss {
     }
 }
 
+// MARK: - MenuMetrics
+
+/// Shared layout metrics for every hover-highlightable row in the
+/// menu-bar dropdown AND its trailing submenu flyouts (Model /
+/// Microphone / Recent Prompts / Entitlement), so all row variants
+/// render an identical highlight.
+///
+/// Concentric-corner rule: the row highlight's curve should follow the
+/// container's curve with even margin, i.e. innerRadius =
+/// containerRadius − inset. The highlight radius is derived from the
+/// self-drawn flyout chrome (10pt − 5pt inset = 5pt) and shared by the
+/// main panel's rows so the two surfaces read as one menu system.
+/// `containerVerticalPadding` matches the horizontal inset so the
+/// first/last row highlights nest into the chrome's curved corners
+/// instead of clashing with them.
+enum MenuMetrics {
+    /// Measured chrome radius of the MenuBarExtra(.window) panel
+    /// (probe-measured on macOS 26 by fitting the window alpha-mask
+    /// boundary). Used by the preview chrome stand-in.
+    static let panelCornerRadius: CGFloat = 16
+    /// Gap between the container edge and the highlight edge.
+    static let rowHorizontalInset: CGFloat = 5
+    /// Corner radius of the self-drawn flyout container (SubmenuChrome
+    /// / .submenuFlyout — a chromeless child panel styled like a native
+    /// NSMenu, so this radius is ours to pick, unlike the OS-drawn
+    /// panel chrome above).
+    static let submenuCornerRadius: CGFloat = 10
+    /// Row highlight radius, concentric inside the flyout chrome
+    /// (submenuCornerRadius − rowHorizontalInset). The main panel's
+    /// rows deliberately use the same value as the flyout rows.
+    static let rowCornerRadius: CGFloat = submenuCornerRadius - rowHorizontalInset
+    /// Padding between the highlight edge and the row content. Chosen
+    /// so content stays 16pt from the container edge (the pre-metrics
+    /// 6pt inset + 10pt padding).
+    static let rowHorizontalPadding: CGFloat = 16 - rowHorizontalInset
+    static let rowVerticalPadding: CGFloat = 5
+    /// Top/bottom padding of the container content stack; equals the
+    /// horizontal inset so corner nesting is uniform.
+    static let containerVerticalPadding: CGFloat = rowHorizontalInset
+}
+
 // MARK: - MenuRow
 
 enum RowTrailing {
@@ -867,15 +946,15 @@ struct MenuRow: View {
 
                 trailingView
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isSelected ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -940,15 +1019,15 @@ private struct CopyLastPromptRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isActive ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -974,9 +1053,10 @@ private struct CopyLastPromptRow: View {
 // Note on the `MenuBarExtra(.window)` constraint: `MenuBarExtra` with
 // `.window` style hosts a SwiftUI panel, not a real NSMenu, so genuine
 // "open a sibling NSMenu on hover" isn't available. The Recent Prompts
-// row presents this view as a trailing `.popover` instead — the closest
-// native shape to a submenu — and each row copies its prompt body to the
-// clipboard, then dismisses the popover.
+// row presents this view as a trailing `.submenuFlyout` instead — a
+// chromeless child panel styled like an NSMenu submenu (see
+// SubmenuFlyout.swift) — and each row copies its prompt body to the
+// clipboard, then dismisses the flyout.
 
 struct RecentPromptsSubmenu: View {
     @Environment(RecentPromptStore.self) private var recentPrompts
@@ -999,7 +1079,6 @@ struct RecentPromptsSubmenu: View {
                 }
             }
         }
-        .padding(.vertical, 4)
         .frame(width: 280)
     }
 }
@@ -1018,7 +1097,7 @@ private struct RecentPromptsEmptyState: View {
 private struct RecentPromptSubmenuRow: View {
     let entry: RecentPrompt
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.submenuDismiss) private var dismiss
     @State private var isHovered = false
 
     var body: some View {
@@ -1037,15 +1116,15 @@ private struct RecentPromptSubmenuRow: View {
                     .foregroundStyle(isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextTertiary)
                     .fixedSize()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -1070,7 +1149,7 @@ private struct RecentPromptSubmenuRow: View {
 
 private struct MicrophonePicker: View {
     @Environment(PreferencesStore.self) private var preferences
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.submenuDismiss) private var dismiss
 
     @State private var devices: [AVCaptureDevice] = []
 
@@ -1081,7 +1160,6 @@ private struct MicrophonePicker: View {
                 row(id: device.uniqueID, name: device.localizedName)
             }
         }
-        .padding(.vertical, 4)
         .frame(width: 260)
         .onAppear(perform: refreshDevices)
     }
@@ -1134,15 +1212,15 @@ private struct MicrophonePickerRow: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -1162,7 +1240,7 @@ private struct MicrophonePickerRow: View {
 
 private struct EntitlementDebugPicker: View {
     @Environment(EntitlementStore.self) private var entitlements
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.submenuDismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1185,7 +1263,6 @@ private struct EntitlementDebugPicker: View {
                 dismiss()
             }
         }
-        .padding(.vertical, 4)
         .frame(width: 220)
     }
 }
@@ -1212,15 +1289,15 @@ private struct EntitlementDebugRow: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -1241,9 +1318,9 @@ private struct MenuPanelChrome<Content: View>: View {
 
     var body: some View {
         content()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
                     .strokeBorder(Color.vfHairline, lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.3), radius: 10, y: 4)

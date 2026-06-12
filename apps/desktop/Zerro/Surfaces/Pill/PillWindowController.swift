@@ -28,7 +28,7 @@ final class PillViewModel {
     /// Monotonically bumped by `PillWindowController.flashBusy()`. The
     /// host view observes changes and runs a brief scale-down-and-back
     /// animation in response — visible "your key registered but the app
-    /// is busy" feedback for ⌘⇧R presses during .processing, which the
+    /// is busy" feedback for recording-hotkey presses during .processing, which the
     /// hotkey handler would otherwise silently drop.
     var flashTrigger: Int = 0
 }
@@ -113,7 +113,7 @@ final class PillWindowController {
         window?.invalidateShadow()
     }
 
-    /// Visible nudge for ⌘⇧R presses that the hotkey handler intentionally
+    /// Visible nudge for recording-hotkey presses that the hotkey handler intentionally
     /// drops (e.g. during .processing — the pill's Cancel is the right
     /// affordance there, not a second recording). Bumps a trigger on the
     /// view-model that the SwiftUI host watches with `.onChange`,
@@ -208,7 +208,7 @@ private struct PillHostView: View {
     let appState: AppState
 
     /// Driven by viewModel.flashTrigger — when the trigger bumps, the
-    /// scale animates 1.0 → 0.96 → 1.0 over ~180ms so a ⌘⇧R press during
+    /// scale animates 1.0 → 0.96 → 1.0 over ~180ms so a recording-hotkey press during
     /// processing reads as registered-but-busy instead of silently dropped.
     @State private var flashScale: CGFloat = 1.0
 

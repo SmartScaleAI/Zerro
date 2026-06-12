@@ -14,11 +14,11 @@ import AppKit
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
-    /// Global shortcut that toggles a recording session. Defaults to ⌘⇧R;
+    /// Global shortcut that toggles a recording session. Defaults to ⌘⌃R;
     /// users may rebind via the Settings recorder, which writes through to
     /// UserDefaults automatically.
     static let toggleRecording = Self(
         "toggleRecording",
-        default: .init(.r, modifiers: [.command, .shift])
+        default: .init(.r, modifiers: [.command, .control])
     )
 }

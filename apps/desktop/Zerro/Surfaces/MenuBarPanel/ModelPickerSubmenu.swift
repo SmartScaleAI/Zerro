@@ -31,7 +31,7 @@ import SwiftUI
 struct ModelPickerSubmenu: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(EntitlementStore.self) private var entitlements
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.submenuDismiss) private var dismiss
 
     /// BYOK key-gating (6C.3): providers with a key on file, loaded fresh on
     /// each open so a Settings change applies immediately. Irrelevant (and
@@ -68,7 +68,6 @@ struct ModelPickerSubmenu: View {
                 }
             }
         }
-        .padding(.vertical, 4)
         .frame(width: 280)
         .onAppear {
             if isBYOK { availableProviders = ProviderKeys.availableProviders() }
@@ -166,21 +165,25 @@ private struct ModelPickerRow: View {
                 } else if let left = estimatedLeft {
                     // Credit column — Managed/Trial only. Price first (the
                     // stable fact), then what the current balance buys.
+                    // Brightens on hover so it stays legible on the blue
+                    // fill, matching MenuRow's trailing-hint treatment.
                     Text("\(model.creditPrice) cr \u{00B7} ~\(left) left")
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.vfTextSecondary)
+                        .foregroundStyle(
+                            isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextSecondary
+                        )
                         .fixedSize()
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
                     .fill(isHovered && !isGated ? Color.vfMenuRowHover : Color.clear)
             )
             .contentShape(Rectangle())
-            .padding(.horizontal, 6)
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
         }
         .buttonStyle(.plain)
         .disabled(isGated)

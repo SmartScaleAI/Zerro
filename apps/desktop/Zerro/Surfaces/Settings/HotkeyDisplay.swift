@@ -114,39 +114,12 @@ private struct IdleKeycapDisplay: View {
         .help("Click to record a new shortcut")
     }
 
-    /// Returns one label per keycap in the design's canonical order:
-    /// Command → Shift → Control → Option → key. This intentionally
-    /// diverges from the shortcut.description string (which follows
-    /// Apple's text-readout order ⌃⌥⇧⌘key with Command rightmost) —
-    /// the Phase 11 design mockups put Command first, so we build the
-    /// array directly from `modifiers` instead of parsing the
-    /// description. The key glyph at the end is extracted by
-    /// stripping the four modifier glyphs from `description`, which
-    /// preserves multi-character keys like "F1", "Space", "⏎".
+    /// One label per keycap, via the shared `keycapLabels` formatter
+    /// (HotkeySymbols.swift) so this view and the menu-bar panel's
+    /// hotkey hints always agree on glyphs and modifier ordering.
     private var labels: [String]? {
-        guard let shortcut else { return nil }
-        var out: [String] = []
-
-        let mods = shortcut.modifiers
-        if mods.contains(.command) { out.append("\u{2318}") } // ⌘
-        if mods.contains(.shift)   { out.append("\u{21E7}") } // ⇧
-        if mods.contains(.control) { out.append("\u{2303}") } // ⌃
-        if mods.contains(.option)  { out.append("\u{2325}") } // ⌥
-
-        if let keyLabel = keyLabel(from: shortcut.description), !keyLabel.isEmpty {
-            out.append(keyLabel)
-        }
-        return out.isEmpty ? nil : out
-    }
-
-    /// Extracts the non-modifier portion of `shortcut.description`.
-    /// Modifier glyphs may appear anywhere in the description string
-    /// (depends on macOS / locale conventions), so we filter them out
-    /// rather than positionally trim.
-    private func keyLabel(from description: String) -> String? {
-        let modifierGlyphs: Set<Character> = ["\u{2303}", "\u{2325}", "\u{21E7}", "\u{2318}"]
-        let key = description.filter { !modifierGlyphs.contains($0) }
-        return key.isEmpty ? nil : key
+        guard let labels = shortcut?.keycapLabels, !labels.isEmpty else { return nil }
+        return labels
     }
 
     private func keyCap(_ label: String) -> some View {

@@ -30,7 +30,7 @@ struct KeyCapView: View {
 #Preview {
     HStack {
         KeyCapView(label: "\u{2318}")
-        KeyCapView(label: "\u{21E7}")
+        KeyCapView(label: "\u{2303}")
         KeyCapView(label: "R")
         KeyCapView(label: "esc")
         KeyCapView(label: "\u{21B5}")
