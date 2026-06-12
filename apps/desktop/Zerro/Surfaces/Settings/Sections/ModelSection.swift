@@ -70,10 +70,11 @@ struct ModelSection: View {
             Text(selectedTitle)
                 .lineLimit(1)
         }
-        // Match the mic picker's fixed trailing-control width so the
-        // right edges of the General pane's controls line up. The wider
-        // 240pt accommodates "Gemini 3.5 Flash · 4 credits".
-        .frame(width: 240)
+        // Fixed slot width (240pt accommodates "Gemini 3.5 Flash ·
+        // 4 credits"); .trailing pins the menu button's right edge to
+        // the row's 20pt padding so it lines up with the mic picker
+        // and the segmented mode control.
+        .frame(width: 240, alignment: .trailing)
     }
 
     /// The closed-state label: the current default, with its price in

@@ -61,13 +61,12 @@ private struct MicrophoneRow: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            // Round 3: 200pt fixed width per design. NSPopUpButton
-            // (which Picker(.menu) wraps) fills its SwiftUI frame, so
-            // the popup background spans the full 200pt with the
-            // chevron at the right edge — that right edge then sits
-            // flush against the row's 20pt right padding via the
-            // Spacer in SettingsRow.
-            .frame(width: 200)
+            // Round 3: 200pt fixed width per design. When the popup's
+            // intrinsic size is narrower than the slot, .trailing pins
+            // its right edge against the row's 20pt right padding so it
+            // lines up with the other trailing controls (segmented
+            // mode picker, model menu) instead of floating centered.
+            .frame(width: 200, alignment: .trailing)
         }
         .onAppear(perform: refreshDevices)
     }
