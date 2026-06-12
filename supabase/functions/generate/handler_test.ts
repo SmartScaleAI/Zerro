@@ -213,11 +213,9 @@ function trialStore(usedCredits = 0, limit = 15): InMemoryStore {
 
 function makeBody(over: Record<string, unknown> = {}) {
   return {
-    // The v1 "mode" field is DELIBERATELY still sent: the pre-Phase-4 dev
-    // client sends it, and the typed-artifact contract ignores it like any
-    // unknown field. Keeping it here makes every test double as tolerance
-    // coverage for the server-first deploy window. Phase 7 removes it.
-    mode: "instruct",
+    // No "mode" field — the Phase 4+ client doesn't send one (the v1 enum is
+    // gone). The two explicit mode-tolerance tests below remain the permanent
+    // record that a stale body carrying one is silently ignored, never a 400.
     audio: { mime: "audio/m4a", filename: "rec.m4a", data: btoa("audio-bytes-here") },
     frames: [
       { timestamp: 0, mime: "image/jpeg", data: btoa("frame0") },
@@ -996,23 +994,27 @@ Deno.test("invalid model → 400 invalid_model, no provider call, no charge, no 
   assertEquals(store.log.length, 0);
 });
 
-// ---- Typed-artifact refactor (Phase 3): the v1 "mode" field is contract-dead --
+// ---- Typed-artifact refactor (Phase 3): the v1 "mode" field is contract-dead.
+// These two tests are the PERMANENT record of the ignore-unknown-fields
+// behavior — kept even though no shipping client sends mode anymore (Phase 7
+// stripped it from makeBody once the deploy window closed).
 
-Deno.test("body without mode → 200 (mode is no longer part of the contract)", async () => {
+Deno.test("body with the legacy mode enum value → 200, silently ignored (never a 400)", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
-  const body = makeBody();
-  delete (body as Record<string, unknown>).mode;
-  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ mode: "instruct" })),
+    deps(store, openai),
+  );
   assertEquals(res.status, 200);
   assertEquals(openai.lastSystem, composedSystemPrompt());
 });
 
 Deno.test("body with a garbage mode value → 200, silently ignored (unknown-field tolerance, not validation)", async () => {
-  // The pre-Phase-4 dev client still sends mode; the hard-cut decision is
-  // ignore-don't-400 so that client doesn't brick mid-rollout. Any value —
-  // not just the old enum — must be tolerated, proving the field is simply
-  // never read rather than leniently validated.
+  // A stale pre-Phase-4 build may still send mode; the hard-cut decision is
+  // ignore-don't-400 so such a client doesn't brick. Any value — not just the
+  // old enum — must be tolerated, proving the field is simply never read
+  // rather than leniently validated.
   const store = activeStore(0);
   const openai = new StubProvider();
   const res = await handleGenerate(

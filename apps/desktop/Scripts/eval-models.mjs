@@ -1015,7 +1015,7 @@ function buildScorecard() {
   const blankRow = (label) => `| ${label} | ${ok.map(() => " ").join(" | ")} |`;
   out.push(
     `## Rubric (score 1–5)`, ``,
-    `Small-text fidelity = read on-screen code/UI text correctly · Deixis = resolved "this/that/here" to the right frame · Hallucination = invented nothing not shown/said (5 = none) · Faithfulness = to intent (instruct) / accuracy (explain).`,
+    `Small-text fidelity = read on-screen code/UI text correctly · Deixis = resolved "this/that/here" to the right frame · Hallucination = invented nothing not shown/said (5 = none) · Faithfulness = chat text + artifact capture what was actually asked (attach iff a deliverable was named).`,
     ``,
     header,
     divider,

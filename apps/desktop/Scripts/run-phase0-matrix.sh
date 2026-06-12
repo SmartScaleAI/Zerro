@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run-phase0-matrix.sh — drive the Phase 0 multi-model eval gate.
+# run-phase0-matrix.sh — drive the Phase 0 multi-model eval gate. HISTORICAL:
+# predates the typed-artifact refactor and NO LONGER RUNS (it invokes the
+# harness's removed `--mode` flag; there is one unified v2 prompt now). Kept
+# as the record of how the Phase 0 gate was driven — current evals use
+# `eval-models.mjs --artifact` (see README-eval.md).
 # =============================================================================
-# Runs the candidate models across the chosen recordings in BOTH modes, plus a
+# Runs the candidate models across the chosen recordings in BOTH v1 modes, plus a
 # Gemini-Pro high-thinking supplementary pass. Anthropic models are included
 # only when ANTHROPIC_API_KEY is set (otherwise the harness would exit on its
 # key-guard); pass MODELS explicitly to override.

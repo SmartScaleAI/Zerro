@@ -130,7 +130,8 @@ captured dir), so re-running against more models costs only the chat calls.
 - **Small-text fidelity** — did it read on-screen code/UI text correctly?
 - **Deixis** — did it resolve "this/that/here" to the right frame/element?
 - **Hallucination** — did it invent names/values not shown or said? (5 = none)
-- **Faithfulness** — to intent (instruct mode) / accuracy (explain mode)
+- **Faithfulness** — did the chat text + artifact capture what the user
+  actually asked for (and attach iff they named a deliverable)?
 - **Cost (USD)** and **Latency (s)** — recorded automatically.
 
 ## Phase 0 eval matrix (multi-model gate)
@@ -271,12 +272,15 @@ The system prompt, interleaving, wire formats, and pricing are mirrored from:
 `CHAT_PRICING` table must price every model in the matrix above so no run shows
 "unpriced".
 
-Phase 0 sync status (2026-06-09):
-- `prompt.ts` (BASE/INSTRUCT/EXPLAIN) — **in sync**, verified verbatim.
+Sync status (2026-06-12, typed-artifact refactor Phase 7):
+- `prompt.ts` (the unified `PROMPT_V2`) — **in sync by construction**: the
+  harness reads the same `Scripts/artifact-eval/prompt-v2.md` mirror at RUN
+  TIME, and `prompt_test.ts` / `PromptV2MirrorTests` enforce byte-identity on
+  the server/Swift copies. (The v1 BASE/INSTRUCT/EXPLAIN sync note here is
+  retired with the modes themselves.)
 - `interleave.ts` (mmss, tiebreak, tags, OCR/click lines) — **in sync**.
-- `providers/openai.ts`, `providers/gemini.ts` wire shapes — **in sync**.
-- `providers/anthropic.ts` — does not exist yet (Phase 3); the harness's
-  `chatAnthropic` is the reference shape for it.
-- `cost.ts` `CHAT_PRICING` — **intentionally behind** the harness this phase.
-  cost.ts still prices only `gpt-4o` + the two Gemini models; the six-model
-  table here is ahead of it and must be mirrored INTO cost.ts in Phase 2.
+- `providers/{openai,gemini,anthropic}.ts` wire shapes — **in sync** (the
+  anthropic adapter shipped in multi-model Phase 3, matching the harness's
+  `chatAnthropic`).
+- `cost.ts` `CHAT_PRICING` — **in sync** since multi-model Phase 2 (all six
+  registry models priced both places).

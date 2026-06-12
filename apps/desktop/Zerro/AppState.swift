@@ -1445,8 +1445,8 @@ final class AppState {
     }
 
     /// The BYOK/local generation path (Phase 9 + 17): Whisper transcribe →
-    /// Interleaver → mode-switch check → GPT-4o generate. (Renamed from
-    /// `runPromptGeneration` in Phase E, which is now the routing branch above.)
+    /// Interleaver → generate. (Renamed from `runPromptGeneration` in
+    /// Phase E, which is now the routing branch above.)
     private func runLocalPromptGeneration(processed: ProcessedRecording) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1455,8 +1455,8 @@ final class AppState {
                 // speech-level energy in the audio, skip the Whisper call
                 // entirely (saves the round-trip + its cost) and proceed on an
                 // empty transcript. The timeline is then frames + OCR + clicks
-                // only; Phase 5 + the existing empty-transcript handling cover
-                // the output (instruct declines, explain describes the screen).
+                // only; the prompt's empty-narration rule covers the output
+                // (one brief chat line, no artifact).
                 let transcript: Transcript
                 if processed.hasSpeech {
                     self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage

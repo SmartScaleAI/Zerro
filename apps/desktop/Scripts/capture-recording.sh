@@ -30,8 +30,8 @@
 #                                          (working dir contents + source.mov)
 #
 # Then:
-#   node Scripts/eval-models.mjs eval-recordings/<name> --mode instruct \
-#     --models gemini:gemini-3.5-flash,openai:gpt-4o
+#   node Scripts/eval-models.mjs eval-recordings/<name> \
+#     --models gemini:gemini-3.5-flash,openai:gpt-5.5
 # =============================================================================
 set -euo pipefail
 

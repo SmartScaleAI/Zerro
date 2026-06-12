@@ -215,15 +215,51 @@ private struct DetailPane: View {
             }
             Divider().overlay(Color.vfHairline)
             ScrollView {
-                Text(entry.prompt)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                // Phase 7: render from the v2 fields — chat text above the
+                // artifact body, the same visual pattern as the pill (no raw
+                // fence text). Raw `prompt` remains ONLY as the fallback for
+                // a legacy/unparseable row that carries no parsed pieces.
+                VStack(alignment: .leading, spacing: VFSpacing.md) {
+                    if let chat = entry.chatText, !chat.isEmpty {
+                        HighlightedMarkdownView(markdown: chat)
+                    }
+                    if let body = entry.artifactBody, !body.isEmpty {
+                        artifactBodyCard(body)
+                    }
+                    if (entry.chatText ?? "").isEmpty, (entry.artifactBody ?? "").isEmpty {
+                        Text(entry.prompt)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color.vfTextPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                }
             }
         }
         .padding(VFSpacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The artifact body in the pill card's visual voice: dark inset
+    /// container, monospace for snippet (ArtifactType.rendersMonospace),
+    /// markdown otherwise.
+    private func artifactBodyCard(_ body: String) -> some View {
+        Group {
+            if entry.resolvedArtifactType?.rendersMonospace == true {
+                Text(body)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .textSelection(.enabled)
+            } else {
+                HighlightedMarkdownView(markdown: body)
+            }
+        }
+        .padding(VFSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.md + 2, style: .continuous)
+                .fill(Color.black.opacity(0.4))
+        )
     }
 
     private var actions: some View {

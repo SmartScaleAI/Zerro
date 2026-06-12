@@ -39,9 +39,9 @@ enum ClickResolver {
     /// a busy recording and tell the model nothing.
     ///
     /// Consequence: click-COUNTING reflects only LABELED clicks. That's
-    /// acceptable today — instruct mode doesn't answer count questions yet
-    /// (that's a later prompt-mode phase). Revisit emitting countable markers for
-    /// unlabeled clicks if/when counting becomes a real feature.
+    /// acceptable today — the generation prompt doesn't answer count
+    /// questions. Revisit emitting countable markers for unlabeled clicks
+    /// if/when counting becomes a real feature.
     nonisolated static func resolve(clicks: [RecordedClick], frames: [ExtractedFrame]) -> [ResolvedClick] {
         guard !clicks.isEmpty else { return [] }
         return clicks.compactMap { click in

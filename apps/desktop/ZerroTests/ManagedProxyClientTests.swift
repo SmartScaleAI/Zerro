@@ -10,8 +10,11 @@
 //    • Success → prompt + usage + credits parsed into the result.
 //    • A 401 mid-use → ONE transparent token refresh + retry, then success.
 //    • 402 → out-of-credits; 5xx → retryable provider error.
-//    • The request sends audio + frames + mode ONLY — never a transcript or
-//      system prompt — and a Bearer token, never the license key.
+//    • The request sends audio + frames + clicks (+ model/has_speech) ONLY —
+//      never a transcript, a system prompt, or anything that steers the
+//      server-owned prompt — and a Bearer token, never the license key.
+//    • convert (Phase 6): text-only body to /convert, suffixed idempotency
+//      key, same refresh-once + error taxonomy.
 //
 
 import CoreMedia

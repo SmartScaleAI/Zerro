@@ -128,6 +128,22 @@ frames; omit either section if empty; omit the whole drawer if both are empty.
 
 ## 3. Codebase map (verified file paths)
 
+> **Post-completion note (Phase 7, 2026-06-12).** This map describes the
+> PRE-refactor codebase the plan was written against; it is kept as the
+> historical record. Outcome: every "to be removed" item below was removed in
+> Phases 4–5 (`PromptModes.swift`, `ModeSwitchDetector.swift`,
+> `ModeSwitchPatterns.swift/.json`, `OutputModeSection.swift` deleted; the
+> `OutputMode` enum is gone). The byte-mirror set is now: canonical
+> `zerro-prompt-system.md` → `apps/desktop/Scripts/artifact-eval/prompt-v2.md`
+> (in-repo mirror) → `generate/prompt.ts` + `PromptGenerationSystemPrompt.swift`
+> (both byte-identity-TESTED) → `eval-models.mjs` reads the mirror at run time.
+> New since the map was drawn: `Services/{ArtifactParser,ResponseModels,
+> AttachedContextBuilder,ConversionSystemPrompt}.swift`,
+> `Surfaces/Pill/{ArtifactCardView,AttachedContextRow}.swift`,
+> `supabase/functions/convert/` (Phase 6), and the conversion prompt mirror
+> `Scripts/artifact-eval/convert-prompt-v1.md`. History entries are v2
+> (`recent_prompts_v2.json`, optional chatText/artifact fields).
+
 Prompt copies that MUST stay byte-mirrored (existing discipline, keep it):
 
 - `apps/desktop/Zerro/Services/PromptGenerationSystemPrompt.swift` (BYOK base)

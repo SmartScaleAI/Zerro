@@ -64,6 +64,15 @@ supabase/
                                       #   handler.ts (request/verify), email.ts (normalize +
                                       #   disposable block + code gen), resend.ts, store.ts,
                                       #   config.ts (+ handler_test.ts, email_test.ts)
+    convert/                          # typed-artifact Phase 6: chat text (+ context) →
+                                      #   agent_prompt artifact block. FREE by design: token
+                                      #   auth + per-identity rate limit ONLY — no credit
+                                      #   check/consume, no slot, no idempotency cache, no
+                                      #   generation_log. Imports generate/'s registry +
+                                      #   provider adapters read-only. handler.ts, limits.ts,
+                                      #   prompt.ts (byte-mirror of Scripts/artifact-eval/
+                                      #   convert-prompt-v1.md, enforced by prompt_test.ts),
+                                      #   config.ts (+ handler_test.ts)
   test/run-curl-tests.sh              # post-deploy verification battery
 README-backend.md                     # this file
 ```
@@ -134,6 +143,7 @@ the runtime — do NOT set them yourself.**
 | `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case provider round-trip). |
 | `GENERATE_RATE_LIMIT_PER_SUB` / `_WINDOW_SECONDS` | optional | Per-subscriber `generate` rate limit (defaults `20` per `60`s). |
 | `GENERATE_PROVIDER_TIMEOUT_MS` | optional | Provider request timeout (default `120000`). Falls back to the legacy `GENERATE_OPENAI_TIMEOUT_MS` if the new var is unset, so a tuned deployment keeps its value. |
+| `CONVERT_RATE_LIMIT_PER_IDENTITY` / `_WINDOW_SECONDS` | optional | `convert` per-identity rate limit (defaults `10` per `60`s) — the free endpoint's ONLY quantitative gate. Input caps are `CONVERT_MAX_{PAYLOAD_BYTES,SOURCE_CHARS,CONTEXT_CHARS}`. |
 | `RESEND_API_KEY` | ✅ **F** | Resend API key for sending the trial verification code email. The new secret `trial-start` requires. Lives only here; never returned/logged. |
 | `TRIAL_CREDITS` | optional | The per-email trial credit grant (default `40`, multi-model plan §1.3). Tunable without a logic change. |
 | `TRIAL_EMAIL_FROM` | optional | The verified getzerro.app sender (default `Zerro <noreply@getzerro.app>`). Must be a domain verified in Resend. |
@@ -175,7 +185,7 @@ supabase secrets set LEMONSQUEEZY_API_KEY="<your LS API key>"  # G — staleness
 # Phase 5: supabase secrets set LS_VARIANT_YEARLY="<yearly-id>" \
 #          LS_VARIANT_TOPUP_BOOST="<boost-variant-id>" LS_VARIANT_TOPUP_POWER="<power-variant-id>"
 
-# 3. Deploy the five functions. --no-verify-jwt is REQUIRED on all five
+# 3. Deploy the six functions. --no-verify-jwt is REQUIRED on all six
 #    (see "Why --no-verify-jwt" below). config.toml already encodes this, but
 #    pass the flag explicitly so a config drift can't silently re-enable the
 #    gateway JWT gate.
@@ -184,26 +194,27 @@ supabase functions deploy session             --no-verify-jwt
 supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate            --no-verify-jwt
 supabase functions deploy trial-start         --no-verify-jwt
+supabase functions deploy convert             --no-verify-jwt
 ```
 
 **Phase F also needs a verified sender domain in Resend** (`getzerro.app`, or
 whatever `TRIAL_EMAIL_FROM` uses) so the verification email isn't rejected /
 spam-filed. Add + verify the domain in the Resend dashboard before going live.
 
-### Why `--no-verify-jwt` on all five
+### Why `--no-verify-jwt` on all six
 
 `verify_jwt` controls whether the **Supabase API gateway** demands a
-Supabase-issued JWT before the function runs. All five need it **off**, for
+Supabase-issued JWT before the function runs. All six need it **off**, for
 different reasons:
 
 - **lemonsqueezy-webhook** — LemonSqueezy sends no Supabase JWT. Security is the
   `X-Signature` HMAC check (raw body, constant-time), done in code.
 - **session** — the credential is the **license key**, not a Supabase JWT.
   Security is the per-key/per-IP rate limit + key-hash lookup.
-- **entitlement** / **generate** — each verifies **our own** session JWT (HS256,
-  `SESSION_JWT_SECRET`) **in code**. If the gateway also tried to verify a JWT,
-  it would reject the app's token before our code runs. So the gateway gate is
-  off and the in-code verify is the real gate.
+- **entitlement** / **generate** / **convert** — each verifies **our own**
+  session JWT (HS256, `SESSION_JWT_SECRET`) **in code**. If the gateway also
+  tried to verify a JWT, it would reject the app's token before our code runs.
+  So the gateway gate is off and the in-code verify is the real gate.
 - **trial-start** (Phase F) — an **unauthenticated public** endpoint: the user is
   mid-trial with no credential yet. Security is the per-email/per-IP rate limit +
   a hashed, TTL'd, attempt-limited code + a disposable-domain block + the
