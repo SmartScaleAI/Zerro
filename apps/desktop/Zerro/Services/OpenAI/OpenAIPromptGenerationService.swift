@@ -187,6 +187,11 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
                 // Byte-identical to the Managed (interleave.ts) and eval
                 // (eval-models.mjs) renderings — KEEP IN SYNC if you touch this.
                 userContent.append(.text("\n\(item.timestampTag) clicked \"\(label)\""))
+
+            case .rawText(let text):
+                // Phase 6: verbatim — no tag, no newline prefix, no quoting,
+                // matching the Managed convert function's single text block.
+                userContent.append(.text(text))
             }
         }
 

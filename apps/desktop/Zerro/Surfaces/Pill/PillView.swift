@@ -15,6 +15,16 @@ import SwiftUI
 
 // MARK: - PillState
 
+/// Phase 6 — the "Write agent prompt" conversion affordance on artifact-less
+/// results, as the pill renders it. `.hidden` (a card is present, or the
+/// feature doesn't apply), `.available` (ghost button), `.running` (inline
+/// spinner), `.failed` (quiet retry note + the button again). Mapped from
+/// `AppState.conversionStatus` by PillHostView so the pill stays a pure
+/// renderer.
+enum ConversionAffordance: Equatable {
+    case hidden, available, running, failed
+}
+
 enum PillState: Equatable {
     case recording(elapsed: String, totalDisplay: String)
     case wrappingUp(elapsed: String, totalDisplay: String)
@@ -80,6 +90,12 @@ struct PillView: View {
     /// transition window (state flips to .done before the result view
     /// can re-render) don't render an empty card.
     var result: ResultPresentation? = nil
+
+    /// Phase 6 — the conversion ghost-button state for artifact-less results.
+    /// Defaults `.hidden` so previews/legacy call sites render no affordance.
+    var conversion: ConversionAffordance = .hidden
+    /// Kicks off the conversion (wired to `AppState.convertToAgentPrompt`).
+    var onConvert: () -> Void = {}
 
     /// True when the result was generated from the screen alone (no
     /// usable narration). Drives the amber "no narration detected" note
@@ -212,9 +228,11 @@ struct PillView: View {
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
+                conversion: conversion,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
-                onDismiss: onDismissResult
+                onDismiss: onDismissResult,
+                onConvert: onConvert
             )
         case .resultExpanded:
             ResultPillContent(
@@ -223,9 +241,11 @@ struct PillView: View {
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
+                conversion: conversion,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
-                onDismiss: onDismissResult
+                onDismiss: onDismissResult,
+                onConvert: onConvert
             )
         case .error(let message, let retryable):
             ErrorPillContent(
@@ -635,12 +655,17 @@ private struct ResultPillContent: View {
     /// secondary line under "Prompt ready". `nil` (BYOK/local) keeps the
     /// single-line header exactly as before.
     let chargeLine: String?
+    /// Phase 6 — the "Write agent prompt" affordance state. Rendered only in
+    /// the expanded artifact-less layout.
+    let conversion: ConversionAffordance
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
     /// as a circular close badge after the Hide/View toggle in the header
     /// strip, separated by a thin vertical hairline divider.
     let onDismiss: () -> Void
+    /// Phase 6 — starts (or retries) the conversion.
+    let onConvert: () -> Void
 
     /// Transient "Copied" confirmation. Flips true on tap, reverts after
     /// `copyFeedbackDuration`. Local to this view — the clipboard write
@@ -864,9 +889,66 @@ private struct ResultPillContent: View {
                     onCopy: onCopy,
                     onCollapse: onToggleExpand
                 )
+                // Phase 6: a converted artifact arrives AFTER the response is
+                // already on screen — slide the card in under the chat text
+                // rather than popping. (For a normal generation the card is
+                // present from the first render, so the transition is inert.)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if result.artifact == nil, conversion != .hidden {
+                conversionRow
             }
         }
         .frame(width: 720, alignment: .leading)
+        .animation(.spring(response: 0.30, dampingFraction: 0.85), value: result)
+    }
+
+    /// Phase 6 — the ghost "✎ Write agent prompt" affordance on artifact-less
+    /// responses: a quiet stroked capsule (no fill — deliberately NOT the hero
+    /// copy style), an inline spinner while the conversion runs, and an
+    /// unobtrusive one-line retry note on failure. The existing chat text is
+    /// never touched by any of these states.
+    private var conversionRow: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+            if conversion == .failed {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.vfWarningAmber)
+                    Text("Couldn\u{2019}t write the prompt \u{2014} try again")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .fixedSize()
+                }
+            }
+            Button(action: onConvert) {
+                HStack(spacing: 6) {
+                    if conversion == .running {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Color.vfTextSecondary)
+                        Text("Writing prompt\u{2026}")
+                            .fixedSize()
+                    } else {
+                        Image(systemName: "pencil.line")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Write agent prompt")
+                            .fixedSize()
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.vfTextSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .disabled(conversion == .running)
+        }
     }
 
     /// Amber heads-up shown above the prompt body when no usable
@@ -1021,6 +1103,34 @@ private struct ResultPillContent: View {
     PillView(state: .resultExpanded, resultHadNoNarration: true)
         .padding(40)
         .background(Color.vfPanelBackground)
+}
+
+#Preview("Result \u{00B7} Convert button") {
+    PillView(
+        state: .resultExpanded,
+        result: ResultPresentation(
+            chatText: "That hydration error comes from rendering `Date.now()` during SSR \u{2014} the server and client markup disagree.",
+            artifact: nil,
+            context: nil
+        ),
+        conversion: .available
+    )
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+
+#Preview("Result \u{00B7} Convert failed") {
+    PillView(
+        state: .resultExpanded,
+        result: ResultPresentation(
+            chatText: "That hydration error comes from rendering `Date.now()` during SSR.",
+            artifact: nil,
+            context: nil
+        ),
+        conversion: .failed
+    )
+    .padding(40)
+    .background(Color.vfPanelBackground)
 }
 
 #Preview("Error \u{00B7} Short") {

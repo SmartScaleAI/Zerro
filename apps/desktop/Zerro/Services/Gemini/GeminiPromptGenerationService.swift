@@ -166,6 +166,10 @@ struct GeminiPromptGenerationService: PromptGenerationService {
                 parts.append(Part(text: "\n\(item.timestampTag) \"\(text)\""))
             case .click(_, let label):
                 parts.append(Part(text: "\n\(item.timestampTag) clicked \"\(label)\""))
+            case .rawText(let text):
+                // Phase 6: verbatim — matches the Managed convert function's
+                // single text block (no tag, no quoting).
+                parts.append(Part(text: text))
             }
         }
 

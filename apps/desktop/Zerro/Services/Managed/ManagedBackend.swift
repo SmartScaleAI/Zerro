@@ -62,6 +62,9 @@ enum ManagedBackend {
     static var entitlementURL: URL { baseURL.appendingPathComponent("entitlement") }
     /// Phase F — the email-gated trial-credits endpoint (request + verify code).
     static var trialStartURL: URL { baseURL.appendingPathComponent("trial-start") }
+    /// Phase 6 (typed-artifact refactor) — the free "Write agent prompt"
+    /// conversion endpoint.
+    static var convertURL: URL { baseURL.appendingPathComponent("convert") }
 
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,

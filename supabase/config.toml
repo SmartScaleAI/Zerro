@@ -55,3 +55,6 @@ verify_jwt = false
 
 [functions.trial-start]
 verify_jwt = false
+
+[functions.convert]
+verify_jwt = false

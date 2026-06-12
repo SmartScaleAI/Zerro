@@ -62,6 +62,13 @@ enum TimelineItem: Sendable {
     /// cursor (resolved from the nearest frame's OCR); unlabeled clicks are
     /// dropped by the resolver, so `label` is always meaningful.
     case click(timestamp: TimeInterval, label: String)
+    /// Phase 6 (typed-artifact refactor) — verbatim text with NO timestamp
+    /// tag and no quoting, rendered exactly as-is. CLIENT-ONLY, used solely
+    /// by the conversion fallback (`PromptGenerationService.convert`) so the
+    /// BYOK conversion sends the same plain user text the Managed `convert`
+    /// function does. Never produced by the Interleaver; the recording
+    /// timeline format above is unchanged.
+    case rawText(String)
 
     /// The sort key for chronological merge. Speech uses its start
     /// time, not its midpoint — keeps the alignment with the moment
@@ -72,6 +79,7 @@ enum TimelineItem: Sendable {
         case .frame(let t, _, _):    return t
         case .speech(let s, _, _):   return s
         case .click(let t, _):       return t
+        case .rawText:               return 0
         }
     }
 
@@ -87,6 +95,8 @@ enum TimelineItem: Sendable {
             return "[\(Self.mmss(s))\u{2013}\(Self.mmss(e))]"
         case .click(let t, _):
             return "[\(Self.mmss(t))]"
+        case .rawText:
+            return "" // rawText renders verbatim — no tag by definition
         }
     }
 
@@ -152,9 +162,12 @@ enum Interleaver {
     /// that beat. KEEP IN SYNC with interleave.ts / eval-models.mjs.
     private static func tieRank(_ item: TimelineItem) -> Int {
         switch item {
-        case .frame:  return 0
-        case .click:  return 1
-        case .speech: return 2
+        case .frame:   return 0
+        case .click:   return 1
+        case .speech:  return 2
+        // Never produced by the Interleaver (rawText is the conversion
+        // fallback's client-only case) — ranked last for completeness.
+        case .rawText: return 3
         }
     }
 }
@@ -189,6 +202,8 @@ extension InterleavedTimeline {
                 // Mirror the payload's click line (encodeBody / interleave.ts /
                 // eval-models.mjs): `[M:SS] clicked "<label>"`.
                 lines.append("\(item.timestampTag) clicked \"\(label)\"")
+            case .rawText(let text):
+                lines.append(text)
             }
         }
         return lines.joined(separator: "\n")

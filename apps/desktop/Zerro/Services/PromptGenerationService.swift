@@ -32,6 +32,26 @@ protocol PromptGenerationService: Sendable {
     ) async throws -> PromptGenerationResult
 }
 
+// MARK: - Conversion (Phase 6)
+
+extension PromptGenerationService {
+    /// The BYOK conversion call (Phase 6 — "Write agent prompt"): a plain
+    /// text-in / text-out chat with the conversion system prompt. Rides the
+    /// SAME provider plumbing as a generation — the one-item `.rawText`
+    /// timeline renders as a single verbatim text block in every provider's
+    /// encodeBody, matching the Managed `convert` function's wire shape —
+    /// so retry/error/usage handling stays identical with zero duplication.
+    func convert(
+        userText: String,
+        systemPrompt: String
+    ) async throws -> PromptGenerationResult {
+        try await generatePrompt(
+            timeline: InterleavedTimeline(items: [.rawText(userText)]),
+            systemPrompt: systemPrompt
+        )
+    }
+}
+
 // MARK: - PromptGenerationResult
 
 struct PromptGenerationResult: Sendable {

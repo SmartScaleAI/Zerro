@@ -141,6 +141,43 @@ final class RecentPromptStoreTests: XCTestCase {
         XCTAssertTrue(store.prompts.isEmpty)
     }
 
+    // MARK: Phase 6 — conversion updates the EXISTING entry
+
+    func testAttachConvertedArtifactUpdatesEntryInPlace() {
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "raw chat-only output", chatText: "raw chat-only output")
+        store.add(prompt: "a newer unrelated entry")
+        XCTAssertEqual(store.prompts.count, 2)
+
+        store.attachConvertedArtifact(
+            originalPrompt: "raw chat-only output",
+            type: "agent_prompt",
+            body: "Do the thing.",
+            title: "Do the thing on the settings page"
+        )
+
+        XCTAssertEqual(store.prompts.count, 2, "a conversion must never create a second row")
+        let updated = store.prompts[1]
+        XCTAssertEqual(updated.artifactType, "agent_prompt")
+        XCTAssertEqual(updated.artifactBody, "Do the thing.")
+        XCTAssertEqual(updated.artifactTitle, "Do the thing on the settings page")
+        XCTAssertEqual(updated.title, "Do the thing on the settings page", "row re-titles from the artifact")
+        XCTAssertEqual(updated.chatText, "raw chat-only output", "the original chat text is preserved")
+        XCTAssertEqual(updated.copyPayload, "Do the thing.", "history copy now follows the artifact")
+
+        // Persisted, not just in-memory.
+        let reloaded = RecentPromptStore(fileURL: fileURL)
+        XCTAssertEqual(reloaded.prompts[1].artifactType, "agent_prompt")
+    }
+
+    func testAttachConvertedArtifactNoOpWhenNothingMatches() {
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "something else")
+        store.attachConvertedArtifact(originalPrompt: "long gone", type: "agent_prompt", body: "b", title: "t")
+        XCTAssertEqual(store.prompts.count, 1)
+        XCTAssertNil(store.prompts[0].artifactType)
+    }
+
     // MARK: Phase 5 — per-type display + copy semantics
 
     private func entry(

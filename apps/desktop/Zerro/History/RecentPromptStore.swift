@@ -212,6 +212,33 @@ final class RecentPromptStore {
         save()
     }
 
+    /// Phase 6 (conversion fallback): grafts a converted artifact onto the
+    /// EXISTING entry for `originalPrompt` — a conversion must never create a
+    /// second history row. Matches the most recent entry whose raw `prompt`
+    /// equals the original (the same trimmed text `add` stored); updates its
+    /// artifact fields, re-titles from the model's artifact title (same rule
+    /// as `add`), and persists. No-op when nothing matches (e.g. the history
+    /// was cleared between generation and conversion).
+    func attachConvertedArtifact(
+        originalPrompt: String,
+        type: String,
+        body: String,
+        title: String?
+    ) {
+        let trimmed = originalPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let idx = prompts.firstIndex(where: { $0.prompt == trimmed }) else { return }
+        prompts[idx].artifactType = type
+        prompts[idx].artifactBody = body
+        let modelTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let modelTitle, !modelTitle.isEmpty {
+            prompts[idx].artifactTitle = modelTitle
+            prompts[idx].title = modelTitle.count > Self.maxTitleLength
+                ? Self.deriveTitle(from: modelTitle)
+                : modelTitle
+        }
+        save()
+    }
+
     func delete(id: UUID) {
         prompts.removeAll { $0.id == id }
         save()

@@ -251,6 +251,18 @@ private struct PillHostView: View {
     /// processing reads as registered-but-busy instead of silently dropped.
     @State private var flashScale: CGFloat = 1.0
 
+    /// Phase 6 — AppState's conversion lifecycle, mapped to the pill's
+    /// render-only affordance enum. `.hidden` whenever the feature doesn't
+    /// apply (a card is present, no result, not in .done).
+    private var conversionAffordance: ConversionAffordance {
+        guard appState.canConvertToAgentPrompt else { return .hidden }
+        switch appState.conversionStatus {
+        case .idle: return .available
+        case .running: return .running
+        case .failed: return .failed
+        }
+    }
+
     var body: some View {
         PillView(
             state: viewModel.pillState,
@@ -283,6 +295,10 @@ private struct PillHostView: View {
             // Phase 5: the parsed result — chat text + optional artifact
             // card + Attached Context drawer payload.
             result: appState.resultPresentation,
+            // Phase 6: the "Write agent prompt" ghost button on artifact-less
+            // results, mapped from AppState's conversion lifecycle.
+            conversion: conversionAffordance,
+            onConvert: { appState.convertToAgentPrompt() },
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
             // Multi-model 6B: the "−N credits · M left" toast, formatted once
