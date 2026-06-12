@@ -119,7 +119,9 @@ struct RecentPromptsView: View {
     }
 
     private func copy(_ entry: RecentPrompt) {
-        Pasteboard.copy(entry.prompt)
+        // Phase 5: same per-type payload semantics as the live pill —
+        // artifact body / chat text / raw fallback (RecentPrompt.copyPayload).
+        Pasteboard.copy(entry.copyPayload)
         didCopyTickID = entry.id
         let tickID = entry.id
         Task {
@@ -155,15 +157,23 @@ private struct SidebarRow: View {
     let entry: RecentPrompt
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(entry.title)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextPrimary)
-                .lineLimit(2)
-                .truncationMode(.tail)
-            Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
+        // Phase 5: the artifact-type glyph (chat bubble for chat-only)
+        // leads the row so the list scans by result kind at a glance.
+        HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+            Image(systemName: entry.displayIconName)
                 .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextSecondary)
+                .foregroundStyle(Color.vfTextTertiary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -187,10 +197,15 @@ private struct DetailPane: View {
         VStack(alignment: .leading, spacing: VFSpacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .lineLimit(2)
+                    HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+                        Image(systemName: entry.displayIconName)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.vfTextTertiary)
+                        Text(entry.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.vfTextPrimary)
+                            .lineLimit(2)
+                    }
                     Text(Self.absolute.string(from: entry.timestamp))
                         .font(.system(size: 11))
                         .foregroundStyle(Color.vfTextSecondary)
@@ -216,7 +231,9 @@ private struct DetailPane: View {
             Button(action: onCopy) {
                 HStack(spacing: 4) {
                     Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                    Text(didCopy ? "Copied" : "Copy")
+                    // §2 per-type button label ("Copy to Agent", "Copy
+                    // draft", …); plain "Copy" for chat-only/pre-v2 rows.
+                    Text(didCopy ? "Copied" : (entry.resolvedArtifactType?.buttonLabel ?? "Copy"))
                 }
             }
             .buttonStyle(SettingsSecondaryButtonStyle())

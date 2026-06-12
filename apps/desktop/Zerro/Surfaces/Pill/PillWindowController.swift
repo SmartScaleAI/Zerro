@@ -31,6 +31,16 @@ final class PillViewModel {
     /// is busy" feedback for recording-hotkey presses during .processing, which the
     /// hotkey handler would otherwise silently drop.
     var flashTrigger: Int = 0
+
+    /// Phase 5 — called by the host view whenever the SwiftUI content's
+    /// size changes OUTSIDE a state morph: the expanded result's content
+    /// re-measures itself (HeightCappedScroll) and the Attached Context
+    /// drawer expands/collapses, none of which pass through
+    /// `update(pillState:)`. The controller re-fits the window in response;
+    /// it no-ops when the fitting size already matches the last target, so
+    /// the per-frame geometry churn DURING a morph animation never fights
+    /// the animator.
+    @ObservationIgnored var onContentSizeChanged: (() -> Void)?
 }
 
 @MainActor
@@ -41,8 +51,19 @@ final class PillWindowController {
     private var window: NSWindow?
     private var observationTask: Task<Void, Never>?
 
+    /// The size `positionAtTopCenter` last fit the window to. Lets
+    /// `contentSizeDidChange` distinguish a REAL content-size change (a
+    /// HeightCappedScroll measurement landing, the context drawer toggling)
+    /// from the animated in-between sizes a morph reports every frame —
+    /// `fittingSize` reflects the final layout, so during a morph it equals
+    /// this target and the handler no-ops.
+    private var lastTargetSize: CGSize = .zero
+
     init(appState: AppState) {
         self.appState = appState
+        viewModel.onContentSizeChanged = { [weak self] in
+            self?.contentSizeDidChange()
+        }
         startObservingAppState()
     }
 
@@ -124,6 +145,23 @@ final class PillWindowController {
         viewModel.flashTrigger &+= 1
     }
 
+    /// Re-fits the window when the SwiftUI content changed size on its own
+    /// (drawer toggle, late scroll-height measurement) — changes that never
+    /// pass through `update(pillState:)` and would otherwise clip against
+    /// the stale window frame.
+    private func contentSizeDidChange() {
+        guard let window, window.isVisible else { return }
+        guard let hosting = window.contentView as? NSHostingView<PillHostView> else { return }
+        let fitting = hosting.fittingSize
+        // During a morph the geometry callback fires every animation frame
+        // with in-between sizes, but fittingSize stays at the morph's final
+        // layout — which positionAtTopCenter already targeted. Only a
+        // genuinely new fitting size warrants a re-fit.
+        guard abs(fitting.width - lastTargetSize.width) > 0.5
+                || abs(fitting.height - lastTargetSize.height) > 0.5 else { return }
+        positionAtTopCenter(animated: true)
+    }
+
     // MARK: - Window setup
 
     private func ensureWindow() {
@@ -173,6 +211,7 @@ final class PillWindowController {
                // morph and left the pill x-shifted after the collapse.
                hosting.layoutSubtreeIfNeeded()
                let targetSize = hosting.fittingSize
+               lastTargetSize = targetSize
                let visible = screen.visibleFrame
                let originX = visible.midX - targetSize.width / 2
                let originY = visible.maxY - 24 - targetSize.height
@@ -241,9 +280,9 @@ private struct PillHostView: View {
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
-            // Phase 4 shim: chat text + divider + artifact body (Phase 5
-            // replaces this with the artifact-card UI).
-            generatedPrompt: appState.resultDisplayMarkdown,
+            // Phase 5: the parsed result — chat text + optional artifact
+            // card + Attached Context drawer payload.
+            result: appState.resultPresentation,
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
             // Multi-model 6B: the "−N credits · M left" toast, formatted once
@@ -253,6 +292,15 @@ private struct PillHostView: View {
             },
             audioLevels: appState.audioLevels
         )
+        // Phase 5: surface content-size changes that bypass the state
+        // machine (drawer toggle, HeightCappedScroll measurements) so the
+        // controller can re-fit the window. The controller filters out the
+        // per-frame churn a morph animation produces.
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { _ in
+            viewModel.onContentSizeChanged?()
+        }
         .scaleEffect(flashScale)
         .onChange(of: viewModel.flashTrigger) { _, _ in
             // Two-step so the property ends back at 1.0 — `repeatCount(1,

@@ -14,6 +14,26 @@
 
 import SwiftUI
 
+// MARK: - ResultPresentation
+
+/// The result pill's render model (Phase 5 of the typed-artifact refactor):
+/// chat text, the optional typed artifact it introduces, and the artifact
+/// card's Attached Context drawer payload. Assembled by
+/// `AppState.resultPresentation` from the parsed response so `PillView`
+/// stays a pure renderer — it never sees `ParsedResponse`'s parse
+/// bookkeeping (validity, recovery, warnings), only what gets drawn.
+struct ResultPresentation: Equatable {
+    /// Conversational text rendered above the card. Never nil — a parse
+    /// fail-safe degrades the whole raw output into this. May be empty when
+    /// the model led straight into an artifact.
+    let chatText: String
+    /// The typed artifact, when one was attached. nil → chat-only layout
+    /// (no card).
+    let artifact: Artifact?
+    /// The Attached Context drawer payload; nil hides the drawer row.
+    let context: AttachedContext?
+}
+
 extension AppState {
 
     /// `nil` means the pill window should be hidden.

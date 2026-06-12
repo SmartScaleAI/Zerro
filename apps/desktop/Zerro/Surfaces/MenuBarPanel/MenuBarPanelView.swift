@@ -998,7 +998,9 @@ private struct CopyLastPromptRow: View {
 
     private func copyToClipboard() {
         guard let entry else { return }
-        Pasteboard.copy(entry.prompt)
+        // Phase 5: per-type payload, same semantics as the live pill —
+        // artifact body / chat text / raw fallback.
+        Pasteboard.copy(entry.copyPayload)
         // Close the dropdown once the prompt is on the clipboard.
         MenuBarExtraDismiss.dismiss()
     }
@@ -1065,6 +1067,13 @@ private struct RecentPromptSubmenuRow: View {
     var body: some View {
         Button(action: copy) {
             HStack(spacing: 0) {
+                // Phase 5: artifact-type glyph (chat bubble for chat-only)
+                // so the submenu scans by result kind.
+                Image(systemName: entry.displayIconName)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextTertiary)
+                    .frame(width: 16, alignment: .leading)
+
                 Text(entry.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -1093,7 +1102,8 @@ private struct RecentPromptSubmenuRow: View {
     }
 
     private func copy() {
-        Pasteboard.copy(entry.prompt)
+        // Phase 5: per-type payload, same semantics as the live pill.
+        Pasteboard.copy(entry.copyPayload)
         // Close the side panel, then the whole dropdown, once the prompt is
         // on the clipboard.
         dismiss()

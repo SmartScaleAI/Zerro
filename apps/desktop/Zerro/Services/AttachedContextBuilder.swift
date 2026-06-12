@@ -24,6 +24,19 @@
 
 import Foundation
 
+// MARK: - AttachedContext
+
+/// The artifact card's context-drawer payload (Phase 5): a one-line
+/// `summary` for the collapsed row ("screen text, 4 clicks") and the
+/// assembled §2 `block` it expands to — the same block `agent_prompt`
+/// copies append. Built once per result by `AttachedContextBuilder.make`;
+/// nil when the recording produced nothing to attach (the row doesn't
+/// render).
+struct AttachedContext: Equatable, Sendable {
+    let summary: String
+    let block: String
+}
+
 /// Pure assembly of the Attached Context block. Stateless string work only.
 enum AttachedContextBuilder {
 
@@ -68,6 +81,33 @@ enum AttachedContextBuilder {
         // enormous (hundreds of long labels). Grapheme-safe via prefix.
         guard block.count > maxLength else { return block }
         return String(block.prefix(maxLength - 1)) + "\u{2026}"
+    }
+
+    /// Builds the drawer payload — block plus its collapsed-row summary —
+    /// or nil when there is nothing to attach. The two share `build`'s
+    /// emptiness rules by construction, so a non-nil payload always has
+    /// both a renderable row and an expandable block.
+    nonisolated static func make(frames: [ExtractedFrame], clicks: [ResolvedClick]) -> AttachedContext? {
+        guard let block = build(frames: frames, clicks: clicks),
+              let summary = summary(frames: frames, clicks: clicks) else { return nil }
+        return AttachedContext(summary: summary, block: block)
+    }
+
+    /// One-line description of what the drawer holds — "screen text,
+    /// 4 clicks", "screen text", "1 click". Mirrors `build`'s emptiness
+    /// rules (blank OCR lines and whitespace-only click labels don't
+    /// count), so summary and block are nil together.
+    nonisolated static func summary(frames: [ExtractedFrame], clicks: [ResolvedClick]) -> String? {
+        let hasScreenText = !dedupedOCRLines(from: frames).isEmpty
+        let clickCount = clicks
+            .map { $0.label.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .count
+
+        var parts: [String] = []
+        if hasScreenText { parts.append("screen text") }
+        if clickCount > 0 { parts.append(clickCount == 1 ? "1 click" : "\(clickCount) clicks") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 
     // MARK: OCR assembly

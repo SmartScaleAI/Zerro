@@ -72,13 +72,14 @@ struct PillView: View {
     var onRecoveryGenerate: () -> Void = {}
     var onRecoveryDiscard: () -> Void = {}
 
-    /// The generated structured prompt, displayed in the .resultExpanded
-    /// body. Threaded from AppState.generatedPrompt via PillWindowController
-    /// so the pure-renderer PillView doesn't need to know about AppState.
+    /// The parsed result the pill renders (Phase 5): chat text, optional
+    /// artifact card, optional Attached Context drawer. Threaded from
+    /// AppState.resultPresentation via PillWindowController so the
+    /// pure-renderer PillView doesn't need to know about AppState.
     /// `nil` falls back to a placeholder so previews and the brief
-    /// transition window (state flips to .done before the markdown view
+    /// transition window (state flips to .done before the result view
     /// can re-render) don't render an empty card.
-    var generatedPrompt: String? = nil
+    var result: ResultPresentation? = nil
 
     /// True when the result was generated from the screen alone (no
     /// usable narration). Drives the amber "no narration detected" note
@@ -207,7 +208,7 @@ struct PillView: View {
         case .resultCompact:
             ResultPillContent(
                 expanded: false,
-                markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
+                result: result ?? ResultPillContent.placeholderResult,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
@@ -218,7 +219,7 @@ struct PillView: View {
         case .resultExpanded:
             ResultPillContent(
                 expanded: true,
-                markdown: generatedPrompt ?? ResultPillContent.placeholderMarkdown,
+                result: result ?? ResultPillContent.placeholderResult,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
@@ -598,23 +599,26 @@ private struct ConfirmRecoveryPillContent: View {
 // MARK: - ResultPillContent
 //
 // Shared by `.resultCompact` (expanded == false) and `.resultExpanded`
-// (expanded == true). The header strip is identical between the two —
-// green check, "Prompt ready", hero blue Copy button, expand/collapse
-// chevron — only the chevron label and icon flip.
+// (expanded == true).
 //
-// In `.resultExpanded` this view adds the structured-prompt body below
-// the header strip, and the Copy button moves into an overlay that
-// punches the top edge of the body container. For `.resultCompact` the
-// Copy button is fully contained within the pill — no overlay, no
-// edge-punching.
+// Compact keeps the Phase 2.75 capsule header unchanged: green check +
+// "Prompt ready" + hero Copy + View chevron + close X.
+//
+// Expanded follows the Phase 5 approved design: a slim top strip (status +
+// charge line on the left, close X on the right — no Copy/Hide there),
+// then the chat text rendered directly on the chrome, then the artifact
+// card (ArtifactCardView), which owns the title row, the Hide chevron, the
+// Attached Context drawer, and the single per-type copy button. A
+// chat-only response renders no card at all — the strip keeps a Hide
+// toggle in that case so the pill can still collapse to compact.
 
 private struct ResultPillContent: View {
     let expanded: Bool
-    /// The structured Markdown prompt to render in the body. Threaded
-    /// from AppState.generatedPrompt at the PillView level; falls back
-    /// to `placeholderMarkdown` when the call site hasn't supplied one
+    /// The parsed result to render. Threaded from
+    /// AppState.resultPresentation at the PillView level; falls back to
+    /// `placeholderResult` when the call site hasn't supplied one
     /// (previews; transient state windows).
-    let markdown: String
+    let result: ResultPresentation
     /// True when the prompt was generated from the screen alone because
     /// no usable narration was detected. Tints the header indicator amber
     /// and, in the expanded body, shows a note explaining why the prompt
@@ -661,21 +665,19 @@ private struct ResultPillContent: View {
                 .zIndex(1)
             if expanded {
                 // Wrapper HStack with Spacers forces explicit centering
-                // of the 720pt body card inside the 760pt VStack, giving
+                // of the 720pt body inside the 760pt VStack, giving
                 // 20pt of chrome on each side. (Relying on VStack's
                 // default `.center` alignment via `.frame(width: 720)`
                 // wasn't reliably producing the gutters in the running
-                // app.) Body sits cleanly BELOW the header — the
-                // Phase 2.5 `-24` slide-up has been retired; this design
-                // wants the body on its own row, not punching through.
+                // app.)
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    bodyContainer
+                    expandedBody
                     Spacer(minLength: 0)
                 }
                 // Bottom gutter matching the 20pt side gutters so the
-                // chrome wraps the body card on all sides — otherwise the
-                // body's dark fill runs flush to the pill's bottom edge.
+                // chrome wraps the content on all sides — otherwise the
+                // card's dark fill runs flush to the pill's bottom edge.
                 .padding(.bottom, 20)
             }
         }
@@ -727,9 +729,19 @@ private struct ResultPillContent: View {
             Spacer(minLength: VFSpacing.xxl)
 
             HStack(spacing: VFSpacing.md) {
-                copyButton
-                expandToggle
-                dismissDivider
+                if !expanded {
+                    // Compact keeps its hero Copy + View affordances.
+                    copyButton
+                    expandToggle
+                    dismissDivider
+                } else if result.artifact == nil {
+                    // Expanded with a card: Copy and Hide moved INTO the
+                    // card (per the Phase 5 design) — the strip carries
+                    // only status + close. Chat-only has no card, so the
+                    // Hide toggle stays here or the pill couldn't collapse.
+                    expandToggle
+                    dismissDivider
+                }
                 dismissButton
             }
         }
@@ -824,31 +836,37 @@ private struct ResultPillContent: View {
 
     // MARK: - Expanded body
 
-    private var bodyContainer: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// The Phase 5 expanded layout: notes, then chat text rendered directly
+    /// on the chrome, then the artifact card. A chat-only response simply
+    /// has no card — the pill is the chat text, which must read as
+    /// intentional, not broken (hence no empty card stub, no divider).
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.lg) {
             if stoppedBySleep {
                 stoppedBySleepNote
-                Divider().overlay(Color.vfHairline)
             }
             if noNarration {
                 noNarrationNote
-                Divider().overlay(Color.vfHairline)
             }
-            eyebrow
-            Divider().overlay(Color.vfHairline)
-            markdownScroll
+            if !result.chatText.isEmpty {
+                // Hugs short chat and scrolls long chat. With a card below,
+                // the cap is tight (chat is the intro, the card is the
+                // payload); chat-only gets the room the old body had.
+                HeightCappedScroll(maxHeight: result.artifact == nil ? 420 : 160) {
+                    HighlightedMarkdownView(markdown: result.chatText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if let artifact = result.artifact {
+                ArtifactCardView(
+                    artifact: artifact,
+                    context: result.context,
+                    onCopy: onCopy,
+                    onCollapse: onToggleExpand
+                )
+            }
         }
-        // Width is fixed; height is owned by the inner ScrollView so the
-        // hard `.frame(height: 420)` survives `.fixedSize(vertical: true)`
-        // propagation from the parent VStack. (A ScrollView's ideal height
-        // is its content's intrinsic height, so without an explicit frame
-        // on the ScrollView itself, fixedSize-propagation would expand the
-        // body to fit the full markdown sample.)
-        .frame(width: 720)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.4))
-        )
+        .frame(width: 720, alignment: .leading)
     }
 
     /// Amber heads-up shown above the prompt body when no usable
@@ -866,8 +884,6 @@ private struct ResultPillContent: View {
                 .foregroundStyle(Color.vfTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, VFSpacing.xl)
-        .padding(.vertical, VFSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -886,46 +902,36 @@ private struct ResultPillContent: View {
                 .foregroundStyle(Color.vfTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, VFSpacing.xl)
-        .padding(.vertical, VFSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var eyebrow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 10))
-                .foregroundStyle(Color.vfTextTertiary)
-            Text("STRUCTURED PROMPT \u{00B7} MARKDOWN")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(Color.vfTextTertiary)
-                .fixedSize()
-        }
-        .padding(.horizontal, VFSpacing.xl)
-        .padding(.top, VFSpacing.lg) // body sits cleanly below the header now — no overlap compensation needed
-        .padding(.bottom, VFSpacing.md)
-    }
+    /// Fallback result when none has been threaded in. Used by SwiftUI
+    /// previews and for the brief transition window between state flipping
+    /// to .done and the result view rendering. Production call sites always
+    /// have a real result by the time the pill morphs into a result state.
+    static let placeholderResult = ResultPresentation(
+        chatText: "I watched you walk through the Pulse login screen \u{2014} "
+            + "here\u{2019}s an agent prompt covering the three layout changes you asked for.",
+        artifact: Artifact(
+            type: .agentPrompt,
+            rawType: "agent_prompt",
+            title: "Rework the Pulse login screen layout",
+            body: placeholderMarkdown
+        ),
+        context: AttachedContext(
+            summary: "screen text, 3 clicks",
+            block: """
+            ## Attached Context
+            **Screen text (OCR excerpts):** Sign in
+            Email
+            Password
+            Forgot password?
+            **Clicks:** clicked "Sign in", clicked "Forgot password?", clicked "SSO"
+            """
+        )
+    )
 
-    private var markdownScroll: some View {
-        ScrollView {
-            HighlightedMarkdownView(markdown: markdown)
-                .padding(.horizontal, VFSpacing.xl + VFSpacing.xs)
-                .padding(.vertical, VFSpacing.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // Hard 420pt frame lives on the ScrollView itself — survives
-        // `.fixedSize(vertical: true)` propagation from the parent VStack
-        // so overflowing markdown scrolls inside the body instead of
-        // expanding the pill.
-        .frame(height: 420)
-    }
-
-    /// Fallback markdown when no generatedPrompt has been threaded in.
-    /// Used by SwiftUI previews and for the brief transition window
-    /// between state flipping to .done and the result body rendering.
-    /// Production call sites always have a real generatedPrompt by the
-    /// time the pill morphs into a result state.
+    /// Body text for `placeholderResult`'s sample artifact.
     static let placeholderMarkdown = """
     ## Context
     A 1:18 narrated walkthrough of the Pulse analytics login screen,
@@ -972,10 +978,43 @@ private struct ResultPillContent: View {
         .background(Color.vfPanelBackground)
 }
 
-#Preview("Result \u{00B7} Expanded") {
+#Preview("Result \u{00B7} Expanded \u{00B7} agent_prompt") {
     PillView(state: .resultExpanded)
         .padding(40)
         .background(Color.vfPanelBackground)
+}
+
+#Preview("Result \u{00B7} Expanded \u{00B7} snippet") {
+    PillView(
+        state: .resultExpanded,
+        result: ResultPresentation(
+            chatText: "That layout shift comes from the unsized avatar image \u{2014} here\u{2019}s the CSS that reserves its box.",
+            artifact: Artifact(
+                type: .snippet,
+                rawType: "snippet",
+                title: "Reserve space for the avatar image",
+                body: ".avatar {\n  width: 40px;\n  height: 40px;\n  aspect-ratio: 1;\n  object-fit: cover;\n}"
+            ),
+            context: AttachedContext(summary: "screen text", block: "## Attached Context\n**Screen text (OCR excerpts):** Profile\nSettings")
+        )
+    )
+    .padding(40)
+    .background(Color.vfPanelBackground)
+}
+
+#Preview("Result \u{00B7} Expanded \u{00B7} chat-only") {
+    PillView(
+        state: .resultExpanded,
+        result: ResultPresentation(
+            chatText: "The error in your terminal is a stale lockfile \u{2014} "
+                + "running `npm install` again after deleting `package-lock.json` clears it. "
+                + "Nothing on screen needs a code change, so there\u{2019}s nothing to hand to an agent here.",
+            artifact: nil,
+            context: nil
+        )
+    )
+    .padding(40)
+    .background(Color.vfPanelBackground)
 }
 
 #Preview("Result \u{00B7} No narration") {

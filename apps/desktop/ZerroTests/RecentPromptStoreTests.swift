@@ -140,4 +140,53 @@ final class RecentPromptStoreTests: XCTestCase {
         let store = RecentPromptStore(fileURL: fileURL)
         XCTAssertTrue(store.prompts.isEmpty)
     }
+
+    // MARK: Phase 5 — per-type display + copy semantics
+
+    private func entry(
+        prompt: String = "raw",
+        chatText: String? = nil,
+        artifactType: String? = nil,
+        artifactBody: String? = nil
+    ) -> RecentPrompt {
+        RecentPrompt(
+            title: "t",
+            prompt: prompt,
+            chatText: chatText,
+            artifactType: artifactType,
+            artifactBody: artifactBody
+        )
+    }
+
+    func testCopyPayloadPrefersArtifactBody() {
+        let e = entry(prompt: "raw with fences", chatText: "intro", artifactType: "snippet", artifactBody: "SELECT 1;")
+        XCTAssertEqual(e.copyPayload, "SELECT 1;")
+    }
+
+    func testCopyPayloadChatOnlyCopiesChatText() {
+        let e = entry(prompt: "raw", chatText: "just an explanation")
+        XCTAssertEqual(e.copyPayload, "just an explanation")
+    }
+
+    func testCopyPayloadFallsBackToRawPrompt() {
+        // Pre-v2 / fail-safe entries carry only the raw prompt.
+        XCTAssertEqual(entry(prompt: "raw output").copyPayload, "raw output")
+    }
+
+    func testDisplayIconPerType() {
+        XCTAssertEqual(entry(artifactType: "agent_prompt").displayIconName, "curlybraces")
+        XCTAssertEqual(entry(artifactType: "message").displayIconName, "envelope")
+        XCTAssertEqual(entry(artifactType: "snippet").displayIconName, "chevron.left.forwardslash.chevron.right")
+        XCTAssertEqual(entry(artifactType: "document").displayIconName, "doc.text")
+    }
+
+    func testDisplayIconChatOnlyAndUnknownType() {
+        XCTAssertEqual(entry().displayIconName, "text.bubble", "chat-only rows get the chat bubble")
+        XCTAssertEqual(
+            entry(artifactType: "future_type").displayIconName,
+            ArtifactType.generic.iconName,
+            "a stored type the enum no longer knows degrades to the generic glyph"
+        )
+        XCTAssertNil(entry(artifactType: "future_type").resolvedArtifactType)
+    }
 }

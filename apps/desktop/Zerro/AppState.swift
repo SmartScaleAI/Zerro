@@ -353,6 +353,14 @@ final class AppState {
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
     var parsedResponse: ParsedResponse?
 
+    /// Phase 5: the Attached Context drawer payload for the result currently
+    /// shown — summary line + assembled block, built ONCE from the processed
+    /// recording when the result is accepted (the recording's frames/clicks
+    /// never change after that). The artifact card's drawer renders it and
+    /// `resultCopyPayload` appends its block on `agent_prompt` copies. Reset
+    /// wherever `parsedResponse` is.
+    var attachedContext: AttachedContext?
+
     /// True when the result was generated from the screen alone because
     /// Whisper returned no usable narration (silent recording / muted
     /// mic). We still produce a prompt (the system prompt has a
@@ -593,6 +601,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         parsedResponse = nil
+        attachedContext = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -762,6 +771,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         parsedResponse = nil
+        attachedContext = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -1587,6 +1597,13 @@ final class AppState {
         let parsed = ArtifactParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
         parsedResponse = parsed
+        attachedContext = processedRecording.flatMap {
+            AttachedContextBuilder.make(frames: $0.frames, clicks: $0.clicks)
+        }
+        // Phase 5 (approved design): the result opens with the artifact card's
+        // body visible — land in the expanded pill, not compact-with-"View".
+        // The card's Hide chevron collapses back to the compact capsule.
+        isResultExpanded = true
 
         // Production visibility for the §2 fail-safe tiers (.public — these
         // carry rule names / a type token, never response content). The
@@ -1614,16 +1631,25 @@ final class AppState {
         )
     }
 
-    /// Markdown the result pill's expanded body renders — the Phase 4 shim
-    /// (Phase 5 replaces it with the artifact-card UI): chat text, and when
-    /// an artifact is attached, its body below a plain divider. Falls back
-    /// to the raw output when parsing produced no structure.
-    var resultDisplayMarkdown: String? {
-        guard let parsed = parsedResponse else { return generatedPrompt }
-        guard let artifact = parsed.artifact else {
-            return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
+    /// Everything the result pill renders, in display form (Phase 5): chat
+    /// text above the optional artifact card, plus the card's context-drawer
+    /// payload. Falls back to the raw output as chat text when parsing
+    /// produced no structure, so the pill always has something to show.
+    var resultPresentation: ResultPresentation? {
+        guard let parsed = parsedResponse else {
+            return generatedPrompt.map {
+                ResultPresentation(chatText: $0, artifact: nil, context: nil)
+            }
         }
-        return parsed.chatText + "\n\n---\n\n" + artifact.body
+        guard let artifact = parsed.artifact else {
+            let chat = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
+            return ResultPresentation(chatText: chat, artifact: nil, context: nil)
+        }
+        return ResultPresentation(
+            chatText: parsed.chatText,
+            artifact: artifact,
+            context: attachedContext
+        )
     }
 
     /// The Copy button's payload per the §2 per-type table: `agent_prompt`
@@ -1635,10 +1661,8 @@ final class AppState {
         guard let artifact = parsed.artifact else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
-        if artifact.type.includesContextInCopy,
-           let processed = processedRecording,
-           let context = AttachedContextBuilder.build(frames: processed.frames, clicks: processed.clicks) {
-            return artifact.body + "\n\n" + context
+        if artifact.type.includesContextInCopy, let context = attachedContext {
+            return artifact.body + "\n\n" + context.block
         }
         return artifact.body
     }

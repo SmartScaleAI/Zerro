@@ -77,6 +77,39 @@ struct RecentPrompt: Identifiable, Codable, Equatable {
     }
 }
 
+// MARK: - Display + copy semantics (Phase 5)
+
+extension RecentPrompt {
+
+    /// The §2 type this entry carries, when its stored wire string still
+    /// maps to a known case. nil for chat-only entries AND for a stored
+    /// string the current enum no longer knows (history outlives enum
+    /// changes by design — `artifactType` is persisted as a String).
+    var resolvedArtifactType: ArtifactType? {
+        artifactType.flatMap(ArtifactType.init(rawValue:))
+    }
+
+    /// Row glyph for the history surfaces: the artifact type's icon, the
+    /// generic doc for an unrecognized stored type, and a chat bubble for
+    /// chat-only entries.
+    var displayIconName: String {
+        guard artifactType != nil else { return "text.bubble" }
+        return (resolvedArtifactType ?? .generic).iconName
+    }
+
+    /// What copying this entry puts on the clipboard — the same per-type
+    /// semantics as the live pill (§2 table): artifact body when one was
+    /// attached, chat text for chat-only, the raw `prompt` for pre-v2 /
+    /// fail-safe entries. History persists no frames/clicks, so an
+    /// `agent_prompt` copy here carries NO Attached Context block — a
+    /// known, accepted gap (plan Phase 5 step 4).
+    var copyPayload: String {
+        if let artifactBody, !artifactBody.isEmpty { return artifactBody }
+        if let chatText, !chatText.isEmpty { return chatText }
+        return prompt
+    }
+}
+
 // MARK: - RecentPromptStore
 
 @MainActor
