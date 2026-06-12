@@ -277,6 +277,9 @@ struct ZerroApp: App {
         // the route in-window (see SettingsView's SettingsRoute enum).
         Window("Zerro Settings", id: SettingsScene.windowID) {
             SettingsView()
+                // Dock icon while open (all four real windows carry this;
+                // the pill/selector/menu-bar surfaces deliberately don't).
+                .dockIconVisibility(windowID: SettingsScene.windowID)
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
@@ -315,6 +318,7 @@ struct ZerroApp: App {
         // window actually surfaces in front of other apps.
         Window("Zerro \u{2014} Setup", id: OnboardingScene.windowID) {
             OnboardingWindowView()
+                .dockIconVisibility(windowID: OnboardingScene.windowID)
                 .environment(permissions)
                 .environment(onboarding)
                 // Phase F: the required email-verification step needs the trial
@@ -334,6 +338,7 @@ struct ZerroApp: App {
         // `AppDelegate.openPaywall()` when the user is `.expired`.
         Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
             PaywallView()
+                .dockIconVisibility(windowID: PaywallScene.windowID)
                 .environment(entitlements)
         }
         .windowResizability(.contentSize)
@@ -346,6 +351,7 @@ struct ZerroApp: App {
         // generation, and dismisses on verify/cancel.
         Window("Zerro \u{2014} Free Trial", id: TrialEmailScene.windowID) {
             TrialEmailCaptureView()
+                .dockIconVisibility(windowID: TrialEmailScene.windowID)
                 .environment(appState)
                 .environment(trialCredits)
                 .environment(entitlements)
@@ -609,6 +615,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Self.appState?.prepareForTermination()
         return .terminateNow
+    }
+
+    /// Clicking the Dock icon (visible only while a qualifying window is
+    /// open — see DockIconController) should raise that window. Without
+    /// this, AppKit's default reopen handling can leave the window buried
+    /// behind other apps because none of our scenes are "main"-window
+    /// material in the usual sense.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        DockIconController.shared.bringVisibleWindowsToFront()
+        return false
     }
 
     @MainActor
