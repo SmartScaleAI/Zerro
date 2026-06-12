@@ -157,13 +157,14 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { mode, model, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
+  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
 
   // 5.5 Resolve the validated model → provider + fixed credit price (Phase 4).
   //     validateBody already gated on ALLOWED_MODELS, so a miss here is a
   //     registry/validation drift bug — reject defensively rather than throw.
   //     The model selects the ADAPTER and the PRICE only; the system prompt is
-  //     composed from `mode` alone (Appendix C #3).
+  //     server-owned and fixed — no client field influences it (Appendix C #3;
+  //     since the typed-artifact refactor there is no mode either).
   const modelEntry = modelById(model);
   if (!modelEntry) return json({ error: "invalid_model" }, 400);
 
@@ -287,9 +288,10 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       return json({ error: "audio_too_long" }, 413);
     }
 
-    // 11. Compose the system prompt SERVER-SIDE (server owns base + mode; the
-    //     client supplied only the mode enum), interleave, and call chat.
-    const systemPrompt = composedSystemPrompt(mode);
+    // 11. Compose the system prompt SERVER-SIDE (the server owns the whole
+    //     text; the client supplies nothing that influences it), interleave,
+    //     and call chat.
+    const systemPrompt = composedSystemPrompt();
     const userContent = buildInterleavedContent(frames, segments, clicks);
 
     let chat;

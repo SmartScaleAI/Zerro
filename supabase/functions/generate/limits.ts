@@ -7,19 +7,21 @@
 // forged oversized payload cleanly (413/400), with NO OpenAI call and NO credit
 // charged. v1 does not flag/abuse-track (possible Phase G add); it just rejects.
 //
-// Wire shape the app sends (audio + frames + mode ONLY — never a transcript or
+// Wire shape the app sends (audio + frames ONLY — never a transcript or
 // prompt; the server transcribes and owns the prompt):
 //   {
-//     "mode": "instruct" | "explain",
 //     "has_speech": true,                                          // optional (Phase 6); false → skip STT
 //     "audio": { "mime": "audio/m4a", "filename": "rec.m4a",
 //                "data": "<base64>", "duration_seconds": 42.0 },   // duration optional
 //     "frames": [ { "timestamp": 0.0, "mime": "image/jpeg", "data": "<base64>" }, … ]
 //   }
+// Typed-artifact refactor (Phase 3): the former "mode" field is GONE from the
+// contract. A body that still carries one (the pre-Phase-4 dev client does) is
+// tolerated like any unknown field — silently ignored, never a 400 — so the
+// in-flight client doesn't brick during the server-first deploy window.
 // =============================================================================
 
 import type { ClickInput, FrameInput } from "./interleave.ts";
-import type { OutputMode } from "./prompt.ts";
 import { ALLOWED_MODELS, DEFAULT_MODEL_ID } from "./models.ts";
 import {
   ALLOWED_AUDIO_MIME,
@@ -33,11 +35,10 @@ import {
 } from "./config.ts";
 
 export interface ParsedRequest {
-  mode: OutputMode;
   /** Phase 4 — the validated generation model (always resolved: an absent wire
    *  field becomes DEFAULT_MODEL_ID). Selects provider + credit price ONLY —
-   *  it never influences the (server-owned) system prompt; `mode` stays the
-   *  single prompt-affecting input. */
+   *  it never influences the (server-owned) system prompt; since the typed-
+   *  artifact refactor NO client field does. */
   model: string;
   audio: { bytes: Uint8Array; mime: string; filename: string };
   frames: FrameInput[];
@@ -79,9 +80,8 @@ export function validateBody(body: unknown): ValidationResult {
   if (typeof body !== "object" || body === null) return reject(400, "invalid_body");
   const b = body as Record<string, unknown>;
 
-  // mode — the ONLY field that influences the (server-owned) system prompt.
-  const mode = b.mode;
-  if (mode !== "instruct" && mode !== "explain") return reject(400, "invalid_mode");
+  // (The v1 "mode" field is no longer read — see the header note. Its absence,
+  // presence, or any value is equally ignored.)
 
   // model (Phase 4) — OPTIONAL. Absent → the registry's recommended default
   // (backward compatible: a pre-multi-model app sends no model). Present but
@@ -186,6 +186,6 @@ export function validateBody(body: unknown): ValidationResult {
 
   return {
     ok: true,
-    value: { mode, model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
+    value: { model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
   };
 }

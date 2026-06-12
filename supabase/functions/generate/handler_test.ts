@@ -213,6 +213,10 @@ function trialStore(usedCredits = 0, limit = 15): InMemoryStore {
 
 function makeBody(over: Record<string, unknown> = {}) {
   return {
+    // The v1 "mode" field is DELIBERATELY still sent: the pre-Phase-4 dev
+    // client sends it, and the typed-artifact contract ignores it like any
+    // unknown field. Keeping it here makes every test double as tolerance
+    // coverage for the server-first deploy window. Phase 7 removes it.
     mode: "instruct",
     audio: { mime: "audio/m4a", filename: "rec.m4a", data: btoa("audio-bytes-here") },
     frames: [
@@ -354,9 +358,9 @@ Deno.test("client-supplied transcript/system_prompt/messages fields are IGNORED 
   // transcript was never used.
   assertEquals(openai.transcribeCalls, 1);
 
-  // The system prompt is the SERVER's composed prompt for the mode — never the
-  // client's. No injected attacker string reaches the model.
-  assertEquals(openai.lastSystem, composedSystemPrompt("instruct"));
+  // The system prompt is the SERVER's composed prompt — never the client's.
+  // No injected attacker string reaches the model.
+  assertEquals(openai.lastSystem, composedSystemPrompt());
   assert(!openai.lastSystem.toLowerCase().includes("translator"));
   assert(!openai.lastSystem.toLowerCase().includes("pwned"));
 
@@ -956,8 +960,8 @@ Deno.test("explicit model: routes to its provider, charges its fixed price, prom
   assertEquals(json.credits_charged, 10);
   // The factory received the VALIDATED model's provider+id.
   assertEquals(openai.makeChatCalls, [{ provider: "anthropic", model: "claude-opus-4-7" }]);
-  // Appendix C #3: the model NEVER affects the system prompt — mode only.
-  assertEquals(openai.lastSystem, composedSystemPrompt("instruct"));
+  // Appendix C #3: the model NEVER affects the (fixed, server-owned) prompt.
+  assertEquals(openai.lastSystem, composedSystemPrompt());
   // Log attribution carries the selected model.
   assertEquals(store.log[0].model, "claude-opus-4-7");
   assertEquals(store.log[0].provider, "anthropic");
@@ -990,6 +994,35 @@ Deno.test("invalid model → 400 invalid_model, no provider call, no charge, no 
   assertEquals(openai.chatCalls, 0);
   assertEquals(store.used.get("sub-1"), 0);
   assertEquals(store.log.length, 0);
+});
+
+// ---- Typed-artifact refactor (Phase 3): the v1 "mode" field is contract-dead --
+
+Deno.test("body without mode → 200 (mode is no longer part of the contract)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const body = makeBody();
+  delete (body as Record<string, unknown>).mode;
+  const res = await handleGenerate(makeReq(await mintToken(), body), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals(openai.lastSystem, composedSystemPrompt());
+});
+
+Deno.test("body with a garbage mode value → 200, silently ignored (unknown-field tolerance, not validation)", async () => {
+  // The pre-Phase-4 dev client still sends mode; the hard-cut decision is
+  // ignore-don't-400 so that client doesn't brick mid-rollout. Any value —
+  // not just the old enum — must be tolerated, proving the field is simply
+  // never read rather than leniently validated.
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ mode: { nested: ["garbage", 42] } })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(openai.lastSystem, composedSystemPrompt());
+  // Money path untouched by the ignored field: one default-model charge.
+  assertEquals((store.used.get("sub-1") ?? 0) > 0, true);
 });
 
 Deno.test("makeChat throws (provider key unset) → clean 503 provider_unavailable, ZERO side effects", async () => {

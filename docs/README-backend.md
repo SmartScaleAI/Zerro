@@ -481,10 +481,12 @@ without a logic change.
 
 ```bash
 cd supabase/functions
-deno test --allow-env --allow-net .            # run EVERYTHING (all functions + _shared)
+deno test --allow-env --allow-net --allow-read .            # run EVERYTHING (all functions + _shared)
 # …or per area:
 deno test --allow-net _shared/                 # signature verify, JWT round-trip, crypto, LS status map
-deno test --allow-env --allow-net generate/    # full generate flow + key-repurposing defense
+deno test --allow-env --allow-net --allow-read generate/    # full generate flow + key-repurposing defense
+#   (--allow-read: prompt_test.ts reads apps/desktop/Scripts/artifact-eval/prompt-v2.md
+#    to enforce byte-identity of the locked prompt — run from inside the repo)
 deno test --allow-env trial-start/             # request/verify flow + email helpers (stubbed sender)
 deno test --allow-env --allow-net session/     # §14.6 staleness re-check (stub LS client)
 deno test --allow-env --allow-net lemonsqueezy-webhook/  # full lifecycle + replay/forgery/stale-drop
