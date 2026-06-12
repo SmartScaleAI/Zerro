@@ -1,0 +1,449 @@
+[
+  {
+    "name": "chat only, no fence material",
+    "tier": "strict",
+    "input": "Just an answer.\nNo fences here.",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false,
+      "chatTextContains": "answer"
+    }
+  },
+  {
+    "name": "well-formed agent_prompt",
+    "tier": "strict",
+    "input": "Chat first, you should see this.\n\n<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"Fix the thing\">>>\nDo the fix.\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": true,
+      "type": "agent_prompt",
+      "title": "Fix the thing",
+      "bodyStartsWith": "Do the fix.",
+      "chatTextContains": "Chat first"
+    }
+  },
+  {
+    "name": "well-formed each type: message",
+    "tier": "strict",
+    "input": "hi\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "type": "message"
+    }
+  },
+  {
+    "name": "well-formed each type: snippet",
+    "tier": "strict",
+    "input": "hi\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "type": "snippet"
+    }
+  },
+  {
+    "name": "well-formed each type: document",
+    "tier": "strict",
+    "input": "hi\n<<<ZERRO_ARTIFACT type=\"document\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "type": "document"
+    }
+  },
+  {
+    "name": "well-formed each type: generic",
+    "tier": "strict",
+    "input": "hi\n<<<ZERRO_ARTIFACT type=\"generic\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "type": "generic"
+    }
+  },
+  {
+    "name": "unknown type coerces to generic",
+    "tier": "strict",
+    "input": "hey\n<<<ZERRO_ARTIFACT type=\"email\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": true,
+      "type": "generic",
+      "rawType": "email",
+      "warningsContain": "coerced"
+    }
+  },
+  {
+    "name": "unclosed block falls back whole",
+    "tier": "strict",
+    "input": "hey\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nbody",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false,
+      "chatTextContains": "body"
+    }
+  },
+  {
+    "name": "two blocks fall back whole",
+    "tier": "strict",
+    "input": "a\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"U\">>>\nc\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "open fence mid-line is unrecoverable",
+    "tier": "strict",
+    "input": "the marker <<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>> inline\nrest",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "open fence indented is unrecoverable",
+    "tier": "strict",
+    "input": "a\n  <<<ZERRO_ARTIFACT type=\"document\" title=\"T\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "CRLF input parses",
+    "tier": "strict",
+    "input": "chat\r\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">>>\r\nbody line\r\n<<<END_ZERRO_ARTIFACT>>>\r\n",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": true,
+      "type": "message",
+      "bodyStartsWith": "body line"
+    }
+  },
+  {
+    "name": "title over 80 chars warns, still valid",
+    "tier": "strict",
+    "input": "c\n<<<ZERRO_ARTIFACT type=\"document\" title=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "warningsContain": "80"
+    }
+  },
+  {
+    "name": "missing title attr is unrecoverable",
+    "tier": "strict",
+    "input": "c\n<<<ZERRO_ARTIFACT type=\"snippet\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "trailing text after close warns, still valid",
+    "tier": "strict",
+    "input": "c\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>\ntrailing",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "warningsContain": "after the close"
+    }
+  },
+  {
+    "name": "close before open falls back whole",
+    "tier": "strict",
+    "input": "<<<END_ZERRO_ARTIFACT>>>\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "fence-like text inside chat code block still trips (single open, no close)",
+    "tier": "strict",
+    "input": "Look at this:\n```\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\n```\nno close fence anywhere",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "empty body warns, still valid",
+    "tier": "strict",
+    "input": "c\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "hasArtifact": true,
+      "warningsContain": "empty artifact body"
+    }
+  },
+  {
+    "name": "R1: open fence single chevron",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "message",
+      "bodyStartsWith": "body",
+      "warningsContain": "R1"
+    }
+  },
+  {
+    "name": "R1: open fence four chevrons",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"document\" title=\"T\">>>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "document",
+      "warningsContain": "R1"
+    }
+  },
+  {
+    "name": "R1: open fence five chevrons",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>>>\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "snippet",
+      "warningsContain": "R1"
+    }
+  },
+  {
+    "name": "R2: body spillover after one chevron",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">Subject: hello\nrest of body\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "message",
+      "bodyStartsWith": "Subject: hello",
+      "bodyContains": "rest of body",
+      "warningsContain": "R2"
+    }
+  },
+  {
+    "name": "R2: body spillover after three chevrons",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"document\" title=\"T\">>># Heading\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "document",
+      "bodyStartsWith": "# Heading",
+      "warningsContain": "R2"
+    }
+  },
+  {
+    "name": "R3: close fence glued to last body line",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">>>\nfirst line\nlast body line.<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "message",
+      "bodyEndsWith": "last body line.",
+      "warningsContain": "R3"
+    }
+  },
+  {
+    "name": "R3: close fence indented standalone",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nbody\n  <<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "snippet",
+      "bodyStartsWith": "body",
+      "bodyEndsWith": "body",
+      "warningsContain": "R3"
+    }
+  },
+  {
+    "name": "R1+R3 combine",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"document\" title=\"T\">\nbody.<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "document",
+      "bodyEndsWith": "body."
+    }
+  },
+  {
+    "name": "R1 with unknown type: recovered AND coerced",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"email\" title=\"T\">\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "type": "generic",
+      "rawType": "email"
+    }
+  },
+  {
+    "name": "guard: zero chevrons after title is unrecoverable",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\"\nbody\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": false,
+      "recovered": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "guard: close token mid-line (text after) is unrecoverable",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"message\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>> and more",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "guard: recovery never invents — chevron line without ZERRO token",
+    "tier": "recovery",
+    "input": "chat\n<<<SOMETHING type=\"message\" title=\"T\">>>\nbody\n<<<END_SOMETHING>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "guard: open+body+close all on one line is unrecoverable",
+    "tier": "recovery",
+    "input": "chat\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>body<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, ap-09-profile-500-null-avatar)",
+    "tier": "recovery",
+    "input": "The API is throwing a 500 error because it attempts to access the `avatar` property of a null record in `user-service.ts`. The prompt below instructs your agent to add a safety check and supply a default fallback avatar to prevent this crash.\n\n<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"Fix null-pointer error on avatar in getUserProfile\">>>>\nFix a 500 Internal Server Error caused by a null-pointer exception when retrieving a profile's avatar.\n\n1. Locate the `getUserProfile` function in `user-service.ts` (around line 84) and its caller in `profile.ts` (around line 21).\n2. Add a null/undefined check where the `avatar` property is read to prevent the `TypeError: Cannot read properties of null (reading 'avatar')` crash.\n3. If the profile record is null, or if the avatar property is missing or null, return a default fallback avatar instead of throwing an error.\n4. Ensure the API returns a successful 200 response with the default avatar instead of a 500 Internal Server Error.\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "agent_prompt"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-04-backend-job-posting)",
+    "tier": "recovery",
+    "input": "Congratulations on getting the headcount! I've put together a clean, professional job description based on your notes. It highlights owning the billing service and the on-call rotation, keeps the tone direct and fluff-free, and leaves out any salary details per your request. \n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"Senior Backend Engineer Job Posting\">\n# Senior Backend Engineer (Remote, US Time Zones)\n\nWe are looking for a Senior Backend Engineer to join our team. In this role, you will take primary ownership of our billing service and help scale our backend infrastructure. This is a remote position open to candidates working within US time zones.\n\n### About the Role\nAs a Senior Backend Engineer, you will be responsible for the reliability, architecture, and feature development of our core billing service. You will write clean, maintainable Go code, optimize Postgres performance, and deploy services to Kubernetes. Because this role owns a business-critical system, you will also participate in our team's on-call rotation.\n\n### What You Will Do\n* **Own the Billing Service:** Design, build, and maintain the systems that handle our transactional and subscription billing pipelines.\n* **Develop in Go:** Write highly performant, clean, and well-tested backend services.\n* **Optimize Data Storage:** Design schemas, optimize queries, and manage Postgres databases at scale.\n* **Deploy & Scale:** Leverage Kubernetes to manage and scale microservices in production.\n* **Collaborate & Support:** Participate in team code reviews, architectural discussions, and our shared engineering on-call rotation.\n\n### What We Are Looking For\n* **Experience:** 5+ years of professional backend software engineering experience.\n* **Language Proficiency:** Strong, production-proven experience writing backend services in Go.\n* **Database Expertise:** Deep familiarity with PostgreSQL, including schema design, query optimization, and transaction management.\n* **Infrastructure Knowledge:** Experience deploying and managing applications in containerized environments, specifically Kubernetes.\n* **System Ownership:** A track record of taking end-to-end ownership of critical production systems (experience working on billing, payment gateways, or financial ledger systems is a major plus).\n* **Location:** Must be located in and working within a US time zone.\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, msg-04-pricing-meeting-followup)",
+    "tier": "recovery",
+    "input": "Here is a draft of the follow-up email summarizing the decisions and action items from your pricing meeting. It's ready to be sent out to the team.\n\n<<<ZERRO_ARTIFACT type=\"message\" title=\"Pricing sync follow-up email\">Subject: Quick recap: Pricing sync decisions & next steps\n\nHi everyone,\n\nThanks for a productive meeting earlier. Here is a quick summary of what we decided regarding our pricing updates:\n\n**Key Decisions:**\n*   **Free Tier:** We are keeping the free tier as-is.\n*   **Pro Tier:** The price will increase from $24/month to $29/month.\n*   **Annual Discount:** The 20% annual discount remains unchanged.\n\n**Action Item:**\n*   **Dana:** Please update the pricing page on the website to reflect these changes by the end of the week (Friday).\n\nLet me know if I missed anything!\n\nBest,\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "message"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-01-offsite-notes-summary)",
+    "tier": "recovery",
+    "input": "The raw offsite notes have been cleaned up and organized into a structured team summary below, keeping a clear distinction between what is finalized for Q3 and what has been parked or remains open. \n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"Q3 Offsite Roadmap Summary\">\n# Q3 Offsite Roadmap Summary\n\nThis document summarizes the decisions, open items, and ownership areas established during our Q3 roadmap offsite.\n\n---\n\n## Decided (Q3 Plan)\n*   **Ship Teams Plan:** We are officially committing to shipping the Teams plan in Q3.\n*   **Mobile Team Growth:** We will move forward with hiring 2 new members for the mobile team to support our upcoming roadmap.\n\n---\n\n## Open Questions & Parking Lot\n*   **Platform Rewrite (Parking Lot):** This initiative is explicitly deferred and placed in the parking lot. It is **not** decided or approved for development at this time.\n*   **Usage-Based Add-on:** We are still evaluating the feasibility and structure of a usage-based add-on. This remains an open product question.\n\n---\n\n## Ownership\n*   **Teams Initiative & Mobile Hiring:** J\n*   **Billing, Pricing, & Add-on Evaluation:** P\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-05-release-notes-2-4)",
+    "tier": "recovery",
+    "input": "Your customer-facing release notes for version 2.4.0 are ready. The draft below highlights SAML SSO as the headline, groups the new features and bug fixes, and filters out the technical dependency and CI build pipeline updates.\n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"Release notes for version 2.4.0\">>>>\n# Version 2.4.0 Release Notes\n\nWe are excited to share the latest updates and improvements in this release, headlined by the introduction of SAML Single Sign-On (SSO) to make your authentication secure and seamless.\n\n## New Features\n\n*   **SAML Single Sign-On (SSO):** Secure your team's access. You can now configure your preferred identity providers to handle authentication, streamlining onboarding and compliance.\n*   **Export to Parquet:** You can now export your dataset queries directly into the Apache Parquet format, allowing for faster and more efficient downstream data processing.\n\n## Bug Fixes and Improvements\n\n*   **Digest Email Timezones:** Fixed an issue where digest email delivery times did not match your local timezone settings.\n*   **Dashboard Visual Stability:** Resolved a visual bug that caused dashboard widgets to briefly flicker or jump when loading fresh data.\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-01-offsite-notes-summary)",
+    "tier": "recovery",
+    "input": "I have organized your raw offsite notes into a clean, structured summary document ready to share with the team. \n\nAs requested, the Q3 goals (shipping the Teams plan and hiring two mobile developers) are listed as firm decisions, while the platform rewrite and usage-based add-on are explicitly marked as open, unresolved discussions.\n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"Q3 Roadmap Offsite Summary\">\n# Q3 Roadmap Offsite Summary\n\nBelow is the summary of decisions, open questions, and ownership assignments coming out of our recent roadmap offsite.\n\n## Decisions Made\n*   **Ship Teams Plan:** We are officially committing to shipping the Teams plan in Q3.\n*   **Mobile Hiring:** We will hire 2 new engineers to support our mobile efforts.\n\n## Open Items & Parking Lot\n*   **Platform Rewrite:** This has been placed in the parking lot and is explicitly undecided at this time.\n*   **Usage-Based Add-on:** Further discussion is required to determine if we will pursue a usage-based add-on.\n\n## Ownership\n*   **Teams Plan:** J\n*   **Billing / Pricing:** P\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-02-readme-setup-section)",
+    "tier": "recovery",
+    "input": "New developers are getting stuck because they're missing the Node version requirement. The README section below puts Node 20 right at the top and outlines the step-by-step setup commands.\n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"README setup section\">>>>\n## Getting Started\n\n### Prerequisites\n\nThis project requires **Node.js 20 or newer**. Please ensure your local environment is up to date:\n\n```bash\nnode -v\n```\n\n### Setup Instructions\n\n1. **Install dependencies:**\n   ```bash\n   pnpm install\n   ```\n\n2. **Configure environment variables:**\n   Copy the example environment file and fill in your Supabase credentials:\n   ```bash\n   cp .env.example .env.local\n   ```\n   Open `.env.local` and provide values for:\n   * `SUPABASE_URL`\n   * `SUPABASE_ANON_KEY`\n\n3. **Start the development server:**\n   ```bash\n   pnpm dev\n   ```\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, msg-05-candidate-outreach)",
+    "tier": "recovery",
+    "input": "This casual outreach message is ready to send to Jess. It calls out her work on `chartkit` to keep it personal and invites her to a low-pressure chat.\n\n<<<ZERRO_ARTIFACT type=\"message\" title=\"Outreach to Jess Moreno (GitHub: jmoreno)\">Subject: Loved your chartkit project / quick chat?\n\nHi Jess,\n\nCame across your GitHub profile and really loved your work—especially the chartkit library. It's incredibly polished and totally stands out. \n\nWe’re looking for a Senior Frontend Engineer right now, and with your background, I thought you'd be a great fit for what we're building. \n\nAre you open to a quick, casual chat sometime soon to see if there's a match? \n\nBest,\n\n[Your Name]\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "message"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.5-flash, doc-02-readme-setup-section)",
+    "tier": "recovery",
+    "input": "The draft below adds a clear \"Getting Started\" section to your README, putting the Node 20 requirement right at the top so it doesn't trip people up. You can paste this directly into your project's markdown file.\n\n<<<ZERRO_ARTIFACT type=\"document\" title=\"README setup section\">>>>\n## Getting Started\n\n### Prerequisites\n\n* **Node.js**: Version 20.0.0 or newer is required. \n\n### Setup Instructions\n\n1. **Install dependencies:**\n   ```bash\n   pnpm install\n   ```\n\n2. **Configure environment variables:**\n   Copy the example environment file to create your local environment config:\n   ```bash\n   cp .env.example .env.local\n   ```\n   Open `.env.local` and fill in your Supabase credentials:\n   * `SUPABASE_URL`\n   * `SUPABASE_ANON_KEY`\n\n3. **Run the development server:**\n   ```bash\n   pnpm dev\n   ```\n<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "document"
+    }
+  },
+  {
+    "name": "real output (gemini:gemini-3.1-pro-preview, msg-02-deploy-freeze-slack)",
+    "tier": "recovery",
+    "input": "Here is the quick announcement for the engineering channel. It covers the deploy freeze, references the specific incident shown on your screen, and notes the hotfix exception. \n\n<<<ZERRO_ARTIFACT type=\"message\" title=\"Deploy freeze announcement for #eng\">>>\nHey team, due to Incident #347 (Payments double-charge), all regular deploys are frozen until Monday. \n\nHotfixes are still allowed, but they require explicit approval from the current on-call before merging.<<<END_ZERRO_ARTIFACT>>>",
+    "expect": {
+      "valid": true,
+      "recovered": true,
+      "hasArtifact": true,
+      "rawType": "message"
+    }
+  }
+]

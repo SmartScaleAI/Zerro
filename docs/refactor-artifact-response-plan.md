@@ -72,6 +72,36 @@ Parser behavior (fail-safe, strict):
   ENTIRE raw output as chat text with no artifact, log a warning. Never crash,
   never render a broken card.
 
+Recovery tier (§2 amendment, 2026-06-11, approved by Colin after Phase 1
+eval): before falling back to chat-only, the parser applies EXACTLY these
+three recovery rules — a closed list, no other best-effort recovery. Each
+rule still requires the literal `ZERRO_ARTIFACT` / `END_ZERRO_ARTIFACT`
+tokens, parseable `type`/`title` attributes, and the single-block discipline;
+recovery can rescue a malformed fence, never invent an artifact.
+
+- **R1 — wrong trailing chevron count on the open fence.** A line starting
+  with `<<<ZERRO_ARTIFACT` at column 0 whose attributes parse and which ends
+  with ≥ 1 `>` (e.g. `…">` or `…">>>>`).
+- **R2 — body spillover on the open fence.** As R1, but with text after the
+  trailing chevron run on the same line → that text becomes the first body
+  line.
+- **R3 — close fence glued to the last body line.** A line that ENDS with the
+  exact `<<<END_ZERRO_ARTIFACT>>>` token → the text before the token is the
+  last body line; the block closes there.
+
+Anything else (open fence mid-line/indented, close token followed by text,
+zero chevrons, unparseable attrs, two blocks, open+close on one line) still
+falls back to whole-output-as-chat-text. A recovered parse is `valid` but
+flagged `recovered`; the eval scorecard reports recovery rate as its own
+metric (separate from validity) so a climbing rate under future prompt edits
+is visible, not silent. Rationale: Phase 1 measured the default model
+(gemini-3.5-flash) plateauing at 95% strict validity on purely mechanical
+fence-boundary slips — 10/10 observed slips were exactly R1/R2/R3 and all
+parsed type-correct under this tier. The executable spec is
+`apps/desktop/Scripts/artifact-eval/parser-tests.json` (strict +
+recovery-tier cases, including those 10 real outputs); Phase 2's
+`ArtifactParserTests.swift` ports and must pass the same list.
+
 Per-type UI table (single source of truth — implement as a Swift enum):
 
 | type | Button label | Icon | Body rendering | Copy payload | Context tag |
@@ -210,7 +240,11 @@ before Phase 2.
    `[ExtractedFrame].ocrText` + `[ResolvedClick]` (dedupe, cap, omit-if-empty).
 4. `ZerroTests/ArtifactParserTests.swift`: well-formed (each type), unknown
    type → generic, unclosed fence, two blocks, fence mid-line, fence inside a
-   code block in chat text, empty body, title > 80 chars, CRLF input.
+   code block in chat text, empty body, title > 80 chars, CRLF input — PLUS
+   the recovery-tier cases (R1/R2/R3 + guards): port every case in
+   `apps/desktop/Scripts/artifact-eval/parser-tests.json`, which includes the
+   10 real model outputs that motivated the tier. The Swift parser must agree
+   with the JS reference on all of them.
    `AttachedContextBuilderTests.swift` likewise.
 5. `RecentPromptStore` v2: `RecentPrompt` gains `chatText: String?`,
    `artifactType: String?`, `artifactBody: String?` (keep `prompt` as the raw

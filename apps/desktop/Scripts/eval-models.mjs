@@ -44,9 +44,11 @@
 //   node Scripts/eval-models.mjs --artifact \
 //     --models gemini:gemini-3.5-flash,anthropic:claude-sonnet-4-6 \
 //     [--fixtures Scripts/artifact-eval/fixtures.json]   # default
-//     [--system-prompt path/to/draft.txt]   # default: current composed mode prompt
+//     [--system-prompt path]                # default: current composed mode prompt;
+//                                           # .md → first fenced block, .txt → raw
 //     [--mode instruct|explain]             # which current prompt when no --system-prompt
 //     [--only ap-01-...,ch-04-...]          # run a subset of fixture ids
+//     [--concurrency 4]                     # drop to 1-2 for rate-limited models
 //     [--thinking low|high] [--out eval-results/artifact]
 // Scores text-only labeled fixtures against the typed-artifact output contract
 // (plan §2). No recording, no Whisper, no images — see the section below.
@@ -404,30 +406,58 @@ const DIRECT_ADDRESS_RE = /\byou(?:r|'re|'ll|'ve|'d)?\b/i;
 const THE_USER_RE = /\bthe user\b/i;
 
 /**
- * §2 parser (fail-safe, strict). Returns
- *   { chatText, artifact: { type, rawType, title, body } | null, valid, warnings }
+ * §2 parser (fail-safe, strict + bounded recovery tier). Returns
+ *   { chatText, artifact: { type, rawType, title, body } | null,
+ *     valid, recovered, warnings }
  * - no fence material anywhere            → chat-only, valid
  * - exactly one well-formed block         → parsed, valid (unknown `type`
  *                                           coerces to generic with a warning)
  * - anything else — unclosed, multiple,
- *   mid-line / indented fence, bad open   → ENTIRE raw output becomes chat
+ *   mid-line open fence, bad attrs        → ENTIRE raw output becomes chat
  *                                           text, artifact null, valid=false
- * Over-long title (> 80) and trailing text after the close fence are recorded
- * as warnings, not validity failures.
+ *
+ * RECOVERY TIER (§2 amendment, 2026-06-11 — Colin-approved closed list).
+ * Recovery rescues a malformed fence; it can never invent an artifact: every
+ * rule still requires the literal ZERRO_ARTIFACT / END_ZERRO_ARTIFACT tokens,
+ * parseable type/title attrs, and the single-block discipline. Exactly three
+ * rules, nothing else:
+ *   R1 — open fence with wrong trailing chevron count: line starts with
+ *        `<<<ZERRO_ARTIFACT` at column 0, attrs parse, ends with ≥1 `>`
+ *        (e.g. `...">` or `...">>>>`)  → accepted as the open fence.
+ *   R2 — open-fence body spillover: as R1, but text follows the trailing
+ *        chevron run on the same line → that text becomes the first body line.
+ *   R3 — close fence glued to the last body line: a line that ENDS with the
+ *        exact `<<<END_ZERRO_ARTIFACT>>>` token → the text before the token
+ *        is the last body line and the block closes there.
+ * A parse that used any rule sets recovered=true (still valid=true) and
+ * records which rule fired in warnings — the scorer reports recovery rate as
+ * its own metric so a climbing rate is visible, not silent.
+ * Over-long title (> 80) and trailing text after the close fence remain
+ * warnings, not validity failures.
  */
+const ARTIFACT_OPEN_STRICT = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*>>>$/;
+const ARTIFACT_OPEN_RECOVERY = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*(>+)(.*)$/;
+
 function parseArtifactResponse(raw) {
   const warnings = [];
   const lines = raw.split(/\r?\n/);
   const opens = [];
-  const closes = [];
+  const closes = []; // { index, strict, prefix }
   let midline = false;
   lines.forEach((line, i) => {
     if (line.startsWith(ARTIFACT_OPEN_PREFIX)) opens.push(i);
     else if (line.includes(ARTIFACT_OPEN_PREFIX)) midline = true;
-    if (line.startsWith(ARTIFACT_CLOSE) && line.trimEnd() === ARTIFACT_CLOSE) closes.push(i);
-    else if (line.includes("<<<END_ZERRO_ARTIFACT")) midline = true;
+    const trimmed = line.trimEnd();
+    if (trimmed === ARTIFACT_CLOSE && line.startsWith(ARTIFACT_CLOSE)) {
+      closes.push({ index: i, strict: true, prefix: "" });
+    } else if (trimmed.endsWith(ARTIFACT_CLOSE)) {
+      // R3 — close token at end of line, content (or indent) before it.
+      closes.push({ index: i, strict: false, prefix: trimmed.slice(0, -ARTIFACT_CLOSE.length) });
+    } else if (line.includes("<<<END_ZERRO_ARTIFACT")) {
+      midline = true; // close token NOT at end of line (or wrong chevrons) — unrecoverable
+    }
   });
-  const asChatOnly = (valid) => ({ chatText: raw.trim(), artifact: null, valid, warnings });
+  const asChatOnly = (valid) => ({ chatText: raw.trim(), artifact: null, valid, recovered: false, warnings });
   if (opens.length === 0 && closes.length === 0 && !midline) return asChatOnly(true);
   if (midline) {
     warnings.push("fence delimiter not alone at line start");
@@ -438,16 +468,31 @@ function parseArtifactResponse(raw) {
     return asChatOnly(false);
   }
   const [o] = opens;
-  const [c] = closes;
-  if (c < o) {
-    warnings.push("close fence precedes open fence");
+  const close = closes[0];
+  const c = close.index;
+  if (c <= o) {
+    warnings.push("close fence does not follow the open fence");
     return asChatOnly(false);
   }
-  const m = lines[o].trimEnd().match(/^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*>>>$/);
+  const openLine = lines[o].trimEnd();
+  let m = openLine.match(ARTIFACT_OPEN_STRICT);
+  let openStrict = true;
+  let spill = "";
   if (!m) {
-    warnings.push(`unparseable open fence: ${lines[o].trim().slice(0, 120)}`);
-    return asChatOnly(false);
+    const r = openLine.match(ARTIFACT_OPEN_RECOVERY);
+    if (!r) {
+      warnings.push(`unparseable open fence: ${lines[o].trim().slice(0, 120)}`);
+      return asChatOnly(false);
+    }
+    openStrict = false;
+    m = r;
+    spill = r[4].trim();
+    warnings.push(spill
+      ? `recovered (R2): open fence with body spillover ("${r[3]}" + text)`
+      : `recovered (R1): open fence ended "${r[3]}" instead of ">>>"`);
   }
+  if (!close.strict) warnings.push("recovered (R3): close fence at end of last body line");
+  const recovered = !openStrict || !close.strict;
   const rawType = m[1];
   const title = m[2];
   let type = rawType;
@@ -457,12 +502,15 @@ function parseArtifactResponse(raw) {
   }
   if (title.length > 80) warnings.push(`title is ${title.length} chars (contract caps at 80)`);
   const chatText = lines.slice(0, o).join("\n").trim();
-  const body = lines.slice(o + 1, c).join("\n").trim();
+  const bodyLines = lines.slice(o + 1, c);
+  if (close.prefix.trim()) bodyLines.push(close.prefix);
+  if (spill) bodyLines.unshift(spill);
+  const body = bodyLines.join("\n").trim();
   const trailing = lines.slice(c + 1).join("\n").trim();
   if (!chatText) warnings.push("no chat text before the artifact block");
   if (!body) warnings.push("empty artifact body");
   if (trailing) warnings.push("text after the close fence (contract: chat first, artifact last)");
-  return { chatText, artifact: { type, rawType, title, body }, valid: true, warnings };
+  return { chatText, artifact: { type, rawType, title, body }, valid: true, recovered, warnings };
 }
 
 /** Synthesize a fixture into the production timeline text shape (no images). */
@@ -502,7 +550,7 @@ function scoreArtifactCase(c, parsed) {
   const chatVoiceOk = parsed.chatText ? DIRECT_ADDRESS_RE.test(parsed.chatText) : null;
   const agentVoiceOk = got && got.type === "agent_prompt" ? !THE_USER_RE.test(got.body) : null;
   return {
-    attachOk, typeOk, valid: parsed.valid, chatVoiceOk, agentVoiceOk,
+    attachOk, typeOk, valid: parsed.valid, recovered: parsed.recovered, chatVoiceOk, agentVoiceOk,
     gotType: got?.rawType ?? null, gotTitle: got?.title ?? null,
   };
 }
@@ -515,11 +563,19 @@ function artifactMetrics(records) {
   const chatVoiced = ok.filter((r) => r.chatVoiceOk !== null);
   const agentVoiced = ok.filter((r) => r.agentVoiceOk !== null);
   const violations = agentVoiced.filter((r) => r.agentVoiceOk === false).length;
+  // Recovery rate — recovered parses / artifact-bearing responses. Recovered
+  // counts as valid, but the rate gets its own row: a climbing rate under
+  // future prompt edits is degradation that validity alone would hide.
+  const withArtifact = ok.filter((r) => r.gotType !== null);
+  const recoveredCount = ok.filter((r) => r.recovered).length;
   return {
     errors: records.length - ok.length,
     attachLabel: pct(ok.filter((r) => r.attachOk).length, ok.length),
     typeLabel: pct(typed.filter((r) => r.typeOk).length, typed.length),
     validLabel: pct(ok.filter((r) => r.valid).length, ok.length),
+    recoveryLabel: withArtifact.length === 0
+      ? "n/a"
+      : `${recoveredCount}/${withArtifact.length} artifacts (${((100 * recoveredCount) / withArtifact.length).toFixed(1)}%)`,
     chatVoiceLabel: pct(chatVoiced.filter((r) => r.chatVoiceOk).length, chatVoiced.length),
     agentVoiceLabel: `${violations} violation${violations === 1 ? "" : "s"} / ${agentVoiced.length} agent_prompt`,
     totalIn: ok.reduce((a, r) => a + r.inputTokens, 0),
@@ -564,6 +620,7 @@ function buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fi
   row("attach / no-attach accuracy", (m) => m.attachLabel);
   row("type accuracy", (m) => m.typeLabel);
   row("contract validity", (m) => m.validLabel);
+  row("recovery rate (tier, counts valid)", (m) => m.recoveryLabel);
   row("chat voice (direct address)", (m) => m.chatVoiceLabel);
   row('agent_prompt voice ("the user")', (m) => m.agentVoiceLabel);
   row("API errors", (m) => String(m.errors));
@@ -575,7 +632,7 @@ function buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fi
 
   out.push(
     `## Per-case results`, ``,
-    `Cell: ✓/✗ on attach+type, then the type the model emitted (\`!\` = malformed contract, ERR = API error).`, ``,
+    `Cell: ✓/✗ on attach+type, then the type the model emitted (\`!\` = malformed contract, \`~R\` = recovery tier, ERR = API error).`, ``,
     `| case | expected | ${specs.join(" | ")} |`,
     `|---|---|${specs.map(() => "---").join("|")}|`,
   );
@@ -585,11 +642,23 @@ function buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fi
       if (!r) return "—";
       if (r.error) return "ERR";
       const pass = r.attachOk && r.typeOk !== false;
-      return `${pass ? "✓" : "✗"} ${r.gotType ?? "chat-only"}${r.valid ? "" : " !"}`;
+      return `${pass ? "✓" : "✗"} ${r.gotType ?? "chat-only"}${r.valid ? "" : " !"}${r.recovered ? " ~R" : ""}`;
     });
     out.push(`| ${c.id} | ${c.expected.has_artifact ? c.expected.type : "chat-only"} | ${cells.join(" | ")} |`);
   }
   out.push(``);
+
+  // Recovery-tier visibility: every recovered parse, with the rule that fired.
+  for (const { spec, records } of perModel) {
+    const rec = records.filter((r) => !r.error && r.recovered);
+    if (!rec.length) continue;
+    out.push(`## Recovered (tier) — ${spec}`, ``);
+    for (const r of rec) {
+      const rules = (r.warnings ?? []).filter((w) => w.startsWith("recovered")).join("; ");
+      out.push(`- ${r.id} → ${r.gotType} — ${rules}`);
+    }
+    out.push(``);
+  }
 
   for (const { spec, records } of perModel) {
     const bad = records.filter(
@@ -623,8 +692,21 @@ async function runArtifactEval() {
   const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",").map((s) => s.trim());
   const thinkingLevel = arg("thinking", "low");
   const outDir = arg("out", "eval-results/artifact");
+  // Per-model request concurrency. 4 is fine for high-limit models; drop to
+  // 1–2 for rate-limited ones (gemini-pro-preview, sonnet) to avoid 429s.
+  const concurrency = Math.max(1, Number(arg("concurrency", "4")) || 4);
+  // --system-prompt: a .txt path is read raw; a .md path yields its FIRST
+  // fenced code block (so the in-repo prompt mirror artifact-eval/prompt-v2.md
+  // can carry a provenance header without it riding into the prompt).
   const promptFile = arg("system-prompt", null);
-  const systemPrompt = promptFile ? readFileSync(promptFile, "utf8") : composedSystemPrompt(promptMode);
+  const loadPromptFile = (p) => {
+    const text = readFileSync(p, "utf8");
+    if (!p.endsWith(".md")) return text;
+    const m = text.match(/(?:^|\n)```\n([\s\S]*?)\n```(?:\n|$)/);
+    if (!m) { console.error(`--system-prompt: no fenced block found in ${p}`); process.exit(1); }
+    return m[1];
+  };
+  const systemPrompt = promptFile ? loadPromptFile(promptFile) : composedSystemPrompt(promptMode);
   const promptLabel = promptFile
     ? `\`${promptFile}\``
     : `current ${promptMode} mode mirror (pre-v2 — pipeline check only, scores not meaningful)`;
@@ -677,7 +759,7 @@ async function runArtifactEval() {
     const [provider, ...rest] = spec.split(":");
     const model = rest.join(":");
     console.error(`\n=== ${spec} (artifact mode, ${fixtures.length} cases${provider === "gemini" ? `, thinking=${thinkingLevel}` : ""}) ===`);
-    const records = await mapPool(fixtures, 4, async (c) => {
+    const records = await mapPool(fixtures, concurrency, async (c) => {
       const blocks = fixtureBlocks(c);
       const t0 = Date.now();
       try {
@@ -690,7 +772,7 @@ async function runArtifactEval() {
         const parsed = parseArtifactResponse(r.content);
         const s = scoreArtifactCase(c, parsed);
         const mark = s.attachOk && s.typeOk !== false && s.valid ? "ok  " : "MISS";
-        console.error(`  ${mark} ${c.id} — expected ${c.expected.has_artifact ? c.expected.type : "chat-only"}, got ${s.gotType ?? "chat-only"}${parsed.valid ? "" : " [INVALID]"} (${seconds.toFixed(1)}s)`);
+        console.error(`  ${mark} ${c.id} — expected ${c.expected.has_artifact ? c.expected.type : "chat-only"}, got ${s.gotType ?? "chat-only"}${parsed.valid ? "" : " [INVALID]"}${parsed.recovered ? " [RECOVERED]" : ""} (${seconds.toFixed(1)}s)`);
         return {
           id: c.id, expected: c.expected, ...s,
           warnings: parsed.warnings, chatText: parsed.chatText,
@@ -716,6 +798,48 @@ async function runArtifactEval() {
     const m = artifactMetrics(records);
     return { model: spec, attach: m.attachLabel, type: m.typeLabel, validity: m.validLabel, errors: m.errors };
   }));
+}
+
+// --parser-tests [file] — run the §2 parser edge-case suite (no API calls).
+// The suite (artifact-eval/parser-tests.json) is the contract's executable
+// spec: strict cases + the recovery-tier cases (including the real model
+// outputs that motivated the tier). Phase 2's ArtifactParserTests.swift must
+// port/pass this same list. Exits non-zero on any failure.
+function runParserTests() {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const i = process.argv.indexOf("--parser-tests");
+  const next = process.argv[i + 1];
+  const testsPath = next && !next.startsWith("--") ? next : join(scriptDir, "artifact-eval", "parser-tests.json");
+  const tests = JSON.parse(readFileSync(testsPath, "utf8"));
+  let failures = 0;
+  for (const t of tests) {
+    const got = parseArtifactResponse(t.input);
+    const problems = [];
+    const e = t.expect;
+    if (e.valid !== undefined && got.valid !== e.valid) problems.push(`valid: ${got.valid} ≠ ${e.valid}`);
+    if (e.recovered !== undefined && got.recovered !== e.recovered) problems.push(`recovered: ${got.recovered} ≠ ${e.recovered}`);
+    if (e.hasArtifact !== undefined && (got.artifact !== null) !== e.hasArtifact) problems.push(`hasArtifact: ${got.artifact !== null} ≠ ${e.hasArtifact}`);
+    if (e.type !== undefined && got.artifact?.type !== e.type) problems.push(`type: ${got.artifact?.type} ≠ ${e.type}`);
+    if (e.rawType !== undefined && got.artifact?.rawType !== e.rawType) problems.push(`rawType: ${got.artifact?.rawType} ≠ ${e.rawType}`);
+    if (e.title !== undefined && got.artifact?.title !== e.title) problems.push(`title: ${JSON.stringify(got.artifact?.title)} ≠ ${JSON.stringify(e.title)}`);
+    if (e.bodyStartsWith !== undefined && !(got.artifact?.body ?? "").startsWith(e.bodyStartsWith)) problems.push(`body does not start with ${JSON.stringify(e.bodyStartsWith)}`);
+    if (e.bodyEndsWith !== undefined && !(got.artifact?.body ?? "").endsWith(e.bodyEndsWith)) problems.push(`body does not end with ${JSON.stringify(e.bodyEndsWith)}`);
+    if (e.bodyContains !== undefined && !(got.artifact?.body ?? "").includes(e.bodyContains)) problems.push(`body does not contain ${JSON.stringify(e.bodyContains)}`);
+    if (e.chatTextContains !== undefined && !got.chatText.includes(e.chatTextContains)) problems.push(`chatText does not contain ${JSON.stringify(e.chatTextContains)}`);
+    if (e.warningsContain !== undefined && !got.warnings.some((w) => w.includes(e.warningsContain))) problems.push(`no warning containing ${JSON.stringify(e.warningsContain)}`);
+    if (problems.length) {
+      failures++;
+      console.error(`FAIL [${t.tier}] ${t.name}\n  ${problems.join("\n  ")}`);
+    } else {
+      console.error(`pass [${t.tier}] ${t.name}`);
+    }
+  }
+  console.error(`\n${tests.length - failures}/${tests.length} parser tests passed`);
+  process.exit(failures ? 1 : 0);
+}
+
+if (process.argv.includes("--parser-tests")) {
+  runParserTests();
 }
 
 if (process.argv.includes("--artifact")) {

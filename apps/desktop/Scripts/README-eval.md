@@ -202,17 +202,25 @@ node Scripts/eval-models.mjs --artifact \
 Flags (artifact mode):
 - `--fixtures path` — default `Scripts/artifact-eval/fixtures.json` (resolved
   relative to the script, so it works from any cwd)
-- `--system-prompt path` — score a prompt DRAFT from a file (this is how
-  Phase 1 iterates on prompt v2 without touching the locked mirrors). Default:
-  the current composed mode prompt — useful only as a pipeline smoke test,
-  since the pre-v2 prompts don't know the artifact contract.
+- `--system-prompt path` — score a prompt from a file instead of the built-in
+  mirror. A `.txt` path is read raw; a `.md` path yields its first fenced
+  block — so the locked in-repo mirror `Scripts/artifact-eval/prompt-v2.md`
+  (provenance header + fenced prompt, byte-identical to
+  `zerro-prompt-system.md` v2) is directly usable:
+  `--system-prompt Scripts/artifact-eval/prompt-v2.md`. Default: the current
+  composed mode prompt (pre-v2 — pipeline smoke test only).
 - `--mode instruct|explain` — which current prompt when `--system-prompt` is
   absent (default instruct)
 - `--only id1,id2` — run a subset of fixture ids while iterating
+- `--parser-tests [file]` — run the §2 parser edge-case suite instead of an
+  eval (no API calls); default file `Scripts/artifact-eval/parser-tests.json`
+- `--concurrency N` — per-model request parallelism (default 4). Drop to 1–2
+  for rate-limited models (`gemini-3.1-pro-preview` and `claude-sonnet-4-6`
+  both 429 heavily at 4).
 - `--models`, `--thinking`, `--out` — as in recording mode
   (default out: `eval-results/artifact/`)
 
-Cases run 4-at-a-time per model. Output per run:
+Cases run `--concurrency`-at-a-time per model. Output per run:
 - **`<stamp>_artifact_<model>.json`** — per-case raw outputs + scores (the
   full record, for digging into any miss)
 - **`ARTIFACT-SCORECARD.md`** — metrics table per model, a per-case ✓/✗ grid,
@@ -227,7 +235,14 @@ Metrics (the four from the plan, all computed automatically — no manual rubric
   alone at line start, parseable `type`/`title` attrs. A clean chat-only
   response is valid; unclosed/multiple/mid-line fences are not. Over-long
   titles (> 80 chars) and trailing text after the close fence are warnings,
-  not validity failures.
+  not validity failures. The parser includes the §2 RECOVERY TIER (amendment
+  2026-06-11): exactly three closed rules — R1 wrong trailing chevron count on
+  the open fence, R2 open-fence body spillover, R3 close fence glued to the
+  last body line. Recovered parses count as valid but are flagged.
+- **recovery rate** — recovered parses / artifact-bearing responses, reported
+  separately from validity. If this climbs after a prompt edit, the edit
+  degraded fence discipline even though validity looks fine — treat it as a
+  regression signal.
 - **voice check** — `agent_prompt` bodies must never say "the user"; chat text
   should address the user directly ("you")
 
@@ -236,7 +251,16 @@ Phase 1 pass bar (default model): attach/no-attach ≥ 90%, contract validity
 
 The harness's `parseArtifactResponse` is the JS reference for Phase 2's
 `ArtifactParser.swift` — once that exists, keep the two in sync (same
-discipline as the prompt mirrors).
+discipline as the prompt mirrors). The parser's executable spec lives in
+`Scripts/artifact-eval/parser-tests.json` (strict + recovery-tier cases,
+including the real model outputs that motivated the tier); run it with:
+
+```bash
+node Scripts/eval-models.mjs --parser-tests   # no API keys needed
+```
+
+Phase 2's `ArtifactParserTests.swift` ports the same list and must pass all
+of it. Add a case to the JSON whenever a new real-world malformation shows up.
 
 ## Keep in sync
 
