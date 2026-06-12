@@ -39,10 +39,22 @@
 //
 // The transcript is cached per working dir (transcript.eval.json) so repeated
 // runs against different models don't re-pay Whisper.
+//
+// ARTIFACT MODE (refactor Phase 0 — docs/refactor-artifact-response-plan.md):
+//   node Scripts/eval-models.mjs --artifact \
+//     --models gemini:gemini-3.5-flash,anthropic:claude-sonnet-4-6 \
+//     [--fixtures Scripts/artifact-eval/fixtures.json]   # default
+//     [--system-prompt path/to/draft.txt]   # default: current composed mode prompt
+//     [--mode instruct|explain]             # which current prompt when no --system-prompt
+//     [--only ap-01-...,ch-04-...]          # run a subset of fixture ids
+//     [--thinking low|high] [--out eval-results/artifact]
+// Scores text-only labeled fixtures against the typed-artifact output contract
+// (plan §2). No recording, no Whisper, no images — see the section below.
 // =============================================================================
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, basename, relative } from "node:path";
+import { join, basename, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------- system prompt (verbatim mirror of generate/prompt.ts) -----------
 
@@ -361,6 +373,357 @@ function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
+
+// =============================================================================
+// ARTIFACT MODE — typed-artifact contract scoring (refactor Phase 0)
+// =============================================================================
+// `--artifact` swaps the recorded-working-dir input for the labeled text-only
+// fixture set (Scripts/artifact-eval/fixtures.json) and scores each model's
+// raw output against the typed-artifact contract
+// (docs/refactor-artifact-response-plan.md §2). Four metrics, per the plan:
+//   (a) attach / no-attach accuracy — artifact attached iff the label says so
+//   (b) type accuracy               — right type, among cases where the label
+//                                     expects an artifact AND the model attached
+//   (c) contract validity rate      — fences well-formed per the §2 parser
+//                                     (chat-only with no fence material = valid)
+//   (d) voice check                 — agent_prompt bodies never say "the user";
+//                                     chat text addresses the user as "you"
+// Fixtures carry no audio or frames, so there is no Whisper call and no image
+// blocks — each case is synthesized into the same timeline TEXT shape the
+// production interleaver emits (`on-screen text:` line, `clicked "X"` lines,
+// [M:SS] speech segments), so the model sees familiar input structure.
+//
+// parseArtifactResponse below is the JS reference for the §2 parser that
+// Phase 2 implements as ArtifactParser.swift — keep the two in sync once that
+// file exists (same KEEP IN SYNC discipline as the prompt mirrors).
+
+const ARTIFACT_TYPES = ["agent_prompt", "message", "snippet", "document", "generic"];
+const ARTIFACT_OPEN_PREFIX = "<<<ZERRO_ARTIFACT";
+const ARTIFACT_CLOSE = "<<<END_ZERRO_ARTIFACT>>>";
+const DIRECT_ADDRESS_RE = /\byou(?:r|'re|'ll|'ve|'d)?\b/i;
+const THE_USER_RE = /\bthe user\b/i;
+
+/**
+ * §2 parser (fail-safe, strict). Returns
+ *   { chatText, artifact: { type, rawType, title, body } | null, valid, warnings }
+ * - no fence material anywhere            → chat-only, valid
+ * - exactly one well-formed block         → parsed, valid (unknown `type`
+ *                                           coerces to generic with a warning)
+ * - anything else — unclosed, multiple,
+ *   mid-line / indented fence, bad open   → ENTIRE raw output becomes chat
+ *                                           text, artifact null, valid=false
+ * Over-long title (> 80) and trailing text after the close fence are recorded
+ * as warnings, not validity failures.
+ */
+function parseArtifactResponse(raw) {
+  const warnings = [];
+  const lines = raw.split(/\r?\n/);
+  const opens = [];
+  const closes = [];
+  let midline = false;
+  lines.forEach((line, i) => {
+    if (line.startsWith(ARTIFACT_OPEN_PREFIX)) opens.push(i);
+    else if (line.includes(ARTIFACT_OPEN_PREFIX)) midline = true;
+    if (line.startsWith(ARTIFACT_CLOSE) && line.trimEnd() === ARTIFACT_CLOSE) closes.push(i);
+    else if (line.includes("<<<END_ZERRO_ARTIFACT")) midline = true;
+  });
+  const asChatOnly = (valid) => ({ chatText: raw.trim(), artifact: null, valid, warnings });
+  if (opens.length === 0 && closes.length === 0 && !midline) return asChatOnly(true);
+  if (midline) {
+    warnings.push("fence delimiter not alone at line start");
+    return asChatOnly(false);
+  }
+  if (opens.length !== 1 || closes.length !== 1) {
+    warnings.push(`expected exactly one artifact block: ${opens.length} open / ${closes.length} close fences`);
+    return asChatOnly(false);
+  }
+  const [o] = opens;
+  const [c] = closes;
+  if (c < o) {
+    warnings.push("close fence precedes open fence");
+    return asChatOnly(false);
+  }
+  const m = lines[o].trimEnd().match(/^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*>>>$/);
+  if (!m) {
+    warnings.push(`unparseable open fence: ${lines[o].trim().slice(0, 120)}`);
+    return asChatOnly(false);
+  }
+  const rawType = m[1];
+  const title = m[2];
+  let type = rawType;
+  if (!ARTIFACT_TYPES.includes(type)) {
+    warnings.push(`unknown type "${rawType}" coerced to generic`);
+    type = "generic";
+  }
+  if (title.length > 80) warnings.push(`title is ${title.length} chars (contract caps at 80)`);
+  const chatText = lines.slice(0, o).join("\n").trim();
+  const body = lines.slice(o + 1, c).join("\n").trim();
+  const trailing = lines.slice(c + 1).join("\n").trim();
+  if (!chatText) warnings.push("no chat text before the artifact block");
+  if (!body) warnings.push("empty artifact body");
+  if (trailing) warnings.push("text after the close fence (contract: chat first, artifact last)");
+  return { chatText, artifact: { type, rawType, title, body }, valid: true, warnings };
+}
+
+/** Synthesize a fixture into the production timeline text shape (no images). */
+function fixtureBlocks(c) {
+  const blocks = [];
+  if (c.ocr_summary) blocks.push({ type: "text", text: `\n[${mmss(0)}] on-screen text: ${c.ocr_summary}` });
+  const sentences = c.transcript.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
+  const clicks = [...(c.clicks ?? [])];
+  // Distribute clicks roughly evenly between speech segments, like a real
+  // recording where the user clicks while narrating; leftovers go at the end.
+  const every = clicks.length ? Math.max(1, Math.floor(sentences.length / (clicks.length + 1))) : 0;
+  let t = 1;
+  let clickIdx = 0;
+  sentences.forEach((s, i) => {
+    const end = t + Math.max(2, Math.min(8, Math.round(s.length / 12)));
+    blocks.push({ type: "text", text: `\n[${mmss(t)}–${mmss(end)}] "${s}"` });
+    t = end + 1;
+    if (clickIdx < clicks.length && every && (i + 1) % every === 0) {
+      blocks.push({ type: "text", text: `\n[${mmss(t)}] clicked "${clicks[clickIdx++]}"` });
+      t += 1;
+    }
+  });
+  while (clickIdx < clicks.length) {
+    blocks.push({ type: "text", text: `\n[${mmss(t)}] clicked "${clicks[clickIdx++]}"` });
+    t += 1;
+  }
+  return blocks;
+}
+
+/** Score one parsed response against its fixture label. */
+function scoreArtifactCase(c, parsed) {
+  const got = parsed.artifact;
+  const attachOk = (got !== null) === c.expected.has_artifact;
+  // Type accuracy compares the RAW emitted type (a hallucinated type string
+  // that coerces to generic is still a type miss, even against expected generic).
+  const typeOk = c.expected.has_artifact && got ? got.rawType === c.expected.type : null;
+  const chatVoiceOk = parsed.chatText ? DIRECT_ADDRESS_RE.test(parsed.chatText) : null;
+  const agentVoiceOk = got && got.type === "agent_prompt" ? !THE_USER_RE.test(got.body) : null;
+  return {
+    attachOk, typeOk, valid: parsed.valid, chatVoiceOk, agentVoiceOk,
+    gotType: got?.rawType ?? null, gotTitle: got?.title ?? null,
+  };
+}
+
+/** Aggregate one model's per-case records into the four plan metrics. */
+function artifactMetrics(records) {
+  const ok = records.filter((r) => !r.error);
+  const pct = (n, d) => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(0)}% (${n}/${d})`);
+  const typed = ok.filter((r) => r.typeOk !== null);
+  const chatVoiced = ok.filter((r) => r.chatVoiceOk !== null);
+  const agentVoiced = ok.filter((r) => r.agentVoiceOk !== null);
+  const violations = agentVoiced.filter((r) => r.agentVoiceOk === false).length;
+  return {
+    errors: records.length - ok.length,
+    attachLabel: pct(ok.filter((r) => r.attachOk).length, ok.length),
+    typeLabel: pct(typed.filter((r) => r.typeOk).length, typed.length),
+    validLabel: pct(ok.filter((r) => r.valid).length, ok.length),
+    chatVoiceLabel: pct(chatVoiced.filter((r) => r.chatVoiceOk).length, chatVoiced.length),
+    agentVoiceLabel: `${violations} violation${violations === 1 ? "" : "s"} / ${agentVoiced.length} agent_prompt`,
+    totalIn: ok.reduce((a, r) => a + r.inputTokens, 0),
+    totalOut: ok.reduce((a, r) => a + r.outputTokens, 0),
+    meanLatency: ok.length ? ok.reduce((a, r) => a + r.seconds, 0) / ok.length : 0,
+  };
+}
+
+/** Small concurrency pool — keeps a 40-case run from being fully serial. */
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i], i);
+      }
+    }),
+  );
+  return out;
+}
+
+function buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fixtures }) {
+  const out = [];
+  const specs = perModel.map((p) => p.spec);
+  const metrics = perModel.map((p) => artifactMetrics(p.records));
+  out.push(
+    `# Artifact-contract scorecard`, ``,
+    `- fixtures: \`${fixturesPath}\` (${fixtures.length} cases)`,
+    `- system prompt: ${promptLabel}`,
+    `- generated: ${stamp}`, ``,
+    `Metrics (plan Phase 0): **attach** = artifact attached iff the label says so · ` +
+    `**type** = right type among cases where the label expects an artifact AND the model attached · ` +
+    `**validity** = §2 fences well-formed (clean chat-only counts as valid) · ` +
+    `**voice** = chat text addresses "you"; agent_prompt bodies never say "the user".`, ``,
+    `## Metrics`, ``,
+    `| metric | ${specs.join(" | ")} |`,
+    `|---|${specs.map(() => "---").join("|")}|`,
+  );
+  const row = (label, f) => out.push(`| ${label} | ${metrics.map(f).join(" | ")} |`);
+  row("attach / no-attach accuracy", (m) => m.attachLabel);
+  row("type accuracy", (m) => m.typeLabel);
+  row("contract validity", (m) => m.validLabel);
+  row("chat voice (direct address)", (m) => m.chatVoiceLabel);
+  row('agent_prompt voice ("the user")', (m) => m.agentVoiceLabel);
+  row("API errors", (m) => String(m.errors));
+  row("mean latency", (m) => `${m.meanLatency.toFixed(1)}s`);
+  out.push(`| est chat cost | ${perModel.map((p, i) => {
+    const c = chatCostUsd(p.spec, metrics[i].totalIn, metrics[i].totalOut);
+    return c === null ? "unpriced" : `$${c.toFixed(4)}`;
+  }).join(" | ")} |`, ``);
+
+  out.push(
+    `## Per-case results`, ``,
+    `Cell: ✓/✗ on attach+type, then the type the model emitted (\`!\` = malformed contract, ERR = API error).`, ``,
+    `| case | expected | ${specs.join(" | ")} |`,
+    `|---|---|${specs.map(() => "---").join("|")}|`,
+  );
+  for (const c of fixtures) {
+    const cells = perModel.map(({ records }) => {
+      const r = records.find((x) => x.id === c.id);
+      if (!r) return "—";
+      if (r.error) return "ERR";
+      const pass = r.attachOk && r.typeOk !== false;
+      return `${pass ? "✓" : "✗"} ${r.gotType ?? "chat-only"}${r.valid ? "" : " !"}`;
+    });
+    out.push(`| ${c.id} | ${c.expected.has_artifact ? c.expected.type : "chat-only"} | ${cells.join(" | ")} |`);
+  }
+  out.push(``);
+
+  for (const { spec, records } of perModel) {
+    const bad = records.filter(
+      (r) => r.error || !r.attachOk || r.typeOk === false || !r.valid || r.agentVoiceOk === false,
+    );
+    if (!bad.length) continue;
+    out.push(`## Failures — ${spec}`, ``);
+    for (const r of bad) {
+      const why = r.error
+        ? `API error: ${r.error}`
+        : [
+            !r.valid && "malformed contract",
+            !r.attachOk && "attach mismatch",
+            r.typeOk === false && `type mismatch (got ${r.gotType ?? "chat-only"})`,
+            r.agentVoiceOk === false && '"the user" in agent_prompt body',
+          ].filter(Boolean).join("; ");
+      out.push(`### ${r.id} — ${why}`, ``);
+      if (r.warnings?.length) out.push(`warnings: ${r.warnings.join(" · ")}`, ``);
+      if (!r.error) {
+        out.push("```", r.raw.slice(0, 800) + (r.raw.length > 800 ? "\n… (truncated)" : ""), "```", ``);
+      }
+    }
+  }
+  return out.join("\n");
+}
+
+async function runArtifactEval() {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const fixturesPath = arg("fixtures", join(scriptDir, "artifact-eval", "fixtures.json"));
+  const promptMode = arg("mode", "instruct");
+  const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",").map((s) => s.trim());
+  const thinkingLevel = arg("thinking", "low");
+  const outDir = arg("out", "eval-results/artifact");
+  const promptFile = arg("system-prompt", null);
+  const systemPrompt = promptFile ? readFileSync(promptFile, "utf8") : composedSystemPrompt(promptMode);
+  const promptLabel = promptFile
+    ? `\`${promptFile}\``
+    : `current ${promptMode} mode mirror (pre-v2 — pipeline check only, scores not meaningful)`;
+
+  // No Whisper in this mode — each key is required only for its own provider.
+  const need = (p) => models.some((m) => m.startsWith(`${p}:`));
+  if (need("openai") && !process.env.OPENAI_API_KEY) { console.error("OPENAI_API_KEY required for openai models"); process.exit(1); }
+  if (need("gemini") && !process.env.GEMINI_API_KEY) { console.error("GEMINI_API_KEY required for gemini models"); process.exit(1); }
+  if (need("anthropic") && !process.env.ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY required for anthropic models"); process.exit(1); }
+
+  let fixtures = JSON.parse(readFileSync(fixturesPath, "utf8"));
+  const problems = [];
+  const seen = new Set();
+  for (const c of fixtures) {
+    const id = c.id ?? "(missing id)";
+    if (!c.id) problems.push("case missing id");
+    else if (seen.has(c.id)) problems.push(`duplicate id ${c.id}`);
+    else seen.add(c.id);
+    if (typeof c.transcript !== "string" || !c.transcript) problems.push(`${id}: transcript must be a non-empty string`);
+    if (typeof c.ocr_summary !== "string") problems.push(`${id}: ocr_summary must be a string`);
+    if (!Array.isArray(c.clicks)) problems.push(`${id}: clicks must be an array`);
+    if (!c.expected || typeof c.expected.has_artifact !== "boolean") problems.push(`${id}: expected.has_artifact must be a boolean`);
+    else if (c.expected.has_artifact && !ARTIFACT_TYPES.includes(c.expected.type)) problems.push(`${id}: expected.type "${c.expected.type}" is not a valid artifact type`);
+    else if (!c.expected.has_artifact && c.expected.type !== null) problems.push(`${id}: expected.type must be null when has_artifact is false`);
+  }
+  if (problems.length) {
+    console.error(`fixtures invalid (${fixturesPath}):\n  ${problems.join("\n  ")}`);
+    process.exit(1);
+  }
+  const dist = {};
+  for (const c of fixtures) {
+    const k = c.expected.has_artifact ? c.expected.type : "chat-only";
+    dist[k] = (dist[k] ?? 0) + 1;
+  }
+  console.error(`fixtures: ${fixtures.length} cases — ${Object.entries(dist).map(([k, v]) => `${k}:${v}`).join(", ")}`);
+
+  const only = arg("only", null);
+  if (only) {
+    const want = new Set(only.split(",").map((s) => s.trim()));
+    fixtures = fixtures.filter((c) => want.has(c.id));
+    console.error(`--only: running ${fixtures.length} of ${seen.size} cases`);
+    if (!fixtures.length) { console.error("no fixture ids matched --only"); process.exit(1); }
+  }
+
+  mkdirSync(outDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const perModel = [];
+
+  for (const spec of models) {
+    const [provider, ...rest] = spec.split(":");
+    const model = rest.join(":");
+    console.error(`\n=== ${spec} (artifact mode, ${fixtures.length} cases${provider === "gemini" ? `, thinking=${thinkingLevel}` : ""}) ===`);
+    const records = await mapPool(fixtures, 4, async (c) => {
+      const blocks = fixtureBlocks(c);
+      const t0 = Date.now();
+      try {
+        const r = provider === "gemini"
+          ? await chatGemini(model, systemPrompt, blocks, process.env.GEMINI_API_KEY, thinkingLevel)
+          : provider === "anthropic"
+          ? await chatAnthropic(model, systemPrompt, blocks, process.env.ANTHROPIC_API_KEY)
+          : await chatOpenAI(model, systemPrompt, blocks, process.env.OPENAI_API_KEY);
+        const seconds = (Date.now() - t0) / 1000;
+        const parsed = parseArtifactResponse(r.content);
+        const s = scoreArtifactCase(c, parsed);
+        const mark = s.attachOk && s.typeOk !== false && s.valid ? "ok  " : "MISS";
+        console.error(`  ${mark} ${c.id} — expected ${c.expected.has_artifact ? c.expected.type : "chat-only"}, got ${s.gotType ?? "chat-only"}${parsed.valid ? "" : " [INVALID]"} (${seconds.toFixed(1)}s)`);
+        return {
+          id: c.id, expected: c.expected, ...s,
+          warnings: parsed.warnings, chatText: parsed.chatText,
+          body: parsed.artifact?.body ?? null, raw: r.content,
+          seconds, inputTokens: r.inputTokens, outputTokens: r.outputTokens,
+        };
+      } catch (e) {
+        console.error(`  ERR  ${c.id} — ${e.message ?? e}`);
+        return { id: c.id, expected: c.expected, error: String(e.message ?? e) };
+      }
+    });
+    const slug = spec.replace(/[:.]/g, "_");
+    writeFileSync(join(outDir, `${stamp}_artifact_${slug}.json`), JSON.stringify({ spec, promptLabel, records }, null, 2));
+    perModel.push({ spec, records });
+  }
+
+  const scorecardPath = join(outDir, "ARTIFACT-SCORECARD.md");
+  writeFileSync(scorecardPath, buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fixtures }));
+  console.error(`\nscorecard → ${scorecardPath}`);
+
+  console.error("\n=== artifact summary ===");
+  console.table(perModel.map(({ spec, records }) => {
+    const m = artifactMetrics(records);
+    return { model: spec, attach: m.attachLabel, type: m.typeLabel, validity: m.validLabel, errors: m.errors };
+  }));
+}
+
+if (process.argv.includes("--artifact")) {
+  await runArtifactEval();
+  process.exit(0);
+}
+
+// ---------- recording mode (the original harness) ----------------------------
 
 const workingDir = process.argv[2];
 if (!workingDir || workingDir.startsWith("--")) {

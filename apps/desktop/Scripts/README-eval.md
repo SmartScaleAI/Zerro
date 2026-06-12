@@ -178,6 +178,66 @@ read frames) **FAILS and is dropped** from the menu. Pay special attention to
 Opus 4.7's documented tendency to add preamble/caveats and "argue" with the
 "Output ONLY" instruction — verify it on real clips, both modes.
 
+## Artifact-contract eval (modes → typed-artifact refactor, Phase 0)
+
+`--artifact` scores models against the typed-artifact output contract
+(`docs/refactor-artifact-response-plan.md` §2) instead of running a recording.
+Input is the labeled, text-only fixture set
+`Scripts/artifact-eval/fixtures.json` — 40 cases of
+`{ id, transcript, ocr_summary, clicks, expected: { has_artifact, type|null, notes } }`
+spanning ~14 `agent_prompt`, ~6 `message`, ~5 `snippet`, ~5 `document`,
+~8 chat-only, and 2 empty-narration cases (including the plan's hard ambiguous
+pair: "how do I center this?" → attach, "this is broken" with no ask → don't).
+
+No recording, no Whisper, no images: each fixture is synthesized into the same
+timeline TEXT shape production emits (`on-screen text:` line, `clicked "X"`
+lines, `[M:SS]` speech segments), so the model sees familiar input structure.
+API keys are only needed for the providers you actually run.
+
+```bash
+node Scripts/eval-models.mjs --artifact \
+  --models gemini:gemini-3.5-flash,anthropic:claude-sonnet-4-6,openai:gpt-5.4-mini
+```
+
+Flags (artifact mode):
+- `--fixtures path` — default `Scripts/artifact-eval/fixtures.json` (resolved
+  relative to the script, so it works from any cwd)
+- `--system-prompt path` — score a prompt DRAFT from a file (this is how
+  Phase 1 iterates on prompt v2 without touching the locked mirrors). Default:
+  the current composed mode prompt — useful only as a pipeline smoke test,
+  since the pre-v2 prompts don't know the artifact contract.
+- `--mode instruct|explain` — which current prompt when `--system-prompt` is
+  absent (default instruct)
+- `--only id1,id2` — run a subset of fixture ids while iterating
+- `--models`, `--thinking`, `--out` — as in recording mode
+  (default out: `eval-results/artifact/`)
+
+Cases run 4-at-a-time per model. Output per run:
+- **`<stamp>_artifact_<model>.json`** — per-case raw outputs + scores (the
+  full record, for digging into any miss)
+- **`ARTIFACT-SCORECARD.md`** — metrics table per model, a per-case ✓/✗ grid,
+  and a Failures section quoting every miss's raw output
+
+Metrics (the four from the plan, all computed automatically — no manual rubric):
+- **attach / no-attach accuracy** — artifact attached iff the label says so
+- **type accuracy** — right type, among cases where the label expects an
+  artifact AND the model attached one (a hallucinated type string counts as a
+  miss even though the parser coerces it to `generic`)
+- **contract validity** — §2 fences well-formed: at most one block, delimiters
+  alone at line start, parseable `type`/`title` attrs. A clean chat-only
+  response is valid; unclosed/multiple/mid-line fences are not. Over-long
+  titles (> 80 chars) and trailing text after the close fence are warnings,
+  not validity failures.
+- **voice check** — `agent_prompt` bodies must never say "the user"; chat text
+  should address the user directly ("you")
+
+Phase 1 pass bar (default model): attach/no-attach ≥ 90%, contract validity
+≥ 98%, type accuracy ≥ 85%.
+
+The harness's `parseArtifactResponse` is the JS reference for Phase 2's
+`ArtifactParser.swift` — once that exists, keep the two in sync (same
+discipline as the prompt mirrors).
+
 ## Keep in sync
 
 The system prompt, interleaving, wire formats, and pricing are mirrored from:

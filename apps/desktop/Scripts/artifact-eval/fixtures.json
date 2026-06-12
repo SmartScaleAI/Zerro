@@ -1,0 +1,442 @@
+[
+  {
+    "id": "ap-01-promo-code-silent-failure",
+    "transcript": "Okay so, um, watch this — I'm gonna click apply on this promo code... see? Nothing. No error, no spinner, nothing happens at all. The code's definitely expired so it should say something. Can you have the agent fix this so when the code is invalid we actually show an error under the field, like in red.",
+    "ocr_summary": "Checkout — Order summary, Subtotal $49.00, Promo code [SAVE20], Apply, Total $49.00, Place order",
+    "clicks": ["Apply", "Apply"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Concrete bug + explicit fix request destined for a coding agent. Body should describe the silent failure of Apply with code SAVE20 and require an inline error message for invalid codes; never 'the user'."
+    }
+  },
+  {
+    "id": "ap-02-sticky-header",
+    "transcript": "So when I scroll down here the, uh, the nav bar just disappears. I want it to stay pinned at the top — sticky, you know — and maybe give it a little drop shadow once you've scrolled. Just like every other site has.",
+    "ocr_summary": "Home, Products, Pricing, Blog, Contact — hero: Ship faster with Acme, Get started",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Concrete UI change to their project. Requirements: nav pinned on scroll + shadow when scrolled."
+    }
+  },
+  {
+    "id": "ap-03-rename-handletap",
+    "transcript": "This function here, handleTap — that name's wrong now, it submits the form. Rename it to handleSubmit, um, everywhere it's used... oh wait, and the tests too, there's like three tests that reference it by name.",
+    "ocr_summary": "func handleTap() { validateFields(); FormService.submit(payload) } — FormViewTests.swift: test_handleTap_validatesFirst",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Rename request with a self-correction adding test updates. Both the rename and the test updates must survive; exact names handleTap/handleSubmit from OCR."
+    }
+  },
+  {
+    "id": "ap-04-dark-mode-toggle",
+    "transcript": "Okay so feature request, um — we need a dark mode toggle in the settings screen, probably right here under Appearance. Default should follow the system but let people override it. Don't touch the onboarding screens though, those stay light, the designer was really clear about that.",
+    "ocr_summary": "Settings — Appearance, Text size, Notifications, Account, Sign out",
+    "clicks": ["Appearance"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Feature ask with a stated constraint (onboarding stays light) — the do-not condition must appear in the artifact."
+    }
+  },
+  {
+    "id": "ap-05-invoice-date-off-by-one",
+    "transcript": "Look at this invoice — it says March 3rd but I created it on March 4th, I literally made it this morning. Every invoice in this list is, uh, is one day behind. I'm in Sydney so I'm guessing it's a timezone thing, the dates are probably stored UTC and rendered wrong. Get the agent to fix the display.",
+    "ocr_summary": "Invoices — INV-1042 Mar 3, 2026 $1,200.00, INV-1041 Mar 1, 2026 $850.00, New invoice",
+    "clicks": ["INV-1042"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Bug report with the user's own hypothesis (UTC rendering). The hypothesis may be relayed as context but the requirement is fixing the displayed date."
+    }
+  },
+  {
+    "id": "ap-06-slow-orders-table",
+    "transcript": "This orders table takes like four seconds to render now that we've got, what, a thousand-ish rows. Scrolling janks too. Can we paginate it — or actually, hmm, maybe virtual scrolling is better so the filters still work on everything. I'll leave that call to whoever implements it, either is fine, it just needs to stop freezing.",
+    "ocr_summary": "Orders (1,038) — Order #, Customer, Status, Total — #2291 Daniel Ho, Shipped, $120.50",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Performance ask where the implementation choice is explicitly left open — the artifact should state the requirement at intent level (fast render, no jank, filters keep working), not mandate one mechanism."
+    }
+  },
+  {
+    "id": "ap-07-brand-color-button",
+    "transcript": "See this Save button? It's this washed-out blue but our brand color is the indigo — it's right there in the style guide, um, 4F46E5. Update the button to use the brand token, and check if any other buttons on this screen got the wrong color too... actually no, just do the primary buttons, leave the link buttons alone.",
+    "ocr_summary": "Style guide — Primary / Indigo #4F46E5, Secondary / Slate #64748B — Editor: Save, Cancel, Preview",
+    "clicks": ["Save"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Styling fix with a self-correction narrowing scope to primary buttons only. Exact hex #4F46E5 should be pulled from OCR; the abandoned broader scope must be dropped."
+    }
+  },
+  {
+    "id": "ap-08-how-do-i-center-this",
+    "transcript": "Ugh, okay, how do I center this card? It's stuck to the left and I've tried, like, margin auto and it did nothing. The container's a flexbox I think. Just... make it sit in the middle of the page.",
+    "ocr_summary": ".pricing-card { width: 380px; margin: 0 auto; } .container { display: flex; align-items: flex-start; }",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "HARD CASE from the plan — phrased as a how-do question but ends naming a concrete change ('make it sit in the middle'). Locked bias: attach. Chat text may briefly explain why margin auto failed; artifact instructs the fix."
+    }
+  },
+  {
+    "id": "ap-09-profile-500-null-avatar",
+    "transcript": "Every time I hit this profile page the API just 500s. Here's the stack trace — it's blowing up in getUserProfile, looks like, um, cannot read properties of null reading avatar. So some users have no avatar set and we never null-check it. Have the agent fix that and make it return the default avatar instead.",
+    "ocr_summary": "TypeError: Cannot read properties of null (reading 'avatar') at getUserProfile (user-service.ts:84) at handler (profile.ts:21) — 500 Internal Server Error",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Debugging case with the fix explicitly requested (null-check + default avatar). Exact symbol getUserProfile and file user-service.ts:84 should come from OCR."
+    }
+  },
+  {
+    "id": "ap-10-email-validation",
+    "transcript": "Type literally anything in this email field — banana, whatever — and it just takes it. Submits fine. We need actual validation here, um, format check on blur, error message under the field, and block the submit until it's valid. Same rules as the signup form, keep it consistent.",
+    "ocr_summary": "Contact sales — Work email [banana], Company, Send request",
+    "clicks": ["Send request"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Form-validation feature with three concrete requirements plus a consistency constraint (match the signup form's rules)."
+    }
+  },
+  {
+    "id": "ap-11-two-fixes-typo-and-spacing",
+    "transcript": "Two things on this screen. First, this label that says Recieve updates — spelled wrong, swap it to R-E-C-E-I-V-E. Second thing, the gap between these checkboxes is way too tight, they're basically touching... give them the same spacing as the form fields above. Don't merge those, they're separate fixes.",
+    "ocr_summary": "Preferences — [x] Recieve updates, [ ] Product news, [ ] Partner offers — Email, Phone",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Multi-request recording — BOTH the typo fix and the spacing fix must appear as distinct items in one artifact (max one artifact per response; do not drop the second ask)."
+    }
+  },
+  {
+    "id": "ap-12-sidebar-overlap-narrow",
+    "transcript": "When I make the window narrow — watch — the sidebar just slides over the content and covers it. Below, I dunno, like 900 pixels maybe? It should collapse into the hamburger instead. We already have the hamburger component on mobile so, um, just use that same behavior here.",
+    "ocr_summary": "Dashboard, Projects, Team, Reports — overlapped content: Q2 Revenue, $1.2M",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Responsive bug with a hedged breakpoint ('like 900 pixels maybe') — the artifact should keep the hedge or surface it as an open question, not assert 900px as fact. Reuse of the existing hamburger component is a stated requirement."
+    }
+  },
+  {
+    "id": "ap-13-extract-fetch-hook",
+    "transcript": "So I noticed we've got this same fetch-retry-toast dance copy-pasted in like, what, three components now — here in OrderList, and ProductGrid does it too, and I think CustomerTable. Pull that out into one shared hook, useFetchWithRetry or whatever, and have all three use it. Behavior should not change at all.",
+    "ocr_summary": "OrderList.tsx — const load = async () => { try { setLoading(true); const r = await fetch(url) } catch { toast.error('Failed to load') } finally { setLoading(false) } }",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Refactor ask. 'useFetchWithRetry or whatever' = suggested-not-mandated name; 'I think CustomerTable' is hedged. Behavior-unchanged constraint must appear."
+    }
+  },
+  {
+    "id": "ap-14-projects-empty-state",
+    "transcript": "New users land here and it's just... white. Nothing. If there's no projects yet we should show an empty state — uh, a little illustration or icon, a line like No projects yet, and a Create project button that opens the same modal as the toolbar one.",
+    "ocr_summary": "Projects — (blank list area) — toolbar: + New project, Search",
+    "clicks": ["+ New project"],
+    "expected": {
+      "has_artifact": true,
+      "type": "agent_prompt",
+      "notes": "Empty-state feature; the button must reuse the same modal as the toolbar's + New project (resolved from the click/OCR)."
+    }
+  },
+  {
+    "id": "msg-01-launch-delay-email",
+    "transcript": "I need to email Sarah about the launch... so basically the API migration ran long and we're slipping from Tuesday to Friday. Um, draft that for me — apologetic but not groveling, mention the migration as the reason, and make sure it says the demo on Thursday is unaffected. Her name's Sarah Chen.",
+    "ocr_summary": "Project plan — Launch: Tue Jun 16 → ???, API migration: in progress, Demo: Thu Jun 18 (unchanged)",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Explicit email draft request with tone guidance. Body should be the ready-to-send email to Sarah Chen — Tuesday→Friday slip, migration as reason, Thursday demo unaffected."
+    }
+  },
+  {
+    "id": "msg-02-deploy-freeze-slack",
+    "transcript": "Okay, can you write a quick Slack message for the eng channel — deploys are frozen til Monday because of the, uh, the payments incident. Hotfixes are still allowed but they need an approval from on-call. Keep it short, people don't read long posts.",
+    "ocr_summary": "Incident #347 — Payments double-charge, Sev 1, Status: monitoring",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Slack announcement draft; short by explicit instruction. Freeze-until-Monday, payments incident as cause, hotfix exception with on-call approval."
+    }
+  },
+  {
+    "id": "msg-03-support-ticket-reply",
+    "transcript": "This customer's annoyed their export keeps timing out. So — write a reply, um, acknowledge it, tell them it's a known issue with exports over fifty thousand rows, the fix ships next week, and the workaround is filtering by date range to keep it under that. Friendly, not corporate-y.",
+    "ocr_summary": "Ticket #8812 — 'Your export feature is useless, it spins forever and dies.' — Customer: Marcus W., Plan: Business",
+    "clicks": ["Reply"],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Support reply draft addressed to the customer (Marcus), warm tone, with the 50k-row explanation, next-week fix, and date-filter workaround."
+    }
+  },
+  {
+    "id": "msg-04-pricing-meeting-followup",
+    "transcript": "Just got out of the pricing meeting — these are my notes on screen. Can you turn this into a follow-up email to the group? Decisions were: we keep the free tier, the Pro price goes to twenty-nine, and, um, the annual discount stays at twenty percent. Action item for Dana to update the pricing page by Friday.",
+    "ocr_summary": "Pricing sync notes — keep free tier ✓, Pro $24 → $29, annual -20% unchanged, Dana: pricing page EOW",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Meeting-recap email. Spoken decisions and OCR notes agree; all three decisions plus Dana's Friday action item must appear."
+    }
+  },
+  {
+    "id": "msg-05-candidate-outreach",
+    "transcript": "Found this candidate, her GitHub's really strong, the, uh, the data viz library especially. Write me a short outreach message — we're hiring a senior frontend, mention I liked the chartkit project specifically so it doesn't read like a blast, and ask if she's open to a chat. Casual tone.",
+    "ocr_summary": "github.com/jmoreno — chartkit ★ 2.4k, d3-utils ★ 312 — Jess Moreno, San Diego",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Recruiting outreach draft to Jess Moreno; must name chartkit specifically, mention the senior frontend role, casual tone."
+    }
+  },
+  {
+    "id": "msg-06-vendor-decline",
+    "transcript": "I need to let this vendor down easy. We're not going with their monitoring thing — we picked a different tool, um, but don't say which one. Thank them for the trial and the demo time, leave the door open for maybe next year. Polite, two paragraphs max.",
+    "ocr_summary": "Mail — From: Tom Ridley, ObserveStack — 'Following up on your trial — ready to talk pricing?'",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "message",
+      "notes": "Decline email to Tom Ridley with a stated omission constraint (don't name the chosen tool) and a length cap (two paragraphs)."
+    }
+  },
+  {
+    "id": "sn-01-sumif-formula",
+    "transcript": "In this sheet I want, um, in this cell — the total of column C but only the rows where the status in column B says Paid. What's the formula? Just give me the thing to paste in.",
+    "ocr_summary": "Invoices sheet — A: Invoice #, B: Status (Paid / Pending / Void), C: Amount, rows 2–214, active cell: F2",
+    "clicks": ["F2"],
+    "expected": {
+      "has_artifact": true,
+      "type": "snippet",
+      "notes": "Spreadsheet formula destined for a cell — 'just give me the thing to paste in'. Body should be the exact formula (e.g. SUMIF over B:C), no commentary inside the body."
+    }
+  },
+  {
+    "id": "sn-02-ffmpeg-mov-to-mp4",
+    "transcript": "I've got this screen recording, demo.mov, it's like 400 megs — I need the command to turn it into a reasonable mp4. Web quality is fine, doesn't need to be lossless, and, uh, keep the audio.",
+    "ocr_summary": "Finder — demo.mov, 412.3 MB, QuickTime movie, Today 9:14 AM",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "snippet",
+      "notes": "Terminal command request — exact runnable ffmpeg command using demo.mov, audio kept. Body is the command only."
+    }
+  },
+  {
+    "id": "sn-03-top-customers-sql",
+    "transcript": "Off this orders table, can you give me the query for our top ten customers by total spend this year? Um, it's the orders table you're looking at — customer_id, total_cents, created_at. Just the SQL, I'll run it in the console myself.",
+    "ocr_summary": "orders — id, customer_id, status, total_cents, created_at — 1,203,441 rows",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "snippet",
+      "notes": "SQL destined for a console — 'just the SQL'. Exact column names from OCR; top 10 by total spend, current year."
+    }
+  },
+  {
+    "id": "sn-04-sku-regex",
+    "transcript": "Our SKUs all look like this — three letters, dash, four digits, dash, and then the size code which is one or two letters. Like these ones here. I need a regex that validates that, anchored, the whole string. That's all I need, just the pattern.",
+    "ocr_summary": "SKU list — TSH-0042-M, HDY-1190-XL, MUG-0007-S, STK-2210-XS",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "snippet",
+      "notes": "Regex pattern only, anchored, matching the spoken spec (which the OCR examples confirm)."
+    }
+  },
+  {
+    "id": "sn-05-git-undo-commit",
+    "transcript": "Ugh, I just committed this but I wasn't done — what's the git incantation to undo the last commit but, um, keep all the changes staged? Haven't pushed it anywhere, it's just local.",
+    "ocr_summary": "Terminal — git log --oneline: a3f91c2 wip: settings refactor, 8d22e01 feat: add appearance section",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "snippet",
+      "notes": "Exact git command (reset --soft HEAD~1 or equivalent) destined for the terminal. Phrased as a question but the deliverable is a runnable command."
+    }
+  },
+  {
+    "id": "doc-01-offsite-notes-summary",
+    "transcript": "These are my raw notes from the roadmap offsite, total mess. Can you write them up as a proper summary doc for the team? Sections for, like, what we decided, what's still open, and who owns what. The Q3 stuff is decided, the platform rewrite is explicitly not decided, don't present it like it is.",
+    "ocr_summary": "offsite notes — q3: ship teams plan, usage-based addon?, platform rewrite: parking lot, mobile: hire 2, owners: J/teams, P/billing",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "document",
+      "notes": "Self-contained team summary doc with decided / open / owners structure; platform rewrite must land under open, not decided."
+    }
+  },
+  {
+    "id": "doc-02-readme-setup-section",
+    "transcript": "New folks keep pinging me about setup, so — write a setup section for the README based on what I've got here. It's, um, pnpm install, then copy env.example to .env.local and fill in the two Supabase keys, then pnpm dev. Oh, and you need Node 20 or newer, that bites people constantly, put that first.",
+    "ocr_summary": "Terminal — pnpm install, cp .env.example .env.local, SUPABASE_URL=, SUPABASE_ANON_KEY=, pnpm dev — node -v: v20.11.0",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "document",
+      "notes": "README setup section destined for the repo's docs. Node 20 prerequisite first per explicit instruction; exact commands from OCR."
+    }
+  },
+  {
+    "id": "doc-03-standing-desk-description",
+    "transcript": "I'm listing this desk on the shop and the description box is just sitting there empty. Write me one — it's the walnut standing desk, um, dual motor, the height range is on screen there, 25 to 50 inches, memory presets, ships flat. Warm tone but don't oversell it, and no exclamation marks.",
+    "ocr_summary": "New listing — Walnut Standing Desk Pro, $1,149, Height: 25–50 in, Dual motor, 4 memory presets, Ships: flat-pack, Description: (empty)",
+    "clicks": ["Description"],
+    "expected": {
+      "has_artifact": true,
+      "type": "document",
+      "notes": "Product description destined for the listing's text field. Specs from OCR (4 memory presets, 25–50 in); tone constraints: warm, no overselling, no exclamation marks."
+    }
+  },
+  {
+    "id": "doc-04-backend-job-posting",
+    "transcript": "We finally got headcount — senior backend. Take these requirements I've got in the doc and write the actual posting. Um, remote-friendly US timezones, the stack is Go and Postgres like it says, five plus years. Skip the rockstar ninja garbage, and don't list a salary, legal hasn't signed off on the band yet.",
+    "ocr_summary": "hiring-notes.md — sr backend, go + postgres + k8s, 5+ yrs, remote ok (US tz), owns billing service, on-call rotation",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "document",
+      "notes": "Job posting with explicit omission (no salary) and tone constraints. OCR adds k8s, billing-service ownership, and on-call — fair game to include."
+    }
+  },
+  {
+    "id": "doc-05-release-notes-2-4",
+    "transcript": "Cutting the 2.4 release today. Here's the commit list since 2.3 — turn it into customer-facing release notes. Group it, you know, features first then fixes. The SSO one is the headline. Oh, and skip anything that says chore or, um, anything about the build pipeline, customers don't care.",
+    "ocr_summary": "git log v2.3.0..HEAD — feat: SAML SSO, feat: export to parquet, fix: timezone in digest emails, fix: dashboard flicker, chore: bump deps, ci: cache docker layers",
+    "clicks": [],
+    "expected": {
+      "has_artifact": true,
+      "type": "document",
+      "notes": "Customer-facing release notes: features then fixes, SSO headlined, chore/ci commits excluded per explicit instruction."
+    }
+  },
+  {
+    "id": "ch-01-hydration-error-meaning",
+    "transcript": "What does this error actually mean? Hydration failed because the initial UI does not match what was rendered on the server. Like, I get the words individually but, um, what's actually going wrong here, and is it why the page flickers?",
+    "ocr_summary": "Console — Error: Hydration failed because the initial UI does not match what was rendered on the server. — Warning: Expected server HTML to contain a matching <div>",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Pure understanding question — explain hydration mismatch and the flicker connection in chat. No fix was requested; attaching an agent_prompt is the failure mode."
+    }
+  },
+  {
+    "id": "ch-02-auth-flow-walkthrough",
+    "transcript": "Can you walk me through how this auth flow works? I'm looking at this diagram and I don't really get, um, where the refresh token comes in, and why the API gateway talks to the identity service twice.",
+    "ocr_summary": "Auth flow diagram — Client → API Gateway → Identity Service — /authorize, /token, refresh_token (30d), access_token (15m), JWKS",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "How-does-this-work question grounded in the on-screen diagram. Chat-only explanation addressed to the user."
+    }
+  },
+  {
+    "id": "ch-03-which-plan",
+    "transcript": "Which of these two plans should I get? It's just me and, uh, one contractor who needs access maybe twice a month. The Team one has the audit log thing but I don't know if I actually care. What would you pick?",
+    "ocr_summary": "Pricing — Starter $12/mo: 1 seat, 10 projects — Team $49/mo: 5 seats, unlimited projects, audit log, SSO",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Advice/judgment question — a recommendation in chat. Nothing here is a deliverable destined somewhere else."
+    }
+  },
+  {
+    "id": "ch-04-this-is-broken-no-ask",
+    "transcript": "Okay so this is broken. See? I drag the card and it just... snaps back. Every time. The console's throwing that warning too. This is so weird, it worked yesterday, I swear nothing changed.",
+    "ocr_summary": "Kanban — In Progress, Done — Console: Warning: Cannot update a component (Board) while rendering a different component (Card)",
+    "clicks": ["Card #214"],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "HARD CASE from the plan — reports breakage but never asks for a fix or an explanation of what to change. Expect a chat-only diagnosis; an unsolicited agent_prompt is the failure mode being tested."
+    }
+  },
+  {
+    "id": "ch-05-digest-email-walkthrough",
+    "transcript": "Where do I turn off these, um, these daily digest emails? I've been through this settings page twice, I clicked Notifications, I see push stuff and mentions but I can't find anything that says digest anywhere.",
+    "ocr_summary": "Settings → Notifications — Push: mentions ✓, replies ✓ — Email: weekly summary ✓, product updates ✗",
+    "clicks": ["Notifications", "Email"],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Settings walkthrough — the user themselves is the executor, so guidance in chat, no artifact. Good answer notes the screen shows 'weekly summary', which may be the setting they mean."
+    }
+  },
+  {
+    "id": "ch-06-march-chart-dip",
+    "transcript": "Why would this chart dip like that in March? Everything else is trending up and then there's this, like, crater. Um, we didn't change pricing then, I don't think. Is there something in this dashboard that would explain it, or what would you even look at?",
+    "ocr_summary": "MRR — Jan $84k, Feb $91k, Mar $62k, Apr $97k — annotations: none — filter: All plans",
+    "clicks": ["Mar"],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Analysis question — possible causes and what to investigate, in chat. The dashboard alone can't determine the cause; a good answer says so rather than inventing one."
+    }
+  },
+  {
+    "id": "ch-07-phishing-judgment",
+    "transcript": "Is this email legit or is someone phishing me? It says it's from our payroll provider but the, uh, the From address looks kind of off to me, and it really wants me to verify my banking details, which... I don't know, smells bad. What do you think?",
+    "ocr_summary": "From: ADP Payroll <secure-notice@adp-verify-portal.com> — 'Action required: verify your banking details within 24 hours' — [Verify Now]",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Judgment question — assessment of the phishing signals (lookalike domain, urgency, banking ask) in chat. No deliverable."
+    }
+  },
+  {
+    "id": "ch-08-gssp-vs-gsp",
+    "transcript": "What's the difference between these two functions? They look almost identical to me — uh, getServerSideProps and getStaticProps. Which one is this page actually using, and like, when would you use one versus the other?",
+    "ocr_summary": "page.tsx — export async function getStaticProps() { return { props, revalidate: 3600 } } — docs tab: getServerSideProps runs on every request",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Comparison/understanding question. A good answer also reads the frame correctly: this page uses getStaticProps with revalidate 3600."
+    }
+  },
+  {
+    "id": "emp-01-sign-off-only",
+    "transcript": "Aaand that's it. That's the whole flow. Um, thanks for watching, catch you in the next one — oh, and like and subscribe, ha.",
+    "ocr_summary": "Dashboard — Welcome back, Colin — Revenue $12,401, Active users 311",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Empty narration: a bare sign-off, no request of any kind. Expect a brief 'no clear request captured' chat response; fabricating a task from the dashboard is the failure mode."
+    }
+  },
+  {
+    "id": "emp-02-near-silent-filler",
+    "transcript": "Um... okay. ... Yeah.",
+    "ocr_summary": "Xcode — ZerroApp.swift — Build Succeeded",
+    "clicks": [],
+    "expected": {
+      "has_artifact": false,
+      "type": null,
+      "notes": "Near-silent filler (transcription artifact on quiet audio). No artifact, no invented task from the Xcode window — brief chat-only handling."
+    }
+  }
+]
