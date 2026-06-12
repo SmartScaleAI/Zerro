@@ -223,28 +223,27 @@ private struct PillHostView: View {
                 appState.cancelRecording()
             },
             onCopy: {
-                // Phase 9 Step 6: write the generated prompt to the system
-                // clipboard (see Pasteboard.copy for the replace-not-append
-                // contract).
-                guard let prompt = appState.generatedPrompt, !prompt.isEmpty else { return }
-                Pasteboard.copy(prompt)
+                // Typed-artifact refactor: copy per the §2 per-type payload
+                // table — agent_prompt copies body + Attached Context, other
+                // types the body alone, chat-only the chat text; raw output
+                // as the fallback when parsing produced no structure. (See
+                // Pasteboard.copy for the replace-not-append contract.)
+                guard let payload = appState.resultCopyPayload, !payload.isEmpty else { return }
+                Pasteboard.copy(payload)
             },
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
             onRetryError: { appState.retryFailedPrompt() },
             onDismissResult: { appState.resetToIdle() },
-            // Phase 17 — confirmation-pill resolutions. Keep uses the
-            // recording's selected mode (the safe default); Switch applies
-            // the suggested opposite mode to this one generation only.
-            onKeepMode: { appState.resolveModeSwitch(switchTo: false) },
-            onSwitchMode: { appState.resolveModeSwitch(switchTo: true) },
             // M2 — recovery offer resolutions, exactly two outcomes. Generate
             // runs the recovered recording (spends the credit, with consent);
             // Discard deletes it. There is no separate dismiss affordance — any
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
-            generatedPrompt: appState.generatedPrompt,
+            // Phase 4 shim: chat text + divider + artifact body (Phase 5
+            // replaces this with the artifact-card UI).
+            generatedPrompt: appState.resultDisplayMarkdown,
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
             // Multi-model 6B: the "−N credits · M left" toast, formatted once

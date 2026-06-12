@@ -157,7 +157,6 @@ struct SettingsView: View {
                 switch selection {
                 case .general:
                     CaptureSection()
-                    OutputModeSection()
                     // Multi-model: the persistent default the capture
                     // toolbar's per-recording model chip seeds from.
                     ModelSection()

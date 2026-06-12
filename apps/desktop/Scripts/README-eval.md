@@ -90,12 +90,13 @@ It's surfaced at the top of the scorecard.
 
 ```bash
 node Scripts/eval-models.mjs eval-recordings/<name> \
-  --mode instruct \
   --models gemini:gemini-3.5-flash,anthropic:claude-opus-4-7,openai:gpt-5.5
 ```
 
 Flags:
-- `--mode instruct|explain` (default instruct)
+- (typed-artifact refactor: `--mode` is GONE — there is one unified v2 prompt,
+  read at run time from `Scripts/artifact-eval/prompt-v2.md`; output filenames
+  carry a `v2` label where the mode used to be)
 - `--models provider:model,...` — `provider` is one of `openai`, `gemini`,
   `anthropic`; must be priced in the script's table to get cost estimates;
   unpriced models still run, cost shows "unpriced"
@@ -136,8 +137,9 @@ captured dir), so re-running against more models costs only the chat calls.
 
 The six candidate models from the multi-model plan §1.1, run on ≥5 real
 recordings spanning dense code/terminal text, small UI text, and mixed windows
-(`eval-recordings/` already has these). Run EVERY model in BOTH modes
-(`--mode instruct` and `--mode explain`):
+(`eval-recordings/` already has these). HISTORICAL (pre-refactor): this matrix
+was run in BOTH v1 modes; the `--mode` flag no longer exists — the commands
+below are kept as a record of the Phase 0 gate, not as runnable recipes:
 
 | # | provider:model | tier (by cost) | thinking |
 |---|---|---|---|
@@ -207,10 +209,9 @@ Flags (artifact mode):
   block — so the locked in-repo mirror `Scripts/artifact-eval/prompt-v2.md`
   (provenance header + fenced prompt, byte-identical to
   `zerro-prompt-system.md` v2) is directly usable:
-  `--system-prompt Scripts/artifact-eval/prompt-v2.md`. Default: the current
-  composed mode prompt (pre-v2 — pipeline smoke test only).
-- `--mode instruct|explain` — which current prompt when `--system-prompt` is
-  absent (default instruct)
+  `--system-prompt Scripts/artifact-eval/prompt-v2.md`. Default: the locked v2
+  mirror (the same file) — so a bare `--artifact` run now scores the SHIPPED
+  prompt.
 - `--only id1,id2` — run a subset of fixture ids while iterating
 - `--parser-tests [file]` — run the §2 parser edge-case suite instead of an
   eval (no API calls); default file `Scripts/artifact-eval/parser-tests.json`

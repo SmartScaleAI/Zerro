@@ -6,7 +6,8 @@
 // JWTs, or credits. It replicates the production pipeline faithfully:
 //   1. Transcribes the recording's audio with whisper-1 (verbose_json,
 //      segment granularity) — same request as the BYOK/Managed paths.
-//   2. Composes the EXACT server-owned system prompt (base + mode layer).
+//   2. Composes the EXACT server-owned system prompt (the locked v2 text,
+//      extracted at run time from Scripts/artifact-eval/prompt-v2.md).
 //   3. Interleaves frames + transcript chronologically with the
 //      frame-before-speech tiebreak and [M:SS] tags — same algorithm as
 //      interleave.ts / InterleavedTimeline.swift.
@@ -15,7 +16,9 @@
 //   5. Writes side-by-side outputs + token/cost/latency to an output dir.
 //
 // KEEP IN SYNC (read-only mirrors — if these change upstream, update here):
-//   - supabase/functions/generate/prompt.ts        (BASE / INSTRUCT / EXPLAIN)
+//   - Scripts/artifact-eval/prompt-v2.md           (prompt — READ AT RUN TIME,
+//     never copied here; the Swift and server copies are byte-identity-tested
+//     against the same mirror)
 //   - supabase/functions/generate/interleave.ts    (mmss, tiebreak, tags)
 //   - supabase/functions/generate/providers/openai.ts, gemini.ts (wire shapes)
 //   - supabase/functions/generate/cost.ts          (pricing table)
@@ -32,7 +35,6 @@
 //   export OPENAI_API_KEY=sk-...          # always required (whisper STT)
 //   export GEMINI_API_KEY=...             # required for gemini:* models
 //   node Scripts/eval-models.mjs <workingDir> \
-//     --mode instruct \
 //     --models gemini:gemini-3.5-flash,gemini:gemini-3.1-pro-preview,openai:gpt-4o \
 //     [--thinking low|high]               # gemini only, default low
 //     [--out eval-results]                # output dir, default ./eval-results
@@ -44,9 +46,8 @@
 //   node Scripts/eval-models.mjs --artifact \
 //     --models gemini:gemini-3.5-flash,anthropic:claude-sonnet-4-6 \
 //     [--fixtures Scripts/artifact-eval/fixtures.json]   # default
-//     [--system-prompt path]                # default: current composed mode prompt;
+//     [--system-prompt path]                # default: the locked v2 mirror;
 //                                           # .md → first fenced block, .txt → raw
-//     [--mode instruct|explain]             # which current prompt when no --system-prompt
 //     [--only ap-01-...,ch-04-...]          # run a subset of fixture ids
 //     [--concurrency 4]                     # drop to 1-2 for rate-limited models
 //     [--thinking low|high] [--out eval-results/artifact]
@@ -58,67 +59,25 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ---------- system prompt (verbatim mirror of generate/prompt.ts) -----------
+// ---------- system prompt (extracted from the locked in-repo mirror) ---------
+// Typed-artifact refactor: the v1 BASE/INSTRUCT/EXPLAIN copies are gone. The
+// harness now reads the LOCKED v2 prompt from Scripts/artifact-eval/
+// prompt-v2.md (first fenced block) at run time — the same mirror the Swift
+// and server copies are byte-identity-tested against — so this file can no
+// longer drift from the deployed prompt text.
 
-const BASE = `You convert a screen recording into clean text output. Your input is:
-- A sequence of JPEG frames sampled from the recording, interleaved in time order with the narration. Each frame is marked with its timestamp [M:SS] and immediately precedes the speech spoken just after it.
-- A timestamped transcript of the user speaking while recording.
-- Some frames are followed by an \`on-screen text:\` line — text extracted from that frame by on-device OCR. Prefer it for exact strings (names, filenames, values, code, URLs); it may be partial or imperfect, and any secrets are shown as [REDACTED]. The frames remain the source of truth for layout and anything OCR didn't capture.
-- Lines like \`clicked "X"\` mark where the user clicked during the recording (the label is the on-screen element under the cursor, from OCR). Use them to resolve deictic references and to understand the sequence of actions the user took.
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const PROMPT_MIRROR_PATH = join(SCRIPT_DIR, "artifact-eval", "prompt-v2.md");
 
-The transcript is raw speech: it contains filler words, false starts, self-corrections, and informal phrasing. Treat it as intent, not literal text. When the user corrects themselves, follow the corrected version and ignore the abandoned one.
-
-The frames show what the user was looking at or pointing to. Use them to ground vague spoken references ("this button", "that error", "here") in concrete on-screen detail. When speech and frames conflict, the frames are the source of truth for what exists; the speech is the source of truth for what the user wants.
-
-Resolving a vague reference to what the frames clearly show is correct and expected. Inventing specifics that are neither shown nor stated is not. When the user gestures at something without naming the exact mechanism, stay at the level of detail the frames and speech support — do not fabricate precise values, names, or settings the user never provided. If a reference is genuinely ambiguous and the frames cannot resolve it, note the ambiguity briefly rather than guessing.
-
-Never invent a request, task, or goal the user did not actually express. A request to review, assess, explain, summarize, analyze, or ask about what is shown is itself an actionable request — handle it normally. Only when the narration contains no request of any kind — a bare sign-off (e.g. "thanks for watching", "like and subscribe"), filler or boilerplate (including transcription artifacts on near-silent audio), or talk unrelated to the screen — do not manufacture a request from what happens to be on screen; how to handle that empty case is defined by the selected output mode below.
-
-The user may speak mostly about what they want changed or done, rather than describing what is on screen. Capture their actual intent regardless of how it is phrased; do not let the form of their speech distort the output format. A single recording may contain more than one request, or a sequence of related changes — capture every distinct one; do not merge them into a single vague ask or drop the later ones.
-
-Output ONLY the final result. No preamble, no "Here is...", no closing remarks, and never wrap the whole output in a code fence. Markdown structure within the output — short headings, lists, inline code — is welcome where it makes the result clearer. The output goes straight to the clipboard.
-
-OUTPUT MODE: The user has selected an output mode (provided below). Treat it as the default. Only override it if the user's speech contains a direct, explicit request for a different output format (e.g. "actually, just explain this" or "write this as instructions instead"). Do NOT switch modes because format-related words happen to appear while the user is describing their screen or content. When in doubt, follow the selected mode.`;
-
-const INSTRUCT = `TASK: Rewrite the user's spoken request as a clear, structured instruction addressed to an AI coding/assistant agent that will carry it out.
-
-Write in second person ("you"), imperative and specific — you are addressing the agent directly. The output is pasted straight into that agent, so phrase everything as direct instructions to it and NEVER refer to "the user", "the recording", "the speaker", or what someone "wants" or "instructed" — say "Rename \`handleTap\` to \`handleSubmit\`", not "The user wants \`handleTap\` renamed". The agent did NOT see the recording, so translate everything shown or referenced into explicit description it can act on without the visuals.
-
-Use the frames to extract the concrete specifics the agent needs: exact labels, filenames, function names, endpoints, values, and UI element names. Pull these in so the agent is not guessing. When the user refers to something vaguely ("this", "here", "that thing"), resolve it against the frames and state it plainly.
-
-When the user describes an outcome without naming the exact technical mechanism, express the requirement at the level of intent the agent can implement, rather than inventing a specific implementation detail the user did not state. If a requirement is genuinely ambiguous and the frames do not resolve it, surface it as a brief open question rather than guessing. If the narration points out a problem or error without explicitly asking for a fix, capture it as the issue to address — describe the problem precisely, but don't invent a specific solution that wasn't indicated.
-
-Structure:
-- Lead with a one-sentence summary of the goal.
-- Then the specific requirements as a tight, ordered list. If the recording contains several distinct requests, give each its own item (or short section) so none is blended together or dropped.
-- Weave the concrete specifics (exact labels, filenames, values, paths) into the requirement they belong to, rather than listing them separately.
-- End with any constraints or "do not" conditions the user stated.
-
-Keep it lean. Do not pad with explanation of why — the agent needs what to do. Drop the user's emotional framing and asides; keep only what is actionable.
-
-If the recording contains no actionable request to rewrite, do not fabricate a task from the frames. Output a single plain line stating that no clear request was captured (for example: "No actionable request found in this recording.") and nothing else.`;
-
-const EXPLAIN = `TASK: Produce a clear, thorough explanation of what the recording shows, tailored to who it is for.
-
-Infer the audience and purpose from the narration:
-- The user asking for their own understanding — "how does this work?", "what is this?", "where do I find X?" — answer them directly and completely, as a reply to their question; you may address them as "you."
-- An explanation meant to be passed on to someone or something else ("so I can send this to a coworker", "explain this for the team") — write a self-contained explanation for that recipient, in neutral third person.
-- Audience unclear — default to a self-contained explanation any reader who did not see the recording could follow.
-
-When the user asks a specific question, answer it. Ground the answer in the frames, the on-screen text, and the narration; you may use general knowledge of well-known tools or sites to fill small gaps, but the recording is the source of truth — say plainly when something cannot be determined from it rather than guessing.
-
-Be thorough: cover the full picture the recording supports — components, behavior, how the parts relate, and the order things happen — at the depth the content warrants. Favor completeness over brevity, but stay substantive: no filler, no restating the obvious. If the recording covers several distinct things or screens, explain each rather than forcing them into one.
-
-If the user voices a wish or intention without asking you to do or answer anything ("I want to fix this", "make it do X"), do not turn it into an instruction — render it as a described characteristic of the subject (e.g. "the error handling is currently fragile," as an observed property). Surface what the user emphasized as notable.
-
-Structure:
-- Open directly with the substance — the first sentence should BE the answer, the title of what this is, or the first real point, not a meta lead-in. Do NOT open with "This recording shows...", "The recording shows...", "Based on the recording...", "Here is...", "In this video...", or any framing-about-the-recording phrasing; begin with the actual content.
-- If the recording is mainly a process or how-to (steps in sequence), lay it out as those ordered steps so the reader could follow them; otherwise explain the components and behavior in plain language, in the depth the recording supports.
-- Include any characteristic the user clearly treated as important.
-
-Do not invent facts, steps, or details the recording and the user's question don't support.`;
-
-const composedSystemPrompt = (mode) => `${BASE}\n\n${mode === "explain" ? EXPLAIN : INSTRUCT}`;
+function composedSystemPrompt() {
+  const md = readFileSync(PROMPT_MIRROR_PATH, "utf8");
+  const m = md.match(/(?:^|\n)\u0060\u0060\u0060\n([\s\S]*?)\n\u0060\u0060\u0060(?:\n|$)/);
+  if (!m) {
+    console.error(`no fenced block found in ${PROMPT_MIRROR_PATH} — mirror format changed?`);
+    process.exit(1);
+  }
+  return m[1];
+}
 
 // ---------- pricing (PINNED MIRROR of generate/cost.ts) ----------------------
 // Keep this a complete, 1:1 mirror of CHAT_PRICING in
@@ -688,7 +647,6 @@ function buildArtifactScorecard(perModel, { stamp, fixturesPath, promptLabel, fi
 async function runArtifactEval() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const fixturesPath = arg("fixtures", join(scriptDir, "artifact-eval", "fixtures.json"));
-  const promptMode = arg("mode", "instruct");
   const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",").map((s) => s.trim());
   const thinkingLevel = arg("thinking", "low");
   const outDir = arg("out", "eval-results/artifact");
@@ -706,10 +664,10 @@ async function runArtifactEval() {
     if (!m) { console.error(`--system-prompt: no fenced block found in ${p}`); process.exit(1); }
     return m[1];
   };
-  const systemPrompt = promptFile ? loadPromptFile(promptFile) : composedSystemPrompt(promptMode);
+  const systemPrompt = promptFile ? loadPromptFile(promptFile) : composedSystemPrompt();
   const promptLabel = promptFile
     ? `\`${promptFile}\``
-    : `current ${promptMode} mode mirror (pre-v2 — pipeline check only, scores not meaningful)`;
+    : `locked v2 mirror (${relative(process.cwd(), PROMPT_MIRROR_PATH)})`;
 
   // No Whisper in this mode — each key is required only for its own provider.
   const need = (p) => models.some((m) => m.startsWith(`${p}:`));
@@ -851,11 +809,14 @@ if (process.argv.includes("--artifact")) {
 
 const workingDir = process.argv[2];
 if (!workingDir || workingDir.startsWith("--")) {
-  console.error("usage: node Scripts/eval-models.mjs <workingDir> --mode instruct|explain --models provider:model,... [--thinking low|high] [--out dir]");
+  console.error("usage: node Scripts/eval-models.mjs <workingDir> --models provider:model,... [--thinking low|high] [--out dir]");
   process.exit(1);
 }
 
-const mode = arg("mode", "instruct");
+// Typed-artifact refactor: there is one unified prompt — `mode` is gone. The
+// label survives only in output filenames/scorecards as "v2" for continuity
+// with pre-refactor result directories.
+const mode = "v2";
 const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",").map((s) => s.trim());
 const thinkingLevel = arg("thinking", "low");
 const outDir = arg("out", "eval-results");
@@ -917,7 +878,7 @@ if (!hasSpeech) {
   console.error(`transcript: ${transcript.segments.length} segments, ${transcript.durationSeconds.toFixed(1)}s measured`);
 }
 
-const systemPrompt = composedSystemPrompt(mode);
+const systemPrompt = composedSystemPrompt();
 // Phase 4: clicks (if any) from the manifest, mirrored into the timeline.
 const clicks = manifest.clicks ?? [];
 const blocks = buildTimeline(frames, transcript.segments, clicks);

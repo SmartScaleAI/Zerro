@@ -137,15 +137,6 @@ struct MenuBarPanelView: View {
                 }
             }
 
-            // Phase 17: transient indicator that the LAST result ran with a
-            // pill-override mode rather than the selected one. Present only
-            // while `effectiveOutputMode` is set (a Switch fired, until the
-            // next return to idle), and scoped to "this one" so it never
-            // reads as a change to the persisted default.
-            if let effective = appState.effectiveOutputMode {
-                modeOverrideIndicator(effective)
-            }
-
             menuDivider
 
             // Phase A library-stays-readable rule: "Copy last prompt" and
@@ -285,17 +276,6 @@ struct MenuBarPanelView: View {
             debugSectionTitle
             // Permission status rows lead the debug list.
             PermissionsDebugSection()
-            // Phase 17 manual trigger: arms the stub mode-switch detector
-            // to "match" on the next recording's generation pass, so the
-            // confirmation pill flow is testable end to end without real
-            // detection. One-shot — consumed by that generation. The label
-            // reflects the armed state (appState is @Observable).
-            // DEFERRED Phase 18: real detection removes the need for this.
-            MenuRow(label: appState.debugForceModeSwitchPill
-                    ? "Mode-Switch Pill: Armed \u{2713}"
-                    : "Force Mode-Switch Pill") {
-                appState.debugForceModeSwitchPill = true
-            }
             MenuRow(label: "Open Onboarding\u{2026}") {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
@@ -709,24 +689,6 @@ struct MenuBarPanelView: View {
         }
     }
 
-    /// Phase 17 — transient "this result was switched" note. Echoes the
-    /// confirmation pill's copy ("…for this one") and uses the same blue
-    /// accent + double-arrow glyph so the two read as one signal. Cleared
-    /// when `effectiveOutputMode` returns to nil on the next idle.
-    private func modeOverrideIndicator(_ mode: OutputMode) -> some View {
-        HStack(spacing: VFSpacing.sm) {
-            Image(systemName: "arrow.left.arrow.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.vfAccentBlue)
-            Text("Switched to \(mode.displayName) for this one")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-    }
 
     /// Open/close delays for the hover-driven side panels (Recent Prompts,
     /// Microphone). The open delay is a hover-intent guard so brushing past

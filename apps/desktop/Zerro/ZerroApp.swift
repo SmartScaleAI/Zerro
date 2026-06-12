@@ -426,17 +426,8 @@ struct ZerroApp: App {
             pillController?.flashBusy()
             return
         }
-        // Phase 17: the mode-switch confirmation pill is awaiting an answer
-        // (Keep/Switch). Like .processing, the record hotkey must not start
-        // a new recording over it — flash to signal "registered, but resolve
-        // the pill first".
-        if case .confirmingMode = state.state {
-            Log.hotkey.notice("mode-switch confirm in flight — flashing pill instead of starting")
-            pillController?.flashBusy()
-            return
-        }
         // M2 (rev 3): the recovery offer is awaiting an answer (Generate /
-        // Discard / dismiss). Like .confirmingMode, the record hotkey must not
+        // Discard / dismiss). Like .processing, the record hotkey must not
         // start a new recording over it — flash to signal "resolve the pill
         // first" (the pill's "x" is the quick "not now").
         if case .confirmingRecovery = state.state {
@@ -534,17 +525,12 @@ struct ZerroApp: App {
                 state.startRecording(
                     selection: selection,
                     microphoneDeviceID: preferences?.microphoneDeviceID ?? "",
-                    // Phase 17: the overlay's mode toggle persisted its
-                    // selection to defaultOutputMode at confirm; read it
-                    // fresh here (same pattern as the mic device) so this
-                    // recording composes with the chosen mode.
-                    outputMode: preferences?.defaultOutputMode ?? .instruct,
                     // Phase 3: read the redaction pref fresh (same pattern) so a
                     // Settings change takes effect on the next recording.
                     redactSecrets: preferences?.redactSecrets ?? ProcessingConfig.redactSecretsDefault,
                     // Multi-model: the toolbar chip's pick, a PER-RECORDING
                     // override — handed through here, never persisted (unlike
-                    // mode/mic above, by design).
+                    // the mic above, by design).
                     modelID: modelID
                 )
             },

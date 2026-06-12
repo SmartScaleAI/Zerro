@@ -97,14 +97,8 @@ final class AreaSelectorWindowController {
             selectedID: preferences.microphoneDeviceID
         )
 
-        // Phase 17: seed the Instruct/Explain switch from the persisted
-        // last-used default. A tap flips it in `state`; the value is
-        // written back to prefs at record-start (confirm) so a cancelled
-        // overlay doesn't silently change the default.
-        state.setOutputMode(preferences.defaultOutputMode)
-
         // Multi-model: seed the model chip from the Preferences default.
-        // Unlike mic/mode, a dropdown pick here is a PER-RECORDING
+        // Unlike the mic, a dropdown pick here is a PER-RECORDING
         // override — it is handed to onConfirm but NEVER written back to
         // PreferencesStore, so the next recording starts on the default.
         state.setModels(
@@ -271,11 +265,6 @@ final class AreaSelectorWindowController {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
                 state.setModelChipHovered(modelFrame?.contains(point) ?? false)
-                // Phase 17: hover tint for the mode toggle's non-selected
-                // segment.
-                state.setHoveredOutputMode(selectionRect.flatMap {
-                    AreaSelectorView.outputMode(at: point, forSelection: $0, in: size)
-                })
                 if state.isMicMenuOpen, let rect = selectionRect {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
@@ -294,14 +283,6 @@ final class AreaSelectorWindowController {
                 // Record button — start recording.
                 if let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
-                    return nil
-                }
-                // Mode toggle — select Instruct/Explain (Phase 17). Checked
-                // before the mic chip / drag logic so a tap acts on the
-                // toggle rather than re-dragging underneath it.
-                if let rect = selectionRect,
-                   let mode = AreaSelectorView.outputMode(at: point, forSelection: rect, in: size) {
-                    state.setOutputMode(mode)
                     return nil
                 }
                 // Model chip — open/close the model dropdown (closing the
@@ -472,11 +453,6 @@ final class AreaSelectorWindowController {
             screenDisplayID: window.screen?.displayID,
             target: .area
         )
-        // Phase 17: this is record-start — commit the toolbar's mode
-        // selection as the new last-used default. The confirm callback in
-        // ZerroApp reads `preferences.defaultOutputMode` (mirroring how it
-        // reads the mic device) and hands it to startRecording.
-        preferences?.defaultOutputMode = state.outputMode
         state.confirm(with: selection)
     }
 
@@ -495,9 +471,6 @@ final class AreaSelectorWindowController {
             screenDisplayID: window.screen?.displayID,
             target: .window(id: candidate.id, title: candidate.title)
         )
-        // Phase 17: record-start — commit the toolbar's mode selection as
-        // the new last-used default (see confirmAreaSelection).
-        preferences?.defaultOutputMode = state.outputMode
         state.confirm(with: selection)
     }
 

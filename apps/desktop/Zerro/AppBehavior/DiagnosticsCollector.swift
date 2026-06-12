@@ -47,7 +47,6 @@ enum DiagnosticsCollector {
         lines.append("  Hotkey:     \(currentHotkeyDescription())")
         lines.append("")
         lines.append("Output:")
-        lines.append("  Default mode: \(preferences.defaultOutputMode.displayName)")
         // Phase 13 (Part B) — include the most recent Sentry event ID
         // so a support email correlates to a captured crash / non-fatal
         // event in the Sentry dashboard. Reads `nil` if no event has

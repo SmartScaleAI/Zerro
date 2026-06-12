@@ -8,17 +8,16 @@
 //  --------
 //  Phase E — the Managed generation path. Where BYOK transcribes + composes
 //  locally and calls OpenAI directly, the Managed path uploads the recording's
-//  AUDIO + FRAMES + the output MODE to the Supabase `generate` proxy and gets
-//  the finished prompt back. The server owns transcription and the system
-//  prompt (§6.1) — so this client sends NEITHER a transcript NOR a prompt; that
-//  is the control that stops a paying user repurposing the Zerro OpenAI key as
-//  a general LLM (§14.1). The client supplies only the `mode` enum, which is
-//  the one input that steers the (server-owned) prompt.
+//  AUDIO + FRAMES to the Supabase `generate` proxy and gets the finished
+//  result back. The server owns transcription and the system prompt (§6.1) —
+//  so this client sends NEITHER a transcript NOR a prompt; that is the
+//  control that stops a paying user repurposing the Zerro provider keys as a
+//  general LLM (§14.1). Typed-artifact refactor: the v1 `mode` enum is gone —
+//  the client supplies NOTHING that steers the (server-owned) prompt.
 //
 //  Wire shape (matches `supabase/functions/generate/limits.ts`):
 //    POST /generate   Authorization: Bearer <session token>
 //    {
-//      "mode": "instruct" | "explain",
 //      "model": "gemini-3.5-flash",        // multi-model 6B: a ModelRegistry id
 //      "has_speech": true,                 // Phase 6: false → server skips Whisper
 //      "audio":  { "mime": "audio/m4a", "filename": "recording.m4a",
@@ -103,8 +102,8 @@ final class ManagedProxyClient {
         self.transport = transport ?? URLSessionManagedTransport()
     }
 
-    /// Runs a proxy generation: reads the audio + frames off disk, base64s them
-    /// with the mode, POSTs to `/generate` with a bearer token, and parses the
+    /// Runs a proxy generation: reads the audio + frames off disk, base64s
+    /// them, POSTs to `/generate` with a bearer token, and parses the
     /// returned prompt. A `401` triggers exactly one transparent token refresh +
     /// retry. Throws `ManagedGenerationError` on every failure path.
     ///
@@ -127,7 +126,6 @@ final class ManagedProxyClient {
     func generate(
         audioURL: URL,
         frames: [ExtractedFrame],
-        mode: OutputMode,
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
         hasSpeech: Bool = true,
@@ -147,7 +145,6 @@ final class ManagedProxyClient {
             try Self.encodeBody(
                 audioURL: audioURL,
                 frames: uploads,
-                mode: mode,
                 durationSeconds: durationSeconds,
                 clicks: clicks,
                 hasSpeech: hasSpeech,
@@ -235,7 +232,6 @@ final class ManagedProxyClient {
     nonisolated static func encodeBody(
         audioURL: URL,
         frames: [FrameUpload],
-        mode: OutputMode,
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
         hasSpeech: Bool = true,
@@ -285,15 +281,13 @@ final class ManagedProxyClient {
             ["timestamp": $0.seconds, "label": $0.label]
         }
 
-        // `mode` is the ONLY field that steers the server-owned prompt — no
-        // transcript, no system prompt (§6.1). Phase 6: `has_speech` is a cost
-        // hint, not prompt input — `false` tells the server to skip the Whisper
-        // call (empty segments); it never influences the system prompt. `model`
+        // Typed-artifact refactor: NO field steers the server-owned prompt —
+        // no mode, no transcript, no system prompt (§6.1). Phase 6:
+        // `has_speech` is a cost hint, not prompt input — `false` tells the
+        // server to skip the Whisper call (empty segments). `model`
         // (multi-model 6B) selects the provider adapter + per-model credit
-        // price server-side — it never influences the system prompt either
-        // (Appendix C #3).
+        // price server-side — never the prompt (Appendix C #3).
         let payload: [String: Any] = [
-            "mode": mode.rawValue,
             "model": model,
             "audio": audio,
             "frames": frameObjects,

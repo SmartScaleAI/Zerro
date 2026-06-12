@@ -31,11 +31,6 @@ extension AppState {
         case .processing:
             return .processing(stepLabel: processingStageLabel)
 
-        case .confirmingMode(let suggested):
-            // Phase 17 — the mode-switch confirmation pill, morphing from
-            // the processing capsule in place.
-            return .confirmSwitch(suggestedMode: suggested)
-
         case .confirmingRecovery:
             // M2 (rev 3) — the sleep-interrupted-recording recovery offer.
             return .confirmRecovery

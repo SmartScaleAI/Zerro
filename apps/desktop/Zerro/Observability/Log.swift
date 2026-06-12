@@ -121,13 +121,12 @@ enum Log {
     /// GPT-4o prompt-generation stage of the API pipeline.
     nonisolated static let promptGen = Logger(subsystem: subsystem, category: "promptGen")
 
-    /// Phase 18 mode-switch detector. Local-only telemetry for the
-    /// opposite-mode matcher: which cue/target fired, where in the
-    /// recording, and at what confidence. Counts/enum-names only — the
-    /// matched cue/target are canonical entries from our own pattern list
-    /// (subsystem identifiers, `.public`), never the user's raw words, and
-    /// the transcript text itself never reaches a log call.
-    nonisolated static let modeSwitch = Logger(subsystem: subsystem, category: "modeSwitch")
+    /// Typed-artifact contract telemetry (Phase 4): §2 parse outcomes on
+    /// generation results — recovery-tier fires (rule names only),
+    /// unknown-type coercions (the type token only), and fail-safe
+    /// fallbacks. Never response content. Production visibility for the
+    /// recovery rate baselined in the Phase 1 eval (~4% of flash artifacts).
+    nonisolated static let artifacts = Logger(subsystem: subsystem, category: "artifacts")
 
     /// Per-request cost accounting (Whisper minutes + GPT tokens).
     /// Separate category so a user inspecting costs can filter to just

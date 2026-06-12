@@ -41,13 +41,6 @@ public enum RecordingState: Equatable {
     case wrappingUp
     case autoStopped
     case processing
-    /// Phase 17 — paused between transcription and generation, awaiting the
-    /// user's answer on the mode-switch confirmation pill. `suggested` is
-    /// the opposite mode the (stubbed) detector flagged. Resolving via
-    /// `resolveModeSwitch(switchTo:)` returns to `.processing` and runs the
-    /// single generation with the effective mode. Lives between
-    /// `.processing` and `.done` and only ever entered when a match fires.
-    case confirmingMode(suggested: OutputMode)
     /// M2 — a recording that a system sleep interrupted was found recoverable
     /// on disk (at wake or launch) and we're asking the user whether to
     /// generate from it. Entered by `recoverOrphanedRecordingIfAny`; resolved
@@ -299,16 +292,6 @@ final class AppState {
     /// capture; `nil` started without a selection (e.g. tests).
     var activeSelection: SelectionRect?
 
-    /// Phase 17: the output mode selected for THIS recording — captured at
-    /// `startRecording` time from the overlay toggle (which also writes it
-    /// back to `PreferencesStore.defaultOutputMode` as the last-used
-    /// default). This is the source of truth for prompt composition; the
-    /// generation path reads it (or a per-recording pill override) and
-    /// never re-reads the persisted default, so an override can't be
-    /// silently undone. Defaults to `.instruct` so test/menu-bar call
-    /// sites that don't pass a mode still compose a valid prompt.
-    var recordingOutputMode: OutputMode = .instruct
-
     /// Phase 3: whether to redact detected secrets (pixels + OCR text) for THIS
     /// recording. Captured at `startRecording` time from
     /// `PreferencesStore.redactSecrets` (same fresh-read pattern as the mic
@@ -328,14 +311,6 @@ final class AppState {
     /// the recording was priced against. `nil` for call sites that don't
     /// pass one (tests, recovered recordings).
     var recordingModelID: String?
-
-    /// Phase 17: the mode a pill override actually ran with, when the user
-    /// tapped "Switch" on the confirmation pill. Transient and per-recording
-    /// — it drives the menu-bar "ran as X" indicator and is cleared on every
-    /// return to idle, so it can never imply the persisted default changed.
-    /// `nil` whenever no override fired (the common case), which the
-    /// indicator reads as "ran with the selected mode."
-    var effectiveOutputMode: OutputMode?
 
     /// Path to the most recently finalized recording on disk. Set by
     /// `handleSessionFinish` when the writer completes successfully;
@@ -370,6 +345,13 @@ final class AppState {
     /// expanded result body reads this; Phase 9 Step 6 copies it to
     /// the clipboard on the Copy button click.
     var generatedPrompt: String?
+
+    /// Typed-artifact refactor (Phase 4): the §2 parse of `generatedPrompt` —
+    /// chat text plus at most one typed artifact. Set alongside
+    /// `generatedPrompt` on BOTH generation paths (Managed and BYOK) and
+    /// reset wherever it is. The pill's rendering shim and the Copy button's
+    /// per-type payload read this; `generatedPrompt` stays the raw fallback.
+    var parsedResponse: ParsedResponse?
 
     /// True when the result was generated from the screen alone because
     /// Whisper returned no usable narration (silent recording / muted
@@ -497,28 +479,6 @@ final class AppState {
     /// already walked away from. Nil whenever no pipeline is running.
     private var processingTask: Task<Void, Never>?
 
-    /// Phase 17: everything needed to resume prompt generation after the
-    /// confirmation pill pauses the pipeline. Stashed when we enter
-    /// `.confirmingMode` so `resolveModeSwitch(switchTo:)` can run the
-    /// single generation with the effective mode — without re-transcribing
-    /// (no double API spend). Cleared on resolution and on every reset path.
-    private struct PendingGeneration {
-        let timeline: InterleavedTimeline
-        let transcript: Transcript
-        let processed: ProcessedRecording
-    }
-    @ObservationIgnored private var pendingGeneration: PendingGeneration?
-
-    #if DEBUG
-    /// Debug-only arming flag for the mode-switch confirmation pill. Set by
-    /// the menu-bar dropdown's debug row; consumed (one-shot) by the next
-    /// recording's generation pass to force the stub detector to "match" so
-    /// the pill flow can be exercised end to end without real detection.
-    /// DEFERRED Phase 18: real string-match detection replaces the need for
-    /// this manual trigger.
-    var debugForceModeSwitchPill: Bool = false
-    #endif
-
     /// Consecutive Retry presses against the current failure chain. Cap
     /// keeps a "Retry → fail → Retry" loop from running forever on a
     /// sustained outage — after the cap the Retry button hides and the
@@ -589,7 +549,6 @@ final class AppState {
     func startRecording(
         selection: SelectionRect? = nil,
         microphoneDeviceID: String = "",
-        outputMode: OutputMode = .instruct,
         redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
         modelID: String? = nil
     ) {
@@ -628,14 +587,12 @@ final class AppState {
         }
         isResultExpanded = false
         activeSelection = selection
-        recordingOutputMode = outputMode
         recordingRedactSecrets = redactSecrets
         recordingModelID = modelID
-        effectiveOutputMode = nil
-        pendingGeneration = nil
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
+        parsedResponse = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -800,12 +757,11 @@ final class AppState {
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
         isResultExpanded = false
-        effectiveOutputMode = nil
-        pendingGeneration = nil
         activeSelection = nil
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
+        parsedResponse = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -905,7 +861,7 @@ final class AppState {
             if let workingDir = processedRecording?.workingDirectory {
                 WorkingDirectory.remove(at: workingDir)
             }
-        case .idle, .done, .failed, .confirmingMode, .confirmingRecovery:
+        case .idle, .done, .failed, .confirmingRecovery:
             break
         }
     }
@@ -1230,14 +1186,10 @@ final class AppState {
         }
     }
 
-    /// Phase 9 + 17: Whisper transcribe → Interleaver → mode-switch check →
-    /// GPT-4o generate. The pill shows `.transcribing` while Whisper runs.
-    /// After transcription the (Phase 17-stubbed) detector decides whether
-    /// the user verbally asked for the opposite output mode; on a match we
-    /// pause at `.confirmingMode` for the confirmation pill and resume from
-    /// `resolveModeSwitch(switchTo:)`. Otherwise generation runs straight
-    /// through with the recording's selected mode. The `.processing → .done`
-    /// transition fires from `runGeneration`.
+    /// Phase 9: Whisper transcribe → Interleaver → generate. The pill shows
+    /// `.transcribing` while Whisper runs; generation then runs straight
+    /// through (the v1 mode-switch pause is gone with modes themselves).
+    /// The `.processing → .done` transition fires from `runGeneration`.
     /// Phase E — the SINGLE routing branch point between the two generation
     /// architectures. A `.managed` user uploads the recording's audio + frames
     /// to the proxy, which transcribes + composes server-side; everyone else
@@ -1285,11 +1237,11 @@ final class AppState {
     }
 
     /// Phase E/F — the proxy generation path (Managed subscription OR trial).
-    /// Uploads audio + frames + the effective mode (NEVER a transcript or system
-    /// prompt — the server owns those, §6.1) to the proxy and lands the returned
-    /// prompt on the same `.done` tail the local path uses (pill + clipboard +
-    /// history unchanged). Does NOT run local Whisper or mode-switch detection —
-    /// both need a transcript the client never has on this path.
+    /// Uploads audio + frames (NEVER a transcript or system prompt — the
+    /// server owns those, §6.1; since the typed-artifact refactor there is no
+    /// mode either) to the proxy and lands the returned result on the same
+    /// `.done` tail the local path uses (pill + history unchanged). Does NOT
+    /// run local Whisper — the server transcribes on this path.
     ///
     /// `tokenProvider` nil = the Managed subscription token (proxy default);
     /// non-nil = the trial token (`isTrial == true`). The two differ only in how
@@ -1301,7 +1253,6 @@ final class AppState {
         tokenProvider: ProxyTokenProviding?,
         isTrial: Bool
     ) {
-        let mode = recordingOutputMode
         let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
         let durationSeconds = CMTimeGetSeconds(processed.duration)
         let label = isTrial ? "trial" : "managed"
@@ -1315,7 +1266,6 @@ final class AppState {
                 let managed = try await proxy.generate(
                     audioURL: audioURL,
                     frames: processed.frames,
-                    mode: mode,
                     durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
                     clicks: processed.clicks,
                     // Phase 6: tell the server whether to bother with Whisper. On
@@ -1342,7 +1292,7 @@ final class AppState {
                 )
 
                 guard self.state == .processing else { return }
-                self.generatedPrompt = result.prompt
+                self.acceptGenerationResult(rawPrompt: result.prompt)
                 // Multi-model 6B: the exact server spend for the result pill's
                 // "−N credits · M left" line (both fields or no toast — a
                 // pre-D2 backend omits credits_charged).
@@ -1352,7 +1302,6 @@ final class AppState {
                 // The proxy path has no client transcript, so the no-narration
                 // note (a BYOK affordance) doesn't apply — never flag it here.
                 self.resultHadNoNarration = false
-                self.recentPromptStore?.add(prompt: result.prompt)
                 self.state = .done
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
 
@@ -1522,68 +1471,10 @@ final class AppState {
                     clicks: processed.clicks
                 )
 
-                // Phase 17: decide the effective mode BEFORE composing the
-                // prompt, so the single generation runs with it. Phase 18
-                // replaced the stub with local opposite-mode string
-                // matching; the debug trigger still forces a (high) match
-                // so the pill is testable without saying the magic words.
-                var detection = ModeSwitchDetector.detect(
-                    transcript: transcript,
-                    selectedMode: self.recordingOutputMode
-                )
-                #if DEBUG
-                if self.debugForceModeSwitchPill {
-                    self.debugForceModeSwitchPill = false
-                    detection = ModeSwitchDetection(
-                        didMatch: true,
-                        suggestedMode: self.recordingOutputMode.opposite,
-                        matchedCue: nil,
-                        matchedTarget: nil,
-                        region: nil,
-                        confidence: .high
-                    )
-                }
-                #endif
-
-                // Phase 18 telemetry: record EVERY match (high or low) as a
-                // local breadcrumb — cue/target/region/confidence, never
-                // any transcript text. Low-confidence (mid-recording)
-                // matches are logged here but deliberately fall through the
-                // gate below without interrupting. The Sentry crash-trail
-                // marker ("mode-switch confirm shown") and the user's
-                // confirm/cancel choice (resolveModeSwitch) cover the
-                // surfaced case; cancel-rate is read from those.
-                if detection.didMatch {
-                    Log.modeSwitch.info(
-                        "match cue=\(detection.matchedCue ?? "-", privacy: .public) target=\(detection.matchedTarget ?? "-", privacy: .public) region=\(detection.region?.rawValue ?? "-", privacy: .public) confidence=\(detection.confidence.rawValue, privacy: .public)"
-                    )
-                }
-
-                // Only HIGH-confidence matches surface the pill (Phase 18).
-                if detection.didMatch,
-                   detection.confidence == .high,
-                   let suggested = detection.suggestedMode,
-                   suggested != self.recordingOutputMode {
-                    // Pause for the confirmation pill. Stash everything the
-                    // resume needs so we don't re-transcribe (no double API
-                    // spend). Keep / Switch both route through
-                    // resolveModeSwitch(switchTo:).
-                    self.pendingGeneration = PendingGeneration(
-                        timeline: timeline,
-                        transcript: transcript,
-                        processed: processed
-                    )
-                    Log.breadcrumb(category: .stateMachine, message: "mode-switch confirm shown")
-                    self.state = .confirmingMode(suggested: suggested)
-                    return
-                }
-
-                // No switch suggested — generate with the selected mode.
                 self.runGeneration(
                     timeline: timeline,
                     transcript: transcript,
-                    processed: processed,
-                    mode: self.recordingOutputMode
+                    processed: processed
                 )
             } catch {
                 Log.transcription.error("failed: \(error.localizedDescription, privacy: .private)")
@@ -1606,18 +1497,13 @@ final class AppState {
         }
     }
 
-    /// Phase 17: the generation half of the API flow, split out so it runs
-    /// either straight after transcription (no switch) or on resume from the
-    /// confirmation pill. Takes the EFFECTIVE output mode as a parameter —
-    /// the recording's selected mode, or the suggested opposite when the
-    /// user tapped "Switch" — and composes the prompt for exactly that mode.
-    /// Never re-reads the persisted default. The `.processing → .done`
-    /// transition fires here on success.
+    /// The generation half of the BYOK API flow. One unified v2 prompt since
+    /// the typed-artifact refactor — no mode parameter. The
+    /// `.processing → .done` transition fires here on success.
     private func runGeneration(
         timeline: InterleavedTimeline,
         transcript: Transcript,
-        processed: ProcessedRecording,
-        mode: OutputMode
+        processed: ProcessedRecording
     ) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1646,7 +1532,7 @@ final class AppState {
                 }
                 let result = try await BYOKRouting.service(for: entry).generatePrompt(
                     timeline: timeline,
-                    systemPrompt: PromptGenerationSystemPrompt.composed(for: mode)
+                    systemPrompt: PromptGenerationSystemPrompt.composed()
                 )
                 // Model name (.public — a registry id we control) and token
                 // counts (.public — metrics, not content). result.prompt.count
@@ -1661,13 +1547,8 @@ final class AppState {
                 )
 
                 guard self.state == .processing else { return }
-                self.generatedPrompt = result.prompt
+                self.acceptGenerationResult(rawPrompt: result.prompt)
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
-                // Phase 11: persist successful prompts to the history
-                // store so the menu-bar Recent Prompts submenu, Paste-
-                // last row, and Settings History tab can surface them.
-                // Wired via a weak ref on AppState set by ZerroApp.init.
-                self.recentPromptStore?.add(prompt: result.prompt)
                 self.state = .done
                 // Phase 13A: terminal-success breadcrumb. If a crash
                 // lands during result presentation (UI bug, copy
@@ -1695,41 +1576,71 @@ final class AppState {
         }
     }
 
-    /// Phase 17: resolves the mode-switch confirmation pill. `switchTo ==
-    /// true` applies the suggested opposite mode to THIS recording only — a
-    /// per-recording override that does NOT touch the persisted default;
-    /// `false` (and, equivalently, dismissing or ignoring the pill) keeps
-    /// the recording's selected mode. Either way generation resumes from the
-    /// stashed timeline with the effective mode; the persisted default is
-    /// never re-read. A no-op outside `.confirmingMode`, so a stray or
-    /// double call can't double-run generation.
-    func resolveModeSwitch(switchTo: Bool) {
-        guard case .confirmingMode(let suggested) = state,
-              let pending = pendingGeneration else { return }
-        pendingGeneration = nil
+    // MARK: - Typed-artifact result handling (Phase 4)
 
-        let effectiveMode: OutputMode = switchTo ? suggested : recordingOutputMode
-        if switchTo {
-            // Transient — drives the menu-bar "ran as X" indicator, cleared
-            // on the next return to idle. Never persisted: an override is
-            // per-recording, it does not become the new default.
-            effectiveOutputMode = suggested
-            Log.breadcrumb(category: .stateMachine, message: "mode-switch accepted")
-        } else {
-            Log.breadcrumb(category: .stateMachine, message: "mode-switch kept")
+    /// The shared `.done` tail for BOTH generation paths (Managed and BYOK):
+    /// parse the raw model output against the §2 contract, surface
+    /// recovery/coercion telemetry, and persist the v2 history entry (model
+    /// artifact title preferred). `generatedPrompt` keeps the raw text as
+    /// the verbatim fallback; `parsedResponse` is what the pill renders.
+    private func acceptGenerationResult(rawPrompt: String) {
+        let parsed = ArtifactParser.parse(rawPrompt)
+        generatedPrompt = rawPrompt
+        parsedResponse = parsed
+
+        // Production visibility for the §2 fail-safe tiers (.public — these
+        // carry rule names / a type token, never response content). The
+        // recovery rate was baselined at ~4% of flash artifacts in Phase 1;
+        // these are the signals that tell us if it climbs in the wild.
+        if !parsed.isValid {
+            Log.artifacts.warning("malformed response degraded to chat text (fail-safe fallback)")
+        }
+        if parsed.wasRecovered {
+            let rules = parsed.warnings
+                .filter { $0.hasPrefix("recovered") }
+                .joined(separator: "; ")
+            Log.artifacts.warning("recovery tier fired: \(rules, privacy: .public)")
+        }
+        if let artifact = parsed.artifact, artifact.rawType != artifact.type.rawValue {
+            Log.artifacts.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
         }
 
-        // Set the stage label before flipping to .processing so the morph
-        // out of the confirm pill lands directly on "Writing your prompt…"
-        // rather than briefly showing the stale transcription label.
-        processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
-        state = .processing
-        runGeneration(
-            timeline: pending.timeline,
-            transcript: pending.transcript,
-            processed: pending.processed,
-            mode: effectiveMode
+        recentPromptStore?.add(
+            prompt: rawPrompt,
+            chatText: parsed.chatText,
+            artifactType: parsed.artifact?.type.rawValue,
+            artifactBody: parsed.artifact?.body,
+            artifactTitle: parsed.artifact?.title
         )
+    }
+
+    /// Markdown the result pill's expanded body renders — the Phase 4 shim
+    /// (Phase 5 replaces it with the artifact-card UI): chat text, and when
+    /// an artifact is attached, its body below a plain divider. Falls back
+    /// to the raw output when parsing produced no structure.
+    var resultDisplayMarkdown: String? {
+        guard let parsed = parsedResponse else { return generatedPrompt }
+        guard let artifact = parsed.artifact else {
+            return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
+        }
+        return parsed.chatText + "\n\n---\n\n" + artifact.body
+    }
+
+    /// The Copy button's payload per the §2 per-type table: `agent_prompt`
+    /// copies body + the client-assembled Attached Context; every other type
+    /// copies the body alone; a chat-only response copies the chat text.
+    /// Falls back to the raw output when parsing produced no structure.
+    var resultCopyPayload: String? {
+        guard let parsed = parsedResponse else { return generatedPrompt }
+        guard let artifact = parsed.artifact else {
+            return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
+        }
+        if artifact.type.includesContextInCopy,
+           let processed = processedRecording,
+           let context = AttachedContextBuilder.build(frames: processed.frames, clicks: processed.clicks) {
+            return artifact.body + "\n\n" + context
+        }
+        return artifact.body
     }
 
     /// User-driven dismissal of the failure pill. Same as cancel —

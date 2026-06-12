@@ -50,7 +50,6 @@ final class ManagedProxyClientTests: XCTestCase {
         let result = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: 12
         )
 
@@ -74,7 +73,6 @@ final class ManagedProxyClientTests: XCTestCase {
         let result = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: 12
         )
         XCTAssertEqual(result.creditsRemaining, 12)
@@ -95,7 +93,6 @@ final class ManagedProxyClientTests: XCTestCase {
         let result = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .explain,
             durationSeconds: nil
         )
 
@@ -124,7 +121,6 @@ final class ManagedProxyClientTests: XCTestCase {
         _ = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: nil,
             idempotencyKey: "REC-KEY-1"
         )
@@ -144,7 +140,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
 
         await assertThrows(.authFailed) {
-            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), mode: .instruct, durationSeconds: nil)
+            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
         }
     }
 
@@ -154,7 +150,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let (session, gen) = freshStubs(genStatus: 402, genBody: #"{"error":"out_of_credits"}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
         await assertThrows(.outOfCredits) {
-            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), mode: .instruct, durationSeconds: nil)
+            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
         }
     }
 
@@ -162,7 +158,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let (session, gen) = freshStubs(genStatus: 503, genBody: #"{"error":"openai_unavailable","retryable":true}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
         await assertThrows(.providerUnavailable) {
-            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), mode: .instruct, durationSeconds: nil)
+            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
         }
     }
 
@@ -170,7 +166,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let (session, gen) = freshStubs(genStatus: 403, genBody: #"{"error":"not_entitled"}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
         await assertThrows(.notEntitled) {
-            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), mode: .instruct, durationSeconds: nil)
+            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
         }
     }
 
@@ -186,7 +182,6 @@ final class ManagedProxyClientTests: XCTestCase {
         _ = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: 7,
             clicks: [ResolvedClick(seconds: 1.5, label: "Save")]
         )
@@ -198,9 +193,11 @@ final class ManagedProxyClientTests: XCTestCase {
         let body = try XCTUnwrap(req.httpBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
-        // Exactly mode + model + audio + frames + clicks + has_speech — nothing else.
-        XCTAssertEqual(Set(json.keys), ["mode", "model", "audio", "frames", "clicks", "has_speech"])
-        XCTAssertEqual(json["mode"] as? String, "instruct")
+        // Exactly model + audio + frames + clicks + has_speech — nothing else.
+        // Typed-artifact refactor: `mode` is gone from the wire; the client
+        // sends NOTHING that steers the server-owned prompt.
+        XCTAssertEqual(Set(json.keys), ["model", "audio", "frames", "clicks", "has_speech"])
+        XCTAssertFalse(json.keys.contains("mode"), "v1 mode field must not ride the wire")
         // Multi-model 6B: when no model is passed, the registry default
         // (the recommended model) rides as the explicit wire value.
         XCTAssertEqual(json["model"] as? String, ModelRegistry.defaultModelID)
@@ -241,7 +238,6 @@ final class ManagedProxyClientTests: XCTestCase {
         _ = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: 7,
             hasSpeech: false
         )
@@ -262,7 +258,6 @@ final class ManagedProxyClientTests: XCTestCase {
         _ = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: frames(),
-            mode: .instruct,
             durationSeconds: 7,
             model: "claude-opus-4-7"
         )

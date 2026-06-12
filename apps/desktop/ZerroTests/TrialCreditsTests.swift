@@ -572,7 +572,6 @@ final class TrialProxyRoutingTests: XCTestCase {
         let result = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: [ExtractedFrame(url: ManagedFixtures.tempFile(), timestamp: .zero, index: 0)],
-            mode: .instruct,
             durationSeconds: 5,
             tokenProvider: trial
         )
@@ -617,7 +616,6 @@ final class TrialProxyRoutingTests: XCTestCase {
         let result = try await proxy.generate(
             audioURL: ManagedFixtures.tempFile(),
             frames: [ExtractedFrame(url: ManagedFixtures.tempFile(), timestamp: .zero, index: 0)],
-            mode: .instruct,
             durationSeconds: 5,
             tokenProvider: trial
         )

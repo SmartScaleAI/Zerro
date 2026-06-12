@@ -13,7 +13,7 @@
 //  networking, no purchase logic — those land in Phases B–F and only ever
 //  WRITE these values; the gate only READS them.
 //
-//  Access level mirrors `RecordingState` / `OutputMode`: `public` even
+//  Access level mirrors `RecordingState`: `public` even
 //  though the app is a single module, so the type composes cleanly with
 //  other public surfaces and matches the heavily-documented enum style
 //  the codebase uses for its state machines.

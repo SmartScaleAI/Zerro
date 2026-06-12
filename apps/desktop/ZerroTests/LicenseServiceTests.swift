@@ -7,8 +7,7 @@
 //  Phase C — unit coverage for the BYOK license layer. The network is stubbed
 //  through `LicenseTransport` (canned JSON + status codes, no real requests)
 //  and the Keychain through `InMemoryKeychainSlot` (Phase B's fake), so these
-//  are deterministic value-in/value-out assertions in the spirit of
-//  `ModeSwitchDetectorTests`. Covers:
+//  are deterministic value-in/value-out assertions. Covers:
 //    • Activation success → Keychain written, instance ID saved, state .byok.
 //    • Activation at-limit → .atActivationLimit, Keychain untouched.
 //    • Validate valid:false (disabled) → license cleared → falls back to trial.
