@@ -15,6 +15,13 @@
 //  • JSON-on-disk was picked over SwiftData (schema-migration overhead
 //    we don't need yet) and UserDefaults (not sized for prompt bodies,
 //    plus it's a plist on disk anyway).
+//  • v2 (typed-artifact refactor Phase 2): entries gain optional
+//    chatText / artifactType / artifactBody / artifactTitle alongside the
+//    raw `prompt` (kept as the verbatim-fallback payload). Versioning is
+//    the FILE NAME — v2 reads/writes `recent_prompts_v2.json` and never
+//    opens the v1 file, so an old install simply starts with empty history
+//    (pre-launch, no migration by design; plan Phase 2 step 5). Title now
+//    prefers the model's artifact title, falling back to `deriveTitle`.
 //  • Writes are debounce-free — `add`/`delete`/`clear` write synchronously
 //    so a crash a millisecond after a successful recording doesn't lose
 //    the result. The on-disk file is small (≤50 entries) so the cost is
@@ -31,18 +38,42 @@ import os
 
 /// One persisted entry in the history. `title` is the user-facing summary
 /// in the submenu / Paste-last row / History list; `prompt` is the full
-/// generated body copied to the clipboard when the user clicks an entry.
+/// RAW generated body — kept verbatim as the fallback copy payload even in
+/// v2, where the parsed pieces ride alongside it.
+///
+/// v2 fields (typed-artifact refactor, all optional so a chat-only response
+/// simply carries nil): `chatText` is the parsed conversational text,
+/// `artifactType` the §2 wire string (`agent_prompt`, `message`, …, stored
+/// as a String so history survives enum changes), `artifactBody` the
+/// artifact's body, and `artifactTitle` the model-written card title.
 struct RecentPrompt: Identifiable, Codable, Equatable {
     var id: UUID
     var title: String
     var prompt: String
     var timestamp: Date
+    var chatText: String?
+    var artifactType: String?
+    var artifactBody: String?
+    var artifactTitle: String?
 
-    init(id: UUID = UUID(), title: String, prompt: String, timestamp: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        prompt: String,
+        timestamp: Date = Date(),
+        chatText: String? = nil,
+        artifactType: String? = nil,
+        artifactBody: String? = nil,
+        artifactTitle: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.prompt = prompt
         self.timestamp = timestamp
+        self.chatText = chatText
+        self.artifactType = artifactType
+        self.artifactBody = artifactBody
+        self.artifactTitle = artifactTitle
     }
 }
 
@@ -96,17 +127,43 @@ final class RecentPromptStore {
 
     // MARK: API
 
-    /// Inserts a new prompt at the top of the list. Title is derived from
-    /// the first non-empty line of `prompt`, trimmed to a sensible length.
-    /// Older entries beyond `maxEntries` fall off the end. Idempotent on
-    /// duplicate `prompt` bodies — re-recording the same exact prompt
-    /// bumps the existing entry's timestamp rather than creating two
-    /// near-identical rows.
-    func add(prompt: String) {
+    /// Inserts a new prompt at the top of the list. Title prefers the
+    /// model's artifact title (v2) and falls back to deriving one from the
+    /// first non-empty line of `prompt`. Older entries beyond `maxEntries`
+    /// fall off the end. Idempotent on duplicate `prompt` bodies —
+    /// re-recording the same exact prompt bumps the existing entry's
+    /// timestamp rather than creating two near-identical rows.
+    ///
+    /// The v2 parameters default to nil so every pre-refactor call site
+    /// (and any raw/unparseable result in Phase 4+) keeps working unchanged.
+    func add(
+        prompt: String,
+        chatText: String? = nil,
+        artifactType: String? = nil,
+        artifactBody: String? = nil,
+        artifactTitle: String? = nil
+    ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let title = Self.deriveTitle(from: trimmed)
-        let entry = RecentPrompt(title: title, prompt: trimmed)
+        let modelTitle = artifactTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title: String
+        if let modelTitle, !modelTitle.isEmpty {
+            // The contract caps titles at 80 chars; deriveTitle's capping
+            // also covers an over-long one that slipped past a warning.
+            title = modelTitle.count > Self.maxTitleLength
+                ? Self.deriveTitle(from: modelTitle)
+                : modelTitle
+        } else {
+            title = Self.deriveTitle(from: trimmed)
+        }
+        let entry = RecentPrompt(
+            title: title,
+            prompt: trimmed,
+            chatText: chatText,
+            artifactType: artifactType,
+            artifactBody: artifactBody,
+            artifactTitle: modelTitle.flatMap { $0.isEmpty ? nil : $0 }
+        )
 
         // Dedup against the most recent entry only — re-runs of the same
         // recording are common (Retry path), surprise duplicates further
@@ -221,10 +278,10 @@ final class RecentPromptStore {
             // (history just won't survive a relaunch).
             Log.history.error("applicationSupport unreachable: \(error.localizedDescription, privacy: .private)")
             return FileManager.default.temporaryDirectory
-                .appendingPathComponent("recent_prompts.json")
+                .appendingPathComponent("recent_prompts_v2.json")
         }
         return base
             .appendingPathComponent("Zerro", isDirectory: true)
-            .appendingPathComponent("recent_prompts.json")
+            .appendingPathComponent("recent_prompts_v2.json")
     }
 }
