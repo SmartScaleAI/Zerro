@@ -267,7 +267,7 @@ private struct DetailPane: View {
             Button(action: onCopy) {
                 HStack(spacing: 4) {
                     Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                    // §2 per-type button label ("Copy to Agent", "Copy
+                    // §2 per-type button label ("Copy Prompt", "Copy
                     // draft", …); plain "Copy" for chat-only/pre-v2 rows.
                     Text(didCopy ? "Copied" : (entry.resolvedArtifactType?.buttonLabel ?? "Copy"))
                 }

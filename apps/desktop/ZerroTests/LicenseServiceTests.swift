@@ -65,6 +65,29 @@ final class LicenseServiceTests: XCTestCase {
         )
     }
 
+    /// Hermetic `EntitlementStore` dependencies. The store's defaults reach
+    /// for the REAL machine otherwise, which lets developer state leak into
+    /// these tests (observed: a live local-backend dev subscription flipped
+    /// both EntitlementStore tests here):
+    ///   • `defaults: .standard` carries the app's cached Managed snapshot;
+    ///   • the real product-kind Keychain slot carries `kind=managed`;
+    ///   • a real-transport `SessionTokenManager` activates the DEBUG
+    ///     `ZERRO_DEV_LICENSE_KEY` scheme fallback and probes the local
+    ///     backend during `activate()` (the E9 gate only protects stubbed
+    ///     transports).
+    private func makeHermeticStore(
+        licenseService: LicenseService,
+        keySlot: InMemoryKeychainSlot,
+        sessionTransport: StubManagedTransport = StubManagedTransport()
+    ) -> EntitlementStore {
+        EntitlementStore(
+            licenseService: licenseService,
+            sessionTokens: SessionTokenManager(licenseKeySlot: keySlot, transport: sessionTransport),
+            productKindSlot: InMemoryKeychainSlot(),
+            defaults: UserDefaults(suiteName: "LicenseServiceTests-\(UUID().uuidString)")!
+        )
+    }
+
     // MARK: - Activation success
 
     func testActivationSuccessWritesKeychainAndSavesInstanceID() async throws {
@@ -119,8 +142,17 @@ final class LicenseServiceTests: XCTestCase {
         let instanceSlot = InMemoryKeychainSlot()
         let service = makeService(transport: transport, keySlot: keySlot, instanceSlot: instanceSlot)
 
+        // The activation probe asks /session whether the key is a Managed
+        // subscription; 403 (not in the mirror) is the BYOK classification.
+        let sessionTransport = StubManagedTransport()
+        sessionTransport.enqueue(#"{"error":"not_entitled"}"#, status: 403)
+
         // Start in trial; activation should flip the store to .byok.
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(
+            licenseService: service,
+            keySlot: keySlot,
+            sessionTransport: sessionTransport
+        )
         if case .trial = store.state {} else {
             XCTFail("expected initial .trial, got \(store.state)")
         }
@@ -194,7 +226,7 @@ final class LicenseServiceTests: XCTestCase {
         )
 
         // A present license → store starts .byok.
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -225,7 +257,7 @@ final class LicenseServiceTests: XCTestCase {
             lastValidatedSlot: lastValidatedSlot
         )
 
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -257,7 +289,7 @@ final class LicenseServiceTests: XCTestCase {
             clock: { now }
         )
 
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok)
 
         await store.revalidateLicenseIfNeeded()
@@ -476,7 +508,7 @@ final class LicenseServiceTests: XCTestCase {
         XCTAssertLessThan(windowEnd, Date(), "fixture sanity: window must be in the past")
 
         // …yet validation is a plain non-revoking success…
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok)
         await store.revalidateLicenseIfNeeded()
         XCTAssertEqual(keySlot.readResult(), .found("KEY-LAPSED-WINDOW"), "out-of-window must never clear the license")
@@ -504,7 +536,7 @@ final class LicenseServiceTests: XCTestCase {
             lastValidatedSlot: lastValidatedSlot
         )
 
-        let store = EntitlementStore(licenseService: service)
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok)
 
         try await store.deactivateThisDevice()

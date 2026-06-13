@@ -7,35 +7,25 @@
 //  Phase 2 of the modes → typed-artifact refactor: assembles the §2
 //  "Attached Context" block CLIENT-side from what the recording already
 //  produced — per-frame OCR text and resolved clicks. No transcript, no
-//  server involvement (locked decision). ADDITIVE in this phase; Phase 4/5
-//  wire it into the copy payload (appended on `agent_prompt` copy) and the
-//  artifact card's context drawer.
+//  server involvement (locked decision).
 //
-//  §2 template:
+//  The §2 markdown template below survives ONLY as model input — the
+//  convert endpoint receives the block verbatim. Revision 2026-06-12: the
+//  artifact card's context drawer was removed, so the block is never
+//  rendered, and no copy payload includes it for any type — it is
+//  internal-only.
 //
 //      ## Attached Context
 //      **Screen text (OCR excerpts):** <deduped, length-capped OCR>
 //      **Clicks:** clicked "Sign in", clicked "Apply", …
 //
 //  Rules (§2): dedupe repeated OCR lines across frames, cap the assembled
-//  block at ~4,000 chars, omit either section when it is empty, and return
-//  nil when both are — the drawer simply doesn't render.
+//  block at ~4,000 chars trimming at WHOLE lines (never a dangling
+//  markdown fragment), omit either section when it is empty, and return
+//  nil when both are.
 //
 
 import Foundation
-
-// MARK: - AttachedContext
-
-/// The artifact card's context-drawer payload (Phase 5): a one-line
-/// `summary` for the collapsed row ("screen text, 4 clicks") and the
-/// assembled §2 `block` it expands to — the same block `agent_prompt`
-/// copies append. Built once per result by `AttachedContextBuilder.make`;
-/// nil when the recording produced nothing to attach (the row doesn't
-/// render).
-struct AttachedContext: Equatable, Sendable {
-    let summary: String
-    let block: String
-}
 
 /// Pure assembly of the Attached Context block. Stateless string work only.
 enum AttachedContextBuilder {
@@ -51,63 +41,49 @@ enum AttachedContextBuilder {
 
     /// Builds the context block, or nil when there is nothing to attach.
     nonisolated static func build(frames: [ExtractedFrame], clicks: [ResolvedClick]) -> String? {
-        let ocrLines = dedupedOCRLines(from: frames)
-        let clickPhrases = clicks
+        let allOCR = dedupedOCRLines(from: frames)
+        let clickLabels = clicks
             .map { $0.label.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .map { "clicked \"\($0)\"" }
+        let clickPhrases = clickLabels.map { "clicked \"\($0)\"" }
 
-        guard !ocrLines.isEmpty || !clickPhrases.isEmpty else { return nil }
+        guard !allOCR.isEmpty || !clickLabels.isEmpty else { return nil }
 
         let clicksSection = clickPhrases.isEmpty ? nil : "\(clicksLabel) \(clickPhrases.joined(separator: ", "))"
 
         // Give the OCR excerpt whatever budget remains after the fixed
         // parts, so the assembled block lands under the cap.
         var ocrSection: String?
-        if !ocrLines.isEmpty {
+        if !allOCR.isEmpty {
             var fixedLength = header.count + 1 + ocrLabel.count + 1 // header + \n + label + space
             if let clicksSection {
                 fixedLength += 1 + clicksSection.count // \n + clicks line
             }
             let budget = max(0, maxLength - fixedLength)
-            ocrSection = "\(ocrLabel) \(cappedExcerpt(ocrLines, budget: budget))"
+            let capped = cappedLines(allOCR, budget: budget)
+            if !capped.kept.isEmpty {
+                let excerpt = capped.kept.joined(separator: "\n") + (capped.truncated ? "\u{2026}" : "")
+                ocrSection = "\(ocrLabel) \(excerpt)"
+            }
         }
 
-        let block = [header, ocrSection, clicksSection]
+        var block = [header, ocrSection, clicksSection]
             .compactMap { $0 }
             .joined(separator: "\n")
 
         // Defensive final cap — only reachable when the click line alone is
-        // enormous (hundreds of long labels). Grapheme-safe via prefix.
-        guard block.count > maxLength else { return block }
-        return String(block.prefix(maxLength - 1)) + "\u{2026}"
-    }
+        // enormous (hundreds of long labels). Trim at the last whole LINE
+        // inside the cap so no dangling markdown fragment is ever emitted.
+        if block.count > maxLength {
+            let prefix = String(block.prefix(maxLength - 1))
+            if let lastBreak = prefix.lastIndex(of: "\n") {
+                block = String(prefix[..<lastBreak]) + "\n\u{2026}"
+            } else {
+                block = prefix + "\u{2026}"
+            }
+        }
 
-    /// Builds the drawer payload — block plus its collapsed-row summary —
-    /// or nil when there is nothing to attach. The two share `build`'s
-    /// emptiness rules by construction, so a non-nil payload always has
-    /// both a renderable row and an expandable block.
-    nonisolated static func make(frames: [ExtractedFrame], clicks: [ResolvedClick]) -> AttachedContext? {
-        guard let block = build(frames: frames, clicks: clicks),
-              let summary = summary(frames: frames, clicks: clicks) else { return nil }
-        return AttachedContext(summary: summary, block: block)
-    }
-
-    /// One-line description of what the drawer holds — "screen text,
-    /// 4 clicks", "screen text", "1 click". Mirrors `build`'s emptiness
-    /// rules (blank OCR lines and whitespace-only click labels don't
-    /// count), so summary and block are nil together.
-    nonisolated static func summary(frames: [ExtractedFrame], clicks: [ResolvedClick]) -> String? {
-        let hasScreenText = !dedupedOCRLines(from: frames).isEmpty
-        let clickCount = clicks
-            .map { $0.label.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .count
-
-        var parts: [String] = []
-        if hasScreenText { parts.append("screen text") }
-        if clickCount > 0 { parts.append(clickCount == 1 ? "1 click" : "\(clickCount) clicks") }
-        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+        return block
     }
 
     // MARK: OCR assembly
@@ -130,10 +106,11 @@ enum AttachedContextBuilder {
         return result
     }
 
-    /// Joins lines up to `budget` characters, truncating at a line boundary
-    /// where possible. A budget too small for even the first line degrades
-    /// to a grapheme-safe character cut with an ellipsis.
-    private nonisolated static func cappedExcerpt(_ lines: [String], budget: Int) -> String {
+    /// Keeps whole lines up to `budget` characters — never a mid-line cut,
+    /// so a truncation can't leave a dangling markdown fragment. Trailing
+    /// kept lines with no alphanumeric content (stray "*", "-", "—" OCR
+    /// noise at the cut point) are dropped from the truncated tail.
+    private nonisolated static func cappedLines(_ lines: [String], budget: Int) -> (kept: [String], truncated: Bool) {
         var kept: [String] = []
         var length = 0
         for line in lines {
@@ -142,14 +119,13 @@ enum AttachedContextBuilder {
             kept.append(line)
             length += cost
         }
-        if kept.isEmpty, let first = lines.first {
-            // Not even one whole line fits — cut within the line.
-            guard budget > 1 else { return "" }
-            return String(first.prefix(budget - 1)) + "\u{2026}"
+        var truncated = kept.count < lines.count
+        if truncated {
+            while let last = kept.last, last.rangeOfCharacter(from: .alphanumerics) == nil {
+                kept.removeLast()
+                truncated = true
+            }
         }
-        if kept.count < lines.count {
-            return kept.joined(separator: "\n") + "\u{2026}"
-        }
-        return kept.joined(separator: "\n")
+        return (kept, truncated)
     }
 }

@@ -353,13 +353,14 @@ final class AppState {
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
     var parsedResponse: ParsedResponse?
 
-    /// Phase 5: the Attached Context drawer payload for the result currently
-    /// shown — summary line + assembled block, built ONCE from the processed
-    /// recording when the result is accepted (the recording's frames/clicks
-    /// never change after that). The artifact card's drawer renders it and
-    /// `resultCopyPayload` appends its block on `agent_prompt` copies. Reset
-    /// wherever `parsedResponse` is.
-    var attachedContext: AttachedContext?
+    /// The assembled §2 Attached Context block for the result currently
+    /// shown, built ONCE from the processed recording when the result is
+    /// accepted (the recording's frames/clicks never change after that).
+    /// Internal-only (revision 2026-06-12: the card's context drawer was
+    /// removed): never rendered and never part of any copy payload — it
+    /// survives solely as the convert request's model input. Reset wherever
+    /// `parsedResponse` is.
+    var attachedContextBlock: String?
 
     /// True when the result was generated from the screen alone because
     /// Whisper returned no usable narration (silent recording / muted
@@ -601,7 +602,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         parsedResponse = nil
-        attachedContext = nil
+        attachedContextBlock = nil
         conversionTask?.cancel()
         conversionTask = nil
         conversionStatus = .idle
@@ -774,7 +775,7 @@ final class AppState {
         processedRecording = nil
         generatedPrompt = nil
         parsedResponse = nil
-        attachedContext = nil
+        attachedContextBlock = nil
         conversionTask?.cancel()
         conversionTask = nil
         conversionStatus = .idle
@@ -1603,8 +1604,8 @@ final class AppState {
         let parsed = ArtifactParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
         parsedResponse = parsed
-        attachedContext = processedRecording.flatMap {
-            AttachedContextBuilder.make(frames: $0.frames, clicks: $0.clicks)
+        attachedContextBlock = processedRecording.flatMap {
+            AttachedContextBuilder.build(frames: $0.frames, clicks: $0.clicks)
         }
         // Phase 5 (approved design): the result opens with the artifact card's
         // body visible — land in the expanded pill, not compact-with-"View".
@@ -1638,37 +1639,34 @@ final class AppState {
     }
 
     /// Everything the result pill renders, in display form (Phase 5): chat
-    /// text above the optional artifact card, plus the card's context-drawer
-    /// payload. Falls back to the raw output as chat text when parsing
-    /// produced no structure, so the pill always has something to show.
+    /// text above the optional artifact card. Falls back to the raw output
+    /// as chat text when parsing produced no structure, so the pill always
+    /// has something to show.
     var resultPresentation: ResultPresentation? {
         guard let parsed = parsedResponse else {
             return generatedPrompt.map {
-                ResultPresentation(chatText: $0, artifact: nil, context: nil)
+                ResultPresentation(chatText: $0, artifact: nil)
             }
         }
         guard let artifact = parsed.artifact else {
             let chat = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
-            return ResultPresentation(chatText: chat, artifact: nil, context: nil)
+            return ResultPresentation(chatText: chat, artifact: nil)
         }
         return ResultPresentation(
             chatText: parsed.chatText,
-            artifact: artifact,
-            context: attachedContext
+            artifact: artifact
         )
     }
 
-    /// The Copy button's payload per the §2 per-type table: `agent_prompt`
-    /// copies body + the client-assembled Attached Context; every other type
-    /// copies the body alone; a chat-only response copies the chat text.
-    /// Falls back to the raw output when parsing produced no structure.
+    /// The Copy button's payload per the §2 per-type table (revised
+    /// 2026-06-12): the artifact body alone for EVERY type — the Attached
+    /// Context is internal-only (convert model input) and is never copied. A chat-only
+    /// response copies the chat text. Falls back to the raw output when
+    /// parsing produced no structure.
     var resultCopyPayload: String? {
         guard let parsed = parsedResponse else { return generatedPrompt }
         guard let artifact = parsed.artifact else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
-        }
-        if artifact.type.includesContextInCopy, let context = attachedContext {
-            return artifact.body + "\n\n" + context.block
         }
         return artifact.body
     }
@@ -1707,7 +1705,7 @@ final class AppState {
         guard let parsed = parsedResponse else { return }
         let source = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
         guard !source.isEmpty else { return }
-        let context = attachedContext?.block
+        let context = attachedContextBlock
         let model = recordingModelID
             ?? preferences?.selectedModelID
             ?? ModelRegistry.defaultModelID

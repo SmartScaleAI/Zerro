@@ -82,8 +82,8 @@ struct PillView: View {
     var onRecoveryGenerate: () -> Void = {}
     var onRecoveryDiscard: () -> Void = {}
 
-    /// The parsed result the pill renders (Phase 5): chat text, optional
-    /// artifact card, optional Attached Context drawer. Threaded from
+    /// The parsed result the pill renders (Phase 5): chat text and the
+    /// optional artifact card. Threaded from
     /// AppState.resultPresentation via PillWindowController so the
     /// pure-renderer PillView doesn't need to know about AppState.
     /// `nil` falls back to a placeholder so previews and the brief
@@ -149,20 +149,23 @@ struct PillView: View {
             .shadow(color: .black.opacity(0), radius: 20, y: 8)
     }
 
-    /// All four capsule states (`.recording`, `.wrappingUp`, `.processing`,
-    /// `.resultCompact`) share one fixed width and height so size never
+    /// The recording-flow capsule states (`.recording`, `.wrappingUp`,
+    /// `.processing`) share one fixed width and height so size never
     /// changes between them — the only morph allowed inside the lock is
     /// content cross-fades and the chrome's corner radius. Sized to
     /// `.recording`'s natural dimensions (the widest+tallest capsule):
     /// dot + timer + waveform + Cancel + Stop. Narrower states absorb
     /// the difference via internal Spacers as breathing room.
-    /// `.resultExpanded` is the one capsule-to-non-capsule morph allowed
-    /// and keeps its content-driven sizing.
+    /// `.resultCompact` hugs its content (check + title + View + X) like
+    /// the recovery capsule, capped at `capsuleWidth` inside
+    /// ResultPillContent so a long title truncates rather than growing the
+    /// pill past the locked footprint. `.resultExpanded` is the one
+    /// capsule-to-non-capsule morph and keeps its content-driven sizing.
     private var lockedCapsuleWidth: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact, .error:
+        case .recording, .wrappingUp, .processing, .error:
             return Self.capsuleWidth
-        case .resultExpanded, .confirmRecovery:
+        case .resultCompact, .resultExpanded, .confirmRecovery:
             return nil
         }
     }
@@ -182,7 +185,7 @@ struct PillView: View {
         }
     }
 
-    private static let capsuleWidth: CGFloat = 392
+    fileprivate static let capsuleWidth: CGFloat = 392
     fileprivate static let capsuleHeight: CGFloat = 50
 
     @ViewBuilder
@@ -621,16 +624,18 @@ private struct ConfirmRecoveryPillContent: View {
 // Shared by `.resultCompact` (expanded == false) and `.resultExpanded`
 // (expanded == true).
 //
-// Compact keeps the Phase 2.75 capsule header unchanged: green check +
-// "Prompt ready" + hero Copy + View chevron + close X.
+// Compact keeps the Phase 2.75 capsule shape, titled by the result itself:
+// green check + the artifact's dynamic title ("Response ready" for
+// chat-only) + hero Copy + View chevron + close X.
 //
-// Expanded follows the Phase 5 approved design: a slim top strip (status +
-// charge line on the left, close X on the right — no Copy/Hide there),
-// then the chat text rendered directly on the chrome, then the artifact
-// card (ArtifactCardView), which owns the title row, the Hide chevron, the
-// Attached Context drawer, and the single per-type copy button. A
-// chat-only response renders no card at all — the strip keeps a Hide
-// toggle in that case so the pill can still collapse to compact.
+// Expanded follows the approved design: a MINIMAL top strip (just the
+// charge line, left, and the close X, right — no check, no label; the
+// card's own check + title is the success signal), then the chat text as
+// prose on the chrome, then the layered artifact card (ArtifactCardView),
+// which owns the title row, the Hide chevron,
+// and the single per-type copy button. A chat-only response renders no
+// card at all — the strip keeps a Hide toggle in that case so the pill can
+// still collapse to compact.
 
 private struct ResultPillContent: View {
     let expanded: Bool
@@ -667,53 +672,52 @@ private struct ResultPillContent: View {
     /// Phase 6 — starts (or retries) the conversion.
     let onConvert: () -> Void
 
-    /// Transient "Copied" confirmation. Flips true on tap, reverts after
-    /// `copyFeedbackDuration`. Local to this view — the clipboard write
-    /// itself lives in `onCopy`; this is purely the visual acknowledgement
-    /// the button previously lacked. Not persisted across the
-    /// compact↔expanded morph (each is a distinct ResultPillContent), which
-    /// is fine: the feedback is a sub-2s flash, not durable state.
-    @State private var didCopy = false
-    @State private var copyResetTask: Task<Void, Never>?
-
     /// Tracks hover on the dismiss button itself (not the whole pill)
     /// so the circular dark-gray background fills in only when the
     /// cursor is on the X. The divider + glyph stay visible at rest.
     @State private var isHoveringDismiss = false
 
-    /// How long the "Copied" confirmation stays up before reverting.
-    private static let copyFeedbackDuration: Duration = .seconds(1.6)
-
     var body: some View {
-        VStack(alignment: .center, spacing: 0) {
-            headerStrip
-                .zIndex(1)
+        Group {
             if expanded {
-                // Wrapper HStack with Spacers forces explicit centering
-                // of the 720pt body inside the 760pt VStack, giving
-                // 20pt of chrome on each side. (Relying on VStack's
-                // default `.center` alignment via `.frame(width: 720)`
-                // wasn't reliably producing the gutters in the running
-                // app.)
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    expandedBody
-                    Spacer(minLength: 0)
-                }
-                // Bottom gutter matching the 20pt side gutters so the
-                // chrome wraps the content on all sides — otherwise the
-                // card's dark fill runs flush to the pill's bottom edge.
-                .padding(.bottom, 20)
+                // UI revision 2: the card IS the expanded pill — no outer
+                // strip, no gutters. The chrome's rounded rect (drawn by
+                // PillView) is the card surface, so the compact ↔ expanded
+                // morph targets the card's own rounded rect directly.
+                ArtifactCardView(
+                    artifact: result.artifact,
+                    chatText: result.chatText,
+                    chargeLine: chargeLine,
+                    noNarration: noNarration,
+                    stoppedBySleep: stoppedBySleep,
+                    conversion: conversion,
+                    onCopy: onCopy,
+                    onCollapse: onToggleExpand,
+                    onDismiss: onDismiss,
+                    onConvert: onConvert
+                )
+                // Phase 6: a converted artifact arrives AFTER the response
+                // is already on screen — animate the body well in rather
+                // than popping. (For a normal generation the card renders
+                // complete from the first frame, so this is inert.)
+                .animation(.spring(response: 0.30, dampingFraction: 0.85), value: result)
+            } else {
+                headerStrip
+                    // The hosting view needs a DETERMINATE width: fixedSize
+                    // makes the strip's width its ideal (content hug; the
+                    // title is capped inside, so the whole capsule stays
+                    // within the locked 392 footprint). A negotiable
+                    // 0…392 range here (`.frame(maxWidth:)` on the chrome)
+                    // sent NSHostingView into an update-constraints loop
+                    // that AppKit aborts by crashing.
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
-        // In `.resultExpanded` we pin the VStack (chrome) to 760pt: the
-        // 720pt bodyContainer centers inside via the wrapper HStack
-        // above, leaving 20pt gutters. In `.resultCompact` width is
-        // owned by `PillView`'s locked frame and the header strip's
-        // internal Spacer absorbs the slack.
+        // In `.resultExpanded` the chrome is pinned to 760pt; compact width
+        // is the strip's fixed ideal above.
         .frame(width: expanded ? 760 : nil)
         .fixedSize(horizontal: false, vertical: expanded)
-        // Clip ONLY the expanded result content so the body-card fill
+        // Clip ONLY the expanded result content so the body-well fill
         // can't bleed past the chrome's rounded corners. The capsule
         // states don't need clipping (content fits inside the chrome
         // naturally), and clipping at the chrome level was producing
@@ -721,52 +725,50 @@ private struct ResultPillContent: View {
         .clipShape(RoundedRectangle(cornerRadius: expanded ? 18 : 28, style: .continuous))
     }
 
+    /// What the compact capsule calls this result: the artifact's dynamic
+    /// title when one is attached (truncating inside the locked 392 width),
+    /// a neutral "Response ready" for chat-only. The expanded layout never
+    /// shows a status label — the card's own check + title is the success
+    /// signal there.
+    private var compactLabel: String {
+        if let artifact = result.artifact {
+            return artifact.title.isEmpty ? "Untitled" : artifact.title
+        }
+        return "Response ready"
+    }
+
+    /// The COMPACT capsule's content (the expanded layout is
+    /// ArtifactCardView): check + result title, then View ⌄ + divider +
+    /// close X. Copying and the credits readout live ONLY in the expanded
+    /// card now, so the title gets the freed width and the capsule hugs
+    /// its content (fixed spacing, no Spacer — the maxWidth cap on the
+    /// chrome is what makes a long title truncate).
     private var headerStrip: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: VFSpacing.xxl) {
             HStack(spacing: VFSpacing.sm) {
-                // Title stays "Prompt ready" in both cases — the compact
-                // pill's locked 392 width has no room for a longer string
-                // alongside Copy + View. The amber indicator carries the
-                // "heads up" signal in compact; the expanded body spells
-                // it out in `noNarrationNote`.
+                // The amber indicator carries the "heads up" signal in
+                // compact; the expanded card spells it out in its
+                // no-narration note.
                 Image(systemName: noNarration ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 14))
                     .foregroundStyle(noNarration ? Color.vfWarningAmber : Color.vfSuccessGreen)
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Prompt ready")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .fixedSize()
-                    // Multi-model 6B: the exact server charge (D2), quiet and
-                    // secondary so the header keeps its compact footprint.
-                    if let chargeLine {
-                        Text(chargeLine)
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.vfTextSecondary)
-                            .fixedSize()
-                    }
-                }
+                Text(compactLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    // Title cap = the locked 392 capsule minus the fixed
+                    // chrome (paddings, check, spacings, View ⌄, divider,
+                    // X). Capping HERE keeps the strip's ideal width
+                    // determinate under the fixedSize above — short titles
+                    // hug, long ones truncate at the cap.
+                    .frame(maxWidth: 228, alignment: .leading)
             }
 
-            // Collapses to `xxl` when the pill is content-sized (compact);
-            // expands to fill when the pill has a fixed wide width (expanded).
-            Spacer(minLength: VFSpacing.xxl)
-
             HStack(spacing: VFSpacing.md) {
-                if !expanded {
-                    // Compact keeps its hero Copy + View affordances.
-                    copyButton
-                    expandToggle
-                    dismissDivider
-                } else if result.artifact == nil {
-                    // Expanded with a card: Copy and Hide moved INTO the
-                    // card (per the Phase 5 design) — the strip carries
-                    // only status + close. Chat-only has no card, so the
-                    // Hide toggle stays here or the pill couldn't collapse.
-                    expandToggle
-                    dismissDivider
-                }
+                expandToggle
+                dismissDivider
                 dismissButton
             }
         }
@@ -811,38 +813,6 @@ private struct ResultPillContent: View {
         .animation(.easeInOut(duration: 0.15), value: isHoveringDismiss)
     }
 
-    private var copyButton: some View {
-        Button(action: handleCopy) {
-            HStack(spacing: 5) {
-                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(didCopy ? "Copied" : "Copy")
-                    .font(.system(size: 13, weight: .semibold))
-                    .fixedSize()
-            }
-            .foregroundStyle(didCopy ? Color.white : Color.vfOnBrand)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(didCopy ? Color.vfSuccessGreen : Color.vfBrandAccent, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .animation(.easeInOut(duration: 0.15), value: didCopy)
-    }
-
-    private func handleCopy() {
-        onCopy()
-        didCopy = true
-        // Cancel any in-flight reset so a second tap restarts the full
-        // window rather than reverting early from the prior tap's timer.
-        copyResetTask?.cancel()
-        copyResetTask = Task { @MainActor in
-            try? await Task.sleep(for: Self.copyFeedbackDuration)
-            guard !Task.isCancelled else { return }
-            didCopy = false
-        }
-    }
-
     private var expandToggle: some View {
         Button(action: onToggleExpand) {
             HStack(spacing: 4) {
@@ -859,134 +829,6 @@ private struct ResultPillContent: View {
         .fixedSize()
     }
 
-    // MARK: - Expanded body
-
-    /// The Phase 5 expanded layout: notes, then chat text rendered directly
-    /// on the chrome, then the artifact card. A chat-only response simply
-    /// has no card — the pill is the chat text, which must read as
-    /// intentional, not broken (hence no empty card stub, no divider).
-    private var expandedBody: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.lg) {
-            if stoppedBySleep {
-                stoppedBySleepNote
-            }
-            if noNarration {
-                noNarrationNote
-            }
-            if !result.chatText.isEmpty {
-                // Hugs short chat and scrolls long chat. With a card below,
-                // the cap is tight (chat is the intro, the card is the
-                // payload); chat-only gets the room the old body had.
-                HeightCappedScroll(maxHeight: result.artifact == nil ? 420 : 160) {
-                    HighlightedMarkdownView(markdown: result.chatText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            if let artifact = result.artifact {
-                ArtifactCardView(
-                    artifact: artifact,
-                    context: result.context,
-                    onCopy: onCopy,
-                    onCollapse: onToggleExpand
-                )
-                // Phase 6: a converted artifact arrives AFTER the response is
-                // already on screen — slide the card in under the chat text
-                // rather than popping. (For a normal generation the card is
-                // present from the first render, so the transition is inert.)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            if result.artifact == nil, conversion != .hidden {
-                conversionRow
-            }
-        }
-        .frame(width: 720, alignment: .leading)
-        .animation(.spring(response: 0.30, dampingFraction: 0.85), value: result)
-    }
-
-    /// Phase 6 — the ghost "✎ Write agent prompt" affordance on artifact-less
-    /// responses: a quiet stroked capsule (no fill — deliberately NOT the hero
-    /// copy style), an inline spinner while the conversion runs, and an
-    /// unobtrusive one-line retry note on failure. The existing chat text is
-    /// never touched by any of these states.
-    private var conversionRow: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.sm) {
-            if conversion == .failed {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.vfWarningAmber)
-                    Text("Couldn\u{2019}t write the prompt \u{2014} try again")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .fixedSize()
-                }
-            }
-            Button(action: onConvert) {
-                HStack(spacing: 6) {
-                    if conversion == .running {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(Color.vfTextSecondary)
-                        Text("Writing prompt\u{2026}")
-                            .fixedSize()
-                    } else {
-                        Image(systemName: "pencil.line")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("Write agent prompt")
-                            .fixedSize()
-                    }
-                }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.vfTextSecondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
-            .disabled(conversion == .running)
-        }
-    }
-
-    /// Amber heads-up shown above the prompt body when no usable
-    /// narration was detected. Explains why the prompt reads generically
-    /// (generated from the screen alone) without framing it as a failure
-    /// — the prompt is real and copyable. Expanded-only: the compact pill
-    /// has no vertical room, and the amber header icon already signals it.
-    private var noNarrationNote: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfWarningAmber)
-            Text("No narration detected \u{2014} this prompt was generated from your screen alone. For a sharper result, record again and describe what you want.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// M2 — neutral heads-up shown above the prompt body when this result was
-    /// recovered at launch from a recording a system sleep interrupted.
-    /// Explains why a result appeared on its own without framing it as a
-    /// failure: the prompt below is complete and copyable, built from what was
-    /// captured before the sleep. Expanded-only, mirroring `noNarrationNote`.
-    private var stoppedBySleepNote: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "moon.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-            Text("Recovered from a recording that stopped when your Mac went to sleep \u{2014} this prompt was built from what you captured before then.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     /// Fallback result when none has been threaded in. Used by SwiftUI
     /// previews and for the brief transition window between state flipping
     /// to .done and the result view rendering. Production call sites always
@@ -999,17 +841,6 @@ private struct ResultPillContent: View {
             rawType: "agent_prompt",
             title: "Rework the Pulse login screen layout",
             body: placeholderMarkdown
-        ),
-        context: AttachedContext(
-            summary: "screen text, 3 clicks",
-            block: """
-            ## Attached Context
-            **Screen text (OCR excerpts):** Sign in
-            Email
-            Password
-            Forgot password?
-            **Clicks:** clicked "Sign in", clicked "Forgot password?", clicked "SSO"
-            """
         )
     )
 
@@ -1076,8 +907,7 @@ private struct ResultPillContent: View {
                 rawType: "snippet",
                 title: "Reserve space for the avatar image",
                 body: ".avatar {\n  width: 40px;\n  height: 40px;\n  aspect-ratio: 1;\n  object-fit: cover;\n}"
-            ),
-            context: AttachedContext(summary: "screen text", block: "## Attached Context\n**Screen text (OCR excerpts):** Profile\nSettings")
+            )
         )
     )
     .padding(40)
@@ -1091,8 +921,7 @@ private struct ResultPillContent: View {
             chatText: "The error in your terminal is a stale lockfile \u{2014} "
                 + "running `npm install` again after deleting `package-lock.json` clears it. "
                 + "Nothing on screen needs a code change, so there\u{2019}s nothing to hand to an agent here.",
-            artifact: nil,
-            context: nil
+            artifact: nil
         )
     )
     .padding(40)
@@ -1110,8 +939,7 @@ private struct ResultPillContent: View {
         state: .resultExpanded,
         result: ResultPresentation(
             chatText: "That hydration error comes from rendering `Date.now()` during SSR \u{2014} the server and client markup disagree.",
-            artifact: nil,
-            context: nil
+            artifact: nil
         ),
         conversion: .available
     )
@@ -1124,8 +952,7 @@ private struct ResultPillContent: View {
         state: .resultExpanded,
         result: ResultPresentation(
             chatText: "That hydration error comes from rendering `Date.now()` during SSR.",
-            artifact: nil,
-            context: nil
+            artifact: nil
         ),
         conversion: .failed
     )

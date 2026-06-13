@@ -235,27 +235,21 @@ struct ZerroApp: App {
                 .environment(recentPrompts)
                 .environmentObject(updater)
         } label: {
-            // OnboardingOpenerRegistrar is a zero-size sibling whose
-            // only job is to capture SwiftUI's `openWindow` environment
-            // action into AppDelegate.requestOpenOnboarding *as soon
-            // as the app launches*. The MenuBarExtra label is the only
-            // always-mounted View in this app — Window scenes only
-            // mount their content when the window is on screen, and
-            // MenuBarExtra's dropdown content only mounts when opened.
-            // Without this, the hotkey can't re-open onboarding once
-            // the user has dismissed it, because the closure that was
-            // previously captured in OnboardingWindowView.onAppear is
-            // never reset on later launches when `hasCompletedOnboarding`
-            // suppresses auto-presentation.
-            OnboardingOpenerRegistrar()
-            // Phase A: same registrar pattern for the paywall window, so
-            // the hotkey gate can bring it forward in this .accessory-policy
-            // app once the user has dismissed it (or before it's ever shown).
-            PaywallOpenerRegistrar()
-            // Phase F: same pattern for the trial email-capture window, opened by
-            // AppState at the first server-funded generation.
-            TrialEmailOpenerRegistrar()
+            // macOS 26.5 (Tahoe) SDK fix: the MenuBarExtra label must be a
+            // SINGLE primary view. The previous multi-child label (three
+            // zero-size opener registrars as siblings of the icon) caused
+            // SwiftUI under the 26.5 SDK to fail to materialize the
+            // MenuBarExtra scene — the status item neither rendered its icon
+            // nor anchored the process, so the LSUIElement app terminated at
+            // launch. The icon is now the sole label child; the openWindow
+            // registrars ride along as zero-size `.background` content (still
+            // always-mounted, so their `.onAppear` capture of `openWindow`
+            // into the AppDelegate fires exactly as before — see each
+            // registrar's onAppear), without making the label a composite.
             MenuBarIconView(isRecording: appState.isRecordingActive)
+                .background(OnboardingOpenerRegistrar())
+                .background(PaywallOpenerRegistrar())
+                .background(TrialEmailOpenerRegistrar())
         }
         .menuBarExtraStyle(.window)
 

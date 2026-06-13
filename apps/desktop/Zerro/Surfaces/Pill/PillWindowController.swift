@@ -34,8 +34,7 @@ final class PillViewModel {
 
     /// Phase 5 — called by the host view whenever the SwiftUI content's
     /// size changes OUTSIDE a state morph: the expanded result's content
-    /// re-measures itself (HeightCappedScroll) and the Attached Context
-    /// drawer expands/collapses, none of which pass through
+    /// re-measures itself (HeightCappedScroll), which doesn't pass through
     /// `update(pillState:)`. The controller re-fits the window in response;
     /// it no-ops when the fitting size already matches the last target, so
     /// the per-frame geometry churn DURING a morph animation never fights
@@ -53,7 +52,7 @@ final class PillWindowController {
 
     /// The size `positionAtTopCenter` last fit the window to. Lets
     /// `contentSizeDidChange` distinguish a REAL content-size change (a
-    /// HeightCappedScroll measurement landing, the context drawer toggling)
+    /// HeightCappedScroll measurement landing)
     /// from the animated in-between sizes a morph reports every frame —
     /// `fittingSize` reflects the final layout, so during a morph it equals
     /// this target and the handler no-ops.
@@ -62,7 +61,16 @@ final class PillWindowController {
     init(appState: AppState) {
         self.appState = appState
         viewModel.onContentSizeChanged = { [weak self] in
-            self?.contentSizeDidChange()
+            // The geometry callback fires DURING the hosting view's SwiftUI
+            // layout pass. Re-entering AppKit layout from inside it
+            // (fittingSize / layoutSubtreeIfNeeded in the handler) is
+            // illegal — AppKit logs "NSHostingView is being laid out
+            // reentrantly" and SKIPS the pass, which is how the morph could
+            // observe a degenerate 0×0 fitting size in the first place.
+            // Defer one runloop turn so the re-fit always runs against a
+            // finished layout; `lastTargetSize` dedupes the extra calls a
+            // single animation frame can enqueue.
+            DispatchQueue.main.async { self?.contentSizeDidChange() }
         }
         startObservingAppState()
     }
@@ -146,7 +154,7 @@ final class PillWindowController {
     }
 
     /// Re-fits the window when the SwiftUI content changed size on its own
-    /// (drawer toggle, late scroll-height measurement) — changes that never
+    /// (a late scroll-height measurement) — changes that never
     /// pass through `update(pillState:)` and would otherwise clip against
     /// the stale window frame.
     private func contentSizeDidChange() {
@@ -198,6 +206,15 @@ final class PillWindowController {
         window = win
     }
 
+    /// Whether `fittingSize` describes a window frame the pill may actually
+    /// be driven to. SwiftUI can transiently report 0×0 mid-transition (the
+    /// hosting view's tree hasn't committed the morphed state yet); a frame
+    /// set from that value renders the pill invisible. Pure so the invariant
+    /// is unit-testable.
+    nonisolated static func isRenderableFitting(_ size: CGSize) -> Bool {
+        size.width >= 1 && size.height >= 1
+    }
+
     private func positionAtTopCenter(animated: Bool) {
         guard let window, let screen = NSScreen.main else { return }
         guard let hosting = window.contentView as? NSHostingView<PillHostView> else { return }
@@ -211,6 +228,14 @@ final class PillWindowController {
                // morph and left the pill x-shifted after the collapse.
                hosting.layoutSubtreeIfNeeded()
                let targetSize = hosting.fittingSize
+               // A mid-transition layout can report a DEGENERATE fitting size —
+               // observed as 0×0 during the .processing → .resultExpanded morph.
+               // Driving the frame there shrinks the pill into nothing, and if no
+               // later geometry event follows, it stays invisible (the launch-QA
+               // "pill disappears after stop" bug). Skip instead: the window keeps
+               // its last good frame, and the content-size observation re-fires
+               // with the settled size and re-fits.
+               guard Self.isRenderableFitting(targetSize) else { return }
                lastTargetSize = targetSize
                let visible = screen.visibleFrame
                let originX = visible.midX - targetSize.width / 2
@@ -293,7 +318,7 @@ private struct PillHostView: View {
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
             // Phase 5: the parsed result — chat text + optional artifact
-            // card + Attached Context drawer payload.
+            // card.
             result: appState.resultPresentation,
             // Phase 6: the "Write agent prompt" ghost button on artifact-less
             // results, mapped from AppState's conversion lifecycle.
@@ -309,7 +334,7 @@ private struct PillHostView: View {
             audioLevels: appState.audioLevels
         )
         // Phase 5: surface content-size changes that bypass the state
-        // machine (drawer toggle, HeightCappedScroll measurements) so the
+        // machine (HeightCappedScroll measurements) so the
         // controller can re-fit the window. The controller filters out the
         // per-frame churn a morph animation produces.
         .onGeometryChange(for: CGSize.self) { proxy in

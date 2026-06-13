@@ -23,14 +23,15 @@ import Foundation
 /// The five artifact types of the §2 output contract. Raw values are the
 /// exact wire strings the model emits in the fence's `type="…"` attribute.
 ///
-/// §2 per-type UI table (source of truth):
+/// §2 per-type UI table (source of truth; revised 2026-06-12 — copy is
+/// body-only for EVERY type, context is internal-only):
 ///
-///     | type         | Button label | Icon     | Body rendering        | Copy payload    | Context tag      |
-///     | agent_prompt | Copy to Agent| {}       | markdown, mono-leaning| body + context  | INCLUDED IN COPY |
-///     | message      | Copy draft   | envelope | prose                 | body only       | FOR REFERENCE    |
-///     | snippet      | Copy snippet | chevron  | monospace code        | body only (exact)| FOR REFERENCE   |
-///     | document     | Copy text    | doc      | prose                 | body only       | FOR REFERENCE    |
-///     | generic      | Copy         | doc      | markdown              | body only       | FOR REFERENCE    |
+///     | type         | Button label | Icon     | Body rendering        | Copy payload     |
+///     | agent_prompt | Copy Prompt  | {}       | markdown, mono-leaning| body only        |
+///     | message      | Copy draft   | envelope | prose                 | body only        |
+///     | snippet      | Copy snippet | chevron  | monospace code        | body only (exact)|
+///     | document     | Copy text    | doc      | prose                 | body only        |
+///     | generic      | Copy         | doc      | markdown              | body only        |
 enum ArtifactType: String, Codable, CaseIterable, Equatable, Sendable {
     case agentPrompt = "agent_prompt"
     case message
@@ -41,7 +42,7 @@ enum ArtifactType: String, Codable, CaseIterable, Equatable, Sendable {
     /// Primary copy-button label on the artifact card (and history rows).
     var buttonLabel: String {
         switch self {
-        case .agentPrompt: "Copy to Agent"
+        case .agentPrompt: "Copy Prompt"
         case .message: "Copy draft"
         case .snippet: "Copy snippet"
         case .document: "Copy text"
@@ -59,14 +60,6 @@ enum ArtifactType: String, Codable, CaseIterable, Equatable, Sendable {
         case .snippet: "chevron.left.forwardslash.chevron.right"
         case .document, .generic: "doc.text"
         }
-    }
-
-    /// Whether the copy payload appends the client-assembled Attached
-    /// Context block (`AttachedContextBuilder`) after the body. Only
-    /// `agent_prompt` copies context ("INCLUDED IN COPY"); every other type
-    /// shows it "FOR REFERENCE" in the drawer and copies the body alone.
-    var includesContextInCopy: Bool {
-        self == .agentPrompt
     }
 
     /// Whether the card body renders in a monospace font. Only `snippet` is

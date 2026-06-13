@@ -136,62 +136,13 @@ final class AttachedContextBuilderTests: XCTestCase {
         XCTAssertLessThanOrEqual(block.count, AttachedContextBuilder.maxLength)
     }
 
-    // MARK: Summary (Phase 5 drawer row)
-
-    func testSummaryListsScreenTextAndPluralClicks() {
-        let summary = AttachedContextBuilder.summary(
-            frames: [frame(0, ocr: "Checkout")],
-            clicks: [
-                ResolvedClick(seconds: 1.0, label: "Apply"),
-                ResolvedClick(seconds: 2.0, label: "Pay"),
-            ]
-        )
-        XCTAssertEqual(summary, "screen text, 2 clicks")
-    }
-
-    func testSummarySingularClick() {
-        XCTAssertEqual(
-            AttachedContextBuilder.summary(
-                frames: [],
-                clicks: [ResolvedClick(seconds: 1.0, label: "Apply")]
-            ),
-            "1 click"
-        )
-    }
-
-    func testSummaryScreenTextOnly() {
-        XCTAssertEqual(
-            AttachedContextBuilder.summary(frames: [frame(0, ocr: "Checkout")], clicks: []),
-            "screen text"
-        )
-    }
-
-    func testSummaryMirrorsBuildEmptinessRules() {
+    func testWhitespaceOnlyInputsReturnNil() {
         // Blank OCR lines and whitespace-only click labels count for
-        // neither build nor summary — the two are nil together, so the
-        // drawer row can never render with nothing behind it.
-        XCTAssertNil(AttachedContextBuilder.summary(
+        // nothing — both sections empty → nil, so the convert request
+        // never carries an empty context block.
+        XCTAssertNil(AttachedContextBuilder.build(
             frames: [frame(0, ocr: "   \n  ")],
             clicks: [ResolvedClick(seconds: 1.0, label: "  ")]
         ))
-        XCTAssertNil(AttachedContextBuilder.make(
-            frames: [frame(0, ocr: "   \n  ")],
-            clicks: [ResolvedClick(seconds: 1.0, label: "  ")]
-        ))
-    }
-
-    func testMakePairsSummaryWithBlock() throws {
-        let context = try XCTUnwrap(AttachedContextBuilder.make(
-            frames: [frame(0, ocr: "Sign in")],
-            clicks: [ResolvedClick(seconds: 1.0, label: "Sign in")]
-        ))
-        XCTAssertEqual(context.summary, "screen text, 1 click")
-        XCTAssertEqual(
-            context.block,
-            AttachedContextBuilder.build(
-                frames: [frame(0, ocr: "Sign in")],
-                clicks: [ResolvedClick(seconds: 1.0, label: "Sign in")]
-            )
-        )
     }
 }
