@@ -65,17 +65,20 @@ jobs:
           echo "Releasing $MARKETING (build $BUILD)"
 
       # ----------------------------------------------------------------------
-      # Select the Xcode toolchain. Pinned to 26.4.x rather than "newest":
-      # the runner image now also ships Xcode 26.5 (Swift 6.3.2), whose
-      # optimizer crashes building the app in Release (see step below).
+      # Select the Xcode toolchain. Pinned to 26.4.x to keep the build toolchain
+      # aligned with the macOS 26.4 deployment target, not to dodge a compiler
+      # bug.
+      #
+      # NOTE: the SubmenuFlyout.swift EarlyPerfInliner optimizer crash is NOT a
+      # 26.5-only regression — it reproduces on 26.4.1 (Swift 6.3.1) too. It is
+      # worked around in source (@_optimize(none) on Coordinator.deinit), so
+      # this pin does not protect against it.
       - name: Select Xcode 26.4
         run: |
           set -euo pipefail
-          # Pin to Xcode 26.4.x. Xcode 26.5 ships Swift 6.3.2, whose optimizer
-          # crashes (EarlyPerfInliner, on a synthesized deinit) building
-          # SubmenuFlyout.swift in Release. 26.4 is the toolchain the
-          # macOS 26.4 deployment target shipped with. Do NOT pick "latest"
-          # blindly — that is how the 26.5 regression slipped in.
+          # Pin to Xcode 26.4.x to match the macOS 26.4 deployment target's
+          # toolchain. (The SubmenuFlyout.swift optimizer crash is handled in
+          # source, not here — it affects 26.4.1 / Swift 6.3.1 as well.)
           XCODE="$(ls -d /Applications/Xcode_26.4*.app 2>/dev/null | sort -V | tail -1)"
           if [ -z "$XCODE" ]; then
             echo "::error::Xcode 26.4 not found on runner. Available:"

@@ -128,6 +128,15 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
         private weak var parentWindow: NSWindow?
         private var lastFittedSize: NSSize?
 
+        // Workaround for a Swift 6.3.x optimizer crash (swift-frontend
+        // segfaults in the EarlyPerfInliner SIL pass while optimizing this
+        // type's synthesized deinit under Release -O/-wmo; reproduces on both
+        // Xcode 26.4.1 / Swift 6.3.1 and 26.5 / Swift 6.3.2). Declaring an
+        // explicit deinit pinned to -Onone keeps the inliner off it. ARC still
+        // releases the stored properties; the empty body is intentional.
+        @_optimize(none)
+        deinit {}
+
         func presentOrUpdate(anchoredTo anchor: NSView, rootView: AnyView) {
             guard let parentWindow = anchor.window else { return }
             self.anchor = anchor
