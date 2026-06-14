@@ -21,11 +21,12 @@
 //     (Console.app on someone else's machine, a sysdiagnose blob a
 //     user emails to support) can read them. NSLog had no such layer
 //     — every formatted argument was always plaintext on disk.
-//  3. SENTRY BREADCRUMB BRIDGE. `Log.breadcrumb(...)` is the explicit
-//     opt-in path that ALSO ships an operational marker to Sentry, so
-//     the next crash report carries the last ~30s of state transitions
-//     as context. Routine Logger calls stay LOCAL ONLY — they never
-//     leave the machine.
+//  3. BREADCRUMB TRAIL. `Log.breadcrumb(...)` records notable
+//     operational transitions to the unified log under a dedicated
+//     `breadcrumb` category. Since the migration off Sentry these are
+//     LOCAL ONLY (like every other Logger call) — they never leave the
+//     machine. PostHog's error tracking captures crashes/exceptions
+//     independently; the trail is for on-device support diagnostics.
 //
 //  Call-site shape
 //  ---------------
@@ -52,12 +53,11 @@
 //  someone-else's-machine logs, which is exactly what we want for
 //  anything user-derived.
 //
-//  Privacy contract for breadcrumbs (Sentry-bound, see beforeBreadcrumb
-//  in CrashReporting): the `message` parameter is `StaticString` so
-//  Swift only accepts a STRING LITERAL at the call site. Interpolated
-//  strings, error.localizedDescription, anything runtime — won't
-//  compile. This is the same mechanical enforcement we use for
-//  `CrashReporting.capture(message:)`.
+//  Privacy contract for breadcrumbs (now local-only): the `message`
+//  parameter is `StaticString` so Swift only accepts a STRING LITERAL at
+//  the call site. Interpolated strings, error.localizedDescription,
+//  anything runtime — won't compile. This is the same mechanical
+//  enforcement we use for `CrashReporting.capture(message:)`.
 //
 
 import Foundation
@@ -160,25 +160,21 @@ enum Log {
     /// belong to a more specific category.
     nonisolated static let ui = Logger(subsystem: subsystem, category: "ui")
 
-    /// CrashReporting bootstrap notices (DSN missing, init confirmation).
-    /// Separate from the runtime Sentry SDK's own logs (which live under
-    /// the SentrySDK subsystem, not ours).
+    /// Analytics / error-tracking bootstrap notices (API key missing, init
+    /// confirmation). Separate from the PostHog SDK's own logs.
     nonisolated static let crashReporting = Logger(subsystem: subsystem, category: "crashReporting")
 
-    // MARK: - Sentry breadcrumb bridge
+    /// Operational breadcrumb trail logger. After the migration off Sentry,
+    /// breadcrumbs are LOCAL ONLY — they go to the unified log (Console.app
+    /// / `log stream` / sysdiagnose), not off the machine. PostHog's error
+    /// tracking captures crashes/exceptions on its own; this trail stays on
+    /// device for support diagnostics.
+    nonisolated static let breadcrumbs = Logger(subsystem: subsystem, category: "breadcrumb")
 
-    /// Sentry breadcrumb categories that survive `beforeBreadcrumb` in
-    /// CrashReporting. MUST stay in sync with
-    /// `CrashReporting.allowedBreadcrumbCategories` — kept here as a
-    /// typed enum so call sites can't accidentally pass a string that
-    /// the allowlist will silently drop.
-    ///
-    /// These are intentionally a SMALLER set than the Logger categories
-    /// above. Logger categories are about Console.app filtering (every
-    /// subsystem gets one); breadcrumb categories are about what kind
-    /// of operational signal is useful in a CRASH REPORT (state
-    /// transitions, pipeline progress, permission changes — not every
-    /// UI tick or hotkey gate decision).
+    // MARK: - Breadcrumb trail (local)
+
+    /// Category tag for an operational breadcrumb. Kept as a typed enum so
+    /// call sites pass a known value rather than a free string.
     enum BreadcrumbCategory: String {
         case appLifecycle    = "appLifecycle"
         case stateMachine    = "stateMachine"
@@ -186,59 +182,33 @@ enum Log {
         case permissionChange = "permissionChange"
     }
 
-    /// Local enum wrapping the three breadcrumb levels we use, so call
-    /// sites don't need to `import Sentry`. The whole point of the
-    /// Log layer is that the rest of the app only knows about Log —
-    /// keeping Sentry types out of call-site files makes those files
-    /// easier to test and keeps the Sentry dependency confined.
+    /// The three breadcrumb levels we use, mapped to `OSLogType`.
     enum BreadcrumbLevel {
         case info, warning, error
 
-        // `nonisolated` because the `breadcrumb(...)` entry point is
-        // nonisolated (must be callable from any context) and reads
-        // this. The project default would otherwise pin it to MainActor.
-        fileprivate nonisolated var sentryLevel: SentryLevel {
+        fileprivate nonisolated var osLogType: OSLogType {
             switch self {
             case .info:    return .info
-            case .warning: return .warning
+            case .warning: return .default
             case .error:   return .error
             }
         }
     }
 
-    /// Emit a Sentry breadcrumb. Use SPARINGLY — breadcrumbs are the
-    /// "last N events leading up to a crash" context that gets
-    /// attached to every captured event. They should mark NOTABLE
-    /// operational transitions (entered .recording, finished
-    /// transcription, screen-recording permission revoked), NOT every
-    /// log line.
+    /// Record an operational breadcrumb to the LOCAL unified log. Use
+    /// SPARINGLY — mark NOTABLE transitions (entered .recording, finished
+    /// transcription, permission revoked), not every log line.
     ///
-    /// CALL-SITE RULES — same privacy contract as
-    /// `CrashReporting.capture(message:)`:
-    ///
-    /// • `message` is `StaticString`. The Swift type system mechanically
-    ///   prevents passing interpolated strings, error descriptions, or
-    ///   anything else derived from runtime user content. Make the
-    ///   literal descriptive — it becomes the human-readable line in
-    ///   the breadcrumb trail attached to the next crash.
-    ///
-    /// • `data` is intentionally NOT exposed. `beforeBreadcrumb` in
-    ///   CrashReporting clears `crumb.data` on every surviving
-    ///   breadcrumb anyway as a safety net, so any data you'd attach
-    ///   here would be discarded before transmission.
-    ///
-    /// `level` defaults to `.info`; bump to `.warning` / `.error` for
-    /// breadcrumbs about a failure path.
+    /// `message` is `StaticString`: the Swift type system mechanically
+    /// prevents interpolated runtime content (paths, error descriptions,
+    /// user text) from entering the trail. The `category` is recorded as a
+    /// `.public` tag so the trail stays filterable.
     nonisolated static func breadcrumb(
         category: BreadcrumbCategory,
         level: BreadcrumbLevel = .info,
         message: StaticString
     ) {
-        let crumb = Breadcrumb()
-        crumb.category = category.rawValue
-        crumb.level = level.sentryLevel
-        crumb.message = "\(message)"
-        crumb.type = "default"
-        SentrySDK.addBreadcrumb(crumb)
+        let text = "\(message)" // StaticString → literal String, safe to log
+        breadcrumbs.log(level: level.osLogType, "[\(category.rawValue, privacy: .public)] \(text, privacy: .public)")
     }
 }

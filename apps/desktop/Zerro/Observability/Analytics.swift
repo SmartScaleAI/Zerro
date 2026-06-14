@@ -83,6 +83,7 @@ enum Analytics {
         PostHogSDK.shared.register([
             "app_version": shortVersion(),
             "build_channel": channel(),
+            "environment": environment(),
         ])
     }
 
@@ -115,8 +116,17 @@ enum Analytics {
 
     // MARK: - Info.plist / environment
 
+    /// Picks the environment-appropriate PostHog key so development traffic
+    /// stays out of the production project. Debug builds use the dev key;
+    /// Release builds use the production key. This is what keeps prod-only
+    /// Slack error alerts from firing on local/dev errors — dev events go
+    /// to a different PostHog environment entirely.
     private static func readKey() -> String? {
-        Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY") as? String
+        #if DEBUG
+        return Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY_DEBUG") as? String
+        #else
+        return Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY") as? String
+        #endif
     }
 
     private static func readHost() -> String {
@@ -133,6 +143,17 @@ enum Analytics {
         return "debug"
         #else
         return "release"
+        #endif
+    }
+
+    /// Coarse environment tag attached to every event. Belt-and-suspenders
+    /// alongside the per-environment API key: even if a stray event landed
+    /// in the wrong project, it's labeled so you can filter it out.
+    private static func environment() -> String {
+        #if DEBUG
+        return "development"
+        #else
+        return "production"
         #endif
     }
 }

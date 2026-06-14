@@ -1,6 +1,44 @@
 # Zerro — PostHog Analytics Tracking Plan
 
-Status: proposal · Scope: macOS app + getzerro.app website · Last updated: 2026-06-13
+Status: proposal + MVP shipped · Scope: macOS app + getzerro.app website · Last updated: 2026-06-13
+
+## MVP implementation status (desktop app)
+
+A basic first cut is wired into the app, with **error/crash tracking migrated
+off Sentry onto PostHog** so analytics and logging live in one place.
+
+What's implemented:
+
+- **SDK + backend swap.** `sentry-cocoa` replaced by `posthog-ios` in the Xcode
+  project; `Info.plist` now carries `POSTHOG_API_KEY` / `POSTHOG_HOST` instead of
+  `SENTRY_DSN`. `Analytics` (new, in `Observability/`) owns the PostHog lifecycle;
+  `CrashReporting` is now a thin PostHog-backed shim with its public API unchanged,
+  so existing `CrashReporting.capture(...)` call sites are untouched.
+- **Error tracking.** `config.errorTrackingConfig.autoCapture = true` captures
+  native crashes (Mach exceptions, POSIX signals, uncaught NSExceptions). Handled
+  errors still flow through `CrashReporting.capture(error:message:stage:context:)`
+  with the same StaticString + allowlisted-context privacy guarantees.
+- **Lifecycle events** come free from `captureApplicationLifecycleEvents`
+  (Application Installed / Opened / Updated).
+- **Manual MVP events:** `onboarding_started`, `onboarding_completed`,
+  `recording_started`, `generation_succeeded`, `generation_failed`,
+  `artifact_copied`, `paywall_shown`.
+- **One toggle** ("Send Anonymous Usage Data & Crash Reports" in Settings) gates
+  both analytics and error capture via PostHog opt-in/opt-out, live, no restart.
+
+Before this ships you must:
+
+1. **Open the project in Xcode** so SPM resolves `posthog-ios` (the resolved
+   pin's revision is filled in on resolve), and verify it builds.
+2. **Set `POSTHOG_API_KEY`** in `apps/desktop/Zerro/Info.plist` (currently a
+   placeholder — analytics no-ops until a real `phc_…` key is present).
+3. **Update the website privacy policy** to name PostHog (see §7).
+
+Known trade-offs from leaving Sentry (see §7 for detail): PostHog's macOS crash
+reporting is newer — Swift crashes can surface as `SIGTRAP` without the message,
+system frames aren't symbolicated, you'll want a dSYM upload step in CI for good
+stack traces, and there's no equivalent to Sentry's app-hang (main-thread stall)
+detection.
 
 This is the event taxonomy to implement for product analytics in PostHog. It
 covers the desktop app and the marketing site, the properties each event should

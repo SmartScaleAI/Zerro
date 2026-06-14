@@ -91,6 +91,11 @@ final class OnboardingState {
     // MARK: - Navigation
 
     func advance() {
+        // First forward step out of Welcome is our "onboarding started"
+        // funnel marker — fired at most once per install.
+        if currentStep == .welcome {
+            Analytics.captureOnce("onboarding_started", key: "vf.analytics.onboardingStarted")
+        }
         if let next = OnboardingStep(rawValue: currentStep.rawValue + 1) {
             currentStep = next
         }
@@ -109,6 +114,7 @@ final class OnboardingState {
     // MARK: - Lifecycle
 
     func completeOnboarding() {
+        Analytics.capture("onboarding_completed")
         hasCompletedOnboarding = true
         // Clear the persisted step so a future re-trigger of the
         // onboarding window (permission revocation path) starts at

@@ -67,14 +67,14 @@ public enum RecordingFailureReason: Equatable {
     case microphoneRevoked
     /// No usable input device at start (`SessionError.noMicrophoneAvailable`)
     /// — a Mac mini with nothing plugged in, AirPods out of the case, etc.
-    /// Environment-driven, NOT a Zerro bug; excluded from Sentry capture.
+    /// Environment-driven, NOT a Zerro bug; excluded from error-tracker capture.
     /// Split from `.audioSetupFailed` (Phase 13B follow-up) which IS an
     /// engineering signal.
     case microphoneUnavailable
     /// A microphone WAS present but wiring it into the capture stack threw
     /// (`SessionError.audioInputSetupFailed`). Unlike
     /// `.microphoneUnavailable` this points at our audio-graph setup, so it
-    /// IS reported to Sentry. Same user-facing copy family — the user's
+    /// IS reported to the error tracker. Same user-facing copy family — the user's
     /// next step (check the mic, try again) is identical.
     case audioSetupFailed
     /// M4 — the microphone captured at start disconnected mid-recording
@@ -137,13 +137,13 @@ public enum RecordingFailureReason: Equatable {
     /// The provider answered but the CONTENT was wrong: decode failures,
     /// schema drift, empty content, the proxy's `malformedResponse` /
     /// `inputRejected`. These mean our contract with the provider broke —
-    /// an engineering signal, reported to Sentry. User-facing copy is
+    /// an engineering signal, reported to the error tracker. User-facing copy is
     /// shared with `.providerUnavailable` on purpose: the user can't act
     /// on the distinction; what matters is "try again later".
     case providerError
     /// The provider (or the managed proxy) is having an outage: 5xx,
     /// 502/503, transport-level URLError weather that isn't offline-class.
-    /// Third-party weather, NOT a Zerro bug — excluded from Sentry capture
+    /// Third-party weather, NOT a Zerro bug — excluded from error-tracker capture
     /// so a regional OpenAI outage can't flood the dashboard (Phase 13B
     /// follow-up: split out of `.providerError`). Same copy + retryability
     /// as `.providerError`.
@@ -152,7 +152,7 @@ public enum RecordingFailureReason: Equatable {
     /// off disk when building the provider request — the BYOK services
     /// wrap this in their `.network` case, and the managed client surfaces
     /// it as `ManagedGenerationError.artifactUnreadable`. Local I/O on
-    /// files Zerro itself wrote, so it IS reported to Sentry, under its
+    /// files Zerro itself wrote, so it IS reported to the error tracker, under its
     /// own errorCode rather than polluting the provider or processing
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
@@ -488,6 +488,12 @@ final class AppState {
     /// already walked away from. Nil whenever no pipeline is running.
     private var processingTask: Task<Void, Never>?
 
+    /// Drives the witty "thinking" pill rotation during the generation
+    /// stage (see `startThinkingRotation`). Scoped strictly to that stage:
+    /// started where the label is set and cancelled on every exit path so
+    /// it never outlives the generation or leaks a timer. Nil when idle.
+    private var thinkingRotationTask: Task<Void, Never>?
+
     /// Consecutive Retry presses against the current failure chain. Cap
     /// keeps a "Retry → fail → Retry" loop from running forever on a
     /// sustained outage — after the cap the Retry button hides and the
@@ -644,6 +650,9 @@ final class AppState {
                 try await session.start()
                 guard let self, self.recordingSession === session else { return }
                 self.state = .recording
+                Analytics.capture("recording_started", [
+                    "model": self.preferences?.selectedModelID ?? "unknown"
+                ])
                 // Phase 13A: breadcrumb the .idle → .recording transition
                 // so it appears in the trail attached to any subsequent
                 // crash or non-fatal capture. StaticString literal —
@@ -677,7 +686,7 @@ final class AppState {
                 self.activeSelection = nil
                 let reason = Self.failureReason(from: error)
                 // Phase 13B: report engineering-signal failures to
-                // Sentry. shouldCapture(_:) filters out user /
+                // the error tracker. shouldCapture(_:) filters out user /
                 // environment failures so we don't ship noise.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
@@ -978,7 +987,7 @@ final class AppState {
             // Phase 13B follow-up: mirror the start-failure path. A
             // mid-recording writer/stream failure is exactly the class of
             // capture-stack bug we want to triage; previously this path
-            // never reached Sentry at all. shouldCapture gates out the
+            // never reached the error tracker at all. shouldCapture gates out the
             // user/environment reasons (revocation, disk full, …) the
             // same way it does everywhere else.
             if Self.shouldCapture(reason) {
@@ -1136,7 +1145,7 @@ final class AppState {
         // would otherwise show whatever label survived the prior run.
         processingStageLabel = "Saving your narration\u{2026}"
         // Phase 13A: marks the .recording → .processing handoff in the
-        // Sentry breadcrumb trail.
+        // local breadcrumb trail.
         Log.breadcrumb(category: .pipelineStage, message: "processing started")
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1187,7 +1196,7 @@ final class AppState {
                     reason = .processingFailed
                 }
                 // Phase 13B: report engineering-signal failures to
-                // Sentry. .diskFull and .recordingTooShort are gated
+                // the error tracker. .diskFull and .recordingTooShort are gated
                 // out by shouldCapture; .processingFailed (a real
                 // pipeline bug) is the one we want to triage.
                 if Self.shouldCapture(reason) {
@@ -1264,6 +1273,59 @@ final class AppState {
     /// non-nil = the trial token (`isTrial == true`). The two differ only in how
     /// the post-success credit balance is applied and how failures are mapped;
     /// the upload + result tail are identical.
+    // MARK: - "Thinking" pill rotation
+
+    /// Begins the generation-stage pill rotation: an immediate random
+    /// Category-1 starter, then a fresh random Category-2 continuation
+    /// every `ProcessingPipeline.thinkingRotationInterval` seconds (never
+    /// the same phrase twice in a row). The `\u{2026}` ellipsis is appended
+    /// at display time to match the existing pill style. Always paired with
+    /// `stopThinkingRotation()` on the stage's success/failure/cancel exits.
+    private func startThinkingRotation() {
+        stopThinkingRotation()
+        processingStageLabel = Self.thinkingLabel(
+            ProcessingPipeline.thinkingStarters.randomElement()
+        )
+        thinkingRotationTask = Task { @MainActor [weak self] in
+            var last: String?
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    for: .seconds(ProcessingPipeline.thinkingRotationInterval)
+                )
+                guard !Task.isCancelled, let self else { return }
+                let next = Self.nextContinuation(avoiding: last)
+                last = next
+                self.processingStageLabel = Self.thinkingLabel(next)
+            }
+        }
+    }
+
+    /// Cancels the pill rotation. Idempotent — safe to call on every exit
+    /// path and when no rotation is running.
+    private func stopThinkingRotation() {
+        thinkingRotationTask?.cancel()
+        thinkingRotationTask = nil
+    }
+
+    /// Picks a continuation phrase distinct from `previous` (so the pill
+    /// never shows the same line twice in a row).
+    static func nextContinuation(avoiding previous: String?) -> String? {
+        let pool = ProcessingPipeline.thinkingContinuations
+        guard pool.count > 1 else { return pool.first }
+        var next = pool.randomElement()
+        while next == previous { next = pool.randomElement() }
+        return next
+    }
+
+    /// Renders a saying into a pill label, appending the ellipsis. Falls
+    /// back to the static stage label if the pool was somehow empty.
+    private static func thinkingLabel(_ saying: String?) -> String {
+        guard let saying else {
+            return ProcessingPipeline.Stage.writingPrompt.userMessage
+        }
+        return saying + "\u{2026}"
+    }
+
     private func runProxyGeneration(
         processed: ProcessedRecording,
         proxy: ManagedProxyClient,
@@ -1275,10 +1337,14 @@ final class AppState {
         let label = isTrial ? "trial" : "managed"
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            // The generation stage is one opaque round-trip: rotate witty
+            // "thinking" sayings instead of a static label, and tear the
+            // rotation down on every exit (success, failure, cancellation).
+            defer { self.stopThinkingRotation() }
             do {
                 // One server round-trip covers upload → STT → generation; the
-                // "Working on it…" label is the honest single stage.
-                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                // rotating "thinking" sayings stand in for the single stage.
+                self.startThinkingRotation()
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
                 let managed = try await proxy.generate(
                     audioURL: audioURL,
@@ -1320,6 +1386,11 @@ final class AppState {
                 // note (a BYOK affordance) doesn't apply — never flag it here.
                 self.resultHadNoNarration = false
                 self.state = .done
+                Analytics.capture("generation_succeeded", [
+                    "route": "managed",
+                    "model": self.preferences?.selectedModelID ?? "unknown",
+                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat"
+                ])
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
 
                 // Reflect the spent credit immediately. For a subscription, also
@@ -1343,6 +1414,10 @@ final class AppState {
                     ? self.trialFailureReason(from: error)
                     : Self.managedFailureReason(from: error)
                 Log.promptGen.error("\(label, privacy: .public) generation failed: \(String(describing: reason), privacy: .public)")
+                Analytics.capture("generation_failed", [
+                    "route": isTrial ? "trial" : "managed",
+                    "reason": Self.errorCodeString(reason)
+                ])
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -1499,7 +1574,7 @@ final class AppState {
                 let reason = Self.failureReason(from: error)
                 // Phase 13B: transcription-stage failures worth triaging
                 // (provider decode failures, unreadable local artifacts)
-                // reach Sentry; user/environment failures AND provider
+                // reach the error tracker; user/environment failures AND provider
                 // 5xx outages are gated out by shouldCapture.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
@@ -1524,8 +1599,11 @@ final class AppState {
     ) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Same opaque generation stage as the proxy path: rotate the
+            // "thinking" sayings and stop on every exit path.
+            defer { self.stopThinkingRotation() }
             do {
-                self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
+                self.startThinkingRotation()
                 Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
                 // Multi-model 6C: route to the selected model's provider,
                 // falling back to the cheapest model whose provider HAS a key
@@ -1567,6 +1645,11 @@ final class AppState {
                 self.acceptGenerationResult(rawPrompt: result.prompt)
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
                 self.state = .done
+                Analytics.capture("generation_succeeded", [
+                    "route": "byok",
+                    "model": self.preferences?.selectedModelID ?? "unknown",
+                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat"
+                ])
                 // Phase 13A: terminal-success breadcrumb. If a crash
                 // lands during result presentation (UI bug, copy
                 // affordance), the trail makes it obvious the pipeline
@@ -1576,10 +1659,14 @@ final class AppState {
                 Log.promptGen.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
-                // Phase 13B: report engineering-signal failures to Sentry.
-                // .providerError here is decode failures / empty content —
-                // contract drift we want to triage. 5xx outages map to
-                // .providerUnavailable and are gated out by shouldCapture.
+                Analytics.capture("generation_failed", [
+                    "route": "byok",
+                    "reason": Self.errorCodeString(reason)
+                ])
+                // Phase 13B: report engineering-signal failures to the error
+                // tracker. .providerError here is decode failures / empty
+                // content — contract drift we want to triage. 5xx outages map
+                // to .providerUnavailable and are gated out by shouldCapture.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -1891,9 +1978,9 @@ final class AppState {
         return trimmed.count < minNarrationCharacters
     }
 
-    // MARK: - Sentry capture gating (Phase 13B)
+    // MARK: - Error-tracker capture gating (Phase 13B)
 
-    /// Whether a given mapped failure is worth reporting to Sentry as a
+    /// Whether a given mapped failure is worth reporting to the error tracker as a
     /// non-fatal event. Split from `failureReason` so the policy of
     /// "what counts as an engineering signal" lives in one place.
     ///
@@ -1930,7 +2017,7 @@ final class AppState {
         }
     }
 
-    /// Safe stringification of `reason` for the Sentry `errorCode` tag.
+    /// Safe stringification of `reason` for the error-tracker `errorCode` property.
     /// Every `RecordingFailureReason` case is value-less, so
     /// `String(describing:)` yields just the case name
     /// ("processingFailed", "providerError", etc.) — a compile-time-
@@ -2063,7 +2150,7 @@ final class AppState {
     /// case. That case is overloaded at the throw sites: URLSession
     /// transport failures AND local `Data(contentsOf:)` reads of our own
     /// frame/audio artifacts both arrive here, and they deserve opposite
-    /// Sentry treatment.
+    /// error-tracker treatment.
     ///
     ///   • URLError, offline-class  → `.networkOffline` (user's
     ///     connectivity; not captured)

@@ -92,7 +92,7 @@ enum PromptGenerationError: Error {
     case network(underlying: Error)
     /// Non-2xx provider response. Carries the status code ONLY — useful and
     /// non-sensitive. The raw response body is deliberately NOT an associated
-    /// value: this error can reach `CrashReporting.capture`, where the Sentry
+    /// value: this error can reach `CrashReporting.capture`, where the PostHog error tracker
     /// SDK derives the exception value from the error's description, and a raw
     /// provider body would ride into that value scrubbed only by a length clamp
     /// (not a content filter). The body is logged `.private` at the throw site

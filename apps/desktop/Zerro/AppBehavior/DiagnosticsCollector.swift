@@ -47,9 +47,9 @@ enum DiagnosticsCollector {
         lines.append("  Hotkey:     \(currentHotkeyDescription())")
         lines.append("")
         lines.append("Output:")
-        // Phase 13 (Part B) — include the most recent Sentry event ID
+        // Phase 13 (Part B) — include the most recent error-tracker diagnostic ID
         // so a support email correlates to a captured crash / non-fatal
-        // event in the Sentry dashboard. Reads `nil` if no event has
+        // event in the PostHog dashboard. Reads `nil` if no event has
         // been sent this launch OR if the user has the crash-reporting
         // toggle OFF (in which case `beforeSend` drops everything and
         // never populates this).

@@ -256,6 +256,9 @@ struct ArtifactCardView: View {
 
     private func handleCopy() {
         onCopy()
+        Analytics.capture("artifact_copied", [
+            "artifact_type": artifact?.type.rawValue ?? "chat"
+        ])
         didCopy = true
         copyResetTask?.cancel()
         copyResetTask = Task { @MainActor in

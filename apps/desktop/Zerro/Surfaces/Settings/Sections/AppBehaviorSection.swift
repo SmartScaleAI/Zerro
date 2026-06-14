@@ -42,28 +42,30 @@ struct AppBehaviorSection: View {
     }
 }
 
-// MARK: - Crash Reporting
+// MARK: - Analytics & Crash Reporting
 
-// Phase 13 (Part B) — the SINGLE documented exception to Zerro's
-// "no analytics / no telemetry" story. Anonymous, on by default,
-// one-click off. The toggle writes to the same UserDefaults key the
-// CrashReporting helper reads from `beforeSend` on every event, so
-// flipping it OFF stops all transmission immediately — no app
-// restart required. Default ON matches the helper's `isEnabled`
-// fallback ("key absent" → true).
+// The SINGLE documented exception to Zerro's "your content stays local"
+// story. Anonymous, on by default, one-click off. The toggle writes to
+// the UserDefaults key both `Analytics` and `CrashReporting` read for
+// their opt-out gate, and `.onChange` flips PostHog's opt-out state live,
+// so turning it OFF stops all transmission immediately — no restart.
+// Default ON matches the `isEnabled` fallback ("key absent" → true).
 
 private struct CrashReportingRow: View {
     @AppStorage(CrashReporting.isEnabledDefaultsKey) private var isEnabled: Bool = true
 
     var body: some View {
         SettingsRow(
-            label: "Send Anonymous Crash Reports",
-            description: "Helps fix crashes without you needing to report them. Recordings, transcripts, generated prompts, and your API key are never sent."
+            label: "Send Anonymous Usage Data & Crash Reports",
+            description: "Shares anonymous product usage and crash diagnostics so we can fix bugs and improve Zerro. Recordings, transcripts, generated prompts, and your API key are never sent."
         ) {
-            Toggle("Send Anonymous Crash Reports", isOn: $isEnabled)
+            Toggle("Send Anonymous Usage Data & Crash Reports", isOn: $isEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .tint(Color.vfSuccessGreen)
+                .onChange(of: isEnabled) { _, newValue in
+                    Analytics.setEnabled(newValue)
+                }
         }
     }
 }

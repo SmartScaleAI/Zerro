@@ -4,3 +4,6 @@
 # editors
 .vscode/
 .idea/
+
+# FUSE orphan files (created when files are edited while open; runtime junk)
+.fuse_hidden*

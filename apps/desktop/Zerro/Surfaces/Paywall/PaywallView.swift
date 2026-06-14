@@ -56,6 +56,7 @@ struct PaywallView: View {
         mainPanel
             .frame(width: Self.windowWidth)
             .background(Color.vfCardBackground)
+            .onAppear { Analytics.capture("paywall_shown") }
     }
 
     // MARK: - Main panel

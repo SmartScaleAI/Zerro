@@ -7,9 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA01F0A12FDE000000000001 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = AA01F0A12FDE000000000002 /* PostHog */; };
 		FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FF3B566F2FCC52E400F27154 /* Sparkle */; };
 		FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */; };
-		FFD158F12FCBA3050043FE79 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = FFD158F02FCBA3050043FE79 /* PostHog */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,7 +68,7 @@
 			files = (
 				FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */,
 				FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */,
-				FFD158F12FCBA3050043FE79 /* PostHog in Frameworks */,
+				AA01F0A12FDE000000000001 /* PostHog in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -154,8 +154,8 @@
 			name = Zerro;
 			packageProductDependencies = (
 				FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */,
-				FFD158F02FCBA3050043FE79 /* PostHog */,
 				FF3B566F2FCC52E400F27154 /* Sparkle */,
+				AA01F0A12FDE000000000002 /* PostHog */,
 			);
 			productName = Zerro;
 			productReference = FF8546CF2FC74ACC000EB1A6 /* Zerro.app */;
@@ -191,8 +191,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
-				FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 				FF3B566E2FCC52E400F27154 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				FFEE62E22FDE451A004132FA /* XCRemoteSwiftPackageReference "posthog-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF8546D02FC74ACC000EB1A6 /* Products */;
@@ -571,19 +571,22 @@
 				minimumVersion = 2.4.0;
 			};
 		};
-		FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+		FFEE62E22FDE451A004132FA /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/PostHog/posthog-ios.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 3.56.0;
+				minimumVersion = 3.60.0;
 			};
-			traits = (
-			);
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AA01F0A12FDE000000000002 /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FFEE62E22FDE451A004132FA /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
+		};
 		FF3B566F2FCC52E400F27154 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FF3B566E2FCC52E400F27154 /* XCRemoteSwiftPackageReference "Sparkle" */;
@@ -593,11 +596,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
-		};
-		FFD158F02FCBA3050043FE79 /* PostHog */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */;
-			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

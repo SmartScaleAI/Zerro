@@ -81,6 +81,52 @@ struct ProcessingPipeline {
         }
     }
 
+    // MARK: - "Thinking" pill sayings
+    //
+    // The generation stage is a single opaque server round-trip with no
+    // sub-progress to report, so instead of a static label the pill cycles
+    // through these witty phrases (Claude-app style). AppState drives the
+    // rotation; append `\u{2026}` at display time to match the pill style.
+
+    /// Shown first, the moment the generation stage begins. Pick one at
+    /// random — don't always lead with the first element.
+    static let thinkingStarters: [String] = [
+        "Summoning the output",
+        "Wrangling the tokens",
+        "Beep boop, thinking",
+        "Whispering into the void",
+        "One sec, doing some robot stuff",
+        "Pretending to think",
+        "Channeling big brain energy",
+        "Summoning a wizard",
+        "Cooking up something magical",
+        "Channeling the token gods",
+        "Putting on my thinking cap",
+        "Brewing a potion",
+        "Aligning the stars",
+        "Sweet-talking the servers",
+        "Cracking my knuckles",
+        "Shaking the magic 8-ball",
+    ]
+
+    /// "Still going" phrases, rotated in after the first starter while
+    /// generation continues.
+    static let thinkingContinuations: [String] = [
+        "Two secs, big computations happening",
+        "Thinking really hard, I promise",
+        "Hitting it with a wrench",
+        "Kicking the server",
+        "Cooking with gas now",
+        "Rummaging for the right words",
+        "Almost got it, I think",
+        "Fishing for the right words",
+        "Nearly there, hang on",
+        "Wrapping my head around it",
+    ]
+
+    /// How often the pill swaps to a fresh continuation phrase, in seconds.
+    static let thinkingRotationInterval: TimeInterval = 2.5
+
     /// Top-level orchestration: creates the working directory, loads
     /// the asset's duration, isolates audio, extracts frames, writes
     /// the manifest, and returns the `ProcessedRecording` AppState

@@ -118,7 +118,7 @@ struct ZerroApp: App {
         // app's lifetime, so weak references stay valid.
         if !Self.didRegisterGlobalShortcuts {
             Self.didRegisterGlobalShortcuts = true
-            // Phase 13 (Part B): bring up Sentry FIRST inside the
+            // Phase 13 (Part B): bring up analytics + error tracking FIRST inside the
             // one-shot block so the crash reporter is live before any
             // launch-time work below (the working-dir sweep, the
             // hotkey closure capture) can fault. CrashReporting.start
@@ -129,7 +129,7 @@ struct ZerroApp: App {
             CrashReporting.start()
             // Phase 13A: anchor breadcrumb. Every subsequent breadcrumb
             // (state transitions, pipeline stages, permission changes)
-            // accumulates AFTER this one in the Sentry crumb trail, so
+            // accumulates AFTER this one in the local breadcrumb trail, so
             // any crash report shows a clean "app launched → ..." lead.
             Log.breadcrumb(category: .appLifecycle, message: "app launched")
             #if DEBUG

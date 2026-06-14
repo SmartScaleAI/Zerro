@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 }
 
-const LAST_UPDATED = "June 10, 2026"
+const LAST_UPDATED = "June 13, 2026"
 
 export default function PrivacyPage() {
   return (
@@ -60,6 +60,12 @@ export default function PrivacyPage() {
           <li>
             <Strong>We do not sell your personal information</Strong> or share
             it for cross-context behavioral advertising.
+          </li>
+          <li>
+            <Strong>Anonymous analytics are optional.</Strong> The app collects
+            anonymous usage and crash diagnostics (metadata only — never your
+            recordings, transcripts, or prompts) to improve reliability, and
+            you can turn it off any time in Settings.
           </li>
         </UL>
       </LegalSection>
@@ -110,6 +116,18 @@ export default function PrivacyPage() {
           only a hashed version of the code, never the raw code.
         </P>
         <P>
+          <Strong>App analytics and crash reports.</Strong> The Zerro desktop
+          app uses PostHog to collect anonymous product-usage events (such as
+          completing onboarding, starting a recording, or copying a result) and
+          diagnostic crash and error reports. These contain only metadata —
+          event names, timings, app version, model identifiers, and error types
+          — and never your recordings, transcripts, generated prompts, file
+          paths, or API keys. This data is associated with an anonymous device
+          identifier, not your name or email. You can turn it off at any time in
+          the app under Settings &rarr; &ldquo;Send Anonymous Usage Data &amp;
+          Crash Reports.&rdquo;
+        </P>
+        <P>
           <Strong>Website analytics.</Strong> The getzerro.app website uses
           Vercel Analytics, which collects aggregated, privacy-focused usage
           data and does not use cross-site tracking cookies.
@@ -122,6 +140,7 @@ export default function PrivacyPage() {
           <li>To process payments and prevent fraud and abuse, including rate limiting and trial-abuse prevention.</li>
           <li>To communicate with you about your account, such as trial verification codes and support responses.</li>
           <li>To understand aggregate usage of our website and improve the product.</li>
+          <li>To diagnose crashes and errors and improve the app&rsquo;s reliability.</li>
           <li>To comply with legal obligations.</li>
         </UL>
         <P>
@@ -139,8 +158,9 @@ export default function PrivacyPage() {
           processing of recordings on Managed/Trial plans, and audio
           transcription via OpenAI Whisper), <Strong>Lemon Squeezy</Strong>{" "}
           (payments, as merchant of record), <Strong>Resend</Strong>{" "}
-          (transactional email), and <Strong>Vercel</Strong> (website hosting
-          and analytics). AI providers process your content under their API
+          (transactional email), <Strong>PostHog</Strong> (anonymous app
+          analytics and crash reporting), and <Strong>Vercel</Strong> (website
+          hosting and analytics). AI providers process your content under their API
           terms; we use API offerings under which inputs are not used to train
           their models. We do not sell your personal information to anyone.
         </P>
@@ -164,6 +184,11 @@ export default function PrivacyPage() {
           <li>
             <Strong>Trial verification codes:</Strong> stored hashed and
             expire within minutes.
+          </li>
+          <li>
+            <Strong>Anonymous app analytics and crash diagnostics:</Strong>{" "}
+            retained by PostHog under our configured retention period and tied
+            only to an anonymous device identifier.
           </li>
         </UL>
         <P>

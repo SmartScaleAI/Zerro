@@ -673,7 +673,7 @@ struct MenuBarPanelView: View {
     /// affordance is the Managed subscription checkout instead.
     private var trialUpgradeRow: some View {
         HStack(spacing: 0) {
-            Text("Running low \u{2014} upgrade to Managed for monthly credits")
+            Text("Running low \u{2014} upgrade to keep going")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfWarningAmber)
                 .fixedSize()
