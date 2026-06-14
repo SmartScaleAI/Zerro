@@ -360,7 +360,7 @@ const Pricing = () => {
             {/* Honest privacy distinction — a genuine selling point, not buried.
                 Bumped to foreground/75 so it clears AA contrast over the gradient surface. */}
             <p className="relative z-10 mt-8 mx-auto max-w-2xl text-center text-sm text-foreground/75">
-                Managed sends your recording to Zerro&apos;s server to generate the prompt.
+                Managed sends your recording to Zerro&apos;s server to generate the result.
                 Bring-your-own-key stays fully on your Mac — recordings never leave your machine.
             </p>
 

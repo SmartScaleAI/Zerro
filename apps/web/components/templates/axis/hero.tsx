@@ -106,7 +106,7 @@ const MorphingPill = () => {
                 transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
                 className="h-4 w-4 rounded-full border-2 border-white/20 border-t-white/80"
               />
-              <span className="text-sm font-medium">Building your prompt…</span>
+              <span className="text-sm font-medium">Building it…</span>
             </div>
             <button className="flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white/90">
               <X className="h-4 w-4" />
@@ -133,7 +133,7 @@ const MorphingPill = () => {
               >
                 <Check className="h-3 w-3 text-white" strokeWidth={3} />
               </motion.div>
-              <span className="text-sm font-medium">Prompt ready</span>
+              <span className="text-sm font-medium">Ready to paste</span>
             </div>
             <div className="flex items-center gap-4">
               <button className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
@@ -179,8 +179,8 @@ const Hero = () => {
         </h1>
         <p className="max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
           Record your screen, dictate what you want, and Zerro turns it into
-          exactly what you need — a structured prompt for your AI agent, or a
-          plain-language explanation of what&apos;s on screen.
+          exactly what you need — an agent prompt, a message, a snippet, a
+          written-up document, or simply a clear answer to your question.
         </p>
         <div className="flex flex-row flex-wrap items-center justify-center gap-3">
           <Button

@@ -61,8 +61,8 @@ export default function OpengraphImage() {
             <span>eyes and ears.</span>
           </div>
           <div style={{ color: "#a1a1a1", fontSize: 32, fontWeight: 400 }}>
-            Record your screen, dictate what you want, and get a structured
-            prompt for your AI agent.
+            Record your screen, dictate what you want, and get exactly what you
+            need — a prompt, a message, a snippet, a document, or a clear answer.
           </div>
         </div>
       </div>

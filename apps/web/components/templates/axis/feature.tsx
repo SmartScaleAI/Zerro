@@ -79,7 +79,7 @@ const ProcessingVisual = () => (
         className="h-3 w-3 rounded-full border-2 border-white/15 border-t-white/70"
       />
       <span className="text-sm font-medium text-white/90">
-        Building your prompt…
+        Building it…
       </span>
     </div>
   </div>
@@ -116,7 +116,7 @@ const steps: Step[] = [
     icon: Crop,
     title: "Select a region",
     description:
-      "Hit the hotkey, drag to frame the part of your screen you want the agent to see. Native macOS crosshair, no window switching.",
+      "Hit the hotkey, drag to frame the part of your screen you want Zerro to see. Native macOS crosshair, no window switching.",
     visual: <SelectRegionVisual />,
   },
   {
@@ -132,15 +132,15 @@ const steps: Step[] = [
     icon: Cpu,
     title: "Zerro processes locally",
     description:
-      "Audio gets isolated and frames get downsampled on your machine. Then a single API call turns it into a structured prompt.",
+      "Audio gets isolated and frames get downsampled on your machine. Then a single API call turns it into the right result — a ready-to-use artifact, or a straight answer.",
     visual: <ProcessingVisual />,
   },
   {
     n: "04",
     icon: ClipboardPaste,
-    title: "Paste the prompt",
+    title: "Paste it anywhere",
     description:
-      "Markdown prompt lands on your clipboard, ready to drop into Cursor, Windsurf, v0, or wherever you ship from.",
+      "It lands on your clipboard — agent prompt, message, snippet, or document — ready to drop into Cursor, your inbox, a sheet, or wherever it's headed.",
     visual: <PastePromptVisual />,
   },
 ]
@@ -163,9 +163,9 @@ const Feature = () => {
           Record. Speak. Copy.
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
-          Think voice dictation — but instead of plain text, you get a
-          structured prompt. No new app to learn; the whole flow runs from the
-          menu bar.
+          Think voice dictation — but instead of plain text, you get exactly
+          what you need: a ready-to-use artifact, or a straight answer. No new
+          app to learn; the whole flow runs from the menu bar.
         </p>
       </div>
 

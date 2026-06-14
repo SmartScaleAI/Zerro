@@ -11,9 +11,10 @@ const tools = ["ChatGPT", "Claude", "Gemini", "Cursor", "Perplexity", "v0"];
 // "Use it for" — everyday, cross-audience examples.
 const uses = [
   "Hand a coding agent real context",
-  "Explain a bug to an AI assistant",
-  "Understand a confusing screen, error, or document",
-  "Explain what you're looking at to a teammate",
+  "Draft a message about what's on screen",
+  "Grab the exact formula or snippet you need",
+  "Turn messy notes into a clean write-up",
+  "Get a confusing screen, error, or chart explained",
 ];
 
 const WhatIsZerro = () => {
@@ -33,15 +34,16 @@ const WhatIsZerro = () => {
           <div className="space-y-5 text-base leading-relaxed text-muted-foreground lg:text-lg">
             <p>
               Zerro is a native macOS menu-bar app that turns a screen recording
-              and a few spoken words into a clear, structured prompt for whatever
-              AI tool you&apos;re using — ChatGPT, Claude, a coding agent, or
-              anything else that takes text.
+              and a few spoken words into exactly what you need — an agent
+              prompt, a message, a code snippet, or a written-up document, ready
+              to paste into any AI tool or send to a person. Or, when you just
+              want to understand something, a clear answer in plain language.
             </p>
             <p>
               Everything runs locally first, and you bring your own keys — no
               servers in the middle, no account required. Talking is faster than
-              typing, and Zerro turns what you say into something an AI can
-              actually act on.
+              typing, and Zerro turns what you say into something you can paste,
+              send, or run.
             </p>
           </div>
         </div>
@@ -84,7 +86,7 @@ const WhatIsZerro = () => {
                 </span>
               ))}
               <span className="rounded-full border border-white/[0.08] bg-black/25 px-3 py-1 text-sm text-white/45">
-                & any text-based AI
+                & anywhere you paste text
               </span>
             </div>
           </div>

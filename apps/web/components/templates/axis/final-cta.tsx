@@ -69,7 +69,7 @@ const FinalCTA = () => {
                         </motion.span>
                     </h2>
                     <p className="max-w-xl text-base text-muted-foreground">
-                        Stop describing what you want. Show it. Zerro turns the recording into a structured prompt your agent can run with.
+                        Stop describing what you want. Show it. Zerro turns the recording into exactly what you need — a prompt, a message, a snippet, a document, or a straight answer.
                     </p>
                     <div className="flex flex-col items-center gap-3">
                         <Button

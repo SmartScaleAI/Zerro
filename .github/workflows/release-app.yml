@@ -220,7 +220,29 @@ jobs:
           rm -f "$KEY_PATH"
 
           xcrun stapler staple "dist/$APP_NAME.dmg"
-          xcrun stapler validate "dist/$APP_NAME.dmg"
+
+          # `stapler validate` on a DMG does an ONLINE ticket lookup (a stapled
+          # dmg ticket isn't validated purely offline the way a .app's is).
+          # Immediately after the notary service returns "Accepted" the ticket
+          # can take a short while to become queryable, so a single validate
+          # flakes with:
+          #   CloudKit query ... failed due to "(null)"
+          #   Could not find base64 encoded ticket in response
+          #   The validate action failed! Error 65.
+          # The staple above already succeeded; retry validation to ride out
+          # ticket propagation rather than failing an otherwise-good release.
+          for attempt in 1 2 3 4 5 6; do
+            if xcrun stapler validate "dist/$APP_NAME.dmg"; then
+              echo "stapler validate succeeded on attempt $attempt."
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::stapler validate still failing after $attempt attempts."
+              exit 1
+            fi
+            echo "stapler validate attempt $attempt failed (ticket may still be propagating); retrying in 20s…"
+            sleep 20
+          done
 
       # ----------------------------------------------------------------------
       # Upload the notarized + stapled dmg to the public Supabase Storage

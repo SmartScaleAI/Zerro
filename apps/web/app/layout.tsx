@@ -22,19 +22,20 @@ export const metadata: Metadata = {
     template: "%s — Zerro",
   },
   description:
-    "Record your screen, dictate what you want, and Zerro hands you a structured prompt — ready to paste into your AI agent. Like voice dictation for your codebase. Record it. Paste it. Zerro in between.",
+    "Record your screen, dictate what you want, and Zerro hands you exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer, ready to paste. Record it. Paste it. Zerro in between.",
   applicationName: "Zerro",
   metadataBase: new URL("https://getzerro.app"),
   alternates: {
     canonical: "/",
   },
   keywords: [
-    "voice dictation for coding",
-    "AI prompt generator",
-    "macOS menu bar app",
-    "Cursor prompt",
-    "Windsurf prompt",
     "screen recording to prompt",
+    "AI prompt generator",
+    "voice to AI prompt",
+    "dictate to AI",
+    "screen to text",
+    "macOS menu bar app",
+    "voice dictation for coding",
     "AI coding agent",
   ],
   robots: {
@@ -61,7 +62,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Zerro — Give your agent eyes and ears",
     description:
-      "Record your screen, dictate what you want, and Zerro hands you a structured prompt — like voice dictation for your codebase. Record it. Paste it. Zerro in between.",
+      "Record your screen, dictate what you want, and Zerro hands you exactly what you need — a prompt, a message, a snippet, a document, or a clear answer. Record it. Paste it. Zerro in between.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
@@ -70,7 +71,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Zerro — Give your agent eyes and ears",
     description:
-      "Record your screen, dictate what you want, and get a structured prompt for your AI agent — voice dictation built for coding.",
+      "Record your screen, dictate what you want, and get exactly what you need — a prompt, a message, a snippet, a document, or a clear answer.",
   },
 };
 

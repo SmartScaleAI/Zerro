@@ -41,12 +41,13 @@ const rows: Row[] = [
   },
   {
     label: "Output",
-    zerro: "Structured prompt",
+    zerro: "Ready-to-use output",
     wispr: "Dictated text",
     loom: "Video link",
   },
   {
-    label: "Built for AI coding agents",
+    label: "Formats output for the task",
+    sub: "Prompt, message, snippet, or doc.",
     zerro: true,
     wispr: false,
     loom: false,
@@ -119,7 +120,8 @@ const Comparison = () => {
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
           Dictation tools give you text. Screen recorders give you a video.
-          Zerro gives your agent a prompt.
+          Zerro gives you the finished result — a prompt, message, snippet, or
+          document, or a straight answer to your question.
         </p>
       </div>
 

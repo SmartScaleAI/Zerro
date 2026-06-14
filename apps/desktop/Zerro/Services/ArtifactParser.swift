@@ -56,6 +56,20 @@ enum ArtifactParser {
     private nonisolated static let recoveryOpen =
         /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*(>+)(.*)$/
 
+    /// Defense-in-depth scrubber tokens (handoff-artifact-fence-leak). When a
+    /// response degrades to the chat-only fallback (e.g. a generation truncated
+    /// by the output-token limit leaves one open fence and no close), the raw
+    /// wire delimiter must NEVER be shown verbatim in the pill. These match the
+    /// open fence (with its attrs + any chevron run, R1/R2 tolerant) and the
+    /// close fence so they can be stripped from the fallback text while keeping
+    /// any real spillover content on the same line. The straggler regex catches
+    /// a malformed open token whose attrs didn't parse. KEEP IN SYNC with the
+    /// `scrubFenceTokens` mirror in `eval-models.mjs`.
+    private nonisolated static let openFenceToken =
+        /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/
+    private nonisolated static let openFenceStraggler = /<<<ZERRO_ARTIFACT[^\n]*/
+    private nonisolated static let closeFenceToken = /<<<END_ZERRO_ARTIFACT>*/
+
     /// Contract cap on the model-written title; over-length warns only.
     private nonisolated static let maxTitleLength = 80
 
@@ -117,9 +131,12 @@ enum ArtifactParser {
         func chatOnly(valid: Bool) -> ParsedResponse {
             // Built from the sentinel-stripped lines (not `raw`) so the empty-
             // case marker never reaches the UI. Equivalent to the old
-            // `raw.trimmed` for every sentinel-free input.
+            // `raw.trimmed` for every sentinel-free input. Fence tokens are
+            // scrubbed as a safety net so a malformed/truncated response (one
+            // open fence, no close) can never show the raw `<<<ZERRO_ARTIFACT`
+            // wire syntax — a no-op on a genuinely fence-free chat reply.
             ParsedResponse(
-                chatText: lines.joined(separator: "\n")
+                chatText: Self.scrubFenceTokens(from: lines.joined(separator: "\n"))
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                 artifact: nil,
                 isValid: valid,

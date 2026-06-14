@@ -30,7 +30,7 @@ export function OrganizationJsonLd() {
         logo: `${SITE_URL}/logo/zerro-mark.svg`,
         email: "support@getzerro.app",
         description:
-          "Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into a structured prompt for AI coding agents.",
+          "Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer to your question.",
       }}
     />
   );
@@ -46,7 +46,7 @@ export function WebSiteJsonLd() {
         name: "Zerro",
         url: SITE_URL,
         description:
-          "Give your agent eyes and ears. Record your screen, dictate what you want, and get a structured prompt for your AI coding agent.",
+          "Give your agent eyes and ears. Record your screen, dictate what you want, and get exactly what you need — a prompt, a message, a snippet, a document, or a clear answer.",
         publisher: { "@type": "Organization", name: "Zerro", url: SITE_URL },
       }}
     />
@@ -61,12 +61,13 @@ export function SoftwareApplicationJsonLd() {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         name: "Zerro",
-        applicationCategory: "DeveloperApplication",
+        applicationCategory: "ProductivityApplication",
         operatingSystem: "macOS",
         url: SITE_URL,
         description:
-          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns a structured Markdown prompt ready to paste into Cursor, Windsurf, v0, or any AI coding agent. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
+          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns exactly what you need — an agent prompt, a ready-to-send message, an exact code snippet, a written-up document, or a clear answer to your question. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
         featureList: [
+          "Returns the right output for the task — agent prompt, message, snippet, document, or a plain-language answer",
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
           "Local-first processing — audio isolation and frame downsampling run on your machine",
           "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",

@@ -24,8 +24,9 @@ export default function PrivacyPage() {
           Zerro is operated by <Strong>SmartScale Solutions LLC</Strong>{" "}
           (&ldquo;SmartScale&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;). Zerro
           is a macOS menu-bar app that lets you record a region of your screen,
-          dictate instructions, and receive a structured prompt for your AI
-          coding agent. This policy explains what data we collect through the
+          dictate what you want, and receive exactly what you need — an agent
+          prompt, a message, a snippet, a document, or a clear answer to your
+          question. This policy explains what data we collect through the
           Zerro app and the getzerro.app website, how we use it, and the
           choices you have. Questions? Email us at{" "}
           <a
