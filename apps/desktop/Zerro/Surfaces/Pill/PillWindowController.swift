@@ -159,6 +159,16 @@ final class PillWindowController {
     /// the stale window frame.
     private func contentSizeDidChange() {
         guard let window, window.isVisible else { return }
+        // Don't re-fit a pill that's logically on its way out. This handler runs
+        // deferred (DispatchQueue.main.async), so by the time it executes the
+        // `.idle → nil` transition is already reflected in `appState.pillState`.
+        // Without this guard, the teardown frame (where `parsedResponse` is nil
+        // and the result view briefly renders an empty/placeholder card) would
+        // re-measure and animate the window to that card's height before the
+        // observation Task orders the window out — the dismiss "height flash".
+        // A still-visible result keeps a non-nil pillState, so legitimate
+        // re-fits (late HeightCappedScroll measurements) are unaffected.
+        guard appState.pillState != nil else { return }
         guard let hosting = window.contentView as? NSHostingView<PillHostView> else { return }
         let fitting = hosting.fittingSize
         // During a morph the geometry callback fires every animation frame

@@ -105,4 +105,30 @@ struct ParsedResponse: Equatable, Sendable {
     /// Human-readable parse notes (unknown type coerced, recovery rule
     /// fired, over-long title, …) — for logging, never for UI.
     let warnings: [String]
+    /// False ONLY when the generation step signalled the empty case via the
+    /// `<<<ZERRO_NO_REQUEST>>>` sentinel — there was no request to convert.
+    /// Defaults true so every other path (valid artifact, category-2
+    /// explain/advice, and the malformed-response fail-safe) keeps the
+    /// "Write agent prompt" affordance; the gate suppresses the button only
+    /// when this is explicitly false. See `AppState.canConvertToAgentPrompt`.
+    let requestPresent: Bool
+
+    /// Mirrors the synthesized memberwise init but defaults `requestPresent`
+    /// to true, so the existing construction sites compile unchanged and only
+    /// the parser's no-request path passes false.
+    init(
+        chatText: String,
+        artifact: Artifact?,
+        isValid: Bool,
+        wasRecovered: Bool,
+        warnings: [String],
+        requestPresent: Bool = true
+    ) {
+        self.chatText = chatText
+        self.artifact = artifact
+        self.isValid = isValid
+        self.wasRecovered = wasRecovered
+        self.warnings = warnings
+        self.requestPresent = requestPresent
+    }
 }

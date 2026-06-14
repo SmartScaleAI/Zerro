@@ -152,6 +152,15 @@ enum DiagnosticsCollector {
         return "\(version) (build \(build))"
     }
 
+    /// User-facing version shown in Settings: marketing version only,
+    /// prefixed with "v" (e.g. "v1.0.1"). The build number is omitted
+    /// here on purpose — it stays in `appVersionString()` for diagnostics.
+    static func displayVersionString() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        return "v\(version)"
+    }
+
     static func osVersionString() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"

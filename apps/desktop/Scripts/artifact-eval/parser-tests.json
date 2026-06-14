@@ -445,5 +445,52 @@
       "hasArtifact": true,
       "rawType": "message"
     }
+  },
+  {
+    "name": "no-request sentinel: empty case is chat-only, requestPresent false",
+    "tier": "strict",
+    "input": "I didn't catch a request in this recording — you walked through the screen and signed off without asking for anything. If you wanted something specific, record again and say what you need.\n<<<ZERRO_NO_REQUEST>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false,
+      "requestPresent": false,
+      "chatTextContains": "didn't catch a request"
+    }
+  },
+  {
+    "name": "no-request sentinel alone (no chat) still parses as empty case",
+    "tier": "strict",
+    "input": "<<<ZERRO_NO_REQUEST>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false,
+      "requestPresent": false
+    }
+  },
+  {
+    "name": "no sentinel: requestPresent defaults true on a normal chat-only reply",
+    "tier": "strict",
+    "input": "That spinner keeps running because the promise never resolves — the catch block swallows the rejection.",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false,
+      "requestPresent": true,
+      "chatTextContains": "spinner"
+    }
+  },
+  {
+    "name": "no-request sentinel inline (not alone on its line) still gates and keeps surrounding text",
+    "tier": "strict",
+    "input": "I didn't catch a request in this recording — record again and say what you need. <<<ZERRO_NO_REQUEST>>>",
+    "expect": {
+      "valid": true,
+      "recovered": false,
+      "hasArtifact": false,
+      "requestPresent": false,
+      "chatTextContains": "record again and say what you need."
+    }
   }
 ]

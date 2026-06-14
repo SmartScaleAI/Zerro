@@ -39,6 +39,13 @@ enum ArtifactParser {
     /// not ending with the full close fence is an unrecoverable malformation.
     private nonisolated static let closeToken = "<<<END_ZERRO_ARTIFACT"
 
+    /// Empty-case sentinel the generation step emits (on its own line) when
+    /// the recording held no request of any kind. It is NOT a fence: it never
+    /// produces or invalidates an artifact — it only flips `requestPresent`
+    /// off so the convert affordance is suppressed (the chat line is still
+    /// shown). Stripped from chat text so it never reaches the UI.
+    private nonisolated static let noRequestSentinel = "<<<ZERRO_NO_REQUEST>>>"
+
     /// Strict open fence: `<<<ZERRO_ARTIFACT type="…" title="…">>>`, alone
     /// on its line (trailing whitespace tolerated), exactly three chevrons.
     private nonisolated static let strictOpen =
@@ -61,10 +68,28 @@ enum ArtifactParser {
         var warnings: [String] = []
         // CRLF-normalize then split — equivalent to the JS reference's
         // split(/\r?\n/): \r\n and \n both break lines, a lone \r does not.
-        let lines = raw
+        let rawLines = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
+
+        // Empty-case sentinel: the generation step emits `<<<ZERRO_NO_REQUEST>>>`
+        // (contractually alone on its own line) when there was no request.
+        // Record its presence, then strip it BEFORE classification/assembly so
+        // it never leaks into chat text. (It is not a fence, so it would
+        // otherwise pass through untouched into the chat-only fallback.)
+        // Detection and stripping are substring-based, not own-line equality:
+        // a model that emits the marker inline ("…say what you need.
+        // <<<ZERRO_NO_REQUEST>>>") still gates AND has the raw token removed
+        // from the visible text. A line that is ONLY the sentinel disappears
+        // entirely (the contract shape); an inline one keeps its surrounding
+        // text.
+        let requestPresent = !rawLines.contains { $0.contains(noRequestSentinel) }
+        let lines: [String] = rawLines.compactMap { line in
+            guard line.contains(noRequestSentinel) else { return line }
+            let stripped = line.replacingOccurrences(of: noRequestSentinel, with: "")
+            return stripped.trimmingCharacters(in: .whitespaces).isEmpty ? nil : stripped
+        }
 
         // One pass to classify fence candidates. Opens must sit at column 0;
         // an open token anywhere else is unrecoverable. Closes are strict
@@ -90,12 +115,17 @@ enum ArtifactParser {
         }
 
         func chatOnly(valid: Bool) -> ParsedResponse {
+            // Built from the sentinel-stripped lines (not `raw`) so the empty-
+            // case marker never reaches the UI. Equivalent to the old
+            // `raw.trimmed` for every sentinel-free input.
             ParsedResponse(
-                chatText: raw.trimmingCharacters(in: .whitespacesAndNewlines),
+                chatText: lines.joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
                 artifact: nil,
                 isValid: valid,
                 wasRecovered: false,
-                warnings: warnings
+                warnings: warnings,
+                requestPresent: requestPresent
             )
         }
 
@@ -177,7 +207,8 @@ enum ArtifactParser {
             artifact: Artifact(type: type, rawType: rawType, title: title, body: body),
             isValid: true,
             wasRecovered: recovered,
-            warnings: warnings
+            warnings: warnings,
+            requestPresent: requestPresent
         )
     }
 }

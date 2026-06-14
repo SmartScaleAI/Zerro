@@ -68,19 +68,35 @@ struct RecentPromptsView: View {
         HSplitView {
             sidebar
                 .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                // Both panes sit on `vfPanelBackground`, so a 0.5pt hairline
+                // on the sidebar's trailing edge becomes the only visual break
+                // between the columns — replacing the default HSplitView seam
+                // with the same weight used inside Settings cards.
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Color.vfHairline)
+                        .frame(width: 0.5)
+                }
             detail
                 .frame(minWidth: 360, maxWidth: .infinity)
         }
     }
 
     private var sidebar: some View {
-        List(selection: $selectedID) {
-            ForEach(recentPrompts.prompts) { entry in
-                SidebarRow(entry: entry)
-                    .tag(entry.id)
+        // Custom column on the flat dark panel surface — replaces the native
+        // `.listStyle(.sidebar)`, whose translucent vibrancy material clashed
+        // with the hand-rolled dark Settings look.
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(recentPrompts.prompts) { entry in
+                    SidebarRow(entry: entry, isSelected: selectedID == entry.id) {
+                        selectedID = entry.id
+                    }
+                }
             }
+            .padding(.vertical, VFSpacing.xs)
         }
-        .listStyle(.sidebar)
+        .background(Color.vfPanelBackground)
     }
 
     @ViewBuilder
@@ -155,27 +171,54 @@ struct RecentPromptsView: View {
 
 private struct SidebarRow: View {
     let entry: RecentPrompt
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
-        // Phase 5: the artifact-type glyph (chat bubble for chat-only)
-        // leads the row so the list scans by result kind at a glance.
-        HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-            Image(systemName: entry.displayIconName)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
+        Button(action: onTap) {
+            // Phase 5: the artifact-type glyph (chat bubble for chat-only)
+            // leads the row so the list scans by result kind at a glance.
+            HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+                Image(systemName: entry.displayIconName)
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.vfTextSecondary)
+                    .foregroundStyle(isSelected ? Color.vfTextSecondary : Color.vfTextTertiary)
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                    Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.vfTextSecondary)
+                }
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, VFSpacing.sm)
+            .padding(.vertical, VFSpacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Contained pill: ~6pt rounded fill inset from the column edge so
+            // selection reads as a chip rather than running edge-to-edge.
+            .background(
+                RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
+                    .fill(fill)
+                    .padding(.horizontal, VFSpacing.xs)
+            )
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 2)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+
+    // Three tiers built from the same tokens as `SettingsNavigationRow`:
+    // clear → faint hover → subtle gray selection.
+    private var fill: Color {
+        if isSelected { return Color.white.opacity(0.07) }
+        if isHovered { return Color.white.opacity(0.03) }
+        return Color.clear
     }
 
     private static let relative: RelativeDateTimeFormatter = {
@@ -213,7 +256,11 @@ private struct DetailPane: View {
                 Spacer()
                 actions
             }
-            Divider().overlay(Color.vfHairline)
+            // Explicit 0.5pt hairline matching the column↔detail seam weight
+            // (the system Divider rendered heavier than the new column seam).
+            Rectangle()
+                .fill(Color.vfHairline)
+                .frame(height: 0.5)
             ScrollView {
                 // Phase 7: render from the v2 fields — chat text above the
                 // artifact body, the same visual pattern as the pill (no raw

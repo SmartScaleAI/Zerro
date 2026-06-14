@@ -428,6 +428,11 @@ function arg(name, fallback) {
 const ARTIFACT_TYPES = ["agent_prompt", "message", "snippet", "document", "generic"];
 const ARTIFACT_OPEN_PREFIX = "<<<ZERRO_ARTIFACT";
 const ARTIFACT_CLOSE = "<<<END_ZERRO_ARTIFACT>>>";
+// Empty-case sentinel — emitted by generation on its own line when there was
+// no request. Not a fence: it only flips requestPresent off (so the convert
+// affordance is suppressed) and is stripped from chat text. KEEP IN SYNC with
+// ArtifactParser.swift's noRequestSentinel.
+const NO_REQUEST_SENTINEL = "<<<ZERRO_NO_REQUEST>>>";
 const DIRECT_ADDRESS_RE = /\byou(?:r|'re|'ll|'ve|'d)?\b/i;
 const THE_USER_RE = /\bthe user\b/i;
 
@@ -466,7 +471,18 @@ const ARTIFACT_OPEN_RECOVERY = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^
 
 function parseArtifactResponse(raw) {
   const warnings = [];
-  const lines = raw.split(/\r?\n/);
+  const rawLines = raw.split(/\r?\n/);
+  // Empty-case sentinel: record its presence, then strip it before
+  // classification/assembly so it never leaks into chat text. Substring-based
+  // (not own-line equality): an inline marker still gates and is removed; a
+  // sentinel-only line vanishes, an inline one keeps its surrounding text.
+  // (Mirror of ArtifactParser.swift.)
+  const requestPresent = !rawLines.some((l) => l.includes(NO_REQUEST_SENTINEL));
+  const lines = rawLines.flatMap((l) => {
+    if (!l.includes(NO_REQUEST_SENTINEL)) return [l];
+    const stripped = l.split(NO_REQUEST_SENTINEL).join("");
+    return stripped.trim() === "" ? [] : [stripped];
+  });
   const opens = [];
   const closes = []; // { index, strict, prefix }
   let midline = false;
@@ -483,7 +499,7 @@ function parseArtifactResponse(raw) {
       midline = true; // close token NOT at end of line (or wrong chevrons) — unrecoverable
     }
   });
-  const asChatOnly = (valid) => ({ chatText: raw.trim(), artifact: null, valid, recovered: false, warnings });
+  const asChatOnly = (valid) => ({ chatText: lines.join("\n").trim(), artifact: null, valid, recovered: false, warnings, requestPresent });
   if (opens.length === 0 && closes.length === 0 && !midline) return asChatOnly(true);
   if (midline) {
     warnings.push("fence delimiter not alone at line start");
@@ -536,7 +552,7 @@ function parseArtifactResponse(raw) {
   if (!chatText) warnings.push("no chat text before the artifact block");
   if (!body) warnings.push("empty artifact body");
   if (trailing) warnings.push("text after the close fence (contract: chat first, artifact last)");
-  return { chatText, artifact: { type, rawType, title, body }, valid: true, recovered, warnings };
+  return { chatText, artifact: { type, rawType, title, body }, valid: true, recovered, warnings, requestPresent };
 }
 
 /** Synthesize a fixture into the production timeline text shape (no images). */
@@ -848,6 +864,7 @@ function runParserTests() {
     if (e.valid !== undefined && got.valid !== e.valid) problems.push(`valid: ${got.valid} ≠ ${e.valid}`);
     if (e.recovered !== undefined && got.recovered !== e.recovered) problems.push(`recovered: ${got.recovered} ≠ ${e.recovered}`);
     if (e.hasArtifact !== undefined && (got.artifact !== null) !== e.hasArtifact) problems.push(`hasArtifact: ${got.artifact !== null} ≠ ${e.hasArtifact}`);
+    if (e.requestPresent !== undefined && got.requestPresent !== e.requestPresent) problems.push(`requestPresent: ${got.requestPresent} ≠ ${e.requestPresent}`);
     if (e.type !== undefined && got.artifact?.type !== e.type) problems.push(`type: ${got.artifact?.type} ≠ ${e.type}`);
     if (e.rawType !== undefined && got.artifact?.rawType !== e.rawType) problems.push(`rawType: ${got.artifact?.rawType} ≠ ${e.rawType}`);
     if (e.title !== undefined && got.artifact?.title !== e.title) problems.push(`title: ${JSON.stringify(got.artifact?.title)} ≠ ${JSON.stringify(e.title)}`);

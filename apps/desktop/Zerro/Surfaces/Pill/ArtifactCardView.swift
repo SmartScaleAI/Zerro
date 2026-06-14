@@ -55,6 +55,27 @@ struct ArtifactCardView: View {
     /// Phase 6 — starts (or retries) the conversion.
     let onConvert: () -> Void
 
+    /// When non-nil, the card renders in its FAILURE configuration (the
+    /// "show generation failures in the expanded response card" handoff): the
+    /// green check badge becomes the amber caution icon, the title reads
+    /// "Generation failed", the body shows the underlying error as prose, and
+    /// the footer Copy button is replaced with Retry. All success-only chrome
+    /// (chat text, body well, conversion affordance, charge line, notes) is
+    /// suppressed. nil → the normal success card. Defaulted so the success
+    /// call site (ResultPillContent) is unchanged.
+    var failure: FailureConfig? = nil
+    /// Fires the Retry action in the failure configuration (wired to
+    /// `AppState.retryFailedPrompt` via the pill's `onRetryError`). Inert in
+    /// the success configuration. Defaulted for the success call site.
+    var onRetry: () -> Void = {}
+
+    /// The two strings the failure card renders: the fixed headline and the
+    /// real underlying error detail.
+    struct FailureConfig: Equatable {
+        let headline: String
+        let detail: String
+    }
+
     /// Transient "Copied" confirmation — same pattern and timing as the
     /// compact header's copy button: flips on tap, reverts after 1.6s, a
     /// re-tap restarts the window.
@@ -71,20 +92,26 @@ struct ArtifactCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: VFSpacing.md) {
             header
-            if stoppedBySleep {
-                stoppedBySleepNote
-            }
-            if noNarration {
-                noNarrationNote
-            }
-            if !chatText.isEmpty {
-                chatSection
-            }
-            if let artifact {
-                bodyWell(for: artifact)
-            }
-            if artifact == nil, conversion == .failed {
-                conversionFailureNote
+            if let failure {
+                // Failure configuration: the underlying error as prose, no
+                // success-only chrome.
+                failureBody(failure)
+            } else {
+                if stoppedBySleep {
+                    stoppedBySleepNote
+                }
+                if noNarration {
+                    noNarrationNote
+                }
+                if !chatText.isEmpty {
+                    chatSection
+                }
+                if let artifact {
+                    bodyWell(for: artifact)
+                }
+                if artifact == nil, conversion == .failed {
+                    conversionFailureNote
+                }
             }
             footer
         }
@@ -95,17 +122,12 @@ struct ArtifactCardView: View {
 
     private var header: some View {
         HStack(spacing: VFSpacing.sm + 2) {
-            // Green check in a soft circular badge — the same badge idiom
-            // the recovery pill's moon uses, sized down.
-            Image(systemName: "checkmark")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.vfSuccessGreen)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.vfSuccessGreen.opacity(0.18)))
+            badge
 
             // The model-written title (§2 caps it at 80 chars; an over-long
             // one that slipped past the warning truncates here). Chat-only
-            // shares the compact capsule's neutral label.
+            // shares the compact capsule's neutral label; failure mode shows
+            // the fixed "Generation failed" headline.
             Text(title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Color.vfTextPrimary)
@@ -115,14 +137,40 @@ struct ArtifactCardView: View {
             Spacer(minLength: VFSpacing.xxl)
 
             HStack(spacing: VFSpacing.md) {
-                collapseToggle
-                dismissDivider
+                // The failure card has no compact form, so it omits the
+                // Hide/collapse chevron and its divider — only Dismiss remains.
+                if failure == nil {
+                    collapseToggle
+                    dismissDivider
+                }
                 dismissButton
             }
         }
     }
 
+    /// The header glyph: the green check in success, the amber caution icon in
+    /// failure — same soft circular badge idiom either way.
+    @ViewBuilder
+    private var badge: some View {
+        if failure != nil {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.vfWarningAmber)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.vfWarningAmber.opacity(0.18)))
+        } else {
+            // Green check in a soft circular badge — the same badge idiom
+            // the recovery pill's moon uses, sized down.
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.vfSuccessGreen)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.vfSuccessGreen.opacity(0.18)))
+        }
+    }
+
     private var title: String {
+        if let failure { return failure.headline }
         guard let artifact else { return "Response ready" }
         return artifact.title.isEmpty ? "Untitled" : artifact.title
     }
@@ -220,19 +268,53 @@ struct ArtifactCardView: View {
 
     private var footer: some View {
         HStack(spacing: VFSpacing.md) {
-            if let chargeLine {
+            // The charge line is a success-only readout — suppressed in failure.
+            if let chargeLine, failure == nil {
                 Text(chargeLine)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextSecondary)
                     .fixedSize()
             }
             Spacer(minLength: VFSpacing.md)
-            if artifact != nil {
+            if failure != nil {
+                retryButton
+            } else if artifact != nil {
                 copyButton
             } else if conversion != .hidden {
                 conversionButton
             }
         }
+    }
+
+    // MARK: Failure configuration
+
+    /// The underlying error rendered as prose, reusing the chat-text scroll so
+    /// a long error wraps and scrolls instead of overflowing the card.
+    private func failureBody(_ failure: FailureConfig) -> some View {
+        HeightCappedScroll(maxHeight: 420, fadesScrollEdges: true) {
+            ChatProseText(text: failure.detail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Replaces the success Copy capsule in failure mode. Styled like the
+    /// primary success button (brand-accent capsule) with a refresh icon.
+    private var retryButton: some View {
+        Button(action: onRetry) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Retry")
+                    .font(.system(size: 13, weight: .semibold))
+                    .fixedSize()
+            }
+            .foregroundStyle(Color.vfOnBrand)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Color.vfBrandAccent, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
     }
 
     private var copyButton: some View {
@@ -443,29 +525,17 @@ private struct ScrollEdges: Equatable {
 //
 // The conversational chat text. PROSE, not code: standard UI font, normal
 // line spacing — it must read like a sentence addressed to the user, not a
-// terminal dump (the body well keeps the monospace voice). Inline markdown
-// (`code`, *emphasis*, **bold**) still renders; SwiftUI gives backtick
-// spans their monospace for free.
+// terminal dump (the body well keeps the monospace voice). Full block
+// markdown renders here via ProseMarkdownView — headings, bullet/numbered
+// lists, and tables lay out as structure instead of leaking through as
+// literal `###` / `|---|` / `- ` syntax — and inline markdown (`code`,
+// *emphasis*, **bold**) resolves within each block. The artifact body well
+// is intentionally NOT routed through this; it stays raw/monospace.
 
 struct ChatProseText: View {
     let text: String
 
     var body: some View {
-        Text(attributed)
-            .font(.system(size: 13))
-            .foregroundStyle(Color.vfTextPrimary)
-            .lineSpacing(3)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Inline-only markdown so paragraph breaks in the chat text survive
-    /// as line breaks; falls back to the raw string if parsing balks
-    /// (never drop the chat text — it's the fail-safe surface).
-    private var attributed: AttributedString {
-        (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(text)
+        ProseMarkdownView(markdown: text)
     }
 }

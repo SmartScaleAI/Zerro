@@ -39,6 +39,13 @@ enum PillState: Equatable {
     /// Dismiss (the user has to fix the underlying cause: Settings, free
     /// up disk, re-record, etc.).
     case error(message: String, retryable: Bool)
+    /// The expanded failure card — shown for RETRYABLE generation failures
+    /// (`AppState.canRetryFailure == true`). Reuses the success card's chrome
+    /// in an error configuration: amber caution badge, the `headline`
+    /// ("Generation failed"), the underlying `detail` as scrollable prose, and
+    /// a Retry button in place of Copy. Non-retryable failures keep the compact
+    /// `.error` capsule. Mapped from `.failed` by the bridge.
+    case failureExpanded(headline: String, detail: String)
     /// M2 — recovery confirmation. Offered at wake/launch when a recording that
     /// a system sleep interrupted is recoverable on disk. Reads "Recording
     /// stopped when your Mac slept — generate a prompt from it?" with exactly
@@ -86,9 +93,10 @@ struct PillView: View {
     /// optional artifact card. Threaded from
     /// AppState.resultPresentation via PillWindowController so the
     /// pure-renderer PillView doesn't need to know about AppState.
-    /// `nil` falls back to a placeholder so previews and the brief
-    /// transition window (state flips to .done before the result view
-    /// can re-render) don't render an empty card.
+    /// `nil` falls back to `ResultPresentation.empty` (a neutral, content-free
+    /// card) during the brief teardown window when state flips `.done → .idle`
+    /// before the result view re-renders. Previews pass a rich sample
+    /// explicitly via `result: ResultPillContent.placeholderResult`.
     var result: ResultPresentation? = nil
 
     /// Phase 6 — the conversion ghost-button state for artifact-less results.
@@ -165,7 +173,7 @@ struct PillView: View {
         switch state {
         case .recording, .wrappingUp, .processing, .error:
             return Self.capsuleWidth
-        case .resultCompact, .resultExpanded, .confirmRecovery:
+        case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery:
             return nil
         }
     }
@@ -180,7 +188,7 @@ struct PillView: View {
         // than overflowing the fixed single-line frame. ErrorPillContent
         // floors itself at capsuleHeight so short messages still render as
         // the familiar 50pt capsule.
-        case .resultExpanded, .error:
+        case .resultExpanded, .failureExpanded, .error:
             return nil
         }
     }
@@ -227,7 +235,7 @@ struct PillView: View {
         case .resultCompact:
             ResultPillContent(
                 expanded: false,
-                result: result ?? ResultPillContent.placeholderResult,
+                result: result ?? .empty,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
@@ -240,7 +248,7 @@ struct PillView: View {
         case .resultExpanded:
             ResultPillContent(
                 expanded: true,
-                result: result ?? ResultPillContent.placeholderResult,
+                result: result ?? .empty,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
@@ -256,6 +264,27 @@ struct PillView: View {
                 onRetry: retryable ? onRetryError : nil,
                 onDismiss: onDismissError
             )
+        case .failureExpanded(let headline, let detail):
+            // Reuse the success card in its failure configuration, wrapped with
+            // the same 760-wide / clipped chrome `.resultExpanded` uses so the
+            // success ↔ failure layouts stay visually consistent.
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                conversion: .hidden,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissError,
+                onConvert: {},
+                failure: ArtifactCardView.FailureConfig(headline: headline, detail: detail),
+                onRetry: onRetryError
+            )
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         case .confirmRecovery:
             ConfirmRecoveryPillContent(
                 onGenerate: onRecoveryGenerate,
@@ -266,8 +295,8 @@ struct PillView: View {
 
     private var cornerRadius: CGFloat {
         switch state {
-        case .resultExpanded: return 18
-        default:              return 28
+        case .resultExpanded, .failureExpanded: return 18
+        default:                                return 28
         }
     }
 }
@@ -510,6 +539,23 @@ private struct ProcessingPillContent: View {
     let stepLabel: String
     let onCancel: () -> Void
 
+    // The "thinking" label arrives as "<phrase>… \u{00B7} <elapsed>". Split
+    // on the middot so the phrase can truncate while the elapsed timer stays
+    // pinned and fully visible — a long phrase must never shove the timer,
+    // spinner, or Cancel off the fixed-width capsule. Labels without a middot
+    // (the earlier pipeline stages) render whole and truncate only if needed.
+    private static let timeSeparator = " \u{00B7} "
+
+    private var phrasePart: String {
+        guard let range = stepLabel.range(of: Self.timeSeparator) else { return stepLabel }
+        return String(stepLabel[..<range.lowerBound])
+    }
+
+    private var timePart: String? {
+        guard let range = stepLabel.range(of: Self.timeSeparator) else { return nil }
+        return String(stepLabel[range.upperBound...])
+    }
+
     var body: some View {
         HStack(spacing: VFSpacing.md) {
             HStack(spacing: VFSpacing.sm) {
@@ -517,10 +563,23 @@ private struct ProcessingPillContent: View {
                     .controlSize(.small)
                     .tint(Color.vfTextSecondary)
 
-                Text(stepLabel)
+                // Truncates first so it yields space to everything else.
+                Text(phrasePart)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.vfTextPrimary)
-                    .fixedSize()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                // Elapsed timer: pinned and never truncated so it stays
+                // readable no matter how long the phrase is. Same gray as the
+                // Cancel button so it reads as secondary metadata.
+                if let timePart {
+                    Text("\u{00B7} \(timePart)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
             }
 
             // Pushes Cancel to the trailing edge so .processing's
@@ -641,8 +700,8 @@ private struct ResultPillContent: View {
     let expanded: Bool
     /// The parsed result to render. Threaded from
     /// AppState.resultPresentation at the PillView level; falls back to
-    /// `placeholderResult` when the call site hasn't supplied one
-    /// (previews; transient state windows).
+    /// `ResultPresentation.empty` in the transient teardown window and to
+    /// `placeholderResult` in previews (passed explicitly).
     let result: ResultPresentation
     /// True when the prompt was generated from the screen alone because
     /// no usable narration was detected. Tints the header indicator amber
@@ -829,10 +888,12 @@ private struct ResultPillContent: View {
         .fixedSize()
     }
 
-    /// Fallback result when none has been threaded in. Used by SwiftUI
-    /// previews and for the brief transition window between state flipping
-    /// to .done and the result view rendering. Production call sites always
-    /// have a real result by the time the pill morphs into a result state.
+    /// Rich sample result for SwiftUI `#Preview` blocks ONLY. Production code
+    /// never falls back to this — the `.resultCompact` / `.resultExpanded`
+    /// cases use `ResultPresentation.empty` when `result` is nil, so the brief
+    /// teardown frame (state flipping `.done → .idle` while `parsedResponse`
+    /// nils out) renders an empty card rather than this heavyweight sample.
+    /// Pass it explicitly to previews via `result: ResultPillContent.placeholderResult`.
     static let placeholderResult = ResultPresentation(
         chatText: "I watched you walk through the Pulse login screen \u{2014} "
             + "here\u{2019}s an agent prompt covering the three layout changes you asked for.",
@@ -886,13 +947,13 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Result \u{00B7} Compact") {
-    PillView(state: .resultCompact)
+    PillView(state: .resultCompact, result: ResultPillContent.placeholderResult)
         .padding(40)
         .background(Color.vfPanelBackground)
 }
 
 #Preview("Result \u{00B7} Expanded \u{00B7} agent_prompt") {
-    PillView(state: .resultExpanded)
+    PillView(state: .resultExpanded, result: ResultPillContent.placeholderResult)
         .padding(40)
         .background(Color.vfPanelBackground)
 }
@@ -929,7 +990,11 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Result \u{00B7} No narration") {
-    PillView(state: .resultExpanded, resultHadNoNarration: true)
+    PillView(
+        state: .resultExpanded,
+        result: ResultPillContent.placeholderResult,
+        resultHadNoNarration: true
+    )
         .padding(40)
         .background(Color.vfPanelBackground)
 }
@@ -981,6 +1046,21 @@ private struct ResultPillContent: View {
     PillView(state: .error(
         message: "Couldn\u{2019}t reach OpenAI \u{2014} check your connection.",
         retryable: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Failure \u{00B7} Expanded") {
+    // Retryable generation failure — the expanded card with a long, realistic
+    // error detail to exercise the body scroll/wrap and the Retry button.
+    PillView(state: .failureExpanded(
+        headline: "Generation failed",
+        detail: "The request to the generation service failed: A server with the "
+            + "specified hostname could not be found. (NSURLErrorDomain, code -1003). "
+            + "This usually means you\u{2019}re offline or the service is temporarily "
+            + "unreachable \u{2014} your recording is still on disk, so Retry will run it "
+            + "again without re-recording."
     ))
         .padding(40)
         .background(Color.vfPanelBackground)

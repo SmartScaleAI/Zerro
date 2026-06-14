@@ -43,6 +43,7 @@ final class ArtifactParserTests: XCTestCase {
             let bodyContains: String?
             let chatTextContains: String?
             let warningsContain: String?
+            let requestPresent: Bool?
         }
     }
 
@@ -98,7 +99,53 @@ final class ArtifactParserTests: XCTestCase {
             if let warning = e.warningsContain {
                 XCTAssertTrue(got.warnings.contains { $0.contains(warning) }, "\(label): warnings should mention \(warning) — got \(got.warnings)")
             }
+            if let requestPresent = e.requestPresent {
+                XCTAssertEqual(got.requestPresent, requestPresent, "\(label): requestPresent")
+            }
         }
+    }
+
+    // MARK: - Swift-specific: no-request sentinel
+
+    /// The empty-case sentinel flips `requestPresent` off, is stripped from the
+    /// rendered chat text, and never invalidates the response (the chat line is
+    /// still shown). The shared suite asserts the flag; this Swift-only case
+    /// proves the literal marker does not leak into the UI text (no shared
+    /// "chatText omits" assertion exists, so it lives here).
+    func testNoRequestSentinelStrippedFromChatText() {
+        let raw = """
+        I didn't catch a request in this recording — record again and say what you need.
+        <<<ZERRO_NO_REQUEST>>>
+        """
+        let got = ArtifactParser.parse(raw)
+        XCTAssertTrue(got.isValid)
+        XCTAssertNil(got.artifact)
+        XCTAssertFalse(got.requestPresent)
+        XCTAssertFalse(got.chatText.contains("ZERRO_NO_REQUEST"), "sentinel must be stripped from chat text")
+        XCTAssertTrue(got.chatText.contains("didn't catch a request"))
+    }
+
+    /// Hardening: the marker still gates and is stripped even when the model
+    /// emits it inline (not alone on its line). Detection and stripping are
+    /// substring-based, so the raw token never leaks into the visible text and
+    /// the surrounding sentence survives intact.
+    func testNoRequestSentinelInlineIsStrippedAndGates() {
+        let raw = "I didn't catch a request in this recording — record again and say what you need. <<<ZERRO_NO_REQUEST>>>"
+        let got = ArtifactParser.parse(raw)
+        XCTAssertTrue(got.isValid)
+        XCTAssertNil(got.artifact)
+        XCTAssertFalse(got.requestPresent)
+        XCTAssertFalse(got.chatText.contains("ZERRO_NO_REQUEST"), "inline sentinel must be stripped from chat text")
+        XCTAssertTrue(got.chatText.contains("record again and say what you need."))
+    }
+
+    /// requestPresent stays true for an ordinary artifact-less reply (the
+    /// category-2 explain/advice case the convert button is FOR).
+    func testRequestPresentDefaultsTrueWithoutSentinel() {
+        let got = ArtifactParser.parse("Here's why that build fails — the cache key is stale.")
+        XCTAssertTrue(got.isValid)
+        XCTAssertNil(got.artifact)
+        XCTAssertTrue(got.requestPresent)
     }
 
     // MARK: - Swift-specific: unicode

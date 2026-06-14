@@ -29,6 +29,14 @@ struct ResultPresentation: Equatable {
     /// The typed artifact, when one was attached. nil → chat-only layout
     /// (no card).
     let artifact: Artifact?
+
+    /// Neutral, content-free presentation. Used by `PillView` as the
+    /// production fallback when `result` is briefly nil during teardown
+    /// (the `.done → .idle` frame, before the window orders out) so the
+    /// pill renders an EMPTY card rather than substituting heavyweight
+    /// sample content. The rich sample lives in
+    /// `ResultPillContent.placeholderResult`, which is preview-only.
+    static let empty = ResultPresentation(chatText: "", artifact: nil)
 }
 
 extension AppState {
@@ -56,7 +64,18 @@ extension AppState {
             return isResultExpanded ? .resultExpanded : .resultCompact
 
         case .failed(let reason):
-            return .error(message: reason.userMessage, retryable: canRetryFailure)
+            // Retryable failures get the expanded card so the user can read
+            // the real error and retry from there; everything else keeps the
+            // compact amber capsule unchanged. `canRetryFailure` is re-evaluated
+            // on every render, so a retry that exhausts the cap degrades to the
+            // small pill (no Retry button) on the next pass.
+            if canRetryFailure {
+                return .failureExpanded(
+                    headline: "Generation failed",
+                    detail: lastFailureDetail ?? reason.userMessage
+                )
+            }
+            return .error(message: reason.userMessage, retryable: false)
         }
     }
 }
@@ -76,7 +95,9 @@ extension PillState {
 
     private static func isResult(_ state: PillState?) -> Bool {
         switch state {
-        case .resultCompact?, .resultExpanded?: return true
+        // `.failureExpanded` is the same big card morph as the result states,
+        // so it gets the softer result spring too.
+        case .resultCompact?, .resultExpanded?, .failureExpanded?: return true
         default: return false
         }
     }

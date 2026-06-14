@@ -53,7 +53,7 @@ enum SupportURLs {
 private struct VersionRow: View {
     var body: some View {
         SettingsRow(label: "Version", description: nil) {
-            Text("Zerro \(DiagnosticsCollector.appVersionString())")
+            Text("Zerro \(DiagnosticsCollector.displayVersionString())")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(Color.vfTextSecondary)
         }

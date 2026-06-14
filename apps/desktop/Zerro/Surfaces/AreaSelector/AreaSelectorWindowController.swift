@@ -4,8 +4,12 @@
 //
 //  Created by Colin Breeding on 5/28/26.
 //
-//  Owns the borderless, full-screen, transparent NSWindow that
-//  hosts the area-selector overlay. Mirrors PillWindowController's
+//  Owns the borderless, full-screen, transparent non-activating
+//  NSPanel that hosts the area-selector overlay. Being a
+//  .nonactivatingPanel lets it take key status (for its event
+//  monitors) without activating the app — so triggering the hotkey
+//  never raises other Zerro windows (Settings, onboarding).
+//  Mirrors PillWindowController's
 //  contentView pattern (NSHostingView directly as contentView, no
 //  custom event-handling NSView wrapper) — using a wrapper view
 //  introduces autolayout/autoresizing coupling that can leave the
@@ -121,7 +125,13 @@ final class AreaSelectorWindowController {
         let win = makeOverlayWindow(on: screen, state: state)
         self.window = win
 
-        NSApp.activate(ignoringOtherApps: true)
+        // No NSApp.activate here: under .accessory policy, activating the
+        // whole app re-orders EVERY Zerro window to the front (Settings,
+        // onboarding, …). The overlay is a non-activating panel (see
+        // makeOverlayWindow / AreaSelectorWindow), so orderFrontRegardless()
+        // + makeKey() below bring just this panel forward and give it key
+        // status — enough for the local event monitors to fire — without
+        // touching any other window.
 
         // Appear as a pure opacity fade with NO scale. The "zoom in" on show
         // is Core Animation's implicit `onOrderIn` action, which runs on the
@@ -651,15 +661,25 @@ final class AreaSelectorWindowController {
             rootView: AreaSelectorRootView(state: state, topInset: topInset)
         )
 
+        // .nonactivatingPanel: the overlay takes key status (for its
+        // mouse/ESC local monitors) without activating the app, so no other
+        // Zerro window is raised when the hotkey fires. See AreaSelectorWindow.
         let win = AreaSelectorWindow(
             contentRect: screen.frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = false
+        // NSPanel hides itself on app deactivation by default; since we
+        // deliberately never activate the app, that would whisk the overlay
+        // away on a stray deactivation event — keep it pinned.
+        win.hidesOnDeactivate = false
+        // We DO need key status (ESC), so the panel must become key on
+        // makeKey() rather than only when a subview demands first responder.
+        win.becomesKeyOnlyIfNeeded = false
         // Suppress AppKit's implicit window appearance animation; `present`
         // reveals the overlay with an explicit opacity-only fade so the dim
         // never scales/zooms up on show.
@@ -698,14 +718,16 @@ final class AreaSelectorWindowController {
 
 // MARK: - AreaSelectorWindow
 
-/// Borderless NSWindow subclass that allows itself to become key.
-/// The default NSWindow refuses key status when `styleMask` is just
-/// `.borderless`, which would block keyDown(ESC) from ever reaching
-/// the responder chain. (Local monitors fire even for non-key
-/// windows, but only when the app is active — for the cleanest
-/// behavior in an .accessory-policy menu-bar app we still want the
-/// overlay to be the key window.)
-private final class AreaSelectorWindow: NSWindow {
+/// Borderless, non-activating NSPanel subclass that allows itself to
+/// become key. As an NSPanel with `.nonactivatingPanel`, it can take
+/// key status — so its mouse/ESC local monitors fire — WITHOUT
+/// activating the app, which under `.accessory` policy would re-order
+/// every Zerro window (Settings, onboarding, …) to the front. The
+/// `canBecomeKey` override is still required: a panel whose styleMask
+/// is just `.borderless`/`.nonactivatingPanel` otherwise refuses key
+/// status, which would block keyDown(ESC) from reaching the responder
+/// chain.
+private final class AreaSelectorWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }

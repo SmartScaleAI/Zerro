@@ -269,7 +269,26 @@ final class AppState {
 
     // MARK: Live State
 
-    var state: RecordingState = .idle
+    var state: RecordingState = .idle {
+        didSet {
+            // The processing pill's elapsed timer + phrase rotation live
+            // exactly as long as the `.processing` state. Drive their
+            // lifecycle centrally here so every entry and every exit (success,
+            // failure, cancel, reset) is covered without threading start/stop
+            // through each call site.
+            switch (oldValue, state) {
+            case (.processing, .processing):
+                break
+            case (_, .processing):
+                startProcessingTimer()
+            case (.processing, _):
+                stopProcessingTimer()
+                stopThinkingRotation()
+            default:
+                break
+            }
+        }
+    }
     var elapsedSeconds: Double = 0
     var frameCount: Int = 0
 
@@ -494,6 +513,19 @@ final class AppState {
     /// it never outlives the generation or leaks a timer. Nil when idle.
     private var thinkingRotationTask: Task<Void, Never>?
 
+    /// The global 1-second ticker for the whole `.processing` state — drives
+    /// the live "· Xs" elapsed counter on every stage label (see
+    /// `startProcessingTimer`). Started/stopped centrally from `state`'s
+    /// `didSet`. Nil when not processing.
+    private var processingTimerTask: Task<Void, Never>?
+
+    /// When the current `.processing` run began, for the elapsed counter.
+    private var processingElapsedStart: ContinuousClock.Instant?
+
+    /// The phrase part of the processing pill label, without the trailing
+    /// "· Xs" the timer appends. Updated by every stage; the ticker reads it.
+    private var processingBaseLabel: String = "Saving your narration\u{2026}"
+
     /// Consecutive Retry presses against the current failure chain. Cap
     /// keeps a "Retry → fail → Retry" loop from running forever on a
     /// sustained outage — after the cap the Retry button hides and the
@@ -501,6 +533,18 @@ final class AppState {
     /// and returns to idle). Reset on every transition out of .failed via
     /// a non-retry path (resetToIdle, cancelRecording, startRecording).
     private var failureRetryAttempts: Int = 0
+
+    /// The underlying error text behind the current `.failed` state, captured
+    /// at the generation catch sites BEFORE the error is mapped down to a
+    /// value-less `RecordingFailureReason`. The expanded failure card
+    /// (`canRetryFailure == true`) surfaces this so the user can read the real
+    /// reason instead of a generic one-liner; `RecordingFailureReason.userMessage`
+    /// is the fallback when this is nil. Privacy: only ever holds transport /
+    /// server error descriptions (see `failureDetail(from:)`) — never transcript
+    /// or response content. Cleared on every path out of `.failed`
+    /// (`resetTransientRecordingState`, a new recording, and `retryFailedPrompt`)
+    /// so a stale detail can't leak into a later state.
+    var lastFailureDetail: String?
 
     /// How many times in a row the user can press Retry on the same
     /// processed-recording chain before the affordance hides. 2 was
@@ -616,6 +660,7 @@ final class AppState {
         resultHadNoNarration = false
         stoppedBySleep = false
         failureRetryAttempts = 0
+        lastFailureDetail = nil
         elapsedSeconds = 0
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
@@ -793,6 +838,7 @@ final class AppState {
         stoppedBySleep = false
         pendingRecoveryURL = nil
         failureRetryAttempts = 0
+        lastFailureDetail = nil
     }
 
     /// Tears down the live session and discards the partial file.
@@ -1143,7 +1189,8 @@ final class AppState {
         // state = .processing before this Task starts running, so for
         // ~ms before the pipeline fires its first onStage the pill
         // would otherwise show whatever label survived the prior run.
-        processingStageLabel = "Saving your narration\u{2026}"
+        // (The .processing didSet already started the elapsed timer.)
+        setProcessingLabel("Saving your narration\u{2026}")
         // Phase 13A: marks the .recording → .processing handoff in the
         // local breadcrumb trail.
         Log.breadcrumb(category: .pipelineStage, message: "processing started")
@@ -1155,7 +1202,7 @@ final class AppState {
                     clicks: clicks,
                     redactSecrets: self.recordingRedactSecrets,
                     onStage: { [weak self] stage in
-                        self?.processingStageLabel = stage.userMessage
+                        self?.setProcessingLabel(stage.userMessage)
                     }
                 )
                 // A cancel that lands after the pipeline finished but
@@ -1273,34 +1320,71 @@ final class AppState {
     /// non-nil = the trial token (`isTrial == true`). The two differ only in how
     /// the post-success credit balance is applied and how failures are mapped;
     /// the upload + result tail are identical.
-    // MARK: - "Thinking" pill rotation
+    // MARK: - Processing pill label + elapsed timer
 
-    /// Begins the generation-stage pill rotation: an immediate random
-    /// Category-1 starter, then a fresh random Category-2 continuation
-    /// every `ProcessingPipeline.thinkingRotationInterval` seconds (never
-    /// the same phrase twice in a row). The `\u{2026}` ellipsis is appended
-    /// at display time to match the existing pill style. Always paired with
-    /// `stopThinkingRotation()` on the stage's success/failure/cancel exits.
-    private func startThinkingRotation() {
-        stopThinkingRotation()
-        processingStageLabel = Self.thinkingLabel(
-            ProcessingPipeline.thinkingStarters.randomElement()
-        )
-        thinkingRotationTask = Task { @MainActor [weak self] in
-            var last: String?
+    /// Starts the global elapsed timer for the `.processing` state. Driven
+    /// from `state`'s `didSet`, so it spans every stage — the static pipeline
+    /// stages ("Saving your narration", "Capturing key moments", "Wrapping
+    /// up") AND the generation rotation — appending a live "· Xs" to whatever
+    /// phrase is current. One continuous clock for the whole request.
+    private func startProcessingTimer() {
+        stopProcessingTimer()
+        processingElapsedStart = ContinuousClock.now
+        // "Saving your narration" is always the first processing stage; reset
+        // the base so a phrase left over from a prior run never flashes.
+        setProcessingLabel("Saving your narration\u{2026}")
+        processingTimerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(
-                    for: .seconds(ProcessingPipeline.thinkingRotationInterval)
-                )
+                try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
-                let next = Self.nextContinuation(avoiding: last)
-                last = next
-                self.processingStageLabel = Self.thinkingLabel(next)
+                // Recompose from the current phrase so the seconds tick up
+                // even while the phrase itself is unchanged.
+                self.setProcessingLabel(self.processingBaseLabel)
             }
         }
     }
 
-    /// Cancels the pill rotation. Idempotent — safe to call on every exit
+    /// Stops the global elapsed timer. Idempotent.
+    private func stopProcessingTimer() {
+        processingTimerTask?.cancel()
+        processingTimerTask = nil
+        processingElapsedStart = nil
+    }
+
+    /// Sets the pill's phrase and immediately composes the visible label with
+    /// the running elapsed timer appended. All processing-stage label updates
+    /// funnel through here so every phrase carries the "· Xs" counter.
+    private func setProcessingLabel(_ phrase: String) {
+        processingBaseLabel = phrase
+        let elapsed = processingElapsedStart
+            .map { Int((ContinuousClock.now - $0).components.seconds) } ?? 0
+        processingStageLabel = "\(phrase) \u{00B7} \(Self.thinkingElapsedText(elapsed))"
+    }
+
+    /// Begins the generation rotation: an immediate random Category-1 starter,
+    /// then a fresh random Category-2 continuation on a
+    /// `ProcessingPipeline.thinkingRotationIntervalRange` cadence (never the
+    /// same phrase twice in a row). Only swaps the phrase — the global timer
+    /// (`startProcessingTimer`) owns the live "· Xs" counter. Paired with
+    /// `stopThinkingRotation()` on the generation success/failure/cancel exits.
+    private func startThinkingRotation() {
+        stopThinkingRotation()
+        setProcessingLabel(ProcessingPipeline.thinkingStarters.randomElement() ?? "Working on it")
+        thinkingRotationTask = Task { @MainActor [weak self] in
+            var last: String?
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    for: .seconds(Double.random(in: ProcessingPipeline.thinkingRotationIntervalRange))
+                )
+                guard !Task.isCancelled, let self else { return }
+                let next = Self.nextContinuation(avoiding: last)
+                last = next
+                self.setProcessingLabel(next ?? "Working on it")
+            }
+        }
+    }
+
+    /// Cancels the phrase rotation. Idempotent — safe to call on every exit
     /// path and when no rotation is running.
     private func stopThinkingRotation() {
         thinkingRotationTask?.cancel()
@@ -1317,13 +1401,14 @@ final class AppState {
         return next
     }
 
-    /// Renders a saying into a pill label, appending the ellipsis. Falls
-    /// back to the static stage label if the pool was somehow empty.
-    private static func thinkingLabel(_ saying: String?) -> String {
-        guard let saying else {
-            return ProcessingPipeline.Stage.writingPrompt.userMessage
+    /// Formats an elapsed duration for the pill: whole seconds under a
+    /// minute ("12s"), whole minutes once past it ("2min").
+    private static func thinkingElapsedText(_ seconds: Int) -> String {
+        let seconds = max(0, seconds)
+        if seconds < 60 {
+            return "\(seconds)s"
         }
-        return saying + "\u{2026}"
+        return "\(seconds / 60)min"
     }
 
     private func runProxyGeneration(
@@ -1426,6 +1511,9 @@ final class AppState {
                         context: ["errorCode": Self.errorCodeString(reason)]
                     )
                 }
+                // Carry the real error for the expanded failure card BEFORE
+                // mapping down to the value-less reason (decision 1).
+                self.lastFailureDetail = Self.failureDetail(from: error)
                 self.state = .failed(reason: reason)
                 // A definitive Managed not-entitled means the subscription lapsed
                 // mid-use — recompute so the app drops out of `.managed`.
@@ -1527,6 +1615,14 @@ final class AppState {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                // BYOK path: start the thinking rotation here, so the
+                // transcription wait shows the same random phrases + elapsed
+                // timer as generation (one continuous timer) instead of a
+                // static "Transcribing…" label. runGeneration keeps it
+                // running and stops it when generation finishes; the
+                // failure/early-return paths below stop it if we never get
+                // that far.
+                self.startThinkingRotation()
                 // Phase 6 no-speech gate: when the pipeline detected no
                 // speech-level energy in the audio, skip the Whisper call
                 // entirely (saves the round-trip + its cost) and proceed on an
@@ -1535,7 +1631,6 @@ final class AppState {
                 // (one brief chat line, no artifact).
                 let transcript: Transcript
                 if processed.hasSpeech {
-                    self.processingStageLabel = ProcessingPipeline.Stage.transcribing.userMessage
                     // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
                     // failure can be triaged by the breadcrumb sequence
                     // alone, without having to look at the failure event.
@@ -1555,7 +1650,10 @@ final class AppState {
                     Log.transcription.info("skipped — no detectable speech (Phase 6 gate)")
                     transcript = Transcript(segments: [], fullText: "")
                 }
-                guard self.state == .processing else { return }
+                guard self.state == .processing else {
+                    self.stopThinkingRotation()
+                    return
+                }
 
                 let timeline = Interleaver.merge(
                     frames: processed.frames,
@@ -1569,6 +1667,9 @@ final class AppState {
                     processed: processed
                 )
             } catch {
+                // Transcription failed before we reached generation, so stop
+                // the rotation here (runGeneration's defer never runs).
+                self.stopThinkingRotation()
                 Log.transcription.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
@@ -1584,6 +1685,9 @@ final class AppState {
                         context: ["errorCode": Self.errorCodeString(reason)]
                     )
                 }
+                // Carry the real error for the expanded failure card BEFORE
+                // mapping down to the value-less reason (decision 1).
+                self.lastFailureDetail = Self.failureDetail(from: error)
                 self.state = .failed(reason: reason)
             }
         }
@@ -1599,11 +1703,13 @@ final class AppState {
     ) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            // Same opaque generation stage as the proxy path: rotate the
-            // "thinking" sayings and stop on every exit path.
+            // The thinking rotation was already started by
+            // runLocalPromptGeneration so its elapsed timer spans the
+            // transcription wait too (one continuous surface). We don't
+            // restart it here — that would reset the timer — we just make
+            // sure it stops on every exit path.
             defer { self.stopThinkingRotation() }
             do {
-                self.startThinkingRotation()
                 Log.breadcrumb(category: .pipelineStage, message: "prompt generation started")
                 // Multi-model 6C: route to the selected model's provider,
                 // falling back to the cheapest model whose provider HAS a key
@@ -1675,6 +1781,9 @@ final class AppState {
                         context: ["errorCode": Self.errorCodeString(reason)]
                     )
                 }
+                // Carry the real error for the expanded failure card BEFORE
+                // mapping down to the value-less reason (decision 1).
+                self.lastFailureDetail = Self.failureDetail(from: error)
                 self.state = .failed(reason: reason)
             }
         }
@@ -1777,8 +1886,17 @@ final class AppState {
     /// fail-safe degraded a malformed response to chat text — there is still
     /// chat text worth converting). A result that already has a card never
     /// shows it.
+    ///
+    /// The one artifact-less case that must NOT show it is the empty case —
+    /// the recording held no request at all. Generation signals that with the
+    /// `<<<ZERRO_NO_REQUEST>>>` sentinel, which the parser turns into
+    /// `requestPresent == false`; converting there has nothing to convert and
+    /// would hallucinate a task from on-screen context. `!= false` (not
+    /// `== true`) keeps the button for every other path, since `requestPresent`
+    /// defaults true.
     var canConvertToAgentPrompt: Bool {
         state == .done && parsedResponse != nil && parsedResponse?.artifact == nil
+            && parsedResponse?.requestPresent != false
     }
 
     /// Converts the current artifact-less response into an `agent_prompt`
@@ -1949,6 +2067,9 @@ final class AppState {
     func retryFailedPrompt() {
         guard canRetryFailure, let processed = processedRecording else { return }
         failureRetryAttempts += 1
+        // Drop the prior detail so a stale string can't leak if the retry
+        // somehow lands in a state that reads it before the next catch site runs.
+        lastFailureDetail = nil
         state = .processing
         // runPromptGeneration starts at the `.transcribing` stage and
         // walks through `.writingPrompt` — exactly the work that needs to
@@ -2024,6 +2145,39 @@ final class AppState {
     /// bounded value with zero user content.
     private static func errorCodeString(_ reason: RecordingFailureReason) -> String {
         String(describing: reason)
+    }
+
+    /// A human-readable, privacy-safe description of a generation error, shown
+    /// in the expanded failure card's body (decision 1 of the failure-card
+    /// handoff). Pulls the carried detail out of a `ManagedGenerationError`
+    /// where one exists; everything else falls back to `localizedDescription`.
+    /// Privacy: every string returned here is a transport- or server-level
+    /// error description — NEVER transcript or response content. Keep it that
+    /// way; this is what gets rendered to the user.
+    private static func failureDetail(from error: Error) -> String {
+        if let managed = error as? ManagedGenerationError {
+            switch managed {
+            case .network(let detail):
+                return detail
+            case .inputRejected(let detail):
+                return detail
+            case .outOfCredits:
+                return "The server reported your credits are spent."
+            case .notEntitled:
+                return "The server reported your subscription is no longer active."
+            case .rateLimited:
+                return "The generation service is rate-limiting requests right now."
+            case .authFailed:
+                return "Couldn\u{2019}t authenticate with the generation service."
+            case .providerUnavailable:
+                return "The generation service is temporarily unavailable."
+            case .malformedResponse:
+                return "The generation service returned an unexpected response."
+            case .artifactUnreadable:
+                return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
+            }
+        }
+        return error.localizedDescription
     }
 
     /// Maps a RecordingSession.SessionError (or anything else) into the

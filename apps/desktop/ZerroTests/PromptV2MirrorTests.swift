@@ -45,7 +45,7 @@ final class PromptV2MirrorTests: XCTestCase {
                     + "(lengths \(composed.count) vs \(mirror.count))"
             )
         }
-        XCTAssertEqual(composed.count, 14_038, "locked v2 length — update alongside an intentional prompt change")
+        XCTAssertEqual(composed.count, 14_228, "locked v2 length — update alongside an intentional prompt change")
     }
 
     func testComposedCarriesTheArtifactContractNotModes() {

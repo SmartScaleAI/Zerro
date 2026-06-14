@@ -283,42 +283,28 @@ struct AreaSelectorView: View {
     private static let toolbarMargin: CGFloat = 8
 
     /// View-local frame (top-left origin) of the whole floating toolbar
-    /// for a given selection. If the toolbar fits inside the selection it
-    /// is centered both horizontally and vertically within the region.
-    /// Otherwise it falls back to being placed `toolbarGap` below the
-    /// selection, flipped above if there isn't room, and pinned inside the
-    /// bottom margin as a last resort. The result is always clamped so it
-    /// never spills past the overlay bounds. Cluster order, left → right:
-    /// model chip, mic chip, Record button.
+    /// for a given selection. Placed `toolbarGap` below the selection,
+    /// flipped above if there isn't room, and clamped so it never spills
+    /// past the overlay bounds. Cluster order, left → right: model chip,
+    /// mic chip, Record button.
     static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
         let width = modelChipWidth + toolbarItemGap
             + micChipWidth + toolbarItemGap + recordButtonWidth
         let size = CGSize(width: width, height: toolbarHeight)
 
-        var originX: CGFloat
-        var originY: CGFloat
-
-        if size.width <= rect.width && size.height <= rect.height {
-            // Fits inside the selection: center it within the region.
-            originX = rect.midX - size.width / 2
-            originY = rect.midY - size.height / 2
-            originY = min(max(originY, toolbarMargin), bounds.height - size.height - toolbarMargin)
-        } else {
-            // Too small to fit: place below the selection.
-            originY = rect.maxY + toolbarGap
-            // Flip above the selection if the toolbar would fall off the
-            // bottom of the overlay.
-            if originY + size.height + toolbarMargin > bounds.height {
-                originY = rect.minY - toolbarGap - size.height
-            }
-            // As a last resort (selection fills the screen vertically), pin
-            // inside the bottom margin.
-            if originY < toolbarMargin {
-                originY = max(toolbarMargin, bounds.height - size.height - toolbarMargin)
-            }
-            originX = rect.midX - size.width / 2
+        var originY = rect.maxY + toolbarGap
+        // Flip above the selection if the toolbar would fall off the
+        // bottom of the overlay.
+        if originY + size.height + toolbarMargin > bounds.height {
+            originY = rect.minY - toolbarGap - size.height
+        }
+        // As a last resort (selection fills the screen vertically), pin
+        // inside the bottom margin.
+        if originY < toolbarMargin {
+            originY = max(toolbarMargin, bounds.height - size.height - toolbarMargin)
         }
 
+        var originX = rect.midX - size.width / 2
         originX = min(max(originX, toolbarMargin), bounds.width - size.width - toolbarMargin)
 
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
@@ -584,15 +570,15 @@ struct AreaSelectorView: View {
         .padding(.horizontal, VFSpacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            Capsule().fill(.regularMaterial)
+            Capsule().fill(.ultraThickMaterial)
         )
         .overlay(
             Capsule().strokeBorder(
-                state.isModelChipHovered ? Color.vfTextSecondary : Color.vfHairline,
-                lineWidth: state.isModelChipHovered ? 1 : 0.5
+                state.isModelChipHovered ? Color.vfTextSecondary : Color.white.opacity(0.12),
+                lineWidth: 1
             )
         )
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
     }
 
     private var micChip: some View {
@@ -614,15 +600,15 @@ struct AreaSelectorView: View {
         .padding(.horizontal, VFSpacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            Capsule().fill(.regularMaterial)
+            Capsule().fill(.ultraThickMaterial)
         )
         .overlay(
             Capsule().strokeBorder(
-                state.isMicChipHovered ? Color.vfTextSecondary : Color.vfHairline,
-                lineWidth: state.isMicChipHovered ? 1 : 0.5
+                state.isMicChipHovered ? Color.vfTextSecondary : Color.white.opacity(0.12),
+                lineWidth: 1
             )
         )
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
     }
 
     private var recordCapsule: some View {
@@ -636,10 +622,15 @@ struct AreaSelectorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            Capsule().fill(Color.vfRecordingRed.opacity(state.isRecordButtonHovered ? 1.0 : 0.9))
+            // Fully opaque so content never bleeds through; the hover
+            // affordance is a subtle white tint on top of the solid red
+            // rather than an opacity change.
+            Capsule()
+                .fill(Color.vfRecordingRed)
+                .overlay(Capsule().fill(Color.white.opacity(state.isRecordButtonHovered ? 0.12 : 0)))
         )
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
     }
 }
 

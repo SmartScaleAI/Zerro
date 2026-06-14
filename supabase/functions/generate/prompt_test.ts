@@ -48,7 +48,7 @@ Deno.test("composedSystemPrompt() is byte-identical to the locked in-repo mirror
         `(lengths ${composed.length} vs ${mirror.length})`,
     );
   }
-  assertEquals(composed.length, 14_038, "locked v2 length — update alongside an intentional prompt change");
+  assertEquals(composed.length, 14_228, "locked v2 length — update alongside an intentional prompt change");
 });
 
 Deno.test("composedSystemPrompt() carries the v2 artifact contract, not the v1 modes", () => {
