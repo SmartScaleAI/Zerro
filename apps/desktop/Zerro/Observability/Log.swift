@@ -62,7 +62,6 @@
 
 import Foundation
 import os
-import Sentry
 
 enum Log {
 
