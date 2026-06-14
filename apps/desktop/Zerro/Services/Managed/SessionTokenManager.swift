@@ -185,18 +185,22 @@ final class SessionTokenManager: ProxyTokenProviding {
     /// key can never be sent to the live `/session`. Compiled OUT of release.
     private func resolveLicenseKey() throws -> String {
         #if DEBUG
-        // When the backend is overridden to a local stack, the dev key WINS over
-        // any activated key in the Keychain — otherwise a stale prod key would be
-        // sent to the local `/session` and 403. Both env vars must be set, so the
-        // throwaway test key can never reach the production `/session`. Gated on
-        // `usesRealTransport` so an injected stub transport (unit tests) never
-        // sees the dev key — the scheme ships these vars enabled.
-        let env = ProcessInfo.processInfo.environment
-        if usesRealTransport,
-           env["ZERRO_FUNCTIONS_BASE_URL"] != nil,
-           let devKey = env["ZERRO_DEV_LICENSE_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !devKey.isEmpty {
-            Log.billing.notice("session exchange using ZERRO_DEV_LICENSE_KEY (DEBUG — local backend)")
+        // When the backend is the local/dev override, the throwaway dev key WINS
+        // over any activated key in the Keychain — otherwise a stale prod key
+        // would be sent to the local `/session` and 403 (surfaced to the user as
+        // a bogus "subscription isn't active"). Gated on
+        // `ManagedBackend.usesDevOverride`, NOT the raw `ZERRO_FUNCTIONS_BASE_URL`
+        // env var: the env var is dropped by the onboarding Screen-Recording
+        // relaunch (the SIGKILL reopen doesn't inherit it), but the persisted
+        // override survives — so the dev key must key off the same persisted
+        // signal as the URL, or the two disagree and the real Keychain key leaks
+        // to the local backend. `usesDevOverride` is false at the production URL,
+        // so the dev key can NEVER reach production. The key VALUE is likewise
+        // persisted from the scheme env so it survives the same relaunch.
+        // `usesRealTransport` keeps an injected stub transport (unit tests) from
+        // ever seeing the dev key.
+        if usesRealTransport, ManagedBackend.usesDevOverride, let devKey = Self.devLicenseKey() {
+            Log.billing.notice("session exchange using dev license key (DEBUG — local backend)")
             return devKey
         }
         #endif
@@ -205,6 +209,27 @@ final class SessionTokenManager: ProxyTokenProviding {
         }
         throw ManagedSessionError.noLicenseKey
     }
+
+    #if DEBUG
+    private static let devLicenseKeyDefaultsKey = "dev.licenseKey"
+
+    /// The DEBUG dev license key: the scheme env var when present (recorded so it
+    /// survives a relaunch that drops the env, mirroring `ManagedBackend.baseURL`),
+    /// else the recorded value. `nil` when neither exists. Only ever used behind
+    /// `ManagedBackend.usesDevOverride`, so a recorded value can't reach prod.
+    private static func devLicenseKey() -> String? {
+        let defaults = UserDefaults.standard
+        if let raw = ProcessInfo.processInfo.environment["ZERRO_DEV_LICENSE_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            defaults.set(raw, forKey: devLicenseKeyDefaultsKey)
+            return raw
+        }
+        if let persisted = defaults.string(forKey: devLicenseKeyDefaultsKey), !persisted.isEmpty {
+            return persisted
+        }
+        return nil
+    }
+    #endif
 
     /// POST /session { license_key } → cache the token + return the snapshot.
     private func exchange() async throws -> ExchangeResult {

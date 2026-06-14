@@ -819,6 +819,15 @@ final class PermissionsManager {
         let bundleURL = Bundle.main.bundleURL
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
+        #if DEBUG
+        // Carry the current process environment into the relaunched instance.
+        // Without this the new process gets the bare launchd environment and
+        // loses the Xcode scheme's ZERRO_FUNCTIONS_BASE_URL / dev license key,
+        // silently switching a local-dev session to the production backend.
+        // (ManagedBackend also persists the override as a backstop for launches
+        // it can't reach, e.g. the SIGKILL reopen — see ManagedBackend.baseURL.)
+        configuration.environment = ProcessInfo.processInfo.environment
+        #endif
         Log.permissions.notice("relaunching to apply Screen Recording grant")
         NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
             if let error {

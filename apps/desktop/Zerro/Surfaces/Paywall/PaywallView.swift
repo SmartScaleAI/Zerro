@@ -52,11 +52,6 @@ struct PaywallView: View {
     /// frame IS the window size; nothing else pins it.
     private static let windowWidth: CGFloat = 760
 
-    /// Fixed height of the plan-cards row. Width is fixed, so the wrapped
-    /// card copy is deterministic; the fixed row is what makes the two cards
-    /// EQUAL height with bottom-aligned CTAs (each card fills it).
-    private static let planCardsHeight: CGFloat = 200
-
     var body: some View {
         mainPanel
             .frame(width: Self.windowWidth)
@@ -110,7 +105,11 @@ struct PaywallView: View {
                 // their own provider API keys. Fully local.
                 BuyOnceCard()
             }
-            .frame(height: Self.planCardsHeight)
+            // Size the row to the TALLER card's natural content height rather
+            // than a fixed pixel height: both cards still fill it (`fillsHeight`)
+            // so they stay EQUAL height with bottom-aligned CTAs, but there's no
+            // dead space above the buttons when the copy is short.
+            .fixedSize(horizontal: false, vertical: true)
 
             // Honest privacy note (§14.5): Managed transits the server; BYOK
             // stays local. Don't let the local-first claim cover Managed.

@@ -1072,7 +1072,11 @@ private struct RecentPromptSubmenuRow: View {
                 Image(systemName: entry.displayIconName)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextTertiary)
-                    .frame(width: 16, alignment: .leading)
+                    // Gutter sized to contain the WIDEST glyph (the `</>`
+                    // snippet symbol overflows a 16pt slot), with a dedicated
+                    // gap before the title so no glyph butts against the text.
+                    .frame(width: 18, alignment: .leading)
+                    .padding(.trailing, VFSpacing.sm)
 
                 Text(entry.title)
                     .font(.system(size: 13))

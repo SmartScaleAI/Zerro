@@ -11,12 +11,11 @@
       }
     },
     {
-      "identity" : "sentry-cocoa",
+      "identity" : "posthog-ios",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/getsentry/sentry-cocoa.git",
+      "location" : "https://github.com/PostHog/posthog-ios.git",
       "state" : {
-        "revision" : "cef29e94feb00b1b712514443d6d70b09ef20355",
-        "version" : "9.15.0"
+        "version" : "3.56.0"
       }
     },
     {

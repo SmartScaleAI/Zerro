@@ -76,7 +76,7 @@ struct ProcessingPipeline {
             case .extractingFrames:  return "Capturing key moments\u{2026}"
             case .writingManifest:   return "Wrapping up\u{2026}"
             case .transcribing:      return "Transcribing your narration\u{2026}"
-            case .writingPrompt:     return "Writing your prompt\u{2026}"
+            case .writingPrompt:     return "Working on it\u{2026}"
             }
         }
     }

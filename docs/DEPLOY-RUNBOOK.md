@@ -69,6 +69,40 @@ Gemini, so default-model requests fail without it), `SESSION_JWT_SECRET`,
 `RESEND_API_KEY`, `LEMONSQUEEZY_API_KEY`. The variant IDs above must be **live
 mode** IDs — test-mode IDs differ.
 
+### 3a. API-key separation — prod vs dev (rate-limit hygiene)
+
+Provider rate limits are enforced at the **account/organization** level, so a
+development or test burst on a key that shares prod's pool can degrade live
+users. (Anthropic specifically enforces an **acceleration limit** — 429s on a
+sharp usage spike even under the steady ITPM/RPM ceilings — which a burst eval
+run trips easily.) A separate key alone does **not** always isolate the limit; a
+separate **project/workspace with its own rate cap** does. This applies to all
+three providers.
+
+Production keys belong **only** in the deployed Supabase secrets (step 3) and
+are never exported into a local shell. Mint a **separate, rate-capped dev key**
+per provider:
+
+- **Anthropic** — create a second **workspace** in the Console, set a
+  per-workspace rate limit (org limits are shared, so a bare second key in the
+  default workspace does *not* isolate them), and mint the key inside it.
+- **OpenAI** — mint the dev key in a separate **project** with its own limits.
+  (OpenAI is also used in prod for Whisper STT, so this protects transcription
+  too.)
+- **Gemini** — mint the dev key in a separate **Google Cloud project**, which
+  carries its own quota.
+
+Each dev key is used in two places:
+
+- **Local backend** — in `supabase/.env.local` as `OPENAI_API_KEY` /
+  `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` (gitignored; only the deployed secrets
+  serve real users).
+- **Eval harness** — exported as `OPENAI_API_KEY_DEV` / `GEMINI_API_KEY_DEV` /
+  `ANTHROPIC_API_KEY_DEV`. `eval-models.mjs` **requires** the relevant `*_DEV`
+  var and hard-stops if it is unset; it never falls back to a production key. The
+  harness also ramps gently (default `--concurrency 2`, exponential backoff
+  honoring `Retry-After`) so even the dev keys don't trip acceleration limits.
+
 ## 4. Verify pg_cron landed
 
 After `db push`:

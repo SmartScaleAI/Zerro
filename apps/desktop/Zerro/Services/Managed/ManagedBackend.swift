@@ -29,6 +29,7 @@
 //
 
 import Foundation
+import os
 
 // MARK: - ManagedBackend
 
@@ -47,15 +48,61 @@ enum ManagedBackend {
     /// `supabase functions serve`, where CHAT_PROVIDER / CHAT_MODEL can be
     /// flipped per-run via an --env-file — no deploy, production untouched.
     /// Compiled OUT of release builds: ships pinned to the production URL.
+    ///
+    /// The override is PERSISTED so it survives ANY relaunch — not just an
+    /// Xcode Run. The scheme env var is injected only when Xcode launches the
+    /// process; the app's own relaunches (the Screen-Recording grant relaunch /
+    /// SIGKILL reopen, see `relaunchToApplyScreenRecording`) and any standalone
+    /// Finder launch do NOT inherit it. Without persistence those launches
+    /// would SILENTLY fall back to the production URL mid-session — writing test
+    /// traffic and trial grants to the real DB, and minting trial tokens against
+    /// a backend the next Xcode-launched run then rejects (surfacing as a bogus
+    /// "verify your email"). So: a launch that sees the env var records it; a
+    /// launch without it reads the recorded value back. To deliberately point a
+    /// DEBUG build back at production, set ZERRO_FUNCTIONS_BASE_URL to an empty
+    /// string (or `production`) once — that clears the persisted override.
+    private static let persistedOverrideKey = "dev.functionsBaseURLOverride"
+
     static let baseURL: URL = {
         #if DEBUG
-        if let override = ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"],
-           let url = URL(string: override) {
+        let defaults = UserDefaults.standard
+        if let raw = ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"] {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.lowercased() == "production" {
+                // Explicit opt back to production from a DEBUG build.
+                defaults.removeObject(forKey: persistedOverrideKey)
+            } else if let url = URL(string: trimmed) {
+                defaults.set(trimmed, forKey: persistedOverrideKey)
+                Log.billing.notice("Managed backend (DEBUG, from env): \(trimmed, privacy: .public)")
+                return url
+            }
+        } else if let persisted = defaults.string(forKey: persistedOverrideKey),
+                  let url = URL(string: persisted) {
+            // No env var (self-relaunch / Finder launch) — reuse the recorded
+            // override rather than silently falling back to production.
+            Log.billing.notice("Managed backend (DEBUG, persisted override): \(persisted, privacy: .public)")
             return url
         }
+        Log.billing.notice("Managed backend (DEBUG): production \(functionsBaseURLString, privacy: .public)")
         #endif
         return URL(string: functionsBaseURLString)!
     }()
+
+    /// DEBUG: true when the backend is pointed at a dev/local override (from the
+    /// scheme env var OR the persisted fallback) rather than the production
+    /// default. Throwaway dev-only credentials — the `ZERRO_DEV_LICENSE_KEY`
+    /// test key — may be used ONLY when this is true, so a test key can never
+    /// reach the production `/session`. Derived from `baseURL` so it stays in
+    /// lockstep with the persisted-override resolution above (in particular it
+    /// survives the onboarding Screen-Recording relaunch, which drops the env
+    /// var but keeps the persisted override). Always false in release.
+    static var usesDevOverride: Bool {
+        #if DEBUG
+        return baseURL.absoluteString != functionsBaseURLString
+        #else
+        return false
+        #endif
+    }
 
     static var sessionURL: URL { baseURL.appendingPathComponent("session") }
     static var generateURL: URL { baseURL.appendingPathComponent("generate") }

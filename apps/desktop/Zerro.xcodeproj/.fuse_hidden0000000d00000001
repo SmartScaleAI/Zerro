@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FF3B566F2FCC52E400F27154 /* Sparkle */; };
 		FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */; };
-		FFD158F12FCBA3050043FE79 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = FFD158F02FCBA3050043FE79 /* PostHog */; };
+		FFD158F12FCBA3050043FE79 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = FFD158F02FCBA3050043FE79 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,7 +68,7 @@
 			files = (
 				FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */,
 				FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */,
-				FFD158F12FCBA3050043FE79 /* PostHog in Frameworks */,
+				FFD158F12FCBA3050043FE79 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -154,7 +154,7 @@
 			name = Zerro;
 			packageProductDependencies = (
 				FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */,
-				FFD158F02FCBA3050043FE79 /* PostHog */,
+				FFD158F02FCBA3050043FE79 /* Sentry */,
 				FF3B566F2FCC52E400F27154 /* Sparkle */,
 			);
 			productName = Zerro;
@@ -191,7 +191,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
-				FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */,
+				FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				FF3B566E2FCC52E400F27154 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -571,12 +571,12 @@
 				minimumVersion = 2.4.0;
 			};
 		};
-		FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+		FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/PostHog/posthog-ios.git";
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 3.56.0;
+				minimumVersion = 9.15.0;
 			};
 			traits = (
 			);
@@ -594,10 +594,10 @@
 			package = FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
 		};
-		FFD158F02FCBA3050043FE79 /* PostHog */ = {
+		FFD158F02FCBA3050043FE79 /* Sentry */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "posthog-ios" */;
-			productName = PostHog;
+			package = FFD158EB2FCBA0980043FE79 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

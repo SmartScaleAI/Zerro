@@ -51,6 +51,27 @@ enum WorkingDirectory {
     /// Used by `make()` to disambiguate from raw recordings.
     static let workingPrefix = "zerro-work-"
 
+    /// Sidecar suffix that marks a source `.mov` as DELIBERATELY abandoned —
+    /// the sleep-interruption or quit-while-recording paths in
+    /// `RecordingSession.abandon()` write `zerro-<UUID>.mov.recoverable` next
+    /// to the fragment. `orphanedRecordings()` offers ONLY `.mov`s that carry
+    /// this marker, so a recording left by something OTHER than a deliberate
+    /// abandon — an Xcode/crash SIGKILL mid-record, or a completed recording
+    /// the `-RetainEvalArtifacts` switch kept on disk — has no marker and is
+    /// swept, never falsely offered as "stopped when your Mac slept". The
+    /// marker shares the `zerro-` prefix, so the launch `sweep()` reclaims it
+    /// alongside everything else.
+    nonisolated static let recoverableMarkerSuffix = "recoverable"
+
+    /// Best-effort, synchronous: drop the recoverable marker next to `movURL`.
+    /// Called from `abandon()` BEFORE the async writer release so the marker
+    /// exists even if the app exits moments later (the quit-while-recording
+    /// path). The `.mov` itself already exists (the writer created it).
+    nonisolated static func markRecoverable(_ movURL: URL) {
+        let marker = movURL.appendingPathExtension(recoverableMarkerSuffix)
+        try? Data().write(to: marker, options: .atomic)
+    }
+
     /// Creates a fresh UUID-named working directory under the system temp
     /// dir and returns its URL. The caller owns the returned directory's
     /// lifecycle — pipeline failure → pipeline deletes; new recording →
@@ -161,12 +182,18 @@ enum WorkingDirectory {
         func modDate(_ url: URL) -> Date {
             (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
         }
+        // Only a `.mov` with its sidecar `.recoverable` marker was deliberately
+        // abandoned (sleep / quit-while-recording). An unmarked `.mov` — a
+        // SIGKILL/crash leftover or an eval-retained completed recording — is
+        // NOT offered; `sweepIfLaunch` reclaims it instead.
+        let names = Set(contents.map(\.lastPathComponent))
         return contents
             .filter {
                 let name = $0.lastPathComponent
                 return name.hasPrefix(prefix)
                     && !name.hasPrefix(workingPrefix)
                     && $0.pathExtension == "mov"
+                    && names.contains("\(name).\(recoverableMarkerSuffix)")
             }
             .sorted { modDate($0) > modDate($1) }
     }

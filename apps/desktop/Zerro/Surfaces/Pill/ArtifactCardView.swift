@@ -182,7 +182,7 @@ struct ArtifactCardView: View {
     /// cap is tight (the chat is the intro, the prompt is the payload);
     /// chat-only gets the room the old body had.
     private var chatSection: some View {
-        HeightCappedScroll(maxHeight: artifact == nil ? 420 : 160) {
+        HeightCappedScroll(maxHeight: artifact == nil ? 420 : 160, fadesScrollEdges: true) {
             ChatProseText(text: chatText)
         }
     }
@@ -362,6 +362,12 @@ struct ArtifactCardView: View {
 
 struct HeightCappedScroll<Content: View>: View {
     let maxHeight: CGFloat
+    /// When true, the scroll view fades its top/bottom edges while there is
+    /// off-screen content in that direction — a "scroll shadow" cue that the
+    /// capped text is overflowing. Position-aware: the top fade appears only
+    /// once scrolled away from the top, the bottom fade only while more sits
+    /// below, so a snug (non-overflowing) body shows no fade at all.
+    var fadesScrollEdges: Bool = false
     @ViewBuilder let content: Content
 
     /// Measured content height; starts at 0 (the view renders effectively
@@ -369,8 +375,14 @@ struct HeightCappedScroll<Content: View>: View {
     /// before draw).
     @State private var contentHeight: CGFloat = 0
 
+    /// Which edges currently have more content beyond them. Both `true`
+    /// (nothing to scroll) → no fade.
+    @State private var edges = ScrollEdges(atTop: true, atBottom: true)
+
+    private var scrollHeight: CGFloat { min(max(contentHeight, 1), maxHeight) }
+
     var body: some View {
-        ScrollView {
+        let scroll = ScrollView {
             content
                 .onGeometryChange(for: CGFloat.self) { proxy in
                     proxy.size.height
@@ -378,8 +390,50 @@ struct HeightCappedScroll<Content: View>: View {
                     contentHeight = height
                 }
         }
-        .frame(height: min(max(contentHeight, 1), maxHeight))
+        .frame(height: scrollHeight)
+
+        if fadesScrollEdges {
+            scroll
+                .onScrollGeometryChange(for: ScrollEdges.self) { geo in
+                    ScrollEdges(
+                        atTop: geo.contentOffset.y <= geo.contentInsets.top + 0.5,
+                        atBottom: geo.contentOffset.y + geo.containerSize.height
+                            >= geo.contentSize.height - 0.5
+                    )
+                } action: { _, newValue in
+                    edges = newValue
+                }
+                .mask(edgeFadeMask)
+        } else {
+            scroll
+        }
     }
+
+    /// A vertical gradient mask: opaque through the middle, fading to clear
+    /// over `fade` points at whichever edge still has content beyond it.
+    private var edgeFadeMask: some View {
+        let fade: CGFloat = 18
+        let h = max(scrollHeight, 1)
+        let topLoc = edges.atTop ? 0 : min(0.5, fade / h)
+        let bottomLoc = edges.atBottom ? 1 : max(0.5, 1 - fade / h)
+        return LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0), location: 0),
+                .init(color: .black, location: topLoc),
+                .init(color: .black, location: bottomLoc),
+                .init(color: .black.opacity(0), location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+/// Whether a capped scroll view is pinned to its top/bottom edge — drives the
+/// `HeightCappedScroll` edge-fade cue.
+private struct ScrollEdges: Equatable {
+    var atTop: Bool
+    var atBottom: Bool
 }
 
 // MARK: - ChatProseText

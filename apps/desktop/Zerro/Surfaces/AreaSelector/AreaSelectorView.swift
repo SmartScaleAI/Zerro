@@ -283,28 +283,42 @@ struct AreaSelectorView: View {
     private static let toolbarMargin: CGFloat = 8
 
     /// View-local frame (top-left origin) of the whole floating toolbar
-    /// for a given selection. Placed `toolbarGap` below the selection,
-    /// flipped above if there isn't room, and clamped so it never spills
-    /// past the overlay bounds. Cluster order, left → right: model chip,
-    /// mic chip, Record button.
+    /// for a given selection. If the toolbar fits inside the selection it
+    /// is centered both horizontally and vertically within the region.
+    /// Otherwise it falls back to being placed `toolbarGap` below the
+    /// selection, flipped above if there isn't room, and pinned inside the
+    /// bottom margin as a last resort. The result is always clamped so it
+    /// never spills past the overlay bounds. Cluster order, left → right:
+    /// model chip, mic chip, Record button.
     static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
         let width = modelChipWidth + toolbarItemGap
             + micChipWidth + toolbarItemGap + recordButtonWidth
         let size = CGSize(width: width, height: toolbarHeight)
 
-        var originY = rect.maxY + toolbarGap
-        // Flip above the selection if the toolbar would fall off the
-        // bottom of the overlay.
-        if originY + size.height + toolbarMargin > bounds.height {
-            originY = rect.minY - toolbarGap - size.height
-        }
-        // As a last resort (selection fills the screen vertically), pin
-        // inside the bottom margin.
-        if originY < toolbarMargin {
-            originY = max(toolbarMargin, bounds.height - size.height - toolbarMargin)
+        var originX: CGFloat
+        var originY: CGFloat
+
+        if size.width <= rect.width && size.height <= rect.height {
+            // Fits inside the selection: center it within the region.
+            originX = rect.midX - size.width / 2
+            originY = rect.midY - size.height / 2
+            originY = min(max(originY, toolbarMargin), bounds.height - size.height - toolbarMargin)
+        } else {
+            // Too small to fit: place below the selection.
+            originY = rect.maxY + toolbarGap
+            // Flip above the selection if the toolbar would fall off the
+            // bottom of the overlay.
+            if originY + size.height + toolbarMargin > bounds.height {
+                originY = rect.minY - toolbarGap - size.height
+            }
+            // As a last resort (selection fills the screen vertically), pin
+            // inside the bottom margin.
+            if originY < toolbarMargin {
+                originY = max(toolbarMargin, bounds.height - size.height - toolbarMargin)
+            }
+            originX = rect.midX - size.width / 2
         }
 
-        var originX = rect.midX - size.width / 2
         originX = min(max(originX, toolbarMargin), bounds.width - size.width - toolbarMargin)
 
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)

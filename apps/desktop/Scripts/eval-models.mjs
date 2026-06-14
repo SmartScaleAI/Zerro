@@ -32,8 +32,16 @@
 // (empty transcript), mirroring the live no-speech gate; absent → transcribe.
 //
 // USAGE:
-//   export OPENAI_API_KEY=sk-...          # always required (whisper STT)
-//   export GEMINI_API_KEY=...             # required for gemini:* models
+//   The harness uses DEDICATED DEV KEYS ONLY — never production keys. Each must
+//   be minted in a separate, rate-capped project/workspace; the harness hard-stops
+//   if the relevant one is unset and never falls back to the plain *_API_KEY, so
+//   test bursts can't rate-limit your live users.
+//   export OPENAI_API_KEY_DEV=sk-...         # required (Whisper STT + openai:* models)
+//   export GEMINI_API_KEY_DEV=...            # required for gemini:* models
+//   export ANTHROPIC_API_KEY_DEV=sk-ant-...  # required for anthropic:* models
+//       (Anthropic's cap lives on a separate Console *workspace* — org limits are
+//        shared, so a bare second key does NOT isolate them. For OpenAI/Gemini,
+//        mint the dev key in a separate project with its own limits/quota.)
 //   node Scripts/eval-models.mjs <workingDir> \
 //     --models gemini:gemini-3.5-flash,gemini:gemini-3.1-pro-preview,openai:gpt-4o \
 //     [--thinking low|high]               # gemini only, default low
@@ -49,7 +57,8 @@
 //     [--system-prompt path]                # default: the locked v2 mirror;
 //                                           # .md → first fenced block, .txt → raw
 //     [--only ap-01-...,ch-04-...]          # run a subset of fixture ids
-//     [--concurrency 4]                     # drop to 1-2 for rate-limited models
+//     [--concurrency 2]                     # default 2 (gentle ramp); raise for
+//                                           # high-limit keys, drop to 1 if throttled
 //     [--thinking low|high] [--out eval-results/artifact]
 // Scores text-only labeled fixtures against the typed-artifact output contract
 // (plan §2). No recording, no Whisper, no images — see the section below.
@@ -186,22 +195,80 @@ async function transcribe(audioPath, openaiKey) {
 
 // ---------- chat adapters (mirror providers/openai.ts + gemini.ts) -----------
 
-// One retry on a transient fault (429 / 5xx), mirroring the single retry the
-// production openai.ts / gemini.ts adapters do. Keeps a flaky 503 from one
-// provider on one clip from torpedoing a whole matrix run.
-async function fetchRetry(url, init) {
-  try {
-    const res = await fetch(url, init);
-    if (res.status === 429 || res.status >= 500) {
-      await new Promise((r) => setTimeout(r, 1500));
-      return await fetch(url, init);
-    }
-    return res;
-  } catch {
-    // Network-level throw (DNS, reset, "fetch failed") — retry once before giving up.
-    await new Promise((r) => setTimeout(r, 1500));
-    return await fetch(url, init);
+// Exponential backoff with jitter on a transient fault (429 / 5xx / network),
+// honoring a 429's Retry-After header. This deliberately RAMPS GENTLY instead of
+// the old fixed 1.5s single retry: a hard, immediate re-fire on 429 just stacks
+// more requests onto an already-throttled key. Anthropic enforces an
+// *acceleration limit* org-wide — a sharp usage spike from a cold/idle key reads
+// as abuse and gets 429'd even well under the steady ITPM/RPM ceilings — so a
+// burst eval run is exactly the shape that trips it. Backing off (and obeying
+// Retry-After) lets the token bucket refill before we try again.
+const RETRY_MAX_ATTEMPTS = 5; // total tries (1 initial + 4 retries) before giving up
+const RETRY_BASE_MS = 1000; // first backoff ~1s, doubling: 1s, 2s, 4s, 8s (+jitter)
+const RETRY_CAP_MS = 30_000; // never sleep more than 30s between tries
+
+function backoffDelayMs(attempt, retryAfterSeconds) {
+  // A server-sent Retry-After (seconds) wins — it tells us exactly when capacity
+  // returns. Jitter on top avoids the pool's workers all re-firing in lockstep.
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(RETRY_CAP_MS, retryAfterSeconds * 1000) + Math.random() * 250;
   }
+  const expo = Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** (attempt - 1));
+  return expo / 2 + Math.random() * (expo / 2); // full-jitter in [expo/2, expo]
+}
+
+async function fetchRetry(url, init) {
+  for (let attempt = 1; ; attempt++) {
+    const lastAttempt = attempt >= RETRY_MAX_ATTEMPTS;
+    try {
+      const res = await fetch(url, init);
+      if (!lastAttempt && (res.status === 429 || res.status >= 500)) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, retryAfter)));
+        continue;
+      }
+      // Success, a non-retryable status, or out of attempts: hand the response
+      // back so the caller's existing non-2xx handling reports it.
+      return res;
+    } catch (e) {
+      // Network-level throw (DNS, reset, "fetch failed"). Out of attempts → rethrow.
+      if (lastAttempt) throw e;
+      await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, NaN)));
+    }
+  }
+}
+
+// API-key separation (rate-limit hygiene). The eval harness fans out bursts of
+// requests; pointed at a PRODUCTION key that serves live users, those bursts can
+// trip provider rate limits and degrade real traffic — Anthropic enforces an
+// *acceleration limit* org-wide, and this is what happened 2026-06-12. So the
+// harness REFUSES to use any production key: every provider requires its own
+// dedicated *_API_KEY_DEV, minted in a separate, rate-capped dev project /
+// workspace. There is intentionally NO fallback to the plain *_API_KEY — a
+// missing dev key is a hard stop, never a silent switch to prod.
+//   • anthropic → the rate cap lives on a separate Anthropic Console *workspace*
+//     (org-level limits are shared, so a bare second key does NOT isolate them).
+//   • openai / gemini → mint the dev key in a separate project with its own
+//     limits/quota (a Google Cloud project for Gemini; an OpenAI project).
+const DEV_KEY_ENV = {
+  anthropic: "ANTHROPIC_API_KEY_DEV",
+  openai: "OPENAI_API_KEY_DEV",
+  gemini: "GEMINI_API_KEY_DEV",
+};
+
+function requireDevKey(provider) {
+  const envVar = DEV_KEY_ENV[provider];
+  const dev = process.env[envVar];
+  if (dev) return dev;
+  console.error(
+    `${envVar} is required to run ${provider} models in the eval harness.\n` +
+      "  This is deliberate: the harness must NOT use your production key, or its\n" +
+      "  request bursts can rate-limit your live users. Mint a separate, rate-capped\n" +
+      "  development key (in its own project/workspace) and export it:\n" +
+      `    export ${envVar}=...\n` +
+      "  (Production keys belong only in your deployed Supabase secrets — never here.)",
+  );
+  process.exit(1);
 }
 
 async function chatOpenAI(model, systemPrompt, blocks, key) {
@@ -650,9 +717,10 @@ async function runArtifactEval() {
   const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",").map((s) => s.trim());
   const thinkingLevel = arg("thinking", "low");
   const outDir = arg("out", "eval-results/artifact");
-  // Per-model request concurrency. 4 is fine for high-limit models; drop to
-  // 1–2 for rate-limited ones (gemini-pro-preview, sonnet) to avoid 429s.
-  const concurrency = Math.max(1, Number(arg("concurrency", "4")) || 4);
+  // Per-model request concurrency. Default 2 keeps the ramp gentle so a cold key
+  // doesn't trip Anthropic's acceleration limit; raise it with --concurrency for
+  // high-limit models/workspaces, or drop to 1 for the most rate-limited ones.
+  const concurrency = Math.max(1, Number(arg("concurrency", "2")) || 2);
   // --system-prompt: a .txt path is read raw; a .md path yields its FIRST
   // fenced code block (so the in-repo prompt mirror artifact-eval/prompt-v2.md
   // can carry a provenance header without it riding into the prompt).
@@ -671,9 +739,12 @@ async function runArtifactEval() {
 
   // No Whisper in this mode — each key is required only for its own provider.
   const need = (p) => models.some((m) => m.startsWith(`${p}:`));
-  if (need("openai") && !process.env.OPENAI_API_KEY) { console.error("OPENAI_API_KEY required for openai models"); process.exit(1); }
-  if (need("gemini") && !process.env.GEMINI_API_KEY) { console.error("GEMINI_API_KEY required for gemini models"); process.exit(1); }
-  if (need("anthropic") && !process.env.ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY required for anthropic models"); process.exit(1); }
+  // Each provider uses its dedicated DEV key only (hard stop if unset) — never a
+  // production key. No Whisper in artifact mode, so a key is needed only when its
+  // own provider appears in the model list.
+  const openaiKey = need("openai") ? requireDevKey("openai") : undefined;
+  const geminiKey = need("gemini") ? requireDevKey("gemini") : undefined;
+  const anthropicKey = need("anthropic") ? requireDevKey("anthropic") : undefined;
 
   let fixtures = JSON.parse(readFileSync(fixturesPath, "utf8"));
   const problems = [];
@@ -722,10 +793,10 @@ async function runArtifactEval() {
       const t0 = Date.now();
       try {
         const r = provider === "gemini"
-          ? await chatGemini(model, systemPrompt, blocks, process.env.GEMINI_API_KEY, thinkingLevel)
+          ? await chatGemini(model, systemPrompt, blocks, geminiKey, thinkingLevel)
           : provider === "anthropic"
-          ? await chatAnthropic(model, systemPrompt, blocks, process.env.ANTHROPIC_API_KEY)
-          : await chatOpenAI(model, systemPrompt, blocks, process.env.OPENAI_API_KEY);
+          ? await chatAnthropic(model, systemPrompt, blocks, anthropicKey)
+          : await chatOpenAI(model, systemPrompt, blocks, openaiKey);
         const seconds = (Date.now() - t0) / 1000;
         const parsed = parseArtifactResponse(r.content);
         const s = scoreArtifactCase(c, parsed);
@@ -821,16 +892,12 @@ const models = arg("models", "gemini:gemini-3.5-flash,openai:gpt-4o").split(",")
 const thinkingLevel = arg("thinking", "low");
 const outDir = arg("out", "eval-results");
 
-const openaiKey = process.env.OPENAI_API_KEY;
-const geminiKey = process.env.GEMINI_API_KEY;
-const anthropicKey = process.env.ANTHROPIC_API_KEY;
-if (!openaiKey) { console.error("OPENAI_API_KEY required (whisper STT)"); process.exit(1); }
-if (models.some((m) => m.startsWith("gemini:")) && !geminiKey) {
-  console.error("GEMINI_API_KEY required for gemini models"); process.exit(1);
-}
-if (models.some((m) => m.startsWith("anthropic:")) && !anthropicKey) {
-  console.error("ANTHROPIC_API_KEY required for anthropic models"); process.exit(1);
-}
+// Each provider uses its dedicated DEV key only — requireDevKey() hard-stops if
+// it's unset, so a production key can never be used by the harness. OpenAI is
+// ALWAYS required here (Whisper STT), independent of the chat model picked.
+const openaiKey = requireDevKey("openai");
+const geminiKey = models.some((m) => m.startsWith("gemini:")) ? requireDevKey("gemini") : undefined;
+const anthropicKey = models.some((m) => m.startsWith("anthropic:")) ? requireDevKey("anthropic") : undefined;
 
 const manifest = JSON.parse(readFileSync(join(workingDir, "manifest.json"), "utf8"));
 const frames = manifest.frames.map((f) => ({

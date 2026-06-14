@@ -559,11 +559,13 @@ final class EntitlementStore {
     private func applyManagedSnapshot(_ snapshot: ManagedEntitlementSnapshot) {
         managedSnapshot = snapshot
         saveCachedSnapshot(snapshot)
-        #if DEBUG
-        // A live snapshot is the user's real entitlement — release any pinned
-        // dev override so it wins (matches the activation path).
-        if devOverrideActive { devOverrideActive = false }
-        #endif
+        // NB: do NOT clear a DEBUG dev override here. A dev-forced `.managed`
+        // drives the very generation/refresh that produces this snapshot, so
+        // clearing the pin would un-force managed after the FIRST generation —
+        // the next record-start `refresh()` would then recompute to the real
+        // (often trial/expired) entitlement and bounce the user to the paywall.
+        // The genuine "real entitlement supersedes the override" case is a real
+        // activation, which clears the pin explicitly in `activate()`.
         state = Self.managedState(from: snapshot)
     }
 

@@ -121,9 +121,17 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
     final class Coordinator {
         private var panel: NSPanel?
         private var hosting: FlyoutHostingView?
+        // Kept so a CONTENT-driven resize (e.g. the async device enumeration
+        // in MicrophonePicker, which lands after the panel is first sized) can
+        // re-fit the panel without another SwiftUI `updateNSView`.
+        private weak var anchor: NSView?
+        private weak var parentWindow: NSWindow?
+        private var lastFittedSize: NSSize?
 
         func presentOrUpdate(anchoredTo anchor: NSView, rootView: AnyView) {
             guard let parentWindow = anchor.window else { return }
+            self.anchor = anchor
+            self.parentWindow = parentWindow
 
             if let hosting {
                 // Already presented: refresh content and re-fit (the
@@ -134,6 +142,15 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
             }
 
             let hosting = FlyoutHostingView(rootView: rootView)
+            // When the hosted SwiftUI content changes its ideal size — most
+            // commonly MicrophonePicker's devices loading in `onAppear`, AFTER
+            // this initial sizing — re-fit the panel so late rows aren't
+            // clipped. Deferred a runloop turn: window mutation mustn't happen
+            // mid-layout, and `hosting`/`panel` aren't stored yet on the very
+            // first invalidation triggered while reading `fittingSize` below.
+            hosting.onContentSizeChange = { [weak self] in
+                DispatchQueue.main.async { self?.refitToContent() }
+            }
             let size = hosting.fittingSize
             let container = NSView(frame: NSRect(origin: .zero, size: size))
 
@@ -184,6 +201,20 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
             panel.orderOut(nil)
             self.panel = nil
             self.hosting = nil
+            self.anchor = nil
+            self.parentWindow = nil
+            self.lastFittedSize = nil
+        }
+
+        /// Re-fit the panel to the hosted content's current ideal size. Driven
+        /// by `FlyoutHostingView.onContentSizeChange` so an async content
+        /// growth (devices/prompts loading after present) resizes the panel
+        /// rather than clipping the new rows. No-ops when the size is unchanged,
+        /// which also stops the layout→resize→layout cycle from looping.
+        private func refitToContent() {
+            guard let anchor, let parentWindow, let hosting, panel != nil else { return }
+            guard hosting.fittingSize != lastFittedSize else { return }
+            layout(anchor: anchor, parentWindow: parentWindow)
         }
 
         /// Sizes the panel to the content and pins the flyout to the
@@ -194,6 +225,7 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
         private func layout(anchor: NSView, parentWindow: NSWindow) {
             guard let panel, let hosting else { return }
             let chromeSize = hosting.fittingSize
+            lastFittedSize = chromeSize
 
             let anchorRect = parentWindow.convertToScreen(anchor.convert(anchor.bounds, to: nil))
             let parentFrame = parentWindow.frame
@@ -250,5 +282,15 @@ private struct SubmenuFlyoutPresenter<Content: View>: NSViewRepresentable {
 /// panel never becomes key — without this, the first click on a row
 /// would only focus the panel instead of selecting.
 private final class FlyoutHostingView: NSHostingView<AnyView> {
+    /// Invoked when the hosted SwiftUI content's ideal size changes, so the
+    /// presenter can re-fit the panel to late-arriving rows (see
+    /// `Coordinator.refitToContent`).
+    var onContentSizeChange: (() -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onContentSizeChange?()
+    }
 }

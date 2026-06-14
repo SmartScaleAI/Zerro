@@ -1277,7 +1277,7 @@ final class AppState {
             guard let self else { return }
             do {
                 // One server round-trip covers upload → STT → generation; the
-                // "Writing your prompt…" label is the honest single stage.
+                // "Working on it…" label is the honest single stage.
                 self.processingStageLabel = ProcessingPipeline.Stage.writingPrompt.userMessage
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
                 let managed = try await proxy.generate(

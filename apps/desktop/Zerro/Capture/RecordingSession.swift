@@ -786,6 +786,13 @@ final class RecordingSession: NSObject {
         removeCaptureMonitors()
 
         let outputURL = self.outputURL
+        // Mark THIS fragment as deliberately abandoned so launch/wake recovery
+        // offers it — and nothing else. Written synchronously, before the async
+        // writer release, so it survives even if the app exits right after (the
+        // quit-while-recording path). Without it, recovery can't tell this
+        // fragment from a SIGKILL/crash leftover or an eval-retained completed
+        // recording, and falsely offers those as "stopped when your Mac slept".
+        WorkingDirectory.markRecoverable(outputURL)
         writerQueue.async { [weak self] in
             guard let self else { return }
             // In-flight appends have drained (serial queue). Release the writer
