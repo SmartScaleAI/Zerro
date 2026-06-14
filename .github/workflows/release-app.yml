@@ -65,15 +65,25 @@ jobs:
           echo "Releasing $MARKETING (build $BUILD)"
 
       # ----------------------------------------------------------------------
-      # Select the newest Xcode on the runner (needed for the macOS 26.4
-      # deployment target and Swift 6.1+ packages). Picked dynamically so this
-      # doesn't break when GitHub updates the runner image.
-      - name: Select latest Xcode
+      # Select the Xcode toolchain. Pinned to 26.4.x rather than "newest":
+      # the runner image now also ships Xcode 26.5 (Swift 6.3.2), whose
+      # optimizer crashes building the app in Release (see step below).
+      - name: Select Xcode 26.4
         run: |
           set -euo pipefail
-          LATEST="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          echo "Selecting $LATEST"
-          sudo xcode-select -switch "$LATEST"
+          # Pin to Xcode 26.4.x. Xcode 26.5 ships Swift 6.3.2, whose optimizer
+          # crashes (EarlyPerfInliner, on a synthesized deinit) building
+          # SubmenuFlyout.swift in Release. 26.4 is the toolchain the
+          # macOS 26.4 deployment target shipped with. Do NOT pick "latest"
+          # blindly — that is how the 26.5 regression slipped in.
+          XCODE="$(ls -d /Applications/Xcode_26.4*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::Xcode 26.4 not found on runner. Available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
           xcodebuild -version
           swift --version
 
