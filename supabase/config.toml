@@ -58,3 +58,11 @@ verify_jwt = false
 
 [functions.convert]
 verify_jwt = false
+
+# feedback — relays an in-app feedback / issue report to Slack. UNAUTHENTICATED
+# like trial-start: the in-app dialog must work signed-out, so there's no
+# credential to verify. Security is the in-code validation (kind allow-list +
+# trimmed/length-capped message) + the server-held SLACK_WEBHOOK_URL secret; the
+# gateway JWT check is OFF so the app's anon-or-no-token request reaches our code.
+[functions.feedback]
+verify_jwt = false

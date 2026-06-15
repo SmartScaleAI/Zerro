@@ -112,6 +112,10 @@ enum ManagedBackend {
     /// Phase 6 (typed-artifact refactor) — the free "Write agent prompt"
     /// conversion endpoint.
     static var convertURL: URL { baseURL.appendingPathComponent("convert") }
+    /// In-app feedback / issue report relay → Slack. Unauthenticated (the
+    /// dialog works signed-out); shares this same base URL resolution so a
+    /// DEBUG backend override points feedback at the local stack too.
+    static var feedbackURL: URL { baseURL.appendingPathComponent("feedback") }
 
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,

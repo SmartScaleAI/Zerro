@@ -6,8 +6,8 @@
 //
 //  Runtime Dock-icon management for an LSUIElement app. Zerro LAUNCHES
 //  with no Dock icon (INFOPLIST_KEY_LSUIElement stays YES), but while a
-//  real window is open — Settings, Onboarding, Paywall, Trial email —
-//  the app should behave like a regular app: visible in the Dock and
+//  real window is open — Settings, Onboarding, Paywall, Trial email,
+//  Feedback — the app should behave like a regular app: visible in the Dock and
 //  the ⌘Tab switcher. The moment the LAST such window closes, the icon
 //  must disappear again.
 //
@@ -17,7 +17,7 @@
 //  window IDs (not a boolean) so Settings staying open while Onboarding
 //  closes keeps the icon.
 //
-//  Scope: ONLY the four SwiftUI Window scenes participate. The pill,
+//  Scope: ONLY the SwiftUI Window scenes listed below participate. The pill,
 //  the recording-focus window, the area-selector overlay, and the
 //  MenuBarExtra panel/flyouts never touch the policy — a recording
 //  started with no windows open must never flash a Dock icon.
@@ -38,12 +38,13 @@ import SwiftUI
 final class DockIconController {
     static let shared = DockIconController()
 
-    /// The four window scenes that warrant a Dock icon while visible.
+    /// The window scenes that warrant a Dock icon while visible.
     private static let qualifyingWindowIDs: Set<String> = [
         SettingsScene.windowID,
         OnboardingScene.windowID,
         PaywallScene.windowID,
         TrialEmailScene.windowID,
+        FeedbackScene.windowID,
     ]
 
     /// IDs of qualifying windows currently on screen. Set semantics give

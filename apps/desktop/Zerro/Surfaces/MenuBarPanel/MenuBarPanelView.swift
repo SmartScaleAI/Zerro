@@ -249,7 +249,11 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
-            MenuRow(label: "Send feedback")
+            MenuRow(label: "Send feedback") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: FeedbackScene.windowID)
+                MenuBarExtraDismiss.dismiss()
+            }
             // Phase 14 / C3.4: Sparkle "Check for Updates…". Owns the
             // SPUStandardUpdaterController at app-launch lifetime (see
             // ZerroApp.updater @StateObject) — this view just reads it

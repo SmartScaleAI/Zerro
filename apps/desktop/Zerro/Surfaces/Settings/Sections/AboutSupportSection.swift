@@ -11,7 +11,7 @@
 //                       snapshot on the clipboard for support emails.
 //                       Phase 13 will graduate this into structured
 //                       `os_log` collection.
-//    3. Send Feedback — navigation row opening the project mailto URL.
+//    3. Send Feedback — navigation row opening the in-app feedback dialog.
 //
 //  Footer is a separate sibling (not inside the card) so it sits
 //  centered below the section card the way the screenshots show.
@@ -45,7 +45,6 @@ struct AboutSupportSection: View {
 /// link as a non-clickable placeholder until one exists.
 enum SupportURLs {
     static let website = URL(string: "https://getzerro.app")!
-    static let feedbackMailto = URL(string: "mailto:feedback@zerro.app")!
 }
 
 // MARK: - Rows
@@ -154,12 +153,15 @@ private struct CheckForUpdatesRow: View {
 }
 
 private struct SendFeedbackRow: View {
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         SettingsNavigationRow(
             label: "Send Feedback",
-            description: "Opens a new message in your mail app."
+            description: "Share an idea or report an issue."
         ) {
-            NSWorkspace.shared.open(SupportURLs.feedbackMailto)
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: FeedbackScene.windowID)
         }
     }
 }

@@ -353,6 +353,26 @@ struct ZerroApp: App {
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
+
+        // In-app feedback dialog (replaces the old mailto link). Opened from the
+        // menu-bar "Send feedback" row and the Settings "Send Feedback" row via
+        // openWindow(id:). Mirrors the Settings window's chromeless/fixed-size
+        // treatment (`.hiddenTitleBar` + `.contentSize`); never auto-presents.
+        Window("Zerro \u{2014} Feedback", id: FeedbackScene.windowID) {
+            FeedbackView()
+                .dockIconVisibility(windowID: FeedbackScene.windowID)
+                // The verified trial email (when present) attributes the report;
+                // FeedbackView reads `rememberedEmail` and sends null otherwise.
+                .environment(trialCredits)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+        .defaultSize(
+            width: FeedbackScene.preferredWidth,
+            height: FeedbackScene.preferredHeight
+        )
     }
 
     // MARK: - Hotkey gating
