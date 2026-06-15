@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 }
 
-const LAST_UPDATED = "June 13, 2026"
+const LAST_UPDATED = "June 15, 2026"
 
 export default function PrivacyPage() {
   return (
@@ -97,6 +97,19 @@ export default function PrivacyPage() {
           in a short-lived cache for up to 15 minutes solely so that a dropped
           connection can be retried without charging you twice, then becomes
           unreadable and is purged.
+        </P>
+        {/* DRAFT — placeholder language pending attorney review */}
+        <P>
+          You must not submit data subject to special legal protection, such as
+          HIPAA-covered health information or PCI-regulated payment card data;
+          see the Acceptable use section of our{" "}
+          <a
+            href="/terms"
+            className="text-foreground underline underline-offset-4"
+          >
+            Terms of Service
+          </a>
+          .
         </P>
         <P>
           <Strong>Recordings (BYOK plan).</Strong> If you bring your own API
