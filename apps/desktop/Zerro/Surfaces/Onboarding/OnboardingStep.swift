@@ -22,6 +22,7 @@ import Foundation
 
 enum OnboardingStep: Int, CaseIterable, Identifiable {
     case welcome = 0
+    case consent
     case email
     case screenRecording
     case microphone
@@ -34,10 +35,11 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     var devLabel: String {
         switch self {
         case .welcome:         return "1 \u{00B7} Welcome"
-        case .email:           return "2 \u{00B7} Email"
-        case .screenRecording: return "3 \u{00B7} Screen"
-        case .microphone:      return "4 \u{00B7} Mic"
-        case .allSet:          return "5 \u{00B7} Ready"
+        case .consent:         return "2 \u{00B7} Consent"
+        case .email:           return "3 \u{00B7} Email"
+        case .screenRecording: return "4 \u{00B7} Screen"
+        case .microphone:      return "5 \u{00B7} Mic"
+        case .allSet:          return "6 \u{00B7} Ready"
         }
     }
 }

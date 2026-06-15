@@ -31,6 +31,7 @@
 
 import Foundation
 import Observation
+import os
 
 /// Namespace for onboarding window-scene constants. Lives alongside the
 /// state so callers that need to programmatically open or dismiss the
@@ -44,11 +45,33 @@ enum OnboardingScene {
 @Observable
 final class OnboardingState {
 
+    // MARK: - Consent constants (Phase 22)
+    //
+    // Single sources of truth for the consent gate. `currentTermsVersion`
+    // is the "Last updated" date stamped on the live Terms of Service /
+    // Privacy Policy — bump it whenever those documents change materially
+    // and every user is re-papered on next launch (see `needsConsent`).
+    // `analyticsDefaultOptIn` controls only the DEFAULT position of the
+    // onboarding analytics toggle (true = on-by-default / opt-out posture);
+    // route the default through this constant so it can be flipped to
+    // opt-in later without touching the view. (EU/US geo-detection of the
+    // default is DEFERRED — see ConsentStepView.)
+
+    static let currentTermsVersion = "2026-06-15"
+    static let analyticsDefaultOptIn = true
+
     // MARK: - Persisted
 
     var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
+
+    /// True when THIS launch surfaced onboarding solely to re-collect
+    /// consent — the user already finished onboarding but the Terms version
+    /// they accepted is stale. In this mode the consent step dismisses the
+    /// window on accept instead of advancing into the (already-completed)
+    /// rest of the flow. Runtime-only; computed once in `init`.
+    private(set) var isReconsenting: Bool = false
 
     /// Survives the OS-issued SIGKILL on Screen Recording grant.
     /// Persisted on every change; cleared on completeOnboarding.
@@ -75,6 +98,10 @@ final class OnboardingState {
     private enum Keys {
         static let hasCompletedOnboarding = "vf.onboarding.hasCompletedOnboarding"
         static let currentStep            = "vf.onboarding.currentStep"
+        // Phase 22 — clickwrap consent record.
+        static let termsAcceptedVersion   = "vf.consent.termsAcceptedVersion"
+        static let termsAcceptedAt        = "vf.consent.termsAcceptedAt"
+        static let privacyAcceptedVersion = "vf.consent.privacyAcceptedVersion"
     }
 
     // MARK: - Init
@@ -86,6 +113,16 @@ final class OnboardingState {
         // .welcome — exactly the right default for first-ever launches.
         let rawStep = defaults.integer(forKey: Keys.currentStep)
         self.currentStep = OnboardingStep(rawValue: rawStep) ?? .welcome
+
+        // Phase 22: re-consent gate. If the user already finished onboarding
+        // but the Terms version they accepted is stale (or absent), surface
+        // the consent screen once before app use. Pin the window to the
+        // consent step; the consent view dismisses on accept in this mode.
+        let needsConsentNow = defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
+        if hasCompletedOnboarding && needsConsentNow {
+            self.isReconsenting = true
+            self.currentStep = .consent
+        }
     }
 
     // MARK: - Navigation
@@ -109,6 +146,50 @@ final class OnboardingState {
 
     func jump(to step: OnboardingStep) {
         currentStep = step
+    }
+
+    // MARK: - Consent (Phase 22)
+
+    /// True when the locally-recorded Terms version doesn't match the current
+    /// one (never accepted, or accepted an older version). Drives both the
+    /// first-run consent gate and the re-consent-on-launch check.
+    var needsConsent: Bool {
+        defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
+    }
+
+    /// Whether the onboarding window should auto-present at launch: either
+    /// onboarding isn't finished, or finished users owe fresh consent. Read
+    /// by `ZerroApp` to drive the window's launch behavior.
+    var shouldPresentOnboardingOnLaunch: Bool {
+        !hasCompletedOnboarding || needsConsent
+    }
+
+    /// Persist the clickwrap consent record. The affirmative button press is
+    /// the consent action; this is the only writer of these keys.
+    func recordConsent() {
+        let now = ISO8601DateFormatter().string(from: Date())
+        defaults.set(Self.currentTermsVersion, forKey: Keys.termsAcceptedVersion)
+        defaults.set(now, forKey: Keys.termsAcceptedAt)
+        defaults.set(Self.currentTermsVersion, forKey: Keys.privacyAcceptedVersion)
+        isReconsenting = false
+        Log.billing.notice("terms consent recorded locally — version \(Self.currentTermsVersion, privacy: .public)")
+
+        // DEFERRED Phase 22.1 — server-side acceptance record.
+        // Consent is collected BEFORE the email-verification step, so there is
+        // no authenticated session here to tie an acceptance to. To record
+        // server-side we need, end to end:
+        //   1. A Supabase migration adding a `terms_acceptances` table
+        //      (account/email key, terms_version, accepted_at, app_version).
+        //   2. A `/terms-accept` edge function (verify_jwt=false, Bearer the
+        //      trial/session token, matching the existing ManagedBackend
+        //      pattern — the app holds no anon key) that inserts a row.
+        //   3. A post-sign-in sync: after EmailStepView verification succeeds
+        //      (where the trial token first exists), POST the locally-stored
+        //      acceptance (version + termsAcceptedAt + app version) so the
+        //      account carries it. Re-runnable / idempotent on (account,
+        //      version) so a re-verify doesn't duplicate rows.
+        // Until that migration + function ship, the local record above is the
+        // authority and is synced opportunistically once 22.1 lands.
     }
 
     // MARK: - Lifecycle

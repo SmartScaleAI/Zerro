@@ -111,7 +111,9 @@ struct ZerroApp: App {
         // ensures the window is INSTANTIATED at launch; the AppDelegate
         // calls NSApp.activate so the window actually comes to front in
         // an .accessory-activation-policy app.
-        AppDelegate.shouldPresentOnboardingOnLaunch = !onb.hasCompletedOnboarding
+        // Phase 22: also present onboarding when a finished user owes fresh
+        // consent (stale Terms version) so the consent screen re-papers them.
+        AppDelegate.shouldPresentOnboardingOnLaunch = onb.shouldPresentOnboardingOnLaunch
 
         // Register the global hotkey exactly once. Captures the long-
         // lived instances weakly — @State keeps them alive for the
@@ -323,7 +325,7 @@ struct ZerroApp: App {
         }
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(onboarding.hasCompletedOnboarding ? .automatic : .presented)
+        .defaultLaunchBehavior(onboarding.shouldPresentOnboardingOnLaunch ? .presented : .automatic)
 
         // Phase A: single-instance paywall window. Mirrors the onboarding
         // window's modifiers, but `.defaultLaunchBehavior(.suppressed)`
