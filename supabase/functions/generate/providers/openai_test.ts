@@ -102,6 +102,37 @@ Deno.test("OpenAIChatClient.chat: empty content → non-retryable ProviderError"
   }
 });
 
+Deno.test("OpenAIChatClient.chat: finish_reason length → non-retryable truncation", async () => {
+  // A truncated response carries partial content; withhold it and surface a
+  // truncation rather than returning it (handoff-artifact-fence-leak).
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "partial <<<ZERRO_ARTIFACT" }, finish_reason: "length" }],
+          usage: { prompt_tokens: 11, completion_tokens: 16384 },
+        }),
+        { status: 200 },
+      ),
+    );
+  try {
+    const client = new OpenAIChatClient("k", "gpt-4o");
+    let err: unknown;
+    try {
+      await client.chat("SYS", [{ type: "text", text: "hi" }]);
+    } catch (e) {
+      err = e;
+    }
+    assertEquals(err instanceof ProviderError, true);
+    assertEquals((err as ProviderError).truncated, true);
+    assertEquals((err as ProviderError).retryable, false);
+    assertEquals((err as ProviderError).provider, "openai");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 Deno.test("OpenAIChatClient.chat: 500 retries once then throws retryable ProviderError", async () => {
   let calls = 0;
   const origFetch = globalThis.fetch;

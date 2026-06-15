@@ -70,16 +70,25 @@ export class ProviderError extends Error {
   readonly retryable: boolean;
   readonly status: number | null;
   readonly provider: string;
+  /** The chat completed but was cut off at the output-token limit
+   *  (`stop_reason`/`finishReason`/`finish_reason` truncation). The handler
+   *  maps a truncation to a distinct 422 so the app can show a clear "response
+   *  too long" state instead of a generic provider error — and so a half-formed,
+   *  fence-leaking prompt is never returned (handoff-artifact-fence-leak).
+   *  Always non-retryable: a retry at the same cap truncates identically. */
+  readonly truncated: boolean;
   constructor(
     message: string,
     retryable: boolean,
     status: number | null = null,
     provider = "openai",
+    truncated = false,
   ) {
     super(message);
     this.name = "ProviderError";
     this.retryable = retryable;
     this.status = status;
     this.provider = provider;
+    this.truncated = truncated;
   }
 }

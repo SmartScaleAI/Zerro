@@ -120,6 +120,15 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             throw PromptGenerationError.decodeFailure(underlying: error)
         }
 
+        // A `length` finish means the generation was cut off at the output-token
+        // limit; the partial content can carry an unterminated `<<<ZERRO_ARTIFACT`
+        // fence, so it must NOT reach the parser as a clean success
+        // (handoff-artifact-fence-leak). Checked before the empty-content guard
+        // because a truncated response usually DOES have (partial) content.
+        if decoded.choices.first?.finishReason == "length" {
+            throw PromptGenerationError.truncated
+        }
+
         guard let content = decoded.choices.first?.message.content,
               !content.isEmpty else {
             throw PromptGenerationError.emptyContent
@@ -269,6 +278,15 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
 
         struct Choice: Decodable {
             let message: ChoiceMessage
+            /// `"stop"` on a complete response, `"length"` when the model hit
+            /// the output-token limit (→ truncated). Optional: absent on some
+            /// streamed/edge shapes, which we treat as non-truncated.
+            let finishReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case message
+                case finishReason = "finish_reason"
+            }
         }
 
         struct ChoiceMessage: Decodable {

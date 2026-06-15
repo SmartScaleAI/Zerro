@@ -60,7 +60,7 @@ Deno.test("AnthropicChatClient.chat: posts the exact Messages API body, key + ve
 
     assertEquals(JSON.parse(c.init.body as string), {
       model: "claude-sonnet-4-6",
-      max_tokens: 8192, // REQUIRED by the Messages API
+      max_tokens: 16384, // REQUIRED by the Messages API
       system: "SYS", // top-level system field, not a message
       messages: [{
         role: "user",
@@ -110,6 +110,29 @@ Deno.test("AnthropicChatClient.chat: stop_reason refusal → non-retryable empty
       err = e;
     }
     assert(err instanceof ProviderError);
+    assertEquals((err as ProviderError).retryable, false);
+    assertEquals((err as ProviderError).provider, "anthropic");
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("AnthropicChatClient.chat: stop_reason max_tokens → non-retryable truncation", async () => {
+  // A truncated response DOES carry partial text; it must still be withheld
+  // (handoff-artifact-fence-leak) and surfaced as a truncation, not returned.
+  const f = stubFetch(() =>
+    okResponse({ stop_reason: "max_tokens" }, [{ type: "text", text: "partial <<<ZERRO_ARTIFACT" }])
+  );
+  try {
+    const client = new AnthropicChatClient("k", "claude-sonnet-4-6");
+    let err: unknown;
+    try {
+      await client.chat("SYS", [{ type: "text", text: "hi" }]);
+    } catch (e) {
+      err = e;
+    }
+    assert(err instanceof ProviderError);
+    assertEquals((err as ProviderError).truncated, true);
     assertEquals((err as ProviderError).retryable, false);
     assertEquals((err as ProviderError).provider, "anthropic");
   } finally {

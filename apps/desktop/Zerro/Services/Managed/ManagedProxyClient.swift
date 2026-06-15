@@ -66,6 +66,13 @@ enum ManagedGenerationError: Error, Equatable {
     case inputRejected(String)
     /// `502`/`503`/`5xx` — the proxy or OpenAI is unavailable. Retryable.
     case providerUnavailable
+    /// `422` — the server's chat completed but was cut off at the output-token
+    /// limit (`stop_reason`/`finishReason`/`finish_reason` truncation). The
+    /// server withholds the half-formed prompt rather than returning a partial
+    /// (possibly fence-leaking) result; surfaced distinctly so the app can show
+    /// a clear "too long" state instead of a generic provider error
+    /// (handoff-artifact-fence-leak).
+    case responseTruncated
     /// Transport failure (offline/DNS/timeout). Retryable / offline-class.
     case network(String)
     /// The success body wasn't the JSON shape we expected.
@@ -270,6 +277,8 @@ final class ManagedProxyClient {
             throw ManagedGenerationError.notEntitled
         case 401:
             throw ManagedGenerationError.authFailed
+        case 422:
+            throw ManagedGenerationError.responseTruncated
         case 429:
             throw ManagedGenerationError.rateLimited
         case 400, 413, 415:
@@ -444,6 +453,10 @@ final class ManagedProxyClient {
             throw ManagedGenerationError.notEntitled
         case 401:
             throw ManagedGenerationError.authFailed
+        case 422:
+            // Server detected an output-token truncation and withheld the
+            // half-formed prompt (handoff-artifact-fence-leak).
+            throw ManagedGenerationError.responseTruncated
         case 429:
             throw ManagedGenerationError.rateLimited
         case 400, 413, 415:

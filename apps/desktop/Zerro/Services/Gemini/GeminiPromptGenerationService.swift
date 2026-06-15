@@ -111,7 +111,16 @@ struct GeminiPromptGenerationService: PromptGenerationService {
         }
         let candidate = decoded.candidates?.first
         let finish = candidate?.finishReason
-        let usableFinish = finish == nil || finish == "STOP" || finish == "MAX_TOKENS"
+        // MAX_TOKENS means the generation was cut off at the output-token limit;
+        // the partial text can carry an unterminated `<<<ZERRO_ARTIFACT` fence,
+        // so it must NOT reach the parser as a clean success
+        // (handoff-artifact-fence-leak). No longer folded into `usableFinish`.
+        if finish == "MAX_TOKENS" {
+            throw PromptGenerationError.truncated
+        }
+        // A non-STOP finish (SAFETY/RECITATION/PROHIBITED_CONTENT) yields no
+        // usable text → emptyContent (the model's choice, server parity).
+        let usableFinish = finish == nil || finish == "STOP"
         let text = (candidate?.content?.parts ?? [])
             .filter { $0.thought != true }
             .compactMap(\.text)

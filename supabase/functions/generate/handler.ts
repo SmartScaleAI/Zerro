@@ -442,6 +442,10 @@ function usageBody(chat: { inputTokens: number; outputTokens: number; model: str
  *  so the strings are kept stable regardless of which provider failed. */
 function providerErrorResponse(e: unknown): Response {
   if (e instanceof ProviderError) {
+    // Output-token truncation → 422 so the app shows a distinct "response too
+    // long" state. Withholding the (partial) prompt is the point: a half-formed
+    // result can carry an unterminated artifact fence (handoff-artifact-fence-leak).
+    if (e.truncated) return json({ error: "response_truncated", retryable: false }, 422);
     if (e.retryable) return json({ error: "provider_unavailable", retryable: true }, 503);
     return json({ error: "generation_failed", retryable: false }, 502);
   }

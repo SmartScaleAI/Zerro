@@ -741,6 +741,18 @@ Deno.test("non-retryable OpenAI error → 502", async () => {
   assertEquals(store.used.get("sub-1"), 0);
 });
 
+Deno.test("output-token truncation → 422, credit NOT consumed", async () => {
+  // A truncated chat must withhold the (partial, fence-leaking) prompt and map
+  // to a distinct 422 — never charged, never returned (handoff-artifact-fence-leak).
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.failChat = new ProviderError("openai_truncated: length", false, 200, "openai", true);
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 422);
+  assertEquals((await res.json()).error, "response_truncated");
+  assertEquals(store.used.get("sub-1"), 0);
+});
+
 // ---- auth -------------------------------------------------------------------
 Deno.test("missing token → 401, nothing happens", async () => {
   const store = activeStore(0);

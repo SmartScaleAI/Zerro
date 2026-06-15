@@ -17,7 +17,7 @@
 //              anthropic-version: 2023-06-01
 //    Body: {
 //      "model": "claude-opus-4-7",
-//      "max_tokens": 8192,                  // REQUIRED by the Messages API
+//      "max_tokens": 16384,                 // REQUIRED by the Messages API
 //      "system": "<composed system prompt>",// top-level, never a message
 //      "messages": [{"role": "user", "content": [
 //        {"type": "text", "text": "\n[0:00] "},
@@ -28,7 +28,8 @@
 //    NO sampling params, NO `thinking` field (Opus 4.7 400s on temperature/
 //    top_p/top_k; absent thinking = off — the eval-gated shape).
 //  Response: content[] (join type=="text" blocks), stop_reason ("refusal" →
-//    empty-content class), usage {input_tokens, output_tokens}, model.
+//    empty-content class; "max_tokens" → truncated class), usage
+//    {input_tokens, output_tokens}, model.
 //
 //  The interleaved text/image rendering (timestamp tags, OCR lines, click
 //  lines) is byte-identical to the OpenAI impl, the Managed interleave.ts,
@@ -42,9 +43,14 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
 
     private nonisolated static let base = URL(string: "https://api.anthropic.com/v1")!
     private nonisolated static let apiVersion = "2023-06-01"
-    /// Required by the Messages API; generous ceiling matching the server
-    /// adapter + eval harness (~966 output tokens typical).
-    private nonisolated static let maxTokens = 8192
+    /// Required by the Messages API. Generous headroom over the ~966-token
+    /// typical so a long recording's longer response doesn't get cut off (the
+    /// old 8192 ceiling truncated ~2-minute recordings — handoff-artifact-fence
+    /// -leak). A response that still hits this limit is detected via
+    /// `stop_reason == "max_tokens"` and surfaced as `.truncated`, never handed
+    /// to the parser half-formed. KEEP IN SYNC with the server adapter's
+    /// ANTHROPIC_MAX_TOKENS.
+    private nonisolated static let maxTokens = 16384
 
     /// The registry model id to run (e.g. "claude-sonnet-4-6"). Selected per
     /// generation by BYOKRouting.
@@ -98,6 +104,15 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
             decoded = try JSONDecoder().decode(MessagesResponse.self, from: data)
         } catch {
             throw PromptGenerationError.decodeFailure(underlying: error)
+        }
+
+        // The generation was cut off at the output-token limit — the partial
+        // text can carry an unterminated `<<<ZERRO_ARTIFACT` fence, so it must
+        // NOT reach the parser as a clean success (handoff-artifact-fence-leak).
+        // Checked before the empty-content guard because a truncated response
+        // usually DOES have (partial) text.
+        if decoded.stopReason == "max_tokens" {
+            throw PromptGenerationError.truncated
         }
 
         // A safety refusal is stop_reason "refusal", usually with no text —

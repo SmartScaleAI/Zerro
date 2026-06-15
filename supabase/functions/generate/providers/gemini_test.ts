@@ -155,6 +155,35 @@ Deno.test("GeminiChatClient.chat: finishReason SAFETY → non-retryable empty co
   }
 });
 
+Deno.test("GeminiChatClient.chat: finishReason MAX_TOKENS → non-retryable truncation", async () => {
+  // A truncated response carries partial parts; withhold it and surface a
+  // truncation rather than returning it (handoff-artifact-fence-leak).
+  const f = stubFetch(() =>
+    new Response(
+      JSON.stringify({
+        candidates: [{ content: { parts: [{ text: "partial <<<ZERRO_ARTIFACT" }] }, finishReason: "MAX_TOKENS" }],
+        usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 16384 },
+      }),
+      { status: 200 },
+    )
+  );
+  try {
+    const client = new GeminiChatClient("k", "gemini-3.5-flash", "low");
+    let err: unknown;
+    try {
+      await client.chat("SYS", [{ type: "text", text: "hi" }]);
+    } catch (e) {
+      err = e;
+    }
+    assert(err instanceof ProviderError);
+    assertEquals((err as ProviderError).truncated, true);
+    assertEquals((err as ProviderError).retryable, false);
+    assertEquals((err as ProviderError).provider, "gemini");
+  } finally {
+    f.restore();
+  }
+});
+
 Deno.test("GeminiChatClient.chat: 503 retries once then throws retryable", async () => {
   let calls = 0;
   const f = stubFetch(() => {

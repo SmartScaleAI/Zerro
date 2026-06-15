@@ -103,4 +103,13 @@ enum PromptGenerationError: Error {
     /// (e.g. `choices[0].message.content` was null or empty). Distinct
     /// from `server` because it's the model's choice, not an outage.
     case emptyContent
+    /// The generation hit the provider's output-token limit and was cut off
+    /// before completing (`stop_reason == "max_tokens"` for Anthropic,
+    /// `finishReason == "MAX_TOKENS"` for Gemini, `finish_reason == "length"`
+    /// for OpenAI). The partial text is NOT usable — it can contain an
+    /// unterminated `<<<ZERRO_ARTIFACT` fence that would otherwise leak into the
+    /// pill as raw wire syntax (handoff-artifact-fence-leak). Surfaced as a
+    /// distinct failure so a cut-off response is never handed to the parser as a
+    /// clean success.
+    case truncated
 }

@@ -109,9 +109,16 @@ export class GeminiChatClient implements ChatClient {
 
     const candidate = json?.candidates?.[0];
     const finish = candidate?.finishReason;
-    // A non-STOP/MAX_TOKENS finish (SAFETY/RECITATION/PROHIBITED_CONTENT) yields
-    // no usable text — same non-retryable "empty content" class as OpenAI.
-    const usableFinish = finish === undefined || finish === "STOP" || finish === "MAX_TOKENS";
+
+    // MAX_TOKENS = output-token truncation: the partial text can carry an
+    // unterminated <<<ZERRO_ARTIFACT fence, so withhold it (handoff-artifact-
+    // fence-leak). No longer folded into usableFinish.
+    if (finish === "MAX_TOKENS") {
+      throw new ProviderError("gemini_truncated: MAX_TOKENS", false, 200, "gemini", true);
+    }
+    // A non-STOP finish (SAFETY/RECITATION/PROHIBITED_CONTENT) yields no usable
+    // text — same non-retryable "empty content" class as OpenAI.
+    const usableFinish = finish === undefined || finish === "STOP";
 
     const parts = candidate?.content?.parts;
     const text = Array.isArray(parts)

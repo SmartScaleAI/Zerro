@@ -31,8 +31,13 @@ import {
 
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
-// Required by the Messages API; generous ceiling, matching the eval harness.
-const ANTHROPIC_MAX_TOKENS = 8192;
+// Required by the Messages API. Generous headroom over the ~966-token typical so
+// a long recording's longer response isn't cut off (the old 8192 truncated
+// ~2-minute recordings — handoff-artifact-fence-leak). A response that still
+// hits this is detected via stop_reason "max_tokens" and surfaced as a
+// truncation, never returned half-formed. KEEP IN SYNC with the BYOK
+// AnthropicPromptGenerationService.maxTokens.
+const ANTHROPIC_MAX_TOKENS = 16384;
 
 interface AnthropicContentBlock {
   type: string;
@@ -107,6 +112,14 @@ export class AnthropicChatClient implements ChatClient {
     // same non-retryable "empty content" class as OpenAI/Gemini (the handler
     // maps non-retryable to 502; no credit is charged).
     const stopReason = json?.stop_reason;
+
+    // Output-token truncation: the partial text can carry an unterminated
+    // <<<ZERRO_ARTIFACT fence, so withhold it (handoff-artifact-fence-leak).
+    // Checked before the empty-content guard — a truncated response has text.
+    if (stopReason === "max_tokens") {
+      throw new ProviderError("anthropic_truncated: max_tokens", false, 200, "anthropic", true);
+    }
+
     const text = Array.isArray(json?.content)
       ? json.content
         .filter((b: { type?: string; text?: unknown }) =>

@@ -154,6 +154,15 @@ export class OpenAIChatClient extends OpenAITransport implements ChatClient {
     if (!res.ok) throw this.classify(res.status, "chat");
 
     const json = await res.json();
+
+    // finish_reason "length" = output-token truncation: the partial content can
+    // carry an unterminated <<<ZERRO_ARTIFACT fence, so withhold it
+    // (handoff-artifact-fence-leak). Checked before the empty-content guard — a
+    // truncated response has (partial) content.
+    if (json?.choices?.[0]?.finish_reason === "length") {
+      throw new ProviderError("openai_truncated: length", false, 200, "openai", true);
+    }
+
     const text = json?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || text.length === 0) {
       // A 200 with no usable content is not retryable (we'd just get it again).

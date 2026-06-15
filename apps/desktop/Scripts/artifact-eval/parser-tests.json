@@ -84,7 +84,19 @@
     "expect": {
       "valid": false,
       "hasArtifact": false,
-      "chatTextContains": "body"
+      "chatTextContains": "body",
+      "chatTextNotContains": "<<<ZERRO_ARTIFACT"
+    }
+  },
+  {
+    "name": "truncated open fence with same-line spillover: chat fallback omits raw wire token",
+    "tier": "strict",
+    "input": "<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"Update Zerro landing page copy and remove FAQ\">>> Update the Zerro landing page copy and remove the FAQ section.\n\n1. Rewrite the hero headline.\n2. Delete the FAQ component.",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false,
+      "chatTextContains": "Update the Zerro landing page copy",
+      "chatTextNotContains": "<<<ZERRO_ARTIFACT"
     }
   },
   {

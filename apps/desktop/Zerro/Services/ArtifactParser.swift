@@ -228,6 +228,37 @@ enum ArtifactParser {
             requestPresent: requestPresent
         )
     }
+
+    // MARK: Fence-token scrub (defense in depth)
+
+    /// Removes any raw artifact wire delimiter from chat-only fallback text so
+    /// a malformed or truncated response never surfaces `<<<ZERRO_ARTIFACT …>>>`
+    /// / `<<<END_ZERRO_ARTIFACT>>>` verbatim in the pill. Operates per line: a
+    /// line that is purely a fence token is dropped; a line where a fence token
+    /// was glued to real content keeps the content (e.g. a truncated open fence
+    /// with body spillover on the same line). A line with no fence material is
+    /// returned untouched, so this is a no-op on an ordinary chat reply. KEEP IN
+    /// SYNC with `scrubFenceTokens` in `eval-models.mjs`.
+    private nonisolated static func scrubFenceTokens(from text: String) -> String {
+        let lines = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        var out: [String] = []
+        out.reserveCapacity(lines.count)
+        for line in lines {
+            let scrubbed = line
+                .replacing(openFenceToken, with: "")
+                .replacing(openFenceStraggler, with: "")
+                .replacing(closeFenceToken, with: "")
+            if scrubbed == line {
+                out.append(line) // no fence material — keep verbatim (incl. blanks)
+            } else if !scrubbed.trimmingCharacters(in: .whitespaces).isEmpty {
+                out.append(scrubbed) // token glued to real content — keep the content
+            }
+            // else: the line was a pure fence token — drop it entirely.
+        }
+        return out.joined(separator: "\n")
+    }
 }
 
 // MARK: - Trailing-whitespace trim

@@ -469,6 +469,29 @@ const THE_USER_RE = /\bthe user\b/i;
 const ARTIFACT_OPEN_STRICT = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*>>>$/;
 const ARTIFACT_OPEN_RECOVERY = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*(>+)(.*)$/;
 
+// Defense-in-depth scrubber (handoff-artifact-fence-leak). KEEP IN SYNC with
+// ArtifactParser.swift's openFenceToken/openFenceStraggler/closeFenceToken +
+// scrubFenceTokens. A response that degrades to chat-only (e.g. a truncated
+// generation leaving one open fence and no close) must never show the raw wire
+// delimiter; this strips it from the fallback text while keeping real spillover.
+const OPEN_FENCE_TOKEN_RE = /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/g;
+const OPEN_FENCE_STRAGGLER_RE = /<<<ZERRO_ARTIFACT[^\n]*/g;
+const CLOSE_FENCE_TOKEN_RE = /<<<END_ZERRO_ARTIFACT>*/g;
+function scrubFenceTokens(text) {
+  return text
+    .split("\n")
+    .map((line) => {
+      const scrubbed = line
+        .replace(OPEN_FENCE_TOKEN_RE, "")
+        .replace(OPEN_FENCE_STRAGGLER_RE, "")
+        .replace(CLOSE_FENCE_TOKEN_RE, "");
+      if (scrubbed === line) return line; // no fence material — keep verbatim
+      return scrubbed.trim() === "" ? null : scrubbed; // drop pure-fence lines
+    })
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
 function parseArtifactResponse(raw) {
   const warnings = [];
   const rawLines = raw.split(/\r?\n/);
@@ -499,7 +522,7 @@ function parseArtifactResponse(raw) {
       midline = true; // close token NOT at end of line (or wrong chevrons) — unrecoverable
     }
   });
-  const asChatOnly = (valid) => ({ chatText: lines.join("\n").trim(), artifact: null, valid, recovered: false, warnings, requestPresent });
+  const asChatOnly = (valid) => ({ chatText: scrubFenceTokens(lines.join("\n")).trim(), artifact: null, valid, recovered: false, warnings, requestPresent });
   if (opens.length === 0 && closes.length === 0 && !midline) return asChatOnly(true);
   if (midline) {
     warnings.push("fence delimiter not alone at line start");
@@ -872,6 +895,7 @@ function runParserTests() {
     if (e.bodyEndsWith !== undefined && !(got.artifact?.body ?? "").endsWith(e.bodyEndsWith)) problems.push(`body does not end with ${JSON.stringify(e.bodyEndsWith)}`);
     if (e.bodyContains !== undefined && !(got.artifact?.body ?? "").includes(e.bodyContains)) problems.push(`body does not contain ${JSON.stringify(e.bodyContains)}`);
     if (e.chatTextContains !== undefined && !got.chatText.includes(e.chatTextContains)) problems.push(`chatText does not contain ${JSON.stringify(e.chatTextContains)}`);
+    if (e.chatTextNotContains !== undefined && got.chatText.includes(e.chatTextNotContains)) problems.push(`chatText must not contain ${JSON.stringify(e.chatTextNotContains)}`);
     if (e.warningsContain !== undefined && !got.warnings.some((w) => w.includes(e.warningsContain))) problems.push(`no warning containing ${JSON.stringify(e.warningsContain)}`);
     if (problems.length) {
       failures++;

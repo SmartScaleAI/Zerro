@@ -42,6 +42,7 @@ final class ArtifactParserTests: XCTestCase {
             let bodyEndsWith: String?
             let bodyContains: String?
             let chatTextContains: String?
+            let chatTextNotContains: String?
             let warningsContain: String?
             let requestPresent: Bool?
         }
@@ -95,6 +96,9 @@ final class ArtifactParserTests: XCTestCase {
             }
             if let chat = e.chatTextContains {
                 XCTAssertTrue(got.chatText.contains(chat), "\(label): chatText should contain \(chat)")
+            }
+            if let absent = e.chatTextNotContains {
+                XCTAssertFalse(got.chatText.contains(absent), "\(label): chatText must not contain \(absent)")
             }
             if let warning = e.warningsContain {
                 XCTAssertTrue(got.warnings.contains { $0.contains(warning) }, "\(label): warnings should mention \(warning) — got \(got.warnings)")

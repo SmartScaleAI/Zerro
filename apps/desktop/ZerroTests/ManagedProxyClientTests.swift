@@ -173,6 +173,18 @@ final class ManagedProxyClientTests: XCTestCase {
         }
     }
 
+    /// The server returns 422 when the generation hit the output-token limit
+    /// and withheld the half-formed prompt (handoff-artifact-fence-leak); the
+    /// client surfaces it distinctly so the pill shows a "too long" state rather
+    /// than a generic provider error or a leaked fence.
+    func testResponseTruncatedMapped() async throws {
+        let (session, gen) = freshStubs(genStatus: 422, genBody: #"{"error":"response_truncated","retryable":false}"#)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+        await assertThrows(.responseTruncated) {
+            _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
+        }
+    }
+
     // MARK: - Payload shape
 
     func testRequestSendsAudioFramesModeOnly() async throws {

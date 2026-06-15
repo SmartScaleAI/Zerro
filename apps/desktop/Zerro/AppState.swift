@@ -148,6 +148,19 @@ public enum RecordingFailureReason: Equatable {
     /// follow-up: split out of `.providerError`). Same copy + retryability
     /// as `.providerError`.
     case providerUnavailable
+    /// The generation hit the provider's output-token limit and was cut off
+    /// before finishing (BYOK `PromptGenerationError.truncated`; Managed
+    /// `ManagedGenerationError.responseTruncated` via the server's 422). The
+    /// partial output is withheld rather than rendered, because a cut-off
+    /// response can carry an unterminated `<<<ZERRO_ARTIFACT` fence that would
+    /// otherwise leak into the pill as raw wire syntax
+    /// (handoff-artifact-fence-leak). NOT retryable: a re-run at the same
+    /// output-token cap truncates identically — the copy points the user at a
+    /// shorter recording instead of dangling a Retry that always fails the same
+    /// way. Frequency is tracked via the `generation_failed` analytics event, so
+    /// it is gated out of error-tracker capture (a known, explainable condition,
+    /// not a bug to triage).
+    case responseTooLong
     /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
     /// off disk when building the provider request — the BYOK services
     /// wrap this in their `.network` case, and the managed client surfaces
@@ -203,6 +216,7 @@ public enum RecordingFailureReason: Equatable {
              .processingFailed, .recordingTooShort, .diskFull,
              .artifactUnreadable,
              .apiKeyMissing, .apiAuth,
+             .responseTooLong,
              .outOfCredits, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -247,6 +261,8 @@ public enum RecordingFailureReason: Equatable {
             return "Hit a rate limit \u{2014} try again in a minute."
         case .providerError, .providerUnavailable:
             return "Generation failed \u{2014} try again."
+        case .responseTooLong:
+            return "The response was too long to finish \u{2014} try a shorter recording."
         case .artifactUnreadable:
             return "Couldn\u{2019}t process the recording."
         case .outOfCredits:
@@ -1548,6 +1564,10 @@ final class AppState {
         case .providerUnavailable:
             // 502/503 from the proxy or OpenAI — weather, not captured.
             return .providerUnavailable
+        case .responseTruncated:
+            // 422 — output-token truncation; partial prompt withheld
+            // (handoff-artifact-fence-leak).
+            return .responseTooLong
         case .malformedResponse, .inputRejected:
             // Contract broke between client and proxy — captured.
             return .providerError
@@ -1592,6 +1612,10 @@ final class AppState {
         case .providerUnavailable:
             // 502/503 — proxy/OpenAI weather, retryable, not captured.
             return .providerUnavailable
+        case .responseTruncated:
+            // 422 — the server's chat hit the output-token limit; the partial
+            // prompt is withheld (handoff-artifact-fence-leak).
+            return .responseTooLong
         case .malformedResponse, .inputRejected, .authFailed:
             // Contract/token machinery broke — engineering signal, captured.
             // (A real recording can't trip the input fuse; a managed-path
@@ -2131,7 +2155,7 @@ final class AppState {
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
-             .providerUnavailable,
+             .providerUnavailable, .responseTooLong,
              .outOfCredits, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -2171,6 +2195,8 @@ final class AppState {
                 return "Couldn\u{2019}t authenticate with the generation service."
             case .providerUnavailable:
                 return "The generation service is temporarily unavailable."
+            case .responseTruncated:
+                return "The response was too long and got cut off before it finished."
             case .malformedResponse:
                 return "The generation service returned an unexpected response."
             case .artifactUnreadable:
@@ -2245,6 +2271,10 @@ final class AppState {
             case .decodeFailure, .emptyContent:
                 // Response contract broke — captured.
                 return .providerError
+            case .truncated:
+                // Output-token limit hit — the partial output is withheld so a
+                // half-formed fence can't leak (handoff-artifact-fence-leak).
+                return .responseTooLong
             }
         }
 
