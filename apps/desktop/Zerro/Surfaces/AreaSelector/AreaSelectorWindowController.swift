@@ -50,6 +50,7 @@ final class AreaSelectorWindowController {
     private var mouseMonitor: Any?
     private var keyMonitor: Any?
     private var screenChangeObserver: NSObjectProtocol?
+    private var didBecomeActiveObserver: NSObjectProtocol?
 
     /// Builds and shows the overlay on the screen containing the
     /// cursor. `onConfirm` fires when the user accepts a selection
@@ -166,6 +167,7 @@ final class AreaSelectorWindowController {
 
         installEventMonitors(for: win, state: state)
         installScreenChangeObserver()
+        installActivationObserver()
     }
 
     /// Phase 10: catch the case where the overlay is presented on an
@@ -185,6 +187,28 @@ final class AreaSelectorWindowController {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.handleScreenParametersChanged()
+            }
+        }
+    }
+
+    /// Re-arm the keyboard when Zerro becomes active again. ⌘-Tab away
+    /// makes another app's window key, so this transient, non-restorable
+    /// panel resigns key and the keyDown monitor goes silent. ⌘-Tab back
+    /// reactivates the app but does not restore the panel as key on its
+    /// own. On reactivation, re-assert key status (makeKey, never
+    /// NSApp.activate — that would re-order every Zerro window) so ESC
+    /// works again without requiring a click first. Guarded on a live
+    /// window so a stale notification after dismiss() is a no-op.
+    private func installActivationObserver() {
+        guard didBecomeActiveObserver == nil else { return }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let window = self?.window, !window.isKeyWindow else { return }
+                window.makeKey()
             }
         }
     }
@@ -214,9 +238,13 @@ final class AreaSelectorWindowController {
         if let screenChangeObserver {
             NotificationCenter.default.removeObserver(screenChangeObserver)
         }
+        if let didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
+        }
         mouseMonitor = nil
         keyMonitor = nil
         screenChangeObserver = nil
+        didBecomeActiveObserver = nil
 
         window?.orderOut(nil)
         window = nil
@@ -290,6 +318,17 @@ final class AreaSelectorWindowController {
             }
 
             if event.type == .leftMouseDown {
+                // Re-arm the keyboard. This monitor consumes the
+                // leftMouseDown (returns nil) before AppKit's sendEvent:
+                // runs, so the panel never goes through its normal
+                // click-to-become-key path. If focus left the overlay
+                // (⌘-Tab away, or another app became key) the panel is no
+                // longer key and the keyDown monitor goes silent. Re-assert
+                // key status here — explicitly doing what sendEvent: would —
+                // so ESC/Space/Return work again after any click into the
+                // overlay. makeKey() (not NSApp.activate) keeps this scoped
+                // to the panel and never re-orders other Zerro windows.
+                if !window.isKeyWindow { window.makeKey() }
                 // Record button — start recording.
                 if let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
