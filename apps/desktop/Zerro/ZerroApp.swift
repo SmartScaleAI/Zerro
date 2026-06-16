@@ -129,6 +129,12 @@ struct ZerroApp: App {
             // once across SwiftUI's re-invocations of App.init, so we
             // get the right one-shot semantics for free.
             CrashReporting.start()
+            // Tier 1 analytics: seed the entitlement super-properties from the
+            // resolved launch state so EVERY event this session carries
+            // monetization context. The EntitlementStore.state didSet keeps them
+            // live thereafter; this initial push is needed because that didSet
+            // doesn't fire for the value computed in EntitlementStore.init.
+            Analytics.updateEntitlementProperties(ent.state)
             // Phase 13A: anchor breadcrumb. Every subsequent breadcrumb
             // (state transitions, pipeline stages, permission changes)
             // accumulates AFTER this one in the local breadcrumb trail, so
@@ -496,6 +502,11 @@ struct ZerroApp: App {
         // documented on EntitlementStore.refresh(). The state name is
         // .public (an enum description, no user content).
         if let entitlements, !entitlements.canGenerate {
+            // Tier 3 analytics: the plain not-entitled (`.expired`) open has no
+            // preflight reason → clear any stale block trigger so PaywallView
+            // reports `manual`. (A managed out-of-credits / inactive block routes
+            // to the failure pill below, not here, and sets its own trigger.)
+            entitlements.paywallTrigger = nil
             Log.hotkey.notice("gating: not entitled — opening paywall")
             AppDelegate.openPaywall()
             return

@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import Script from "next/script";
-import { Analytics } from "@vercel/analytics/next";
 import {
   OrganizationJsonLd,
   WebSiteJsonLd,
 } from "@/components/structured-data";
+import { PostHogProvider } from "./providers";
 import "./globals.css";
 
 const inter = Inter({
@@ -88,13 +88,14 @@ export default function RootLayout({
       >
         <OrganizationJsonLd />
         <WebSiteJsonLd />
-        <div
-          className={`${inter.variable} min-h-screen w-full bg-background font-light text-foreground`}
-          style={{ fontFamily: sansFont }}
-        >
-          {children}
-        </div>
-        <Analytics />
+        <PostHogProvider>
+          <div
+            className={`${inter.variable} min-h-screen w-full bg-background font-light text-foreground`}
+            style={{ fontFamily: sansFont }}
+          >
+            {children}
+          </div>
+        </PostHogProvider>
         {/* LemonSqueezy affiliate tracking. The config must be set before
             affiliate.js loads, so the inline config runs beforeInteractive. */}
         <Script id="lemonsqueezy-affiliate-config" strategy="beforeInteractive">

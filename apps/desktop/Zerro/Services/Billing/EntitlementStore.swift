@@ -53,7 +53,36 @@ final class EntitlementStore {
     /// The current entitlement standing. Read-only to the outside world —
     /// nothing but this store (and, in DEBUG, the dev override) mutates it,
     /// so the gate and any UI always see a value that came through here.
-    private(set) var state: EntitlementState
+    ///
+    /// Tier 1 analytics: every assignment refreshes the `entitlement_state` /
+    /// `credits_remaining_bucket` super-properties so all events segment by
+    /// monetization state. This is the single chokepoint — `refresh()`,
+    /// `activate()`, the apply-credits paths, and the DEBUG override all flow
+    /// through here. (The value set in `init` doesn't trip `didSet`; that one
+    /// is seeded explicitly after `Analytics.start()` in `ZerroApp`.)
+    private(set) var state: EntitlementState {
+        didSet {
+            Analytics.updateEntitlementProperties(state)
+            Self.captureTrialTransition(from: oldValue, to: state)
+        }
+    }
+
+    /// Tier 3 analytics: the two purely-LOCAL trial transitions. Subscription
+    /// activation/lapse are captured SERVER-SIDE from the LemonSqueezy webhook
+    /// (reliable even with the app closed), so they are deliberately NOT emitted
+    /// here — the webhook is the single source and firing here too would
+    /// double-count.
+    private static func captureTrialTransition(from old: EntitlementState, to new: EntitlementState) {
+        // First grant: pre-trial (no balance) → a real credit balance.
+        if case .trial(let oldBalance) = old, oldBalance == nil,
+           case .trial(let newBalance) = new, let granted = newBalance {
+            Analytics.capture("trial_started", ["credits_granted": granted])
+        }
+        // Trial spent out: any trial balance → expired.
+        if case .trial = old, case .expired = new {
+            Analytics.capture("trial_exhausted")
+        }
+    }
 
     // MARK: - Dependencies
 
@@ -496,6 +525,20 @@ final class EntitlementStore {
         guard case .trial = state, let trialCredits else { return false }
         return trialCredits.rememberedEmail == nil
     }
+
+    // MARK: - Paywall trigger (Tier 3 analytics)
+
+    /// Why the paywall was last routed open — read once by `PaywallView.onAppear`
+    /// for `paywall_shown.trigger`, then cleared. Set to a block reason by
+    /// `AppState.presentPreflightBlock`; the record-start gate resets it to `nil`
+    /// on the plain `.expired` open (→ `manual` in the event). UI/analytics only;
+    /// never gates anything.
+    enum PaywallTrigger: String {
+        case outOfCredits = "out_of_credits"
+        case subscriptionInactive = "subscription_inactive"
+        case apiKeyMissing = "api_key_missing"
+    }
+    var paywallTrigger: PaywallTrigger?
 
     /// Reflect a just-completed trial generation's `credits_remaining` and
     /// recompute (so the menu-bar line updates and, when credits hit zero, the

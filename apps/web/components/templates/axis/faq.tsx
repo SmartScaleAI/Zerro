@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import { track } from "@/lib/analytics";
 import { faqEntries } from "./faq-data";
 
 // FAQ accordion. Each answer is always rendered in the DOM (just height-collapsed
@@ -87,7 +88,11 @@ const Faq = () => {
             question={entry.question}
             answer={entry.answer}
             isOpen={openIndex === i}
-            onToggle={() => setOpenIndex(openIndex === i ? null : i)}
+            onToggle={() => {
+              const willOpen = openIndex !== i;
+              setOpenIndex(willOpen ? i : null);
+              if (willOpen) track("faq_opened", { question: entry.question });
+            }}
           />
         ))}
       </div>

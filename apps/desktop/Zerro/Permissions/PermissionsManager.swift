@@ -185,8 +185,35 @@ final class PermissionsManager {
             if nowGranted {
                 reactivateApp()
             }
+
+            // Tier 2 analytics: emit the permission funnel transitions for
+            // Screen Recording + Microphone. Inside the
+            // `hasPerformedInitialRefresh` guard so the synthetic
+            // `.notDetermined → .granted` step during init doesn't fire. AX is
+            // skipped — it's informational and never reports `.denied`.
+            Self.emitPermissionTransition("screen_recording", prev: prevScreen, new: screenRecordingStatus)
+            Self.emitPermissionTransition("microphone", prev: prevMic, new: microphoneStatus)
         }
         hasPerformedInitialRefresh = true
+    }
+
+    /// Tier 2 analytics: emit the single permission funnel event for one
+    /// status transition (or nothing on a no-op / untracked change). Exactly
+    /// one event fires per real transition: `revoked` takes precedence over
+    /// `denied` for a granted→denied flip, since a lost grant is a revocation,
+    /// not a fresh denial. `permission` is `screen_recording` / `microphone`.
+    private static func emitPermissionTransition(
+        _ permission: String,
+        prev: PermissionStatus,
+        new: PermissionStatus
+    ) {
+        if prev != .granted, new == .granted {
+            Analytics.capture("permission_granted", ["permission": permission])
+        } else if prev == .granted, new != .granted {
+            Analytics.capture("permission_revoked", ["permission": permission])
+        } else if prev != .denied, new == .denied {
+            Analytics.capture("permission_denied", ["permission": permission])
+        }
     }
 
     /// Set after the first `refreshStatuses()` call so the transition

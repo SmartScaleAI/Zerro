@@ -538,6 +538,20 @@ final class AppState {
     /// When the current `.processing` run began, for the elapsed counter.
     private var processingElapsedStart: ContinuousClock.Instant?
 
+    /// Tier 1 analytics: when the current generation request was dispatched,
+    /// set in `runPromptGeneration` alongside `generation_started`. Read by the
+    /// success/failure tails to attach `latency_ms`. Reset on each generation
+    /// start (including a retry), so the latency is measured per-attempt.
+    private var generationStartInstant: ContinuousClock.Instant?
+
+    /// Tier 1 analytics (Tier 2 fix): the model id resolved ONCE at generation
+    /// start, reused by `generation_started` and its matching
+    /// `generation_succeeded`/`_failed` so a single generation is always
+    /// reported under one model — including when a per-recording override
+    /// (`recordingModelID`) differs from the persisted `selectedModelID`. Reset
+    /// per attempt, alongside `generationStartInstant`.
+    private var generationModelID: String?
+
     /// The phrase part of the processing pill label, without the trailing
     /// "· Xs" the timer appends. Updated by every stage; the ticker reads it.
     private var processingBaseLabel: String = "Saving your narration\u{2026}"
@@ -805,6 +819,16 @@ final class AppState {
         case .subscriptionInactive: reason = .subscriptionInactive
         case .apiKeyMissing: reason = .apiKeyMissing
         }
+        // Tier 3 analytics: stash the gate reason so a paywall opened off this
+        // block carries the right `paywall_shown.trigger` (read + cleared in
+        // PaywallView). Harmless when the failure pill is shown instead.
+        entitlements?.paywallTrigger = {
+            switch block {
+            case .outOfCredits: return .outOfCredits
+            case .subscriptionInactive: return .subscriptionInactive
+            case .apiKeyMissing: return .apiKeyMissing
+            }
+        }()
         state = .failed(reason: reason)
         if block == .subscriptionInactive, let entitlements {
             Task { await entitlements.refreshManagedEntitlement() }
@@ -865,6 +889,13 @@ final class AppState {
     func cancelRecording() {
         if let session = recordingSession,
            state == .recording || state == .wrappingUp || state == .autoStopped {
+            // Tier 1 analytics: only a LIVE recording is "cancelled". A cancel
+            // from .processing/.done below is discarding an already-completed
+            // recording (which already fired `recording_completed`), so it stays
+            // silent — keeping completed/cancelled mutually exclusive per session.
+            Analytics.capture("recording_cancelled", [
+                "duration_seconds": Int(elapsedSeconds.rounded())
+            ])
             session.cancel()
             return
         }
@@ -1018,6 +1049,17 @@ final class AppState {
         permissions?.stopMonitoring()
         switch outcome {
         case .finished(let url, let clicks):
+            // Tier 1 analytics: the recording loop's terminal event. Read the
+            // pre-transition state for `end_reason` — the auto-stop path set
+            // `.autoStopped` before finalizing; a manual stop leaves
+            // `.recording`/`.wrappingUp`. `elapsedSeconds` still holds the final
+            // capture duration here (reset only happens on the next start).
+            // Fires only for a live session reaching processing, so it's
+            // mutually exclusive with `recording_cancelled`.
+            Analytics.capture("recording_completed", [
+                "duration_seconds": Int(elapsedSeconds.rounded()),
+                "end_reason": state == .autoStopped ? "auto_stop" : "manual",
+            ])
             lastRecordingURL = url
             // Phase 8 Step 1: run real audio isolation in place of the
             // old mock 4s sleep. Frame extraction (Step 2), manifest
@@ -1150,6 +1192,11 @@ final class AppState {
         Log.breadcrumb(category: .stateMachine, message: "offering sleep-interrupted recording recovery")
         pendingRecoveryURL = newest
         state = .confirmingRecovery
+        // Tier 2 analytics: the recovery offer was presented. `trigger`
+        // distinguishes the wake path (common lid-close) from a launch scan.
+        Analytics.capture("recovery_offered", [
+            "trigger": trigger == .wake ? "wake" : "launch"
+        ])
     }
 
     /// Blanket-sweep junk only on the launch trigger; on wake we never sweep
@@ -1172,12 +1219,17 @@ final class AppState {
         guard case .confirmingRecovery = state, let url = pendingRecoveryURL else { return }
         pendingRecoveryURL = nil
         if generate {
+            // Tier 2 analytics: accepted/discarded are mutually exclusive per
+            // offer. An accepted recovery flows on through processing/generation,
+            // so it also emits the `processing_*`/`generation_*` events.
+            Analytics.capture("recovery_accepted")
             Log.breadcrumb(category: .stateMachine, message: "recovery accepted — generating")
             stoppedBySleep = true
             lastRecordingURL = url
             state = .processing
             runProcessing(sourceURL: url)
         } else {
+            Analytics.capture("recovery_discarded")
             Log.breadcrumb(category: .stateMachine, message: "recovery discarded")
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: url) }
             state = .idle
@@ -1238,6 +1290,17 @@ final class AppState {
                 // doesn't double-occupy tmp until the next sweep.
                 Task.detached(priority: .utility) { WorkingDirectory.remove(at: sourceURL) }
                 self.lastRecordingURL = nil
+                // Tier 1 analytics: the local pipeline finished and generation
+                // is about to start. Best-effort metadata already at hand —
+                // pipeline elapsed off the processing clock, frame/audio counts
+                // off the result. No extra work computed for these.
+                let audioSeconds = CMTimeGetSeconds(result.duration)
+                Analytics.capture("processing_completed", [
+                    "duration_seconds": self.processingElapsedStart
+                        .map { Int((ContinuousClock.now - $0).components.seconds) } ?? 0,
+                    "frame_count": result.frames.count,
+                    "audio_seconds": audioSeconds.isFinite ? Int(audioSeconds.rounded()) : 0,
+                ])
                 // Phase 8 done → kick off Phase 9 API work. The
                 // .processing → .done transition fires from inside
                 // runPromptGeneration after the model returns. Stage
@@ -1257,6 +1320,19 @@ final class AppState {
                     reason = .recordingTooShort
                 } else {
                     reason = .processingFailed
+                }
+                // Tier 1 analytics: a too-short/empty recording is its own
+                // terminal recording event (with the capture duration); every
+                // other pipeline failure is a `processing_failed` carrying the
+                // bounded reason enum. Mutually exclusive — exactly one fires.
+                if reason == .recordingTooShort {
+                    Analytics.capture("recording_too_short", [
+                        "duration_seconds": Int(self.elapsedSeconds.rounded())
+                    ])
+                } else {
+                    Analytics.capture("processing_failed", [
+                        "reason": Self.errorCodeString(reason)
+                    ])
                 }
                 // Phase 13B: report engineering-signal failures to
                 // the error tracker. .diskFull and .recordingTooShort are gated
@@ -1295,6 +1371,20 @@ final class AppState {
         // The policy lives in `EntitlementStore.generationRoute`; this is just the
         // mechanism. A nil entitlements falls back to local (fail-safe).
         let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
+        // Tier 1 analytics: mark the start (for latency_ms on the outcome) and
+        // fire the funnel-entry event — but only for the routes that actually
+        // dispatch a request. `.trialNeedsEmail` dispatches nothing (it routes
+        // to email capture), so it gets no start event and no latency clock.
+        if let analyticsRoute = Self.analyticsRoute(for: route) {
+            let model = recordingModelID ?? preferences?.selectedModelID ?? ModelRegistry.defaultModelID
+            generationStartInstant = ContinuousClock.now
+            generationModelID = model
+            Analytics.capture("generation_started", [
+                "model": model,
+                "route": analyticsRoute,
+                "provider": ModelRegistry.entry(id: model)?.provider.rawValue ?? "unknown",
+            ])
+        }
         switch route {
         case .managedProxy:
             if let proxy = managedProxyClient {
@@ -1489,8 +1579,9 @@ final class AppState {
                 self.state = .done
                 Analytics.capture("generation_succeeded", [
                     "route": "managed",
-                    "model": self.preferences?.selectedModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat"
+                    "model": self.generationModelID ?? "unknown",
+                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
 
@@ -1517,7 +1608,9 @@ final class AppState {
                 Log.promptGen.error("\(label, privacy: .public) generation failed: \(String(describing: reason), privacy: .public)")
                 Analytics.capture("generation_failed", [
                     "route": isTrial ? "trial" : "managed",
-                    "reason": Self.errorCodeString(reason)
+                    "reason": Self.errorCodeString(reason),
+                    "latency_ms": self.generationLatencyMs() ?? 0,
+                    "model": self.generationModelID ?? "unknown"
                 ])
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
@@ -1777,8 +1870,9 @@ final class AppState {
                 self.state = .done
                 Analytics.capture("generation_succeeded", [
                     "route": "byok",
-                    "model": self.preferences?.selectedModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat"
+                    "model": self.generationModelID ?? "unknown",
+                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 // Phase 13A: terminal-success breadcrumb. If a crash
                 // lands during result presentation (UI bug, copy
@@ -1791,7 +1885,9 @@ final class AppState {
                 let reason = Self.failureReason(from: error)
                 Analytics.capture("generation_failed", [
                     "route": "byok",
-                    "reason": Self.errorCodeString(reason)
+                    "reason": Self.errorCodeString(reason),
+                    "latency_ms": self.generationLatencyMs() ?? 0,
+                    "model": self.generationModelID ?? "unknown"
                 ])
                 // Phase 13B: report engineering-signal failures to the error
                 // tracker. .providerError here is decode failures / empty
@@ -1824,6 +1920,14 @@ final class AppState {
         let parsed = ArtifactParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
         parsedResponse = parsed
+        // Tier 4 analytics: the activation signal — a usable result was produced.
+        // Fired here (the shared generation `.done` tail), so it counts once per
+        // generation and NOT on the "Write agent prompt" conversion re-parse,
+        // which lands in `acceptConversionResult`. Metadata only.
+        Analytics.capture("artifact_produced", [
+            "artifact_type": parsed.artifact?.type.rawValue ?? "chat",
+            "was_chat_only": parsed.artifact == nil,
+        ])
         attachedContextBlock = processedRecording.flatMap {
             AttachedContextBuilder.build(frames: $0.frames, clicks: $0.clicks)
         }
@@ -2090,7 +2194,21 @@ final class AppState {
     /// prevents a loop on sustained outages.
     func retryFailedPrompt() {
         guard canRetryFailure, let processed = processedRecording else { return }
+        // Tier 2 analytics: read the failure reason while state is still
+        // `.failed`, and `attempt` after the increment, before re-entering
+        // generation. The re-run fires a fresh `generation_started`, so a retry
+        // reads as `generation_retried → generation_started → succeeded/failed`.
+        let retriedReason: RecordingFailureReason? = {
+            if case .failed(let reason) = state { return reason }
+            return nil
+        }()
         failureRetryAttempts += 1
+        if let retriedReason {
+            Analytics.capture("generation_retried", [
+                "reason": Self.errorCodeString(retriedReason),
+                "attempt": failureRetryAttempts,
+            ])
+        }
         // Drop the prior detail so a stale string can't leak if the retry
         // somehow lands in a state that reads it before the next catch site runs.
         lastFailureDetail = nil
@@ -2169,6 +2287,29 @@ final class AppState {
     /// bounded value with zero user content.
     private static func errorCodeString(_ reason: RecordingFailureReason) -> String {
         String(describing: reason)
+    }
+
+    // MARK: - Generation analytics helpers (Tier 1)
+
+    /// Maps the internal `GenerationRoute` to the analytics `route` value
+    /// (`managed` / `trial` / `byok`), or `nil` for `.trialNeedsEmail` — which
+    /// dispatches no request, so it has no `generation_started`/latency.
+    private static func analyticsRoute(for route: EntitlementStore.GenerationRoute) -> String? {
+        switch route {
+        case .managedProxy:    return "managed"
+        case .trialProxy:      return "trial"
+        case .local:           return "byok"
+        case .trialNeedsEmail: return nil
+        }
+    }
+
+    /// Milliseconds since `generationStartInstant`, for `latency_ms` on the
+    /// generation outcomes. `nil` only if no start was recorded (defensive —
+    /// every dispatched generation sets the instant first).
+    private func generationLatencyMs() -> Int? {
+        guard let start = generationStartInstant else { return nil }
+        let components = (ContinuousClock.now - start).components
+        return Int(components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// A human-readable, privacy-safe description of a generation error, shown

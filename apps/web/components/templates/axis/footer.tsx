@@ -3,6 +3,7 @@
 import Image from "next/image"
 import Link from "next/link"
 import { motion } from "motion/react"
+import { track } from "@/lib/analytics"
 
 const Footer = () => {
   // "/#section" (not "#section") so the links work from /privacy and /terms too.
@@ -48,6 +49,15 @@ const Footer = () => {
           <li key={link.name}>
             <Link
               href={link.href}
+              onClick={() => {
+                // Anchor links (/#section) are on-page nav; the route links
+                // (/privacy, /terms) are the outbound destinations worth tracking.
+                if (!link.href.includes("#")) {
+                  track("outbound_clicked", {
+                    destination: link.href.replace(/^\//, ""),
+                  })
+                }
+              }}
               className="text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               {link.name}
@@ -60,6 +70,9 @@ const Footer = () => {
       <div className="flex w-full max-w-md flex-col items-center gap-2 border-t border-border pt-4">
         <a
           href="mailto:support@getzerro.app"
+          onClick={() =>
+            track("outbound_clicked", { destination: "support_email" })
+          }
           className="text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           support@getzerro.app

@@ -148,6 +148,26 @@ final class OnboardingState {
         currentStep = step
     }
 
+    // MARK: - Step-view funnel (Tier 4)
+
+    /// Fire `onboarding_step_viewed` at most once per step per install. Deduped
+    /// via `captureOnce` (a UserDefaults flag keyed by the step's stable
+    /// analytics name) so the SIGKILL relaunch on the Screen Recording grant,
+    /// a Cmd-Q resume, and back-navigation don't inflate the funnel. Fired from
+    /// the view layer (not `advance()`) so the step restored after the relaunch
+    /// is still counted.
+    func recordStepViewed(_ step: OnboardingStep) {
+        Analytics.captureOnce(
+            "onboarding_step_viewed",
+            key: "vf.analytics.onboardingStep.\(step.analyticsName)",
+            [
+                "step": step.analyticsName,
+                "step_index": step.rawValue,
+                "total_steps": OnboardingStep.allCases.count,
+            ]
+        )
+    }
+
     // MARK: - Consent (Phase 22)
 
     /// True when the locally-recorded Terms version doesn't match the current

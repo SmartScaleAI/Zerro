@@ -110,8 +110,14 @@ final class APIKeyFieldModel {
     func saveAndValidate() {
         let trimmed = trimmedKey
         if trimmed.isEmpty {
+            // Tier 3 analytics: a present→empty transition is a key removal.
+            // Presence only — the key value is never included.
+            let hadKey = !(keychain.read()?.isEmpty ?? true)
             keychain.delete()
             state = .unverified
+            if hadKey {
+                Analytics.capture("byok_key_removed", ["provider": provider.rawValue])
+            }
             return
         }
         // Skip the round-trip if nothing actually changed.
@@ -137,6 +143,17 @@ final class APIKeyFieldModel {
         run(validating: candidate, writeOnValid: true, writeOnInconclusive: false)
     }
 
+    /// Writes the validated key, firing `byok_key_added` only on a genuine
+    /// empty→present transition (rotating an existing key is not an "add").
+    /// Presence only — the key value is never sent.
+    private func writeKeyTrackingAdd(_ candidate: String) {
+        let hadKey = !(keychain.read()?.isEmpty ?? true)
+        keychain.write(candidate)
+        if !hadKey {
+            Analytics.capture("byok_key_added", ["provider": provider.rawValue])
+        }
+    }
+
     private func run(validating candidate: String, writeOnValid: Bool, writeOnInconclusive: Bool) {
         state = .checking
         Task { @MainActor in
@@ -144,12 +161,12 @@ final class APIKeyFieldModel {
             guard state == .checking else { return }
             switch result {
             case .valid:
-                if writeOnValid { keychain.write(candidate) }
+                if writeOnValid { writeKeyTrackingAdd(candidate) }
                 state = .verified
             case .invalidKey:
                 state = .invalid
             case .inconclusive:
-                if writeOnInconclusive { keychain.write(candidate) }
+                if writeOnInconclusive { writeKeyTrackingAdd(candidate) }
                 // No separate "unverified-saved" pill — inconclusive lands
                 // on .unverified so the user knows re-checking is worthwhile.
                 state = .unverified

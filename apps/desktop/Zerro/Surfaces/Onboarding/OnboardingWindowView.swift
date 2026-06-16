@@ -46,6 +46,14 @@ struct OnboardingWindowView: View {
             stepBody
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, VFSpacing.lg)
+                // Tier 4: per-step funnel, fired when a step becomes visible.
+                // From the view (not advance()) so the step restored after the
+                // Screen Recording SIGKILL relaunch is counted; deduped per
+                // install inside recordStepViewed so it can't inflate.
+                .onAppear { onboarding.recordStepViewed(onboarding.currentStep) }
+                .onChange(of: onboarding.currentStep) { _, newStep in
+                    onboarding.recordStepViewed(newStep)
+                }
         }
         .frame(minHeight: 460)
     }

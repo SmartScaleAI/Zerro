@@ -45,6 +45,7 @@ import SwiftUI
 
 struct PaywallView: View {
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(EntitlementStore.self) private var entitlements
 
     /// Window width. Sized for the two side-by-side plan cards (website
     /// pricing parity) with comfortable padding — each card gets ~350pt.
@@ -56,7 +57,15 @@ struct PaywallView: View {
         mainPanel
             .frame(width: Self.windowWidth)
             .background(Color.vfCardBackground)
-            .onAppear { Analytics.capture("paywall_shown") }
+            .onAppear {
+                // Tier 3 analytics: the gate stashes WHY the paywall opened
+                // (`manual` when there's no preflight reason, e.g. an expired
+                // trial). Read once, then clear so a later open isn't mislabeled.
+                Analytics.capture("paywall_shown", [
+                    "trigger": entitlements.paywallTrigger?.rawValue ?? "manual"
+                ])
+                entitlements.paywallTrigger = nil
+            }
     }
 
     // MARK: - Main panel
@@ -254,7 +263,10 @@ private struct BuyOnceCard: View {
             return
         }
         Log.billing.notice("paywall: opening BYOK checkout in browser")
-        NSWorkspace.shared.open(url)
+        // Tier 3 analytics: fire `checkout_opened` and open the custom-data-
+        // decorated URL (carries ph_distinct_id + product for webhook stitching).
+        Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.byok.rawValue])
+        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .byok))
     }
 }
 
@@ -302,7 +314,9 @@ private struct SubscriptionOptionCard: View {
             return
         }
         Log.billing.notice("paywall: opening \(tier.rawValue, privacy: .public) subscription checkout")
-        NSWorkspace.shared.open(url)
+        // Tier 3 analytics: only the Managed (Pro) subscription is sold here.
+        Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue])
+        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .subscriptionPro))
     }
 }
 

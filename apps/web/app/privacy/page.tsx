@@ -143,8 +143,14 @@ export default function PrivacyPage() {
         </P>
         <P>
           <Strong>Website analytics.</Strong> The getzerro.app website uses
-          Vercel Analytics, which collects aggregated, privacy-focused usage
-          data and does not use cross-site tracking cookies.
+          PostHog to collect anonymous product-usage metadata — page views,
+          referrer and campaign source, device and browser type, and
+          interaction events such as clicking a download button or expanding an
+          FAQ — along with aggregated heatmaps of where visitors click and
+          scroll. This is metadata only and is not tied to your name or email.
+          We do not record your browsing session, and the site is cookieless:
+          PostHog sets no cross-site tracking cookies and keeps no identifier
+          between visits.
         </P>
       </LegalSection>
 
@@ -172,9 +178,9 @@ export default function PrivacyPage() {
           processing of recordings on Managed/Trial plans, and audio
           transcription via OpenAI Whisper), <Strong>Lemon Squeezy</Strong>{" "}
           (payments, as merchant of record), <Strong>Resend</Strong>{" "}
-          (transactional email), <Strong>PostHog</Strong> (anonymous app
-          analytics and crash reporting), and <Strong>Vercel</Strong> (website
-          hosting and analytics). AI providers process your content under their API
+          (transactional email), <Strong>PostHog</Strong> (anonymous app and
+          website analytics and crash reporting), and <Strong>Vercel</Strong>{" "}
+          (website hosting). AI providers process your content under their API
           terms; we use API offerings under which inputs are not used to train
           their models. We do not sell your personal information to anyone.
         </P>

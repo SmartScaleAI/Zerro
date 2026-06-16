@@ -1,11 +1,10 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { DownloadButton } from "@/components/download-button";
 import { AnimatedBorder } from "@/components/ui/animated-border";
 import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
-import { DOWNLOAD_URL } from "@/lib/site-config";
 import { motion } from "motion/react";
 
 const FinalCTA = () => {
@@ -72,16 +71,15 @@ const FinalCTA = () => {
                         Stop describing what you want. Show it. Zerro turns the recording into exactly what you need — a prompt, a message, a snippet, a document, or a straight answer.
                     </p>
                     <div className="flex flex-col items-center gap-3">
-                        <Button
+                        <DownloadButton
+                            placement="final_cta"
                             className="relative rounded-full gap-2 hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input"
                             size="lg"
-                            nativeButton={false}
-                            render={<a href={DOWNLOAD_URL} download />}
                         >
                             <AnimatedBorder />
                             <AppleIcon className="h-4 w-4" />
                             Download for macOS
-                        </Button>
+                        </DownloadButton>
                         <p className="text-sm text-muted-foreground">
                             v1.0 · Apple Silicon · Signed &amp; notarized
                         </p>

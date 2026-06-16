@@ -465,7 +465,12 @@ private struct ManageRow: View {
             description: description
         ) {
             Button(isManaged ? "Manage subscription" : "Subscribe") {
-                openBillingLink(isManaged ? BillingLinks.customerPortalURL : BillingLinks.proCheckoutURL)
+                // Manage = portal (not a checkout); Subscribe = Managed checkout.
+                if isManaged {
+                    openBillingLink(BillingLinks.customerPortalURL)
+                } else {
+                    openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro)
+                }
             }
             .buttonStyle(SettingsSecondaryButtonStyle())
         }
@@ -495,6 +500,20 @@ private func openBillingLink(_ url: URL?) {
         return
     }
     NSWorkspace.shared.open(url)
+}
+
+/// Checkout variant of `openBillingLink` (Tier 4 coverage fix): fires
+/// `checkout_opened{product}` and opens the custom-data-decorated URL
+/// (ph_distinct_id + product → webhook stitching, Tier 3 §0). Portal/manage
+/// opens stay on `openBillingLink` — they are not checkouts. Same nil-placeholder
+/// early-return: an unconfigured product fires nothing.
+private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
+    guard let url else {
+        Log.billing.notice("settings: checkout link not configured yet (placeholder)")
+        return
+    }
+    Analytics.capture("checkout_opened", ["product": product.rawValue])
+    NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
 }
 
 // MARK: - Usage meter (multi-model 6F)
@@ -610,7 +629,7 @@ private struct UsageMeterRow: View {
                 Text("Running low \u{2014} upgrade to keep going")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.vfWarningAmber)
-                Button("Upgrade to Managed") { openBillingLink(BillingLinks.proCheckoutURL) }
+                Button("Upgrade to Managed") { openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro) }
                     .buttonStyle(SettingsSecondaryButtonStyle())
             }
         }
@@ -651,11 +670,11 @@ private struct UsageMeterRow: View {
                     .font(.system(size: 12))
                     .foregroundStyle(low ? Color.vfWarningAmber : Color.vfTextSecondary)
                 if let boost = BillingLinks.boostTopupCheckoutURL {
-                    Button("Boost \u{00B7} 200 \u{00B7} $10") { openBillingLink(boost) }
+                    Button("Boost \u{00B7} 200 \u{00B7} $10") { openCheckout(boost, product: .topupBoost) }
                         .buttonStyle(SettingsSecondaryButtonStyle())
                 }
                 if let power = BillingLinks.powerTopupCheckoutURL {
-                    Button("Power \u{00B7} 500 \u{00B7} $22") { openBillingLink(power) }
+                    Button("Power \u{00B7} 500 \u{00B7} $22") { openCheckout(power, product: .topupPower) }
                         .buttonStyle(SettingsSecondaryButtonStyle())
                 }
             }
@@ -695,7 +714,12 @@ private struct ByokManageRow: View {
                 : "$69 one-time \u{2014} includes 1 year of updates. You pay your providers directly for usage."
         ) {
             Button(isLicensed ? "Manage devices" : "Get a license") {
-                openBillingLink(isLicensed ? BillingLinks.customerPortalURL : BillingLinks.byokCheckoutURL)
+                // Manage devices = portal (not a checkout); Get a license = BYOK checkout.
+                if isLicensed {
+                    openBillingLink(BillingLinks.customerPortalURL)
+                } else {
+                    openCheckout(BillingLinks.byokCheckoutURL, product: .byok)
+                }
             }
             .buttonStyle(SettingsSecondaryButtonStyle())
         }

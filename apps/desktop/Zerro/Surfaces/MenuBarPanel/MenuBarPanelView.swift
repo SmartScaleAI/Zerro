@@ -645,8 +645,8 @@ struct MenuBarPanelView: View {
                 .foregroundStyle(Color.vfWarningAmber)
                 .fixedSize()
             HStack(spacing: VFSpacing.sm) {
-                topupChip("Boost \u{00B7} 200 credits \u{00B7} $10", url: BillingLinks.boostTopupCheckoutURL)
-                topupChip("Power \u{00B7} 500 credits \u{00B7} $22", url: BillingLinks.powerTopupCheckoutURL)
+                topupChip("Boost \u{00B7} 200 credits \u{00B7} $10", url: BillingLinks.boostTopupCheckoutURL, product: .topupBoost)
+                topupChip("Power \u{00B7} 500 credits \u{00B7} $22", url: BillingLinks.powerTopupCheckoutURL, product: .topupPower)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -655,10 +655,13 @@ struct MenuBarPanelView: View {
     }
 
     @ViewBuilder
-    private func topupChip(_ label: String, url: URL?) -> some View {
+    private func topupChip(_ label: String, url: URL?, product: BillingLinks.CheckoutProduct) -> some View {
         if let url {
             Button {
-                NSWorkspace.shared.open(url)
+                // Tier 3 analytics: fire `checkout_opened` + open the custom-data-
+                // decorated URL (ph_distinct_id + product → webhook stitching).
+                Analytics.capture("checkout_opened", ["product": product.rawValue])
+                NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
                 MenuBarExtraDismiss.dismiss()
             } label: {
                 Text(label)
@@ -688,7 +691,9 @@ struct MenuBarPanelView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard let url = BillingLinks.subscriptionCheckoutURL(tier: .pro) else { return }
-            NSWorkspace.shared.open(url)
+            // Tier 4 coverage fix: the menu-bar trial-upgrade is a real checkout.
+            Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue])
+            NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .subscriptionPro))
             MenuBarExtraDismiss.dismiss()
         }
     }

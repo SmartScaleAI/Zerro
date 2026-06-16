@@ -53,6 +53,16 @@ struct ModelSection: View {
             ForEach(ModelRegistry.enabled) { model in
                 let gated = isGated(model)
                 Button {
+                    // Tier 4 analytics: prior id BEFORE the write; only on a
+                    // real change. Model ids only — no content.
+                    let fromModel = preferences.selectedModelID
+                    if model.id != fromModel {
+                        Analytics.capture("model_changed", [
+                            "from_model": fromModel,
+                            "to_model": model.id,
+                            "surface": "settings",
+                        ])
+                    }
                     preferences.selectedModelID = model.id
                 } label: {
                     // The selected row carries the checkmark (menus on

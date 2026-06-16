@@ -1,10 +1,11 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { DownloadButton } from "@/components/download-button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
 import { Menu, X } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
-import { DOWNLOAD_URL } from "@/lib/site-config"
+import { track } from "@/lib/analytics"
 import {
   AnimatePresence,
   motion,
@@ -14,6 +15,9 @@ import {
 import Image from "next/image"
 import Link from "next/link"
 import { useEffect, useState } from "react"
+
+// "#how-it-works" → "how_it_works", matching the section_viewed naming.
+const navTarget = (href: string) => href.replace(/^#/, "").replace(/-/g, "_")
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false)
@@ -90,35 +94,36 @@ const Navbar = () => {
                 <Link
                   href={link.href}
                   key={link.name}
+                  onClick={() =>
+                    track("nav_link_clicked", { target: navTarget(link.href) })
+                  }
                   className="flex flex-row items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {link.name}
                 </Link>
               ))}
             </div>
-            <Button
+            <DownloadButton
+              placement="navbar"
               className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
               size="lg"
-              nativeButton={false}
-              render={<a href={DOWNLOAD_URL} download />}
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
               Download for macOS
-            </Button>
+            </DownloadButton>
           </section>
 
           <section className="flex flex-row items-center gap-2 lg:hidden">
-            <Button
+            <DownloadButton
+              placement="navbar_mobile"
               className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
               size="default"
-              nativeButton={false}
-              render={<a href={DOWNLOAD_URL} download />}
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
               Download
-            </Button>
+            </DownloadButton>
             <Button
               variant="ghost"
               size="icon"
@@ -174,7 +179,10 @@ const Navbar = () => {
                     <Link
                       href={link.href}
                       className="flex flex-row items-center justify-between rounded-lg px-4 py-3 font-medium text-foreground transition-colors hover:bg-muted"
-                      onClick={() => setIsOpen(false)}
+                      onClick={() => {
+                        track("nav_link_clicked", { target: navTarget(link.href) })
+                        setIsOpen(false)
+                      }}
                     >
                       {link.name}
                     </Link>

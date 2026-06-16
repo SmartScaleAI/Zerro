@@ -30,6 +30,22 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
+    /// Stable, snake_case identifier for analytics — decoupled from `devLabel`
+    /// (debug-only, may change) and `rawValue` (an index that shifts if steps
+    /// are reordered/inserted). Used as the `onboarding_step_viewed.step`
+    /// property and the per-step `captureOnce` dedupe key, so it must stay
+    /// constant across releases.
+    var analyticsName: String {
+        switch self {
+        case .welcome:         return "welcome"
+        case .consent:         return "consent"
+        case .email:           return "email"
+        case .screenRecording: return "screen_recording"
+        case .microphone:      return "microphone"
+        case .allSet:          return "all_set"
+        }
+    }
+
     /// Compact label used by the dev panel's step-jump buttons. Production
     /// titles live in the step views themselves.
     var devLabel: String {

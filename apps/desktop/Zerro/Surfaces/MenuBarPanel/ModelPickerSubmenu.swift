@@ -63,6 +63,16 @@ struct ModelPickerSubmenu: View {
                     },
                     gatedHint: gated ? "Add \(model.provider.displayName) key" : nil
                 ) {
+                    // Tier 4 analytics: capture the prior id BEFORE the write;
+                    // fire only on a real change. Model ids only — no content.
+                    let fromModel = preferences.selectedModelID
+                    if model.id != fromModel {
+                        Analytics.capture("model_changed", [
+                            "from_model": fromModel,
+                            "to_model": model.id,
+                            "surface": "menu_bar",
+                        ])
+                    }
                     preferences.selectedModelID = model.id
                     dismiss()
                 }

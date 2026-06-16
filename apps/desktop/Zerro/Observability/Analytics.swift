@@ -48,10 +48,24 @@ enum Analytics {
         UserDefaults.standard.object(forKey: CrashReporting.isEnabledDefaultsKey) as? Bool ?? true
     }
 
+    /// The current anonymous PostHog `distinct_id` (a device-scoped id — we never
+    /// `identify`, so it's never PII), or `nil` before `start()`. Plumbed through
+    /// the LemonSqueezy checkout `custom_data` (Tier 3) so the webhook's
+    /// server-side `subscription_*` events land on the SAME PostHog person as the
+    /// app's funnel.
+    static var distinctId: String? {
+        didStart ? PostHogSDK.shared.getDistinctId() : nil
+    }
+
     // MARK: - Lifecycle
 
     static func start() {
         guard !didStart else { return }
+
+        #if DEBUG
+        Log.crashReporting.notice("Analytics & error tracking disabled in DEBUG builds — nothing sent to PostHog during development.")
+        return
+        #endif
 
         guard let key = readKey(), !key.isEmpty, !key.hasPrefix("phc_REPLACE") else {
             Log.crashReporting.notice("POSTHOG_API_KEY missing or placeholder in Info.plist — analytics & error tracking disabled this launch.")
@@ -114,19 +128,71 @@ enum Analytics {
         enabled ? PostHogSDK.shared.optIn() : PostHogSDK.shared.optOut()
     }
 
+    // MARK: - Entitlement super-properties (Tier 1)
+
+    /// Registers the two billing super-properties (`entitlement_state` +
+    /// `credits_remaining_bucket`) so EVERY event — existing and new — can be
+    /// segmented by monetization state. Re-registering overwrites the prior
+    /// values live, the same mechanism `start()` uses for the static
+    /// super-properties; call this whenever the entitlement changes.
+    ///
+    /// No-op until `start()` has run (registering before setup would be lost).
+    /// Privacy: only a coarse state enum and a credit BUCKET ever leave here —
+    /// never the exact balance.
+    static func updateEntitlementProperties(_ state: EntitlementState) {
+        guard didStart else { return }
+        PostHogSDK.shared.register([
+            "entitlement_state": entitlementStateName(state),
+            "credits_remaining_bucket": creditsRemainingBucket(state),
+        ])
+    }
+
+    /// Coarse monetization state. `pre_trial` distinguishes a never-verified
+    /// trial user (`.trial(creditsRemaining: nil)`) from one with a live balance.
+    private static func entitlementStateName(_ state: EntitlementState) -> String {
+        switch state {
+        case .trial(let creditsRemaining):
+            return creditsRemaining == nil ? "pre_trial" : "trial"
+        case .expired:
+            return "expired"
+        case .byok:
+            return "byok"
+        case .managed(let tier, _, _):
+            switch tier {
+            case .starter: return "managed_starter"
+            case .pro:     return "managed_pro"
+            }
+        }
+    }
+
+    /// Buckets the relevant credit balance so we can see "users near zero"
+    /// without ever emitting a high-cardinality, near-PII exact count. `n/a`
+    /// for the states with no meaningful balance (BYOK, expired, pre-trial).
+    private static func creditsRemainingBucket(_ state: EntitlementState) -> String {
+        let balance: Int
+        switch state {
+        case .trial(let creditsRemaining):
+            guard let creditsRemaining else { return "n/a" } // pre-trial
+            balance = creditsRemaining
+        case .managed(_, let creditsRemaining, _):
+            balance = creditsRemaining
+        case .byok, .expired:
+            return "n/a"
+        }
+        switch balance {
+        case ..<1:    return "0"
+        case 1...10:  return "1-10"
+        case 11...50: return "11-50"
+        default:      return "50+"
+        }
+    }
+
     // MARK: - Info.plist / environment
 
-    /// Picks the environment-appropriate PostHog key so development traffic
-    /// stays out of the production project. Debug builds use the dev key;
-    /// Release builds use the production key. This is what keeps prod-only
-    /// Slack error alerts from firing on local/dev errors — dev events go
-    /// to a different PostHog environment entirely.
+    /// Reads the production PostHog key. Only ever called in Release —
+    /// `start()` returns early in DEBUG, so development transmits nothing.
     private static func readKey() -> String? {
-        #if DEBUG
-        return Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY_DEBUG") as? String
-        #else
-        return Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY") as? String
-        #endif
+        Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY") as? String
     }
 
     private static func readHost() -> String {

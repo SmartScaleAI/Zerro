@@ -46,6 +46,7 @@ import {
   type TopupVariantConfig,
 } from "./tier.ts";
 import type { Status, WebhookStore } from "./store.ts";
+import { capturePostHog } from "./posthog.ts";
 
 export interface WebhookResult {
   status: number;
@@ -75,6 +76,18 @@ const TOPUP_CONFIG: TopupVariantConfig = {
 
 function logAction(event: string, subscriptionId: string | null, action: string) {
   console.log(JSON.stringify({ fn: "lemonsqueezy-webhook", event, subscriptionId, action }));
+}
+
+/**
+ * Tier 3 analytics: the PostHog distinct_id for a subscription event. Prefers
+ * the app's anonymous id plumbed through the checkout `custom_data` (so the
+ * server-side event stitches onto the SAME person as the app funnel); falls back
+ * to a stable `ls:<subscription_id>` when absent (still counted, just unstitched).
+ */
+function postHogDistinctId(payload: LsWebhook, lsSubId: string): string {
+  const custom = payload.meta?.custom_data as { ph_distinct_id?: unknown } | null | undefined;
+  const id = custom?.ph_distinct_id;
+  return typeof id === "string" && id.length > 0 ? id : `ls:${lsSubId}`;
 }
 
 /**
@@ -227,6 +240,12 @@ async function handleSubscriptionUpsert(
 
   await adoptPendingLicenseKey(deps, subscriptionId, ls_order_id);
   logAction("subscription_created", subscriptionId, "upserted+period_opened");
+
+  // Tier 3 analytics: a newly-mirrored active subscription. Only on this
+  // applied path — the stale-drop branch returned early above, and an exact
+  // redelivery was 200'd by the idempotency gate before reaching here, so a
+  // webhook redelivery can't double-count. Tier only — never email/customer id.
+  await capturePostHog("subscription_activated", postHogDistinctId(payload, lsSubId), { tier });
 }
 
 // ---- subscription_updated (tier change; v1: new limit NEXT period) ---------
@@ -279,6 +298,18 @@ async function handleSubscriptionStatusChange(deps: WebhookDeps, payload: LsWebh
 
   await deps.store.updateSubscription(existing.id, { status, ls_updated_at: attrs.updated_at ?? null });
   logAction("subscription_status", existing.id, `status=${status}`);
+
+  // Tier 3 analytics: a lapse (cancelled/expired). Only on this applied path —
+  // the no-existing and stale branches returned early, and exact redeliveries
+  // were caught by the idempotency gate. `status` here is only ever "cancelled"
+  // or "expired" (the two events routed to this handler), so it doubles as the
+  // reason. `previous_tier` is resolved from the event's own variant. Tier +
+  // reason only — never email/customer id/order id.
+  const previousTier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
+  await capturePostHog("subscription_lapsed", postHogDistinctId(payload, lsSubId), {
+    previous_tier: previousTier,
+    reason: status,
+  });
 }
 
 // ---- invoice events: resolve the subscription via attributes.subscription_id

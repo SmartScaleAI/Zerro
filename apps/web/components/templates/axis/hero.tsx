@@ -1,10 +1,11 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { DownloadButton } from "@/components/download-button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
 import { Play, Check, Copy, X, Square, ChevronDown } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
-import { DOWNLOAD_URL } from "@/lib/site-config"
+import { track } from "@/lib/analytics"
 import { motion, AnimatePresence } from "motion/react"
 import { useEffect, useState } from "react"
 
@@ -183,17 +184,21 @@ const Hero = () => {
           written-up document, or simply a clear answer to your question.
         </p>
         <div className="flex flex-row flex-wrap items-center justify-center gap-3">
-          <Button
+          <DownloadButton
+            placement="hero"
             className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
             size="lg"
-            nativeButton={false}
-            render={<a href={DOWNLOAD_URL} download />}
           >
             <AnimatedBorder />
             <AppleIcon className="h-4 w-4" />
             Download for macOS
-          </Button>
-          <Button className="gap-2 rounded-full" variant="outline" size="lg">
+          </DownloadButton>
+          <Button
+            className="gap-2 rounded-full"
+            variant="outline"
+            size="lg"
+            onClick={() => track("demo_played")}
+          >
             <Play className="h-4 w-4" />
             Watch it work
           </Button>

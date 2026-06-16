@@ -2,6 +2,23 @@ import type { NextConfig } from "next"
 import withBundleAnalyzer from "@next/bundle-analyzer"
 
 const nextConfig: NextConfig = {
+  // Reverse-proxy PostHog through our own domain so ad-blockers don't drop
+  // events. The /static rule (assets) must come before the catch-all, which
+  // covers /flags, /e/, /i/v0/e/, etc. SDK points api_host at "/ingest".
+  async rewrites() {
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: "https://us-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/ingest/:path*",
+        destination: "https://us.i.posthog.com/:path*",
+      },
+    ]
+  },
+  // PostHog needs trailing-slash-sensitive routes to pass through untouched.
+  skipTrailingSlashRedirect: true,
   async redirects() {
     return [
       {

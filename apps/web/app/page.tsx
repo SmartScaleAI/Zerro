@@ -11,6 +11,7 @@ import Footer from "@/components/templates/axis/footer";
 import WhatIsZerro from "@/components/templates/axis/what-is-zerro";
 import Comparison from "@/components/templates/axis/comparison";
 import Faq from "@/components/templates/axis/faq";
+import { SectionView } from "@/components/section-view";
 import { GradientField } from "@/components/ui/gradient-field";
 import {
   SoftwareApplicationJsonLd,
@@ -72,16 +73,36 @@ const Page = () => {
       />
 
       <main className="relative flex flex-col gap-24 lg:gap-40 mt-44 mb-14 lg:mt-52 lg:mb-32 mx-auto w-full">
-        <Hero />
-        <WhatIsZerro />
-        <Feature />
-        <ToolFeature />
-        <BuiltRight />
-        <Comparison />
-        <NowTalking />
-        <Pricing />
-        <Faq />
-        <FinalCTA />
+        <SectionView section="hero">
+          <Hero />
+        </SectionView>
+        <SectionView section="what_is_zerro">
+          <WhatIsZerro />
+        </SectionView>
+        <SectionView section="how_it_works">
+          <Feature />
+        </SectionView>
+        <SectionView section="output">
+          <ToolFeature />
+        </SectionView>
+        <SectionView section="built_right">
+          <BuiltRight />
+        </SectionView>
+        <SectionView section="comparison">
+          <Comparison />
+        </SectionView>
+        <SectionView section="the_shift">
+          <NowTalking />
+        </SectionView>
+        <SectionView section="pricing">
+          <Pricing />
+        </SectionView>
+        <SectionView section="faq">
+          <Faq />
+        </SectionView>
+        <SectionView section="final_cta">
+          <FinalCTA />
+        </SectionView>
         <Footer />
       </main>
     </div>

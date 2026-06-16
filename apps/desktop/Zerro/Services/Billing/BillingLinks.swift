@@ -21,6 +21,39 @@ import Foundation
 
 enum BillingLinks {
 
+    // MARK: - Checkout custom-data (Tier 3 analytics)
+
+    /// The purchasable products. Drives both the `checkout_opened.product`
+    /// analytics property and the LemonSqueezy `custom_data.product` the webhook
+    /// reads back alongside the resolved tier. Raw values match the event spec.
+    enum CheckoutProduct: String {
+        case subscriptionPro = "subscription_pro"
+        case byok = "byok"
+        case topupBoost = "topup_boost"
+        case topupPower = "topup_power"
+    }
+
+    /// Returns `base` decorated with the LemonSqueezy custom-data query params
+    /// (Tier 3 §0): the app's anonymous PostHog `distinct_id` — so the webhook's
+    /// server-side `subscription_activated`/`_lapsed` stitch to the SAME PostHog
+    /// person as the app funnel — plus the product tag. The distinct_id is
+    /// omitted when analytics hasn't started; the product is always set. Pure URL
+    /// construction (callers fire `checkout_opened` + open the result); brackets
+    /// are URL-encoded by `URLComponents`, which LemonSqueezy decodes back to
+    /// `checkout[custom][…]`.
+    static func checkoutURL(_ base: URL, product: CheckoutProduct) -> URL {
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            return base
+        }
+        var items = components.queryItems ?? []
+        if let distinctId = Analytics.distinctId {
+            items.append(URLQueryItem(name: "checkout[custom][ph_distinct_id]", value: distinctId))
+        }
+        items.append(URLQueryItem(name: "checkout[custom][product]", value: product.rawValue))
+        components.queryItems = items
+        return components.url ?? base
+    }
+
     // MARK: - Test vs. Live checkout switch
     //
     // LemonSqueezy test mode and live mode are the SAME store domain

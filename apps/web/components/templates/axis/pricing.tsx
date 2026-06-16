@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { DownloadButton } from "@/components/download-button";
 import { AnimatedBorder } from "@/components/ui/animated-border";
 import { BorderTrail } from "@/components/ui/border-trail";
 import { Card } from "@/components/ui/card";
 import { GradientField } from "@/components/ui/gradient-field";
-import { DOWNLOAD_URL } from "@/lib/site-config";
+import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { Check, Sparkles } from "lucide-react";
 import { AppleIcon } from "@/components/ui/apple-icon";
@@ -75,6 +75,8 @@ type Tier = {
     features: (string | { label: string; note: string })[];
     cta: { label: string; variant: "primary" | "outline" };
     highlight?: boolean;
+    // `placement` value sent with download_clicked for this card's CTA.
+    placement: string;
 };
 
 // Order matters: cards render left-to-right in array order. The highlighted
@@ -98,6 +100,7 @@ const tiers: Tier[] = [
         ],
         cta: { label: "Download for macOS", variant: "primary" },
         highlight: true,
+        placement: "pricing_managed",
     },
     {
         name: "BYOK",
@@ -114,6 +117,7 @@ const tiers: Tier[] = [
             "No subscription, no account",
         ],
         cta: { label: "Download for macOS", variant: "primary" },
+        placement: "pricing_byok",
     },
 ];
 
@@ -251,7 +255,10 @@ const Pricing = () => {
                                                 <button
                                                     key={option}
                                                     type="button"
-                                                    onClick={() => setBilling(option)}
+                                                    onClick={() => {
+                                                        setBilling(option);
+                                                        track("pricing_billing_toggled", { interval: option });
+                                                    }}
                                                     className={cn(
                                                         "rounded-full px-3 py-1 font-medium capitalize transition-colors",
                                                         billing === option
@@ -326,7 +333,8 @@ const Pricing = () => {
                                     })}
                                 </ul>
 
-                                <Button
+                                <DownloadButton
+                                    placement={tier.placement}
                                     className={cn(
                                         "relative w-full rounded-full gap-2",
                                         // Standard (dark) cards: filled primary CTA with the hover/blur treatment.
@@ -338,8 +346,6 @@ const Pricing = () => {
                                     )}
                                     size="lg"
                                     variant={tier.cta.variant === "primary" ? "default" : "outline"}
-                                    nativeButton={false}
-                                    render={<a href={DOWNLOAD_URL} download />}
                                 >
                                     {tier.highlight ? (
                                         // Highlighted card: animated border tinted from the
@@ -350,7 +356,7 @@ const Pricing = () => {
                                     )}
                                     <AppleIcon className="h-4 w-4" />
                                     {tier.cta.label}
-                                </Button>
+                                </DownloadButton>
                             </Card>
                         </motion.div>
                     );
