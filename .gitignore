@@ -5,5 +5,8 @@
 .vscode/
 .idea/
 
+# Claude Code local tooling (dev-launch configs, etc.)
+.claude/
+
 # FUSE orphan files (created when files are edited while open; runtime junk)
 .fuse_hidden*
