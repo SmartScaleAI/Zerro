@@ -158,7 +158,7 @@ enum ProcessingConfig {
     /// and the message it explains can't drift apart. Unrelated to — and far
     /// below — the `maxRecordingSeconds` (180s) auto-stop CAP at the other end:
     /// one is the shortest clip we'll process, the other the longest we'll record.
-    static let minRecordingSeconds: Double = 5
+    static let minRecordingSeconds: Double = 3
 
     /// True when a manually-stopped recording of `seconds` is below the
     /// `minRecordingSeconds` floor and must be discarded with

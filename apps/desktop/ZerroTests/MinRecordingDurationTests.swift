@@ -20,9 +20,15 @@ import XCTest
 final class MinRecordingDurationTests: XCTestCase {
 
     /// A clip strictly shorter than the floor is discarded — the gate fires.
+    /// Values are derived from the constant so they track the threshold rather
+    /// than drift if it's re-tuned.
     func testBelowFloorIsTooShort() {
         XCTAssertTrue(ProcessingConfig.isBelowMinimumDuration(seconds: 0))
-        XCTAssertTrue(ProcessingConfig.isBelowMinimumDuration(seconds: 4.9))
+        XCTAssertTrue(
+            ProcessingConfig.isBelowMinimumDuration(
+                seconds: ProcessingConfig.minRecordingSeconds - 0.1
+            )
+        )
         XCTAssertTrue(
             ProcessingConfig.isBelowMinimumDuration(
                 seconds: ProcessingConfig.minRecordingSeconds - 0.001
@@ -30,7 +36,7 @@ final class MinRecordingDurationTests: XCTestCase {
         )
     }
 
-    /// "At least 5 seconds" means exactly the floor is long enough — the boundary
+    /// "At least N seconds" means exactly the floor is long enough — the boundary
     /// is inclusive, so a clip right at the threshold is KEPT (gate does not fire).
     func testExactlyFloorIsKept() {
         XCTAssertFalse(
@@ -42,7 +48,11 @@ final class MinRecordingDurationTests: XCTestCase {
 
     /// Anything past the floor is plainly kept.
     func testAboveFloorIsKept() {
-        XCTAssertFalse(ProcessingConfig.isBelowMinimumDuration(seconds: 5.1))
+        XCTAssertFalse(
+            ProcessingConfig.isBelowMinimumDuration(
+                seconds: ProcessingConfig.minRecordingSeconds + 0.1
+            )
+        )
         XCTAssertFalse(ProcessingConfig.isBelowMinimumDuration(seconds: 180))
     }
 
