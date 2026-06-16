@@ -19,11 +19,54 @@ import AVFoundation
 import KeyboardShortcuts
 import SwiftUI
 
-/// A quiet Managed status nudge shown below the menu-bar header (Phase E).
-/// `actionable` past-due nudges open the customer portal on click.
-private struct ManagedNudge {
-    let text: String
-    let actionable: Bool
+// MARK: - MenuBarBillingAction
+
+/// The label + optional secondary nudge + paywall trigger for the single,
+/// always-present menu-bar billing row, resolved from the live entitlement.
+/// This is the consolidation of the old scattered prompts (trial-upgrade,
+/// top-up, past-due, manage) into one row. Pure + `Equatable` so the
+/// state → (label, trigger) mapping is unit-tested without the view.
+///
+/// Rules (decision §3):
+///   • `.trial`            → "Upgrade"     (voluntaryUpgrade) — trial still works.
+///   • `.expired`          → "Upgrade"     (blocked) — the gated wall.
+///   • `.managed` past-due → "Manage Plan" (manage) + "update your card" nudge.
+///   • `.managed` low      → "Add Credits" (topup) — lead with top-up packs.
+///   • `.managed` healthy  → "Manage Plan" (manage).
+///   • `.byok`             → "Manage Plan" (manage) — nothing to upgrade/top up.
+struct MenuBarBillingAction: Equatable {
+    let label: String
+    /// A quiet secondary line under the label (currently only the Managed
+    /// past-due warning, folded in from the removed status nudge). `nil` hides it.
+    let secondary: String?
+    let trigger: EntitlementStore.PaywallTrigger
+
+    static func resolve(state: EntitlementState, isPastDue: Bool, isLowBalance: Bool) -> MenuBarBillingAction {
+        switch state {
+        case .trial:
+            return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .voluntaryUpgrade)
+        case .expired:
+            return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .blocked)
+        case .byok:
+            return MenuBarBillingAction(label: "Manage Plan", secondary: nil, trigger: .manage)
+        case .managed:
+            // Past-due is a payment problem → manage (update card), and it folds
+            // in the warning the removed status nudge used to carry.
+            if isPastDue {
+                return MenuBarBillingAction(
+                    label: "Manage Plan",
+                    secondary: "Payment issue \u{2014} update your card",
+                    trigger: .manage
+                )
+            }
+            // Low balance (but paid up) → buy more credits.
+            if isLowBalance {
+                return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
+            }
+            // Healthy Managed → manage (already top tier; no plan ladder to sell).
+            return MenuBarBillingAction(label: "Manage Plan", secondary: nil, trigger: .manage)
+        }
+    }
 }
 
 struct MenuBarPanelView: View {
@@ -115,26 +158,6 @@ struct MenuBarPanelView: View {
             // verification window.
             if entitlements.needsTrialEmailVerification {
                 trialVerifyBanner()
-            }
-
-            // Phase E: quiet Managed nudge — past-due ("update your card", §9.1)
-            // and/or out-of-credits ("resets {date}"). Non-blocking; generation
-            // keeps working on remaining credits while past-due.
-            if let nudge = managedNudge {
-                managedStatusLine(nudge)
-            }
-
-            // Multi-model 6B.4: when the balance can't cover the SELECTED
-            // model's next generation (CreditDisplay.isLowBalance — the same
-            // threshold the billing card uses; deliberately not "exactly
-            // zero"), surface the top-up packs (Managed) or the upgrade path
-            // (Trial — trials can't buy top-ups).
-            if isBalanceLowForSelectedModel {
-                if case .trial = entitlements.state {
-                    trialUpgradeRow
-                } else {
-                    topupPackRow
-                }
             }
 
             menuDivider
@@ -260,6 +283,11 @@ struct MenuBarPanelView: View {
             // out of the environment so the controller stays alive
             // when the dropdown closes.
             CheckForUpdatesView()
+            // The single, always-present billing entry point (consolidation
+            // target): label + paywall trigger vary by state, replacing the
+            // scattered trial-upgrade / top-up / past-due CTAs. Opens the
+            // (context-aware) paywall window.
+            billingActionRow
             MenuRow(label: "Settings\u{2026}", trailing: .hotkey("\u{2318},")) {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsScene.windowID)
@@ -532,41 +560,23 @@ struct MenuBarPanelView: View {
         }
     }
 
-    /// A Managed nudge to surface below the header, if any. Past-due takes
-    /// precedence (it's the actionable one); out-of-credits is shown otherwise.
-    /// `nil` for a healthy Managed plan or any non-Managed state.
-    private var managedNudge: ManagedNudge? {
-        guard case .managed = entitlements.state, let snapshot = entitlements.managedSnapshot else { return nil }
-        if snapshot.isPastDue {
-            return ManagedNudge(text: "Payment issue \u{2014} update your card", actionable: true)
-        }
-        if snapshot.isOutOfCredits {
-            let reset = BillingDateFormat.resetDate(snapshot.resetDate)
-            return ManagedNudge(
-                text: reset.map { "Out of credits \u{2014} resets \($0)" } ?? "Out of credits this month",
-                actionable: false
-            )
-        }
-        return nil
-    }
+    // MARK: - Consolidated billing entry point
 
-    /// Phase E — quiet Managed status line (past-due / out-of-credits). Matches
-    /// the trial line's understated treatment; the past-due variant opens the
-    /// customer portal on click.
-    private func managedStatusLine(_ nudge: ManagedNudge) -> some View {
-        HStack(spacing: 0) {
-            Text(nudge.text)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfWarningAmber)
-                .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard nudge.actionable, let url = BillingLinks.customerPortalURL else { return }
-            NSWorkspace.shared.open(url)
+    /// The single, always-present billing row. Its label + secondary nudge +
+    /// paywall trigger are resolved from the live entitlement (see
+    /// `MenuBarBillingAction`), so one row covers the old trial-upgrade, top-up,
+    /// past-due, and manage prompts. Click sets the trigger (so the paywall's
+    /// dynamic copy matches) and opens the context-aware paywall window.
+    private var billingActionRow: some View {
+        let action = MenuBarBillingAction.resolve(
+            state: entitlements.state,
+            isPastDue: entitlements.managedSnapshot?.isPastDue == true,
+            isLowBalance: isBalanceLowForSelectedModel
+        )
+        return BillingActionRow(label: action.label, secondary: action.secondary) {
+            entitlements.paywallTrigger = action.trigger
+            AppDelegate.openPaywall()
+            MenuBarExtraDismiss.dismiss()
         }
     }
 
@@ -633,71 +643,6 @@ struct MenuBarPanelView: View {
             return false
         }
     }
-
-    /// Managed low-balance escalation: the two top-up packs (plan §1.4) as
-    /// compact checkout chips. A pack whose checkout link isn't configured yet
-    /// resolves to `nil` and its chip is simply absent (the BillingLinks
-    /// placeholder pattern), leaving the amber line as a plain notice.
-    private var topupPackRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Running low \u{2014} top up to keep going")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfWarningAmber)
-                .fixedSize()
-            HStack(spacing: VFSpacing.sm) {
-                topupChip("Boost \u{00B7} 200 credits \u{00B7} $10", url: BillingLinks.boostTopupCheckoutURL, product: .topupBoost)
-                topupChip("Power \u{00B7} 500 credits \u{00B7} $22", url: BillingLinks.powerTopupCheckoutURL, product: .topupPower)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func topupChip(_ label: String, url: URL?, product: BillingLinks.CheckoutProduct) -> some View {
-        if let url {
-            Button {
-                // Tier 3 analytics: fire `checkout_opened` + open the custom-data-
-                // decorated URL (ph_distinct_id + product → webhook stitching).
-                Analytics.capture("checkout_opened", ["product": product.rawValue])
-                NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
-                MenuBarExtraDismiss.dismiss()
-            } label: {
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// Trial low-balance escalation: trials can't buy top-ups, so the
-    /// affordance is the Managed subscription checkout instead.
-    private var trialUpgradeRow: some View {
-        HStack(spacing: 0) {
-            Text("Running low \u{2014} upgrade to keep going")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfWarningAmber)
-                .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard let url = BillingLinks.subscriptionCheckoutURL(tier: .pro) else { return }
-            // Tier 4 coverage fix: the menu-bar trial-upgrade is a real checkout.
-            Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue])
-            NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .subscriptionPro))
-            MenuBarExtraDismiss.dismiss()
-        }
-    }
-
 
     /// Open/close delays for the hover-driven side panels (Recent Prompts,
     /// Microphone). The open delay is a hover-intent guard so brushing past
@@ -947,6 +892,51 @@ struct MenuRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(trailingColor)
         }
+    }
+}
+
+// MARK: - BillingActionRow
+//
+// The single consolidated billing row's view. Like CopyLastPromptRow it can
+// carry a smaller secondary line below the label (the folded-in past-due
+// warning), so it breaks the uniform tight row height only when there's a
+// nudge to show; otherwise it reads as an ordinary MenuRow.
+
+private struct BillingActionRow: View {
+    let label: String
+    var secondary: String?
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let secondary {
+                    Text(secondary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.vfWarningAmber)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
+                    .fill(isHovered ? Color.vfMenuRowHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 

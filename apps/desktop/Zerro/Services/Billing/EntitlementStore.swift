@@ -531,14 +531,54 @@ final class EntitlementStore {
     /// Why the paywall was last routed open — read once by `PaywallView.onAppear`
     /// for `paywall_shown.trigger`, then cleared. Set to a block reason by
     /// `AppState.presentPreflightBlock`; the record-start gate resets it to `nil`
-    /// on the plain `.expired` open (→ `manual` in the event). UI/analytics only;
-    /// never gates anything.
+    /// on the plain `.expired` open (→ `manual` in the event). It ALSO drives the
+    /// paywall's dynamic headline (see `PaywallCopy`). UI/analytics only; never
+    /// gates anything.
+    ///
+    /// The first three cases are pre-flight block reasons; the last four are the
+    /// menu-bar "Upgrade" entry-point contexts (one always-present row whose
+    /// label + trigger vary by state — see `MenuBarBillingAction`).
     enum PaywallTrigger: String {
         case outOfCredits = "out_of_credits"
         case subscriptionInactive = "subscription_inactive"
         case apiKeyMissing = "api_key_missing"
+        /// Trial exhausted — the gated `.expired` open (the original paywall).
+        case blocked = "blocked"
+        /// A still-in-trial user voluntarily opening the upgrade surface.
+        case voluntaryUpgrade = "voluntary_upgrade"
+        /// A Managed user adding credits (low balance / out of credits).
+        case topup = "topup"
+        /// An entitled user (Managed/BYOK) managing — not a sell.
+        case manage = "manage"
     }
     var paywallTrigger: PaywallTrigger?
+
+    /// One-shot flag set by the checkout-return deep link when a brand-new buyer
+    /// must paste their license key: `ActivateLicenseCard` reads it on appear to
+    /// open straight into the (focused) activation field. Read-once then cleared,
+    /// like `paywallTrigger`. UI only.
+    var focusActivationFieldOnOpen = false
+
+    /// True when the user already holds a PURCHASED entitlement (Managed or
+    /// BYOK) — nothing left to buy/activate. The checkout-return deep link reads
+    /// this to choose silent-refresh (an already-activated Managed user's top-up)
+    /// vs open-the-paywall-to-paste (a brand-new buyer). Mirrors the paid arm of
+    /// `canGenerate` without the trial/expired rows.
+    var isPaidEntitled: Bool {
+        switch state {
+        case .managed, .byok: return true
+        case .trial, .expired: return false
+        }
+    }
+
+    /// True when a license key is on file (a prior activation). Used by the
+    /// app-activation refresh (Step 5) to decide whether to re-hit
+    /// `/entitlement` — fail-open `.present`-only so a Keychain blip (which the
+    /// license layer surfaces as `.indeterminate`) doesn't trigger needless
+    /// network work. Matches the presence check in `revalidateLicenseIfNeeded`.
+    var hasLicenseOnFile: Bool {
+        licenseService.currentLicenseState().presence == .present
+    }
 
     /// Reflect a just-completed trial generation's `credits_remaining` and
     /// recompute (so the menu-bar line updates and, when credits hit zero, the

@@ -12,5 +12,20 @@
 	<string>https://getzerro.app/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>IV0J9TIWJpe/dL5A/8NvDhfmsjZatlrJA1NPnmX2xiE=</string>
+	<!-- Billing: the `zerro://` scheme LemonSqueezy bounces back to after a
+	     checkout (each product's "Redirect URL after purchase" =
+	     zerro://checkout-complete?product=<product>). Handled in
+	     AppDelegate.application(_:open:). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.cbreeding.Zerro.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>zerro</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -176,6 +176,11 @@ struct ZerroApp: App {
             // in the one-shot block — `state` is the retained instance only on
             // the first init.
             AppDelegate.appState = state
+            // Billing entry-point work: hand the long-lived entitlement store to
+            // the AppDelegate so the `zerro://` checkout-return deep link and the
+            // app-activation refresh can reach it (both live outside the SwiftUI
+            // view tree). Weak (like `appState`), set only in this one-shot block.
+            AppDelegate.entitlements = ent
             // Wire onboarding gating for recovery (AppState owns the recovery
             // logic + the wake observer but not the OnboardingStore).
             state.onboardingCompleteProvider = { [weak onb] in
@@ -608,6 +613,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user's first server-funded generation (Phase F). Mirrors the two above.
     nonisolated(unsafe) static var requestOpenTrialEmail: (() -> Void)?
 
+    /// Set by `PaywallOpenerRegistrar` alongside the opener. Used by the
+    /// checkout-return deep link to dismiss the paywall for an already-activated
+    /// buyer (a Managed top-up that updated credits silently).
+    nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
+
+    /// Set by `ZerroApp.init`'s one-shot block to the long-lived entitlement
+    /// store. Read by the `zerro://` checkout-return deep link and the
+    /// app-activation refresh. Weak, like `appState` — owned by ZerroApp's
+    /// @State for the app's lifetime.
+    nonisolated(unsafe) static weak var entitlements: EntitlementStore?
+
+    /// Throttle stamp for the app-activation entitlement refresh, so a flurry of
+    /// activations doesn't hammer `/session` / `/entitlement`. MainActor-isolated
+    /// (only touched from `refreshEntitlementOnActivation`).
+    @MainActor private static var lastActivationRefresh: Date?
+
     /// Set by `ZerroApp.init`'s one-shot block to the live, long-lived
     /// AppState. Read by `applicationShouldTerminate` (M1) to route a quit by
     /// the current recording/processing state. Weak — AppState is owned by
@@ -623,6 +644,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // .accessory-policy menu-bar app.
         if Self.shouldPresentOnboardingOnLaunch {
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        // Step 5 (billing): refresh the entitlement whenever Zerro becomes
+        // active. This is the fallback for a checkout return where the `zerro://`
+        // deep link didn't fire, AND it silently bumps an already-activated
+        // Managed user's credit balance after a top-up (no paste needed). App-
+        // lifetime observer; throttled so it never hammers the backend.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in Self.refreshEntitlementOnActivation() }
+        }
+    }
+
+    /// Minimum gap between app-activation entitlement refreshes, so a rapid
+    /// ⌘-Tab in/out doesn't spam `/session` / `/entitlement`.
+    @MainActor
+    private static let activationRefreshThrottle: TimeInterval = 15
+
+    /// Throttled entitlement refresh on app activation. Always recomputes the
+    /// local state (cheap, fail-open); only re-hits `/entitlement` when a license
+    /// is actually on file (`refreshManagedEntitlement` itself no-ops unless the
+    /// user is `.managed`).
+    @MainActor
+    static func refreshEntitlementOnActivation() {
+        guard let entitlements else { return }
+        let now = Date()
+        if let last = lastActivationRefresh, now.timeIntervalSince(last) < activationRefreshThrottle {
+            return
+        }
+        lastActivationRefresh = now
+        entitlements.refresh()
+        if entitlements.hasLicenseOnFile {
+            Task { @MainActor in await entitlements.refreshManagedEntitlement() }
+        }
+    }
+
+    /// Step 4 (billing): the `zerro://` checkout-return deep link. LemonSqueezy's
+    /// per-product "Redirect URL after purchase" bounces the browser back to
+    /// `zerro://checkout-complete?product=<product>`; macOS routes it here
+    /// (CFBundleURLTypes registers the scheme). Custom-scheme opens arrive via
+    /// this AppKit hook rather than SwiftUI `.onOpenURL` because the app may have
+    /// no window mounted on return (it's a menu-bar/accessory app).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme?.lowercased() == "zerro" {
+            Self.handleCheckoutReturn(url)
+        }
+    }
+
+    /// Resolves a checkout return: refresh the entitlement, then either bring the
+    /// user back silently (already entitled — a top-up or a prior activation) or
+    /// open the paywall with the activation field focused (a brand-new buyer who
+    /// must paste their license key — the backend stores only a hash, so the app
+    /// can't fetch it). Never claims success on its own; activation does that.
+    @MainActor
+    static func handleCheckoutReturn(_ url: URL) {
+        guard url.host == "checkout-complete" else {
+            Log.billing.notice("deep link: ignoring \(url.absoluteString, privacy: .public)")
+            return
+        }
+        guard let entitlements else {
+            Log.billing.error("deep link: checkout-complete but entitlements not wired")
+            return
+        }
+        Log.billing.notice("deep link: checkout-complete received")
+        Task { @MainActor in
+            entitlements.refresh()
+            await entitlements.refreshManagedEntitlement()
+            if entitlements.isPaidEntitled {
+                // Already activated (e.g. a Managed top-up) — credits updated
+                // silently. Surface the app and dismiss the paywall if it's open.
+                NSApp.activate(ignoringOtherApps: true)
+                requestDismissPaywall?()
+                Log.billing.notice("deep link: already entitled — refreshed silently")
+            } else {
+                // Brand-new buyer must paste the key — open the paywall straight
+                // into the focused activation field, in the manage/activate copy.
+                entitlements.paywallTrigger = .manage
+                entitlements.focusActivationFieldOnOpen = true
+                openPaywall()
+                Log.billing.notice("deep link: not yet entitled — opening paywall focused on activation")
+            }
         }
     }
 
@@ -729,6 +834,7 @@ private struct OnboardingOpenerRegistrar: View {
 
 private struct PaywallOpenerRegistrar: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         Color.clear
@@ -736,6 +842,12 @@ private struct PaywallOpenerRegistrar: View {
             .onAppear {
                 AppDelegate.requestOpenPaywall = {
                     openWindow(id: PaywallScene.windowID)
+                }
+                // Captured alongside the opener so the checkout-return deep link
+                // can dismiss the paywall for an already-activated user (a
+                // top-up) without standing up a second registrar.
+                AppDelegate.requestDismissPaywall = {
+                    dismissWindow(id: PaywallScene.windowID)
                 }
             }
     }
