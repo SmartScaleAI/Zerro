@@ -161,7 +161,7 @@ final class BYOKRoutingTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
-        XCTAssertEqual(json["max_tokens"] as? Int, 8192) // REQUIRED by the Messages API
+        XCTAssertEqual(json["max_tokens"] as? Int, 16384) // REQUIRED by the Messages API (raised from 8192 to stop ~2-min truncation)
         XCTAssertEqual(json["system"] as? String, "SYSTEM") // top-level, never a message
         // NO sampling params, NO thinking field (Opus 4.7 400s on them).
         XCTAssertNil(json["temperature"])

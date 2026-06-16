@@ -39,6 +39,15 @@ enum PillState: Equatable {
     /// Dismiss (the user has to fix the underlying cause: Settings, free
     /// up disk, re-record, etc.).
     case error(message: String, retryable: Bool)
+    /// M5 — a PAID-blocked failure (trial credits exhausted / out of credits /
+    /// inactive subscription) that still has a held recording on disk. Rendered
+    /// in the same chrome as `.confirmRecovery` but amber: a warning badge, the
+    /// paid-block copy, a plain "Discard" button, and a filled primary button
+    /// that reads "Upgrade" until the user is entitled and "Generate" after.
+    /// `entitled` carries `EntitlementStore.canGenerate` so the label flips live
+    /// (read in the bridge so Observation tracks it). Mapped from `.failed` by
+    /// the bridge when `AppState.canResumePaidGeneration` is true.
+    case paidBlockResume(message: String, entitled: Bool)
     /// The expanded failure card — shown for RETRYABLE generation failures
     /// (`AppState.canRetryFailure == true`). Reuses the success card's chrome
     /// in an error configuration: amber caution badge, the `headline`
@@ -47,8 +56,9 @@ enum PillState: Equatable {
     /// `.error` capsule. Mapped from `.failed` by the bridge.
     case failureExpanded(headline: String, detail: String)
     /// M2 — recovery confirmation. Offered at wake/launch when a recording that
-    /// a system sleep interrupted is recoverable on disk. Reads "Recording
-    /// stopped when your Mac slept — generate a prompt from it?" with exactly
+    /// was interrupted (system sleep, app quit, network drop, etc.) is
+    /// recoverable on disk. Reads "Recording stopped — generate a prompt from
+    /// it?" with exactly
     /// two outcomes: Generate (run the recovered recording, spending the credit
     /// with consent) and Discard (delete it). Dismissing the pill any other way
     /// also resolves to Discard. Recovery NEVER auto-generates — it always asks.
@@ -74,6 +84,13 @@ struct PillView: View {
     /// Default no-op so #Preview blocks can keep passing literal states
     /// without ceremony.
     var onRetryError: () -> Void = {}
+    /// M5 — the `.paidBlockResume` pill's primary action. Wired in
+    /// `PillWindowController` to `AppState.resumePaidGeneration`, which re-checks
+    /// entitlement and either re-runs the held recording (when entitled) or opens
+    /// the paywall — so the one action backs both the "Generate" and "Upgrade"
+    /// labels. Default no-op so #Preview blocks can pass literal states without
+    /// ceremony.
+    var onResumePaidGeneration: () -> Void = {}
     /// Closes the result pill from either compact or expanded state. The
     /// affordance is a small "x" badge tucked into the chrome's top-right
     /// corner so users can dismiss after copying without having to wait
@@ -173,21 +190,23 @@ struct PillView: View {
         switch state {
         case .recording, .wrappingUp, .processing, .error:
             return Self.capsuleWidth
-        case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery:
+        case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
+             .paidBlockResume:
             return nil
         }
     }
 
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .resultCompact, .confirmRecovery:
+        case .recording, .wrappingUp, .processing, .resultCompact, .confirmRecovery,
+             .paidBlockResume:
             return Self.capsuleHeight
         // .error keeps the locked 392 width (so it still reads as the same
         // capsule it morphed from) but drives its own height: a long
-        // message wraps to a second line and grows the pill down rather
-        // than overflowing the fixed single-line frame. ErrorPillContent
-        // floors itself at capsuleHeight so short messages still render as
-        // the familiar 50pt capsule.
+        // message wraps to as many lines as it needs and grows the pill
+        // down rather than truncating or overflowing the fixed frame.
+        // ErrorPillContent floors itself at capsuleHeight so short messages
+        // still render as the familiar 50pt capsule.
         case .resultExpanded, .failureExpanded, .error:
             return nil
         }
@@ -264,6 +283,13 @@ struct PillView: View {
                 onRetry: retryable ? onRetryError : nil,
                 onDismiss: onDismissError
             )
+        case .paidBlockResume(let message, let entitled):
+            PaidBlockResumePillContent(
+                message: message,
+                entitled: entitled,
+                onPrimary: onResumePaidGeneration,
+                onDiscard: onDismissError
+            )
         case .failureExpanded(let headline, let detail):
             // Reuse the success card in its failure configuration, wrapped with
             // the same 760-wide / clipped chrome `.resultExpanded` uses so the
@@ -326,21 +352,23 @@ private struct ErrorPillContent: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: VFSpacing.md) {
+        // Center-align so the amber icon and the Retry/Dismiss controls sit
+        // at the vertical midpoint of the message, however many lines it
+        // wraps to.
+        HStack(alignment: .center, spacing: VFSpacing.md) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 14))
                 .foregroundStyle(Color.vfWarningAmber)
 
-            // Wrap to at most two lines within the locked 392 width
-            // instead of `.fixedSize()`-ing to the message's full
-            // intrinsic width (which overflowed the chrome for the
-            // longer copy, e.g. "Add your OpenAI API key in Settings to
-            // generate prompts."). `fixedSize(vertical:)` lets the text
-            // claim the height its wrapped layout needs.
+            // Wrap within the locked 392 width and show the full message,
+            // however many lines it takes, instead of `.fixedSize()`-ing to
+            // the message's full intrinsic width (which overflowed the
+            // chrome for the longer copy, e.g. "You've used all your free
+            // trial credits…"). `fixedSize(vertical:)` lets the text claim
+            // the height its wrapped layout needs so nothing is truncated.
             Text(message)
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextPrimary)
-                .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -374,7 +402,7 @@ private struct ErrorPillContent: View {
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, 10)
         // Floor at the capsule height so a one-line error still reads as
-        // the standard 50pt pill; two-line copy grows past it.
+        // the standard 50pt pill; multi-line copy grows past it.
         .frame(minHeight: PillView.capsuleHeight)
     }
 }
@@ -621,7 +649,7 @@ private struct ProcessingPillContent: View {
 // primary "Generate" (run it, spending the credit with consent). There is no
 // separate dismiss affordance: dismissing the pill resolves to Discard (see
 // PillWindowController), so a recovered recording is never silently retained.
-// The moon glyph ties it to the result's "recovered after sleep" note.
+// The recovery glyph ties it to the result's "recovered" note.
 
 private struct ConfirmRecoveryPillContent: View {
     let onGenerate: () -> Void
@@ -631,7 +659,7 @@ private struct ConfirmRecoveryPillContent: View {
         HStack(spacing: VFSpacing.md) {
             iconBadge
 
-            Text("Recording stopped when your Mac slept \u{2014} generate a prompt from it?")
+            Text("Recording stopped \u{2014} generate a prompt from it?")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Color.vfTextPrimary)
                 .fixedSize()
@@ -646,7 +674,7 @@ private struct ConfirmRecoveryPillContent: View {
     }
 
     private var iconBadge: some View {
-        Image(systemName: "moon.fill")
+        Image(systemName: "arrow.clockwise")
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color.vfAccentBlue)
             .frame(width: 30, height: 30)
@@ -672,6 +700,78 @@ private struct ConfirmRecoveryPillContent: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .background(Color.vfAccentBlue, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
+// MARK: - PaidBlockResumePillContent
+//
+// M5 (resume after purchase). A paid-blocked failure that still has a held
+// recording on disk, styled like `ConfirmRecoveryPillContent` but AMBER (the
+// failure tint) instead of blue: a warning badge, the paid-block copy, a plain
+// "Discard" button, and a filled primary button. The primary button is a single
+// action (`resumePaidGeneration`, which refreshes entitlement then resumes-or-
+// paywalls), but its LABEL is dynamic — "Upgrade" until the user is entitled,
+// "Generate" after. `entitled` is read from `EntitlementStore.canGenerate` in
+// the bridge, so activating a license flips the label live (both stores are
+// @Observable). Discard maps to `dismissFailure()`, which for a paid block
+// discards the held recording (deletes the working dir + clears the pointer).
+
+private struct PaidBlockResumePillContent: View {
+    let message: String
+    let entitled: Bool
+    let onPrimary: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(spacing: VFSpacing.md) {
+            iconBadge
+
+            Text(message)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.vfTextPrimary)
+                .fixedSize()
+
+            Spacer(minLength: 40)
+
+            discardButton
+            primaryButton
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
+    }
+
+    private var iconBadge: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.vfWarningAmber)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(Color.vfWarningAmber.opacity(0.20)))
+    }
+
+    private var discardButton: some View {
+        Button(action: onDiscard) {
+            Text("Discard")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    private var primaryButton: some View {
+        Button(action: onPrimary) {
+            // Single action; the label reflects entitlement — "Upgrade" opens
+            // the paywall, "Generate" resumes the held recording.
+            Text(entitled ? "Generate" : "Upgrade")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.vfWarningAmber, in: Capsule())
         }
         .buttonStyle(.plain)
         .fixedSize()
@@ -1032,9 +1132,13 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Error \u{00B7} Long") {
-    // The longest production message — exercises the two-line wrap.
+    // The longest production message — pulls the real copy from
+    // `RecordingFailureReason.trialCreditsExhausted.userMessage` (the source
+    // of truth in AppState) rather than duplicating it, so the preview can't
+    // drift if the copy changes. Exercises the full multi-line wrap at the
+    // locked 392 width with no truncation.
     PillView(state: .error(
-        message: "Add your OpenAI API key in Settings to generate prompts.",
+        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
         retryable: false
     ))
         .padding(40)
@@ -1046,6 +1150,28 @@ private struct ResultPillContent: View {
     PillView(state: .error(
         message: "Couldn\u{2019}t reach OpenAI \u{2014} check your connection.",
         retryable: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Paid block \u{00B7} Upgrade") {
+    // M5 — paid-blocked failure, NOT yet entitled: amber resume pill with the
+    // filled "Upgrade" button (opens the paywall). Real copy from AppState.
+    PillView(state: .paidBlockResume(
+        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
+        entitled: false
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Paid block \u{00B7} Generate") {
+    // M5 — same pill once the user is entitled: the primary button flips to
+    // "Generate" and resumes the held recording on tap.
+    PillView(state: .paidBlockResume(
+        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
+        entitled: true
     ))
         .padding(40)
         .background(Color.vfPanelBackground)

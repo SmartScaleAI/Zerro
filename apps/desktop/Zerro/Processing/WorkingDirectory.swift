@@ -63,6 +63,15 @@ enum WorkingDirectory {
     /// alongside everything else.
     nonisolated static let recoverableMarkerSuffix = "recoverable"
 
+    /// Filename of the marker dropped INSIDE a `zerro-work-` directory whose
+    /// recording is being held for a paid-block resume (M5 — see
+    /// `PendingPaidGeneration`). Its presence tells `sweep()` to spare that
+    /// directory across launches so the recording survives a quit during
+    /// browser checkout; the file's contents are a copy of the pending record.
+    /// Unlike `recoverableMarkerSuffix` (a sidecar NEXT TO a `.mov`), this lives
+    /// inside the working dir, so the sweep checks for it per-directory.
+    nonisolated static let pendingPaidMarkerName = "pending-paid.json"
+
     /// Best-effort, synchronous: drop the recoverable marker next to `movURL`.
     /// Called from `abandon()` BEFORE the async writer release so the marker
     /// exists even if the app exits moments later (the quit-while-recording
@@ -223,6 +232,12 @@ enum WorkingDirectory {
         var removed = 0
         for entry in contents where entry.lastPathComponent.hasPrefix(prefix) {
             if let keepPath, entry.standardizedFileURL.path == keepPath { continue }
+            // M5: a working dir holding a paid-block recording (Continue-after-pay)
+            // carries the pending-paid marker. Spare it so the recording survives
+            // a quit during checkout — the restore path / an intentional dismiss
+            // is the only thing that removes it. Cheap best-effort file probe;
+            // genuinely orphaned `zerro-work-` dirs (no marker) are still reclaimed.
+            if containsPendingPaidMarker(entry) { continue }
             do {
                 try fm.removeItem(at: entry)
                 removed += 1
@@ -238,5 +253,14 @@ enum WorkingDirectory {
         if removed > 0 {
             Log.cleanup.notice("sweep removed \(removed, privacy: .public) orphaned entries")
         }
+    }
+
+    /// Whether `dir` contains the pending-paid marker file — i.e. it holds a
+    /// recording being held for a Continue-after-pay resume. Best-effort: any
+    /// failure (not a directory, unreadable) reads as "no marker", so the sweep
+    /// errs toward reclaiming rather than leaking. Cheap existence check, no read.
+    nonisolated static func containsPendingPaidMarker(_ dir: URL) -> Bool {
+        let marker = dir.appendingPathComponent(pendingPaidMarkerName)
+        return FileManager.default.fileExists(atPath: marker.path)
     }
 }

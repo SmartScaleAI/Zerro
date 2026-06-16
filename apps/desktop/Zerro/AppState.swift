@@ -303,6 +303,14 @@ final class AppState {
             default:
                 break
             }
+            // M5: a delivered result (including a resumed paid generation that
+            // succeeded) no longer needs the held-recording pointer. Clearing on
+            // every `.done` also reaps any stale pending record left by a normal
+            // success. Removes the UserDefaults pointer + the marker; the working
+            // dir stays for the normal result lifecycle (next record / dismiss).
+            if case .done = state {
+                pendingPaidStore.clear()
+            }
         }
     }
     var elapsedSeconds: Double = 0
@@ -454,6 +462,14 @@ final class AppState {
     // yet wired, or in a unit test) keeps the existing local path — fail-safe.
     @ObservationIgnored weak var entitlements: EntitlementStore?
     @ObservationIgnored var managedProxyClient: ManagedProxyClient?
+
+    // M5 (resume after purchase): owner of the persisted "pending paid
+    // generation" pointer. When generation is blocked for a paid reason
+    // (trial credits exhausted / out of credits / inactive subscription) the
+    // processed recording is held so the failure pill can offer Continue.
+    // Owned (not weak) and `var` so tests can inject an ephemeral
+    // `UserDefaults`-backed store; the default uses `.standard`.
+    @ObservationIgnored var pendingPaidStore = PendingPaidGenerationStore()
 
     // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
     // (same lifetime + weak-ref contract as `entitlements`). The proxy
@@ -674,6 +690,10 @@ final class AppState {
         if let priorWorkingDir = processedRecording?.workingDirectory {
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
+        // M5: a brand-new recording supersedes any held paid-block recording —
+        // clear its persisted pointer (its working dir is the prior one removed
+        // just above) so we never restore or resume a stale recording.
+        pendingPaidStore.clear()
         isResultExpanded = false
         activeSelection = selection
         recordingRedactSecrets = redactSecrets
@@ -879,6 +899,12 @@ final class AppState {
         pendingRecoveryURL = nil
         failureRetryAttempts = 0
         lastFailureDetail = nil
+        // M5: every teardown path that runs through here (cancel, reset-to-idle,
+        // mid-session revocation, the cancelled/interrupted session finishes) is
+        // a "no longer holding this" point — reap any persisted paid-block
+        // pointer + marker. The working dir itself is removed by the call sites
+        // that own disk cleanup (they key on `processedRecording.workingDirectory`).
+        pendingPaidStore.clear()
     }
 
     /// Tears down the live session and discards the partial file.
@@ -1624,6 +1650,12 @@ final class AppState {
                 // mapping down to the value-less reason (decision 1).
                 self.lastFailureDetail = Self.failureDetail(from: error)
                 self.state = .failed(reason: reason)
+                // M5: if this is a PAID block (trial credits exhausted / out of
+                // credits / inactive subscription), hold the processed recording
+                // so the failure pill can offer Continue once the user pays. The
+                // recording's artifacts are still intact on disk (this catch left
+                // them in place), so resume re-runs generation with no re-record.
+                self.capturePendingPaidGenerationIfNeeded(reason: reason, processed: processed)
                 // A definitive Managed not-entitled means the subscription lapsed
                 // mid-use — recompute so the app drops out of `.managed`.
                 if !isTrial, reason == .subscriptionInactive, let entitlements = self.entitlements {
@@ -2171,7 +2203,15 @@ final class AppState {
     /// User-driven dismissal of the failure pill. Same as cancel —
     /// returns to .idle so the next hotkey press starts cleanly.
     func dismissFailure() {
-        guard case .failed = state else { return }
+        guard case .failed(let reason) = state else { return }
+        // M5: dismissing a PAID-blocked failure means "give up on this
+        // recording" — delete the held working dir and clear the pending
+        // pointer so it isn't restored at the next launch. (`resetToIdle` also
+        // removes `processedRecording`'s working dir; this additionally covers a
+        // recording restored at launch and clears the persisted pointer.)
+        if PaidBlockReason(reason) != nil {
+            discardPendingPaidGeneration()
+        }
         resetToIdle()
     }
 
@@ -2220,6 +2260,152 @@ final class AppState {
         // blocks leave them in place), so the second attempt reads the
         // same audio.m4a + frames + manifest the first one did.
         runPromptGeneration(processed: processed)
+    }
+
+    // MARK: - Resume after purchase (M5)
+
+    /// Persists a held-recording pointer when generation is blocked for a PAID
+    /// reason, so the failure pill can offer Continue and survive a quit during
+    /// checkout. No-op for any non-paid reason or when there's no processed
+    /// recording to hold. Writes both the `UserDefaults` pointer and the
+    /// in-working-dir marker (which spares the dir from the launch sweep).
+    private func capturePendingPaidGenerationIfNeeded(
+        reason: RecordingFailureReason,
+        processed: ProcessedRecording
+    ) {
+        guard let paidReason = PaidBlockReason(reason) else { return }
+        let model = recordingModelID
+            ?? preferences?.selectedModelID
+            ?? ModelRegistry.defaultModelID
+        let pending = PendingPaidGeneration(
+            workingDirectoryName: processed.workingDirectory.lastPathComponent,
+            idempotencyKey: processed.idempotencyKey,
+            modelID: model,
+            reason: paidReason,
+            createdAt: Date()
+        )
+        pendingPaidStore.save(pending)
+        Log.billing.notice("paid block held for resume (reason=\(String(describing: paidReason), privacy: .public))")
+    }
+
+    /// True when the current failure is a PAID block AND we have a held
+    /// recording to resume — either still in memory or persisted on disk. The
+    /// pill reads this via the bridge to decide whether to render the Continue
+    /// button alongside Dismiss.
+    var canResumePaidGeneration: Bool {
+        guard case .failed(let reason) = state, PaidBlockReason(reason) != nil else {
+            return false
+        }
+        return processedRecording != nil || pendingPaidStore.load() != nil
+    }
+
+    /// User-driven Continue from a paid-blocked failure pill. Re-checks
+    /// entitlement (the user may have just subscribed / added BYOK keys in the
+    /// browser); if they can now generate, reconstructs the held recording if
+    /// needed and re-runs generation reusing the original idempotency key (so the
+    /// proxy replays a charged-but-blocked response instead of double-charging).
+    /// If they still can't generate, opens the paywall and LEAVES the pending
+    /// record intact so they can pay and tap Continue again.
+    func resumePaidGeneration() {
+        guard canResumePaidGeneration else { return }
+        Analytics.capture("resume_paid_generation_tapped")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Re-check entitlement against the freshest truth: refresh the
+            // synchronous compute, and for a managed user also pull the
+            // authoritative /entitlement snapshot (fail-open on a network blip).
+            self.entitlements?.refresh()
+            await self.entitlements?.refreshManagedEntitlement()
+            // The user could have dismissed / started something during the await.
+            guard self.canResumePaidGeneration else { return }
+
+            // Still not entitled → route to the paywall, keep the held recording.
+            guard self.entitlements?.canGenerate == true else {
+                Analytics.capture("resume_paid_generation_paywalled")
+                Log.billing.notice("resume: still not entitled — opening paywall, keeping held recording")
+                AppDelegate.openPaywall()
+                return
+            }
+
+            // Entitled now → reconstruct the recording from disk if it isn't
+            // already in memory, then re-run generation. A missing/corrupt working
+            // dir means the held recording is gone — clear it and fall back to idle.
+            let processed: ProcessedRecording?
+            if let inMemory = self.processedRecording {
+                processed = inMemory
+            } else if let pending = self.pendingPaidStore.load() {
+                processed = try? ProcessedRecording.reconstruct(
+                    workingDirectory: pending.workingDirectoryURL,
+                    idempotencyKey: pending.idempotencyKey
+                )
+            } else {
+                processed = nil
+            }
+            guard let processed else {
+                Log.billing.error("resume: held recording missing/corrupt — clearing pending and resetting")
+                self.discardPendingPaidGeneration()
+                self.state = .idle
+                return
+            }
+
+            Analytics.capture("resume_paid_generation_started")
+            Log.billing.notice("resume: entitled — re-running generation against held recording")
+            self.processedRecording = processed
+            self.lastFailureDetail = nil
+            // The success path clears the pending record (state didSet on `.done`);
+            // a fresh paid block re-captures it.
+            self.state = .processing
+            self.runPromptGeneration(processed: processed)
+        }
+    }
+
+    /// Deletes the held recording's working directory AND clears the persisted
+    /// pointer + marker — the "give up on this recording" teardown. Resolves the
+    /// directory from the in-memory recording when present, else from the
+    /// persisted pointer (the restore-but-not-yet-reconstructed path). Best-effort.
+    private func discardPendingPaidGeneration() {
+        if let dir = processedRecording?.workingDirectory {
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: dir) }
+        } else if let pending = pendingPaidStore.load() {
+            let dir = pending.workingDirectoryURL
+            Task.detached(priority: .utility) { WorkingDirectory.remove(at: dir) }
+        }
+        pendingPaidStore.clear()
+    }
+
+    /// Restores a held paid-blocked recording at launch (called from the launch
+    /// path BEFORE the blanket sweep). If a pending record is persisted, fresh
+    /// enough, and its working directory is intact with a readable manifest,
+    /// rebuilds `processedRecording` and re-enters `.failed(reason:)` so the pill
+    /// comes back up with Continue. Anything stale/missing/corrupt is cleared and
+    /// we proceed normally. Returns true when a recording was restored (so the
+    /// caller can skip the recovery/sweep that would otherwise run).
+    @discardableResult
+    func restorePendingPaidGenerationIfAny() -> Bool {
+        guard state == .idle, let pending = pendingPaidStore.load() else { return false }
+        // Drop a record that has outlived any plausible checkout.
+        if Date().timeIntervalSince(pending.createdAt) > PendingPaidGenerationStore.maxAge {
+            Log.billing.notice("restore: pending paid generation is stale — clearing")
+            discardPendingPaidGeneration()
+            return false
+        }
+        // Rebuild the recording from disk; a missing/corrupt working dir means the
+        // held recording is gone.
+        guard let processed = try? ProcessedRecording.reconstruct(
+            workingDirectory: pending.workingDirectoryURL,
+            idempotencyKey: pending.idempotencyKey
+        ) else {
+            Log.billing.notice("restore: held recording missing/corrupt — clearing pending")
+            // Pointer clear only; if the dir exists but the manifest is unreadable
+            // the launch sweep reclaims it (the marker no longer protects it).
+            pendingPaidStore.clear()
+            return false
+        }
+        processedRecording = processed
+        recordingModelID = pending.modelID
+        state = .failed(reason: pending.reason.failureReason)
+        Log.billing.notice("restore: held paid recording restored — pill back with Continue")
+        return true
     }
 
     /// Below this many non-whitespace characters, the transcript is

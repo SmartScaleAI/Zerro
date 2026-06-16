@@ -98,10 +98,34 @@ struct ProcessedRecording {
     /// replayed on retry instead of charging a second credit. A genuinely new
     /// recording yields a new `ProcessedRecording`, hence a new key.
     ///
-    /// A property default (not a memberwise-init parameter): excluded from the
-    /// synthesized initializer, so the pipeline's construction site is unchanged
-    /// and the key can't be set — or accidentally reused — from outside.
-    let idempotencyKey: String = UUID().uuidString
+    /// Defaults to a fresh UUID for every NEW recording. An explicit initializer
+    /// (below) accepts it so a recording RECONSTRUCTED from disk for a
+    /// Continue-after-pay resume (`reconstruct(workingDirectory:idempotencyKey:)`)
+    /// can carry the ORIGINAL key — the proxy then replays the charged-but-blocked
+    /// `/generate` instead of charging a second credit. The default keeps every
+    /// existing call site (pipeline, tests) compiling unchanged.
+    let idempotencyKey: String
+
+    /// Explicit memberwise init with `idempotencyKey` defaulting to a fresh UUID,
+    /// so all existing construction sites keep compiling while a reconstruction
+    /// can inject the original recording's key (M5 resume-after-purchase).
+    init(
+        audioURL: URL,
+        frames: [ExtractedFrame],
+        duration: CMTime,
+        workingDirectory: URL,
+        clicks: [ResolvedClick],
+        hasSpeech: Bool,
+        idempotencyKey: String = UUID().uuidString
+    ) {
+        self.audioURL = audioURL
+        self.frames = frames
+        self.duration = duration
+        self.workingDirectory = workingDirectory
+        self.clicks = clicks
+        self.hasSpeech = hasSpeech
+        self.idempotencyKey = idempotencyKey
+    }
 }
 
 // MARK: - ExtractedFrame
@@ -184,6 +208,79 @@ struct RecordingManifest: Codable {
     struct ClickEntry: Codable {
         let timestampSeconds: Double
         let label: String
+    }
+}
+
+// MARK: - RecordingManifest reading (M5 — resume after purchase)
+
+/// Failure decoding a `manifest.json` back into a `RecordingManifest` /
+/// `ProcessedRecording`. Surfaced by the reconstruction path so a held
+/// recording with a missing or corrupt manifest is treated as orphaned (the
+/// pending record is cleared) rather than crashing the restore.
+enum ManifestReadError: Error {
+    /// No `manifest.json` in the working directory (deleted/never written).
+    case manifestMissing
+    /// The `manifest.json` bytes wouldn't decode into a `RecordingManifest`.
+    case manifestUndecodable(underlying: Error)
+}
+
+extension RecordingManifest {
+    /// Decodes the `manifest.json` sidecar from `workingDirectory`. The inverse
+    /// of `ProcessingPipeline.writeManifest`. Throws `ManifestReadError` when the
+    /// file is absent or won't decode.
+    static func read(fromWorkingDirectory workingDirectory: URL) throws -> RecordingManifest {
+        let url = workingDirectory.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: url) else {
+            throw ManifestReadError.manifestMissing
+        }
+        do {
+            return try JSONDecoder().decode(RecordingManifest.self, from: data)
+        } catch {
+            throw ManifestReadError.manifestUndecodable(underlying: error)
+        }
+    }
+}
+
+extension ProcessedRecording {
+    /// Rebuilds a `ProcessedRecording` from a working directory's `manifest.json`
+    /// — the on-disk artifacts (audio, frames) are untouched by the original
+    /// generation failure, so reading the manifest reconstitutes everything the
+    /// generation needs. Used by the resume-after-purchase path to re-run a
+    /// held recording's generation after the user pays.
+    ///
+    /// `idempotencyKey` is injected so the resumed generation reuses the ORIGINAL
+    /// recording's key (the proxy replays a charged-but-blocked response instead
+    /// of double-charging). The in-memory-only `ExtractedFrame.lines` aren't
+    /// rebuilt — clicks are already resolved in the manifest, so generation never
+    /// needs them. Throws `ManifestReadError` on a missing/corrupt manifest.
+    static func reconstruct(
+        workingDirectory: URL,
+        idempotencyKey: String
+    ) throws -> ProcessedRecording {
+        let manifest = try RecordingManifest.read(fromWorkingDirectory: workingDirectory)
+        let timescale: CMTimeScale = 600
+        let frames = manifest.frames
+            .sorted { $0.index < $1.index }
+            .map { entry in
+                ExtractedFrame(
+                    url: workingDirectory.appendingPathComponent(entry.filename),
+                    timestamp: CMTime(seconds: entry.timestampSeconds, preferredTimescale: timescale),
+                    index: entry.index,
+                    ocrText: entry.ocrText
+                )
+            }
+        let clicks = (manifest.clicks ?? []).map {
+            ResolvedClick(seconds: $0.timestampSeconds, label: $0.label)
+        }
+        return ProcessedRecording(
+            audioURL: workingDirectory.appendingPathComponent(manifest.audioFilename),
+            frames: frames,
+            duration: CMTime(seconds: manifest.durationSeconds, preferredTimescale: timescale),
+            workingDirectory: workingDirectory,
+            clicks: clicks,
+            hasSpeech: manifest.hasSpeech,
+            idempotencyKey: idempotencyKey
+        )
     }
 }
 

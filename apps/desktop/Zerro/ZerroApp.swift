@@ -185,6 +185,15 @@ struct ZerroApp: App {
             // survives sleep and never relaunches, so a launch-only check would
             // never surface it. App-lifetime observer, registered once here.
             state.startWakeRecoveryObserver()
+            // M5 (resume after purchase): BEFORE the blanket launch sweep,
+            // restore a paid-blocked recording the user was holding across a
+            // quit-during-checkout. If one is restored, AppState re-enters
+            // `.failed` with the recording loaded so the pill returns with a
+            // Continue button; the marker in its working dir keeps the launch
+            // sweep from reclaiming it. Stale/missing/corrupt records are cleared
+            // here. Synchronous + on MainActor so state is set before the
+            // recovery task below runs (which no-ops when state isn't `.idle`).
+            state.restorePendingPaidGenerationIfAny()
             // Launch recovery still covers crash / force-quit / relaunch (where
             // the app actually exited). Both paths OFFER (ask before
             // generating); neither auto-spends a credit.

@@ -90,4 +90,21 @@ final class PillFailureCardBridgeTests: XCTestCase {
         }
         XCTAssertFalse(retryable)
     }
+
+    func testPaidBlockWithHeldRecordingMapsToResumePill() {
+        let appState = AppState()
+        // A paid block (trial credits exhausted) with a held recording → the
+        // dedicated resume pill, not the compact .error capsule. With no
+        // entitlements wired, `canGenerate` is false → the primary button reads
+        // "Upgrade" (entitled == false).
+        appState.processedRecording = makeProcessedRecording()
+        appState.state = .failed(reason: .trialCreditsExhausted)
+
+        XCTAssertTrue(appState.canResumePaidGeneration)
+        guard case .paidBlockResume(let message, let entitled) = appState.pillState else {
+            return XCTFail("a paid block with a held recording should map to .paidBlockResume, got \(String(describing: appState.pillState))")
+        }
+        XCTAssertEqual(message, RecordingFailureReason.trialCreditsExhausted.userMessage)
+        XCTAssertFalse(entitled, "no entitlement wired → label is Upgrade, not Generate")
+    }
 }

@@ -75,6 +75,19 @@ extension AppState {
                     detail: lastFailureDetail ?? reason.userMessage
                 )
             }
+            // M5: a paid-blocked failure (trial credits exhausted / out of
+            // credits / inactive subscription) with a held recording gets the
+            // dedicated resume pill so the user can pay and continue the SAME
+            // recording. `entitled` is read from the entitlement store HERE so
+            // Observation tracks it — when the user activates a license and
+            // entitlement flips to `.byok`/`.managed`, the primary button's label
+            // re-renders from "Upgrade" to "Generate" without any extra plumbing.
+            if canResumePaidGeneration {
+                return .paidBlockResume(
+                    message: reason.userMessage,
+                    entitled: entitlements?.canGenerate == true
+                )
+            }
             return .error(message: reason.userMessage, retryable: false)
         }
     }

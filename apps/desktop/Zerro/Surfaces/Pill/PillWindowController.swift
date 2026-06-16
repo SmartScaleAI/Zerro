@@ -320,6 +320,8 @@ private struct PillHostView: View {
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
             onRetryError: { appState.retryFailedPrompt() },
+            // M5 — resume a paid-blocked recording after the user pays.
+            onResumePaidGeneration: { appState.resumePaidGeneration() },
             onDismissResult: { appState.resetToIdle() },
             // M2 — recovery offer resolutions, exactly two outcomes. Generate
             // runs the recovered recording (spends the credit, with consent);
