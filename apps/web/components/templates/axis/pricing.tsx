@@ -163,7 +163,7 @@ const Pricing = () => {
                 className="top-0 bottom-0 left-1/2 -translate-x-1/2 z-0 w-screen"
             />
 
-            <div className="relative z-10 mb-8 lg:mb-10 flex flex-col items-center gap-3 text-center">
+            <div className="relative z-10 mb-5 lg:mb-7 flex flex-col items-center gap-3 text-center">
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
                     Pricing
                 </p>
