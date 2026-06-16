@@ -148,6 +148,30 @@ enum ProcessingConfig {
     /// instead of egressing a frame set that scales with the bogus duration.
     static let maxRecordingSeconds: Double = 180
 
+    /// Minimum real recorded content, in seconds — the manual-stop FLOOR
+    /// enforced in `AppState.stopRecording`. A user who stops a recording before
+    /// it reaches this many seconds has it discarded (the partial `.mov` is
+    /// cancelled) with the actionable `.recordingTooShort` failure, rather than
+    /// handing a near-empty clip to processing/generation. This is the SINGLE
+    /// SOURCE OF TRUTH for that floor: the gate reads it here and the
+    /// `.recordingTooShort` user-facing copy interpolates it, so the threshold
+    /// and the message it explains can't drift apart. Unrelated to — and far
+    /// below — the `maxRecordingSeconds` (180s) auto-stop CAP at the other end:
+    /// one is the shortest clip we'll process, the other the longest we'll record.
+    static let minRecordingSeconds: Double = 5
+
+    /// True when a manually-stopped recording of `seconds` is below the
+    /// `minRecordingSeconds` floor and must be discarded with
+    /// `.recordingTooShort` rather than processed. The single decision
+    /// `AppState.stopRecording` makes at manual stop, factored out as a pure
+    /// function so the stop-gate is unit-testable without a live capture
+    /// session. The boundary is inclusive at the floor — exactly
+    /// `minRecordingSeconds` is long enough (kept), only strictly shorter is
+    /// discarded — matching the `< minRecordingSeconds` gate.
+    static func isBelowMinimumDuration(seconds: Double) -> Bool {
+        seconds < minRecordingSeconds
+    }
+
     /// When the recording crosses into its final stretch the pill shifts to
     /// "wrapping up" so the auto-stop at `maxRecordingSeconds` isn't a
     /// surprise (read by AppState.handleElapsedUpdate). Derived from the cap

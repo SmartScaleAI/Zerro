@@ -248,7 +248,9 @@ public enum RecordingFailureReason: Equatable {
         case .processingFailed:
             return "Couldn\u{2019}t process the recording."
         case .recordingTooShort:
-            return "Recording was too short \u{2014} try again."
+            // Interpolate the floor from its single source of truth so the copy
+            // can't drift from the threshold the gate actually enforces.
+            return "Recording needs to be at least \(Int(ProcessingConfig.minRecordingSeconds)) seconds long."
         case .diskFull:
             return "Your Mac is out of storage \u{2014} free up space and try again."
         case .apiKeyMissing:
@@ -864,6 +866,35 @@ final class AppState {
     func stopRecording() {
         guard let session = recordingSession,
               state == .recording || state == .wrappingUp || state == .autoStopped else {
+            return
+        }
+        // Minimum-duration gate (manual stop only — the 180s auto-stop arrives
+        // through `handleElapsedUpdate`, never here). A user who hits stop before
+        // the clip reaches `minRecordingSeconds` has nothing worth processing, so
+        // we DISCARD the partial rather than spend a pipeline/OpenAI run on it:
+        //   • `session.cancel()` finalizes with `deletingFile: true`, dropping the
+        //     partial `.mov` (cleanup lives in RecordingSession.finalize, so it
+        //     runs regardless of the `.failed` short-circuit below),
+        //   • we set `.failed(.recordingTooShort)` SYNCHRONOUSLY, before the
+        //     cancel's async `.cancelled` finish callback reaches
+        //     `handleSessionFinish` — whose `if case .failed = state { return }`
+        //     guard then short-circuits, so the `.cancelled` outcome can't reset
+        //     the UI to idle and stomp this failure (same ordering as
+        //     `handleMidSessionRevocation`),
+        //   • and we return early: `session.stop()` is never called, so the
+        //     `.finished` path (processing + `recording_completed`) never runs.
+        if ProcessingConfig.isBelowMinimumDuration(seconds: elapsedSeconds) {
+            // Tier 1 analytics: a too-short manual stop is its own terminal
+            // recording event, sharing the `recording_too_short` name + duration
+            // shape with the processing-path empty-recording case — mutually
+            // exclusive with `recording_completed` (never fired here) and with the
+            // user-initiated `recording_cancelled` (a different intent).
+            Analytics.capture("recording_too_short", [
+                "duration_seconds": Int(elapsedSeconds.rounded())
+            ])
+            session.cancel()
+            resetTransientRecordingState()
+            state = .failed(reason: .recordingTooShort)
             return
         }
         session.stop()
