@@ -53,6 +53,7 @@ struct AreaSelectorView: View {
                 recordButton(in: bounds)
                 modelMenu(in: bounds)
                 micMenu(in: bounds)
+                devValidationBanner(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
         }
@@ -257,13 +258,30 @@ struct AreaSelectorView: View {
     /// Multi-model: the per-recording model dropdown chip, leftmost in the
     /// cluster since the typed-artifact refactor removed the mode toggle.
     static let modelChipWidth: CGFloat = 168
+    /// Dev Mode (Phase 1): the agent + folder chips inserted between the mic
+    /// chip and Record when the mode switch is on, plus the standalone mode
+    /// switch that sits to the cluster's left.
+    static let agentChipWidth: CGFloat = 150
+    static let folderChipWidth: CGFloat = 168
+    static let devToggleWidth: CGFloat = 128
+    /// Gap between the standalone Dev Mode switch and the settings cluster —
+    /// wider than `toolbarItemGap` so the switch reads as separate, not part
+    /// of the cluster.
+    private static let devToggleGap: CGFloat = 14
     private static let toolbarItemGap: CGFloat = 8
     private static let toolbarGap: CGFloat = 14
     private static let toolbarMargin: CGFloat = 8
 
-    /// Total toolbar width: model chip + mic chip + Record, gap-separated.
-    private static var toolbarClusterWidth: CGFloat {
-        modelChipWidth + toolbarItemGap + micChipWidth + toolbarItemGap + recordButtonWidth
+    /// Total settings-cluster width. In Dev Mode the agent + folder chips are
+    /// inserted between the mic chip and Record. The standalone mode switch is
+    /// NOT part of this width (it floats to the cluster's left); keeping the
+    /// cluster's centering identical in normal mode preserves existing layout.
+    static func toolbarClusterWidth(devMode: Bool = false) -> CGFloat {
+        var width = modelChipWidth + toolbarItemGap + micChipWidth + toolbarItemGap + recordButtonWidth
+        if devMode {
+            width += agentChipWidth + toolbarItemGap + folderChipWidth + toolbarItemGap
+        }
+        return width
     }
 
     /// View-local frame (top-left origin) of the whole floating toolbar.
@@ -275,10 +293,10 @@ struct AreaSelectorView: View {
     /// toolbar is pinned bottom-center of the overlay (see
     /// `fullScreenToolbarFrame`). Cluster order, left → right: model chip,
     /// mic chip, Record button.
-    static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
-        if fullScreen { return fullScreenToolbarFrame(in: bounds) }
+    static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        if fullScreen { return fullScreenToolbarFrame(in: bounds, devMode: devMode) }
 
-        let size = CGSize(width: toolbarClusterWidth, height: toolbarHeight)
+        let size = CGSize(width: toolbarClusterWidth(devMode: devMode), height: toolbarHeight)
 
         var originY = rect.maxY + toolbarGap
         // Flip above the selection if the toolbar would fall off the
@@ -300,8 +318,8 @@ struct AreaSelectorView: View {
 
     /// Full-screen toolbar: pinned bottom-center of the overlay, floating
     /// above the bottom edge by the standard `toolbarMargin`.
-    static func fullScreenToolbarFrame(in bounds: CGSize) -> CGRect {
-        let size = CGSize(width: toolbarClusterWidth, height: toolbarHeight)
+    static func fullScreenToolbarFrame(in bounds: CGSize, devMode: Bool = false) -> CGRect {
+        let size = CGSize(width: toolbarClusterWidth(devMode: devMode), height: toolbarHeight)
         let originX = (bounds.width - size.width) / 2
         let originY = bounds.height - size.height - toolbarMargin
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
@@ -309,23 +327,54 @@ struct AreaSelectorView: View {
 
     /// Model-picker chip: leftmost segment of the toolbar (multi-model
     /// per-recording override).
-    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         return CGRect(x: t.minX, y: t.minY, width: modelChipWidth, height: t.height)
     }
 
     /// Mic-picker chip: second segment of the toolbar, after the model
     /// chip.
-    static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+    static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let x = t.minX + modelChipWidth + toolbarItemGap
         return CGRect(x: x, y: t.minY, width: micChipWidth, height: t.height)
     }
 
+    /// Agent chip: Dev-Mode-only, inserted after the mic chip. The chip is a
+    /// confirmation of the auto-detected agent in Phase 1, not a picker.
+    static func agentChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        let mic = micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: true)
+        let x = mic.maxX + toolbarItemGap
+        return CGRect(x: x, y: mic.minY, width: agentChipWidth, height: mic.height)
+    }
+
+    /// Folder chip: Dev-Mode-only, inserted after the agent chip. Shows the
+    /// project name or the "Select folder" attention state when unset.
+    static func folderChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        let agent = agentChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+        let x = agent.maxX + toolbarItemGap
+        return CGRect(x: x, y: agent.minY, width: folderChipWidth, height: agent.height)
+    }
+
     /// Record button: the right segment of the toolbar.
-    static func recordButtonFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+    static func recordButtonFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         return CGRect(x: t.maxX - recordButtonWidth, y: t.minY, width: recordButtonWidth, height: t.height)
+    }
+
+    /// Standalone Dev Mode mode-switch pill. Floats to the cluster's left
+    /// (separated by `devToggleGap`), clamped inside the overlay's left
+    /// margin. Present in both modes — it's how the user enters/leaves Dev
+    /// Mode — so it does not depend on `devMode`.
+    ///
+    /// KNOWN LIMITATION (Phase 4 — toolbar overflow): on a selection pushed
+    /// hard against the left screen edge the margin clamp can park the switch
+    /// over the cluster's leading chip. Folds into the icon-compact overflow
+    /// work; acceptable for Phase 1's common centered-selection case.
+    static func devToggleFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        let x = max(toolbarMargin, t.minX - devToggleGap - devToggleWidth)
+        return CGRect(x: x, y: t.minY, width: devToggleWidth, height: t.height)
     }
 
     // MARK: - Mic dropdown geometry
@@ -340,8 +389,8 @@ struct AreaSelectorView: View {
 
     /// View-local frame of the open dropdown panel, anchored under the
     /// mic chip (flipped above if there isn't room below).
-    static func micMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false) -> CGRect {
-        let chip = micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+    static func micMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let chip = micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let height = CGFloat(itemCount) * micMenuRowHeight + micMenuPadding * 2
         let width = micChipWidth
 
@@ -361,9 +410,10 @@ struct AreaSelectorView: View {
         forSelection rect: CGRect,
         in bounds: CGSize,
         itemCount: Int,
-        fullScreen: Bool = false
+        fullScreen: Bool = false,
+        devMode: Bool = false
     ) -> Int? {
-        let frame = micMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen)
+        let frame = micMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen, devMode: devMode)
         guard frame.contains(point) else { return nil }
         let localY = point.y - frame.minY - micMenuPadding
         guard localY >= 0 else { return nil }
@@ -387,8 +437,8 @@ struct AreaSelectorView: View {
     /// View-local frame of the open model dropdown, anchored at the model
     /// chip's leading edge (flipped above if there isn't room below,
     /// clamped inside the overlay horizontally).
-    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false) -> CGRect {
-        let chip = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let chip = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let height = CGFloat(itemCount) * modelMenuRowHeight + modelMenuPadding * 2
         let width = modelMenuWidth
 
@@ -410,9 +460,10 @@ struct AreaSelectorView: View {
         forSelection rect: CGRect,
         in bounds: CGSize,
         itemCount: Int,
-        fullScreen: Bool = false
+        fullScreen: Bool = false,
+        devMode: Bool = false
     ) -> Int? {
-        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen)
+        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen, devMode: devMode)
         guard frame.contains(point) else { return nil }
         let localY = point.y - frame.minY - modelMenuPadding
         guard localY >= 0 else { return nil }
@@ -425,7 +476,7 @@ struct AreaSelectorView: View {
     private func modelMenu(in bounds: CGSize) -> some View {
         if state.isModelMenuOpen, let rect = state.confirmableSelectionRect {
             let items = state.models
-            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen)
+            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: VFSpacing.xs) {
@@ -493,7 +544,7 @@ struct AreaSelectorView: View {
     private func micMenu(in bounds: CGSize) -> some View {
         if state.isMicMenuOpen, let rect = state.confirmableSelectionRect {
             let items = state.micMenuItems
-            let frame = Self.micMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen)
+            let frame = Self.micMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: VFSpacing.xs) {
@@ -538,9 +589,17 @@ struct AreaSelectorView: View {
     private func recordButton(in bounds: CGSize) -> some View {
         if let rect = state.confirmableSelectionRect {
             let fullScreen = state.mode == .fullScreen
-            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
-            let micFrame = Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
-            let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+            let devMode = state.isDevMode
+            let toggleFrame = Self.devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let micFrame = Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+
+            // Standalone mode switch — always present so the user can enter/
+            // leave Dev Mode; floats to the cluster's left.
+            devToggleChip
+                .frame(width: toggleFrame.width, height: toggleFrame.height)
+                .position(x: toggleFrame.midX, y: toggleFrame.midY)
 
             modelChip
                 .frame(width: modelFrame.width, height: modelFrame.height)
@@ -550,9 +609,187 @@ struct AreaSelectorView: View {
                 .frame(width: micFrame.width, height: micFrame.height)
                 .position(x: micFrame.midX, y: micFrame.midY)
 
+            // Dev Mode chips: agent (confirmation) + folder (attention state
+            // until set), inserted between the mic chip and Record.
+            if devMode {
+                let agentFrame = Self.agentChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+                let folderFrame = Self.folderChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+
+                agentChip
+                    .frame(width: agentFrame.width, height: agentFrame.height)
+                    .position(x: agentFrame.midX, y: agentFrame.midY)
+
+                folderChip
+                    .frame(width: folderFrame.width, height: folderFrame.height)
+                    .position(x: folderFrame.midX, y: folderFrame.midY)
+            }
+
             recordCapsule
                 .frame(width: recFrame.width, height: recFrame.height)
                 .position(x: recFrame.midX, y: recFrame.midY)
+        }
+    }
+
+    // MARK: - Dev Mode toolbar chrome
+    //
+    // The mode switch + agent/folder chips reuse the mic/model chip chrome so
+    // the toolbar reads as one row. Frames come from the same static helpers
+    // the controller hit-tests against.
+
+    /// Standalone Dev Mode switch. A leading "wand" glyph + label + an on/off
+    /// pip that fills brand-accent when engaged.
+    private var devToggleChip: some View {
+        HStack(spacing: VFSpacing.xs) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 12))
+                .foregroundStyle(state.isDevMode ? Color.vfBrandAccent : Color.vfTextSecondary)
+            Text("Dev Mode")
+                .font(.system(size: 12, weight: state.isDevMode ? .semibold : .regular))
+                .foregroundStyle(Color.vfTextPrimary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            // On/off pip: filled when engaged, hollow when off.
+            Circle()
+                .fill(state.isDevMode ? Color.vfBrandAccent : Color.clear)
+                .overlay(Circle().strokeBorder(Color.vfTextTertiary, lineWidth: state.isDevMode ? 0 : 1))
+                .frame(width: 9, height: 9)
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            Capsule().fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule().strokeBorder(
+                state.isDevMode
+                    ? Color.vfBrandAccent.opacity(0.6)
+                    : (state.isDevToggleHovered ? Color.vfTextSecondary : Color.white.opacity(0.12)),
+                lineWidth: 1
+            )
+        )
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+    }
+
+    /// Agent chip — confirmation of the agent this recording dispatches to.
+    /// Phase 1 ships a single agent, so there's no dropdown chevron. When the
+    /// agent isn't installed it's an amber attention state ("· install"), and
+    /// clicking opens the install docs.
+    private var agentChip: some View {
+        let missing = state.isAgentMissing
+        let detecting = state.isDetectingAgent
+        return HStack(spacing: VFSpacing.xs) {
+            Image(systemName: "terminal")
+                .font(.system(size: 12))
+                .foregroundStyle(missing ? Color.vfWarningAmber : Color.vfTextSecondary)
+            Text(state.selectedAgentName)
+                .font(.system(size: 12))
+                .foregroundStyle(missing ? Color.vfWarningAmber : Color.vfTextPrimary)
+                .opacity(detecting ? 0.6 : 1)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if detecting {
+                Text("· checking")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextTertiary)
+                    .fixedSize()
+            } else if missing {
+                Text("· install")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfWarningAmber)
+                    .fixedSize()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            Capsule().fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule().strokeBorder(
+                missing
+                    ? Color.vfWarningAmber.opacity(0.7)
+                    : (state.isAgentChipHovered ? Color.vfTextSecondary : Color.white.opacity(0.12)),
+                lineWidth: 1
+            )
+        )
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+    }
+
+    /// Folder chip — the project the agent edits. When unset it's an
+    /// amber/dashed attention state ("Select folder"); once set it shows the
+    /// project directory name. A SET folder that isn't a git repo (Milestone 7)
+    /// also shows an amber attention state with a "· not a git repo" note, since
+    /// Dev Mode needs a repo for its checkpoint/revert safety net. Clicking opens
+    /// the folder picker.
+    private var folderChip: some View {
+        let isSet = state.projectDisplayName != nil
+        let notRepo = state.isProjectNotGitRepo
+        // Amber whenever the folder needs the user's attention: unset, or set
+        // but not a git repo.
+        let attention = !isSet || notRepo
+        return HStack(spacing: VFSpacing.xs) {
+            Image(systemName: "folder")
+                .font(.system(size: 12))
+                .foregroundStyle(attention ? Color.vfWarningAmber : Color.vfTextSecondary)
+            Text(state.projectDisplayName ?? "Select folder")
+                .font(.system(size: 12))
+                .foregroundStyle(attention ? Color.vfWarningAmber : Color.vfTextPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if notRepo {
+                Text("· not a git repo")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfWarningAmber)
+                    .fixedSize()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            Capsule().fill(.ultraThickMaterial)
+        )
+        .overlay(
+            Capsule().strokeBorder(
+                // Keep the dashed "needs picking" stroke only when unset; a set
+                // non-repo folder uses a solid amber stroke (it IS a choice, just
+                // a flagged one).
+                style: StrokeStyle(lineWidth: 1, dash: isSet ? [] : [4, 3])
+            )
+            .foregroundStyle(
+                attention
+                    ? Color.vfWarningAmber.opacity(0.8)
+                    : (state.isFolderChipHovered ? Color.vfTextSecondary : Color.white.opacity(0.12))
+            )
+        )
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+    }
+
+    /// Inline record-time validation message (e.g. "Pick a folder…"),
+    /// centered just above the toolbar cluster. Dev-Mode-only.
+    @ViewBuilder
+    private func devValidationBanner(in bounds: CGSize) -> some View {
+        if let message = state.devValidationMessage, let rect = state.confirmableSelectionRect {
+            let toolbar = Self.toolbarFrame(
+                forSelection: rect, in: bounds,
+                fullScreen: state.mode == .fullScreen, devMode: state.isDevMode
+            )
+            HStack(spacing: VFSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.vfWarningAmber)
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .fixedSize()
+            }
+            .padding(.horizontal, VFSpacing.sm)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.vfWarningAmber.opacity(0.5), lineWidth: 0.5))
+            .fixedSize()
+            .position(x: toolbar.midX, y: toolbar.minY - 18)
         }
     }
 
@@ -812,6 +1049,39 @@ private struct PulseLoginBackdrop: View {
         }())
     }
     .frame(width: 1000, height: 640)
+}
+
+/// Dev Mode on: the cluster grows to model · mic · agent · folder · record
+/// with the standalone mode switch floating to its left. Folder unset, so the
+/// folder chip shows the amber/dashed "Select folder" attention state.
+#Preview("Dev Mode — folder unset") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.setDevState(isDevMode: true, agentID: "claude-code", agentName: "Claude Code", projectURL: nil)
+            return s
+        }())
+    }
+    .frame(width: 1200, height: 700)
+}
+
+/// Dev Mode on with a folder chosen + a validation message showing — the
+/// record-time block state.
+#Preview("Dev Mode — folder set + blocked") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.setDevState(
+                isDevMode: true, agentID: "claude-code", agentName: "Claude Code",
+                projectURL: URL(fileURLWithPath: "/Users/you/Developer/acme-web", isDirectory: true)
+            )
+            s.setDevValidationMessage("Pick a folder to work in before recording.")
+            return s
+        }())
+    }
+    .frame(width: 1200, height: 700)
 }
 
 @MainActor

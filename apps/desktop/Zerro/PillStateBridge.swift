@@ -89,7 +89,35 @@ extension AppState {
                 )
             }
             return .error(message: reason.userMessage, retryable: false)
+
+        // Dev Mode (Phase 1) — the dispatch tail. Reached only for a Dev Mode
+        // recording; normal mode never produces these.
+        case .devCheckpointing:
+            return .devProgress(label: "Checkpointing\u{2026}", cancellable: true)
+        case .devAgentDispatching:
+            return .devProgress(label: "Dispatching to the agent\u{2026}", cancellable: true)
+        case .devAgentRunning:
+            return .devProgress(label: devRunSubstatus?.label ?? "Working\u{2026}", cancellable: true)
+        case .devReverting:
+            // Restoring the tree — not cancellable (interrupting a revert is the
+            // dangerous case we're guarding against).
+            return .devProgress(label: "Reverting\u{2026}", cancellable: false)
+        case .devDone:
+            return .devDone(summary: devDiffSummary)
+        case .devFailed:
+            // Offer Revert only when a checkpoint exists (failures before the
+            // checkpoint — non-git folder, missing agent — have nothing to undo).
+            return .devFailed(detail: devFailure?.userMessage ?? "Dev Mode run failed.",
+                              canRevert: devCanRevert)
         }
+    }
+
+    /// The `.devDone` pill's one-line change summary ("2 files changed (+8 −3)").
+    var devDiffSummary: String {
+        guard let stat = devDiffStat else { return "Changes applied" }
+        guard stat.filesChanged > 0 else { return "No file changes" }
+        let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
+        return "\(files) changed (+\(stat.added) \u{2212}\(stat.removed))"
     }
 }
 

@@ -52,6 +52,49 @@ public enum RecordingState: Equatable {
     case confirmingRecovery
     case done
     case failed(reason: RecordingFailureReason)
+
+    // MARK: Dev Mode (Phase 1) — the dispatch tail (design §8)
+    //
+    // These are reached ONLY when the recording was Dev Mode; a normal
+    // recording lands in `.done`/`.failed` exactly as before. After generation
+    // produces the `agent_prompt`, the dev branch runs checkpoint → agent →
+    // diff instead of presenting the clipboard result pill.
+
+    /// Snapshotting the working tree before the agent edits (brief).
+    case devCheckpointing
+    /// Spawning the agent (between checkpoint and first output).
+    case devAgentDispatching
+    /// The agent is running; live substatus is held in `devRunSubstatus`.
+    case devAgentRunning
+    /// The agent finished; `devDiffStat` holds the change summary. Milestone 7
+    /// renders Revert/Done here.
+    case devDone
+    /// The dispatch failed; the reason lives in `AppState.devFailure` (kept off
+    /// the case so this public enum doesn't expose the internal failure type).
+    /// Milestone 7 renders Revert/Retry here. No auto-revert — partial edits are
+    /// left in place.
+    case devFailed
+    /// Restoring the working tree to the checkpoint (Milestone 7). Reached from
+    /// an explicit Revert (on `.devDone`/`.devFailed`) OR from a cancel during
+    /// an active dispatch, which terminates the agent then auto-reverts. Brief;
+    /// resolves to `.idle` on success or back to `.devFailed` if revert failed.
+    case devReverting
+}
+
+// MARK: - DevModeSelection
+
+/// The Dev Mode choices carried from the capture toolbar into a recording: the
+/// agent to dispatch to and the project folder it edits. nil at `startRecording`
+/// means a normal (clipboard) recording. Both fields are guaranteed present by
+/// the toolbar's record-time validation (an unset agent/folder blocks Record).
+public struct DevModeSelection: Equatable, Sendable {
+    public let agentID: String
+    public let projectURL: URL
+
+    public init(agentID: String, projectURL: URL) {
+        self.agentID = agentID
+        self.projectURL = projectURL
+    }
 }
 
 // MARK: - RecordingFailureReason
@@ -357,6 +400,45 @@ final class AppState {
     /// pass one (tests, recovered recordings).
     var recordingModelID: String?
 
+    // MARK: Dev Mode (Phase 1) — per-recording dispatch state
+    //
+    // Captured at `startRecording` from the capture toolbar (alongside
+    // `recordingModelID`) and carried into generation. All inert when
+    // `recordingIsDevMode == false`, so a normal recording is byte-identical.
+
+    /// Whether THIS recording dispatches to a local coding agent instead of the
+    /// clipboard result pill.
+    var recordingIsDevMode: Bool = false
+    /// The project folder the agent runs in (`cwd`). Set iff `recordingIsDevMode`.
+    var recordingProjectURL: URL?
+    /// The agent registry id this recording dispatches to. Set iff dev mode.
+    var recordingAgentID: String?
+
+    /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
+    var devRunSubstatus: DevRunSubstatus?
+    /// The diff summary shown on `.devDone` ("N files changed (+x −y)").
+    var devDiffStat: GitDiffStat?
+    /// The failure shown on `.devFailed`.
+    var devFailure: DevDispatchFailure?
+    /// The pre-run checkpoint + its git service, retained across a dispatch so
+    /// Milestone 7's Revert can restore the tree on either outcome. Not observed
+    /// (plain data the UI never renders directly).
+    @ObservationIgnored var devCheckpoint: GitCheckpoint?
+    @ObservationIgnored var devCheckpointService: GitCheckpointService?
+    /// True between a safe-cancel request and its auto-revert finishing (M7 #3).
+    /// While set, the in-flight dispatch's normal outcome handling is suppressed
+    /// (the cancel path owns teardown), so a terminated agent can't flash a
+    /// `.devFailed` card before the tree is restored to `.idle`.
+    @ObservationIgnored private var devCancelInFlight = false
+    /// When the current dispatch started (set in `beginDevDispatch`), for the
+    /// M8 `duration_ms` analytics metric. Cleared on teardown.
+    @ObservationIgnored private var devDispatchStartTime: Date?
+
+    /// One shared coordinator (and its single runner) so the cap-1 dispatch
+    /// guard spans the app, not one call.
+    @ObservationIgnored private let devDispatchCoordinator = DevDispatchCoordinator()
+    @ObservationIgnored private var devDispatchTask: Task<Void, Never>?
+
     /// Path to the most recently finalized recording on disk. Set by
     /// `handleSessionFinish` when the writer completes successfully;
     /// cleared on cancel and on every new startRecording.
@@ -657,7 +739,8 @@ final class AppState {
         selection: SelectionRect? = nil,
         microphoneDeviceID: String = "",
         redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
-        modelID: String? = nil
+        modelID: String? = nil,
+        devMode: DevModeSelection? = nil
     ) {
         guard state == .idle else {
             // State name is .public — RecordingState case names contain
@@ -700,6 +783,11 @@ final class AppState {
         activeSelection = selection
         recordingRedactSecrets = redactSecrets
         recordingModelID = modelID
+        // Dev Mode: carry the toolbar's agent + folder into the recording. nil
+        // for a normal recording, which leaves the dev path entirely inert.
+        recordingIsDevMode = devMode != nil
+        recordingProjectURL = devMode?.projectURL
+        recordingAgentID = devMode?.agentID
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
@@ -930,6 +1018,32 @@ final class AppState {
         pendingRecoveryURL = nil
         failureRetryAttempts = 0
         lastFailureDetail = nil
+        // Dev Mode: stop awaiting any in-flight dispatch and clear its state.
+        // Killing a still-running agent on an explicit cancel is handled by
+        // `cancelDevDispatchSafely` (which routes here only after the agent has
+        // exited and the tree is reverted). As a safety FLOOR, terminate the
+        // coordinator unconditionally: the Swift-Task `cancel()` is inert (the
+        // runner/coordinator never poll `Task.isCancelled`), so it is NOT a way
+        // to stop the process — only `coordinator.cancel()` (SIGTERM→SIGKILL)
+        // is. Calling it when nothing is running is a harmless no-op. This
+        // guarantees no teardown path can ever abandon a live agent.
+        devDispatchTask?.cancel()
+        devDispatchTask = nil
+        devDispatchCoordinator.cancel()
+        // Discard the checkpoint's on-disk untracked snapshot (a temp dir not
+        // under the `zerro-` sweep prefix) so it doesn't leak when the dev
+        // result is dismissed/reset without a Revert.
+        if let checkpoint = devCheckpoint { devCheckpointService?.discardSnapshot(checkpoint) }
+        devCancelInFlight = false
+        devDispatchStartTime = nil
+        recordingIsDevMode = false
+        recordingProjectURL = nil
+        recordingAgentID = nil
+        devRunSubstatus = nil
+        devDiffStat = nil
+        devFailure = nil
+        devCheckpoint = nil
+        devCheckpointService = nil
         // M5: every teardown path that runs through here (cancel, reset-to-idle,
         // mid-session revocation, the cancelled/interrupted session finishes) is
         // a "no longer holding this" point — reap any persisted paid-block
@@ -944,6 +1058,13 @@ final class AppState {
     /// ordered before UI reset. If there's no live session (e.g.
     /// cancel-during-processing), reset immediately.
     func cancelRecording() {
+        // Dev Mode (M7 #3): a cancel during an active dispatch must terminate
+        // the agent and restore the tree — never just drop the UI and leave
+        // half-applied edits with no undo. The safe path owns teardown.
+        if isDevDispatchActive {
+            cancelDevDispatchSafely()
+            return
+        }
         if let session = recordingSession,
            state == .recording || state == .wrappingUp || state == .autoStopped {
             // Tier 1 analytics: only a LIVE recording is "cancelled". A cancel
@@ -977,6 +1098,15 @@ final class AppState {
     }
 
     func resetToIdle() {
+        // Dev Mode (M7 #3): never abandon a live agent. If a dispatch is active,
+        // the ONLY safe way to idle is to terminate it and auto-revert — a plain
+        // reset would cancel the (inert) Swift Task, discard the undo snapshot,
+        // and leave the agent process editing files with no way back. Route
+        // through the safe cancel so every idle path is safe-by-construction.
+        if isDevDispatchActive {
+            cancelDevDispatchSafely()
+            return
+        }
         recordingSession?.cancel()
         processingTask?.cancel()
         processingTask = nil
@@ -1037,7 +1167,17 @@ final class AppState {
             if let workingDir = processedRecording?.workingDirectory {
                 WorkingDirectory.remove(at: workingDir)
             }
-        case .idle, .done, .failed, .confirmingRecovery:
+        case .devCheckpointing, .devAgentDispatching, .devAgentRunning:
+            // M7 #3: stop the agent so it can't keep editing files after we're
+            // gone. A full async auto-revert can't run during synchronous
+            // termination, but the git checkpoint (a `stash create` commit +
+            // saved untracked snapshot) persists, and terminating the agent
+            // bounds the edits rather than leaving an orphaned process writing.
+            devDispatchCoordinator.cancel()
+        case .idle, .done, .failed, .confirmingRecovery,
+             .devDone, .devFailed, .devReverting:
+            // Terminal/idle dev states: the agent has exited; nothing to tear
+            // down. The checkpoint protects the tree if the user reverts.
             break
         }
     }
@@ -1633,7 +1773,7 @@ final class AppState {
                 // The proxy path has no client transcript, so the no-narration
                 // note (a BYOK affordance) doesn't apply — never flag it here.
                 self.resultHadNoNarration = false
-                self.state = .done
+                self.finishGenerationOrDispatch()
                 Analytics.capture("generation_succeeded", [
                     "route": "managed",
                     "model": self.generationModelID ?? "unknown",
@@ -1938,7 +2078,7 @@ final class AppState {
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
-                self.state = .done
+                self.finishGenerationOrDispatch()
                 Analytics.capture("generation_succeeded", [
                     "route": "byok",
                     "model": self.generationModelID ?? "unknown",
@@ -2064,6 +2204,307 @@ final class AppState {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
         return artifact.body
+    }
+
+    // MARK: - Dev Mode dispatch (Phase 1, Milestone 6)
+
+    /// The success-tail fork (design §3, step 3→4): a normal recording lands in
+    /// `.done` (the clipboard result pill); a Dev Mode recording NEVER touches
+    /// the clipboard — it branches into the agent dispatch instead. Generation
+    /// (the "eyes" step, billed on Zerro's model) has already succeeded by the
+    /// time we get here; this only decides what happens with the produced
+    /// `agent_prompt`.
+    private func finishGenerationOrDispatch() {
+        guard recordingIsDevMode else {
+            state = .done
+            return
+        }
+        beginDevDispatch()
+    }
+
+    /// Hand the generated `agent_prompt` to the coding agent: checkpoint → run →
+    /// diff (via `DevDispatchCoordinator`), driving the pill through the dev
+    /// tail. Gated entirely behind `recordingIsDevMode`.
+    private func beginDevDispatch() {
+        // The dispatch payload is the agent_prompt body the dev system prompt
+        // produced. No agent_prompt (e.g. the recording held no concrete change
+        // → ZERRO_NO_REQUEST) → nothing to dispatch.
+        guard let artifact = parsedResponse?.artifact,
+              artifact.type == .agentPrompt,
+              !artifact.body.isEmpty else {
+            devFailure = .noChangeRequested
+            state = .devFailed
+            return
+        }
+        guard let projectURL = recordingProjectURL, let agentID = recordingAgentID else {
+            devFailure = .agentUnavailable
+            state = .devFailed
+            return
+        }
+        // The agent was resolved (installed) at record-time validation; read the
+        // cached detection result rather than re-probing on the main thread.
+        guard let agent = DevAgentDetection.shared.entry(id: agentID),
+              agent.installed, agent.absolutePath != nil else {
+            devFailure = .agentUnavailable
+            state = .devFailed
+            return
+        }
+
+        // Analytics: the dispatch start (metadata only). The succeeded/failed
+        // counterparts (M8) read `devDispatchStartTime` for `duration_ms`.
+        Analytics.capture("dev_dispatch_started", ["agent_id": agentID])
+        devDispatchStartTime = Date()
+
+        devRunSubstatus = nil
+        devDiffStat = nil
+        devFailure = nil
+        devCancelInFlight = false
+        state = .devCheckpointing
+
+        let body = artifact.body
+        devDispatchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.devDispatchCoordinator.dispatch(
+                prompt: body,
+                projectURL: projectURL,
+                agent: agent,
+                // Phase 1 default — edits-only (design §11). The opt-in
+                // "allow commands" toggle is a later phase.
+                permission: .editsOnly,
+                // Retain the checkpoint as soon as it's taken so a cancel/quit
+                // mid-run has something to revert (M7 #3), before the agent
+                // even finishes.
+                onCheckpoint: { [weak self] checkpoint, service in
+                    self?.devCheckpoint = checkpoint
+                    self?.devCheckpointService = service
+                },
+                onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
+            )
+            // Ignore a stale completion if the user moved on (new recording /
+            // reset cleared the dev state).
+            guard self.recordingIsDevMode else { return }
+            self.applyDevOutcome(outcome)
+        }
+    }
+
+    private func applyDevPhase(_ phase: DevDispatchPhase) {
+        // Once a safe-cancel begins, it owns the state (.devReverting → idle).
+        // The agent can still emit a substatus during the SIGTERM→SIGKILL grace
+        // window; without this guard that late event would flip the pill back to
+        // the cancellable `.devAgentRunning` card mid-cancel — a visual regress
+        // AND a re-entry hole (a second cancel could fire). Drop it.
+        guard !devCancelInFlight else { return }
+        switch phase {
+        case .checkpointing:
+            state = .devCheckpointing
+        case .dispatching:
+            state = .devAgentDispatching
+        case .running(let substatus):
+            devRunSubstatus = substatus
+            state = .devAgentRunning
+        }
+    }
+
+    private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
+        // A safe-cancel owns its own teardown (terminate → auto-revert → idle),
+        // so don't render the terminated agent's outcome as a `.devFailed` card.
+        guard !devCancelInFlight else { return }
+        let durationMs = devDispatchDurationMs()
+        switch outcome {
+        case .succeeded(let success):
+            devCheckpoint = success.checkpoint
+            devCheckpointService = success.service
+            devDiffStat = success.diff
+            devFailure = nil
+            state = .devDone
+            Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
+            // M8 analytics — metadata only (counts/durations; no path/content).
+            Analytics.capture("dev_run_succeeded", [
+                "duration_ms": durationMs,
+                "files_changed": success.diff.filesChanged,
+            ])
+        case .failed(let failure, let checkpoint, let service, let diff):
+            // No auto-revert (§8): keep the checkpoint (when one was taken) so
+            // Milestone 7's Revert can restore the partial edits.
+            devCheckpoint = checkpoint
+            devCheckpointService = service
+            devFailure = failure
+            state = .devFailed
+            Log.dev.notice("Dev dispatch failed — \(String(describing: failure), privacy: .public)")
+            // M8 analytics — coarse reason CODE (never the stderr tail / any
+            // content), duration, and the partial-edit count.
+            Analytics.capture("dev_run_failed", [
+                "reason": Self.devFailureCode(failure),
+                "duration_ms": durationMs,
+                "files_changed": diff?.filesChanged ?? 0,
+            ])
+        }
+    }
+
+    /// Elapsed ms since the current dispatch started, for M8 `duration_ms`.
+    /// 0 when no start time is recorded (defensive — shouldn't happen on a real
+    /// outcome).
+    private func devDispatchDurationMs() -> Int {
+        guard let start = devDispatchStartTime else { return 0 }
+        return Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    /// Stable, coarse analytics code for a dispatch failure (§14.5: enums only —
+    /// NEVER the stderr tail or any user content). The pill's `userMessage` may
+    /// embed stderr; this deliberately does not.
+    private static func devFailureCode(_ failure: DevDispatchFailure) -> String {
+        switch failure {
+        case .notAGitRepo:        return "not_a_git_repo"
+        case .gitUnavailable:     return "git_unavailable"
+        case .checkpointFailed:   return "checkpoint_failed"
+        case .agentUnavailable:   return "agent_unavailable"
+        case .noChangeRequested:  return "no_change_requested"
+        case .revertFailed:       return "revert_failed"
+        case .agent(let reason):
+            switch reason {
+            case .timeout(.wallClock):  return "agent_timeout_wallclock"
+            case .timeout(.inactivity): return "agent_timeout_inactivity"
+            case .nonZeroExit:          return "agent_nonzero_exit"
+            case .spawnFailed:          return "agent_spawn_failed"
+            case .busy:                 return "agent_busy"
+            case .cancelled:            return "agent_cancelled"
+            }
+        }
+    }
+
+    // MARK: - Dev Mode revert / retry / cancel (Milestone 7)
+
+    /// Whether the pill should offer Revert on the current terminal state: only
+    /// when a checkpoint was actually taken (a failure BEFORE the checkpoint —
+    /// non-git folder, no agent — has nothing to revert). Read by the bridge.
+    var devCanRevert: Bool { devCheckpoint != nil && devCheckpointService != nil }
+
+    /// True while an in-flight Dev Mode dispatch could be cancelled (the pill's
+    /// progress card shows a Cancel that routes to the safe terminate→revert).
+    private var isDevDispatchActive: Bool {
+        switch state {
+        case .devCheckpointing, .devAgentDispatching, .devAgentRunning: return true
+        default: return false
+        }
+    }
+
+    /// True while a Dev Mode dispatch is mid-flight OR reverting. The record
+    /// hotkey reads this to flash-and-ignore (like `.processing`) instead of
+    /// starting a new recording over a live agent (M7 #3) — starting one would
+    /// route through `resetToIdle`/`startRecording` and abandon the running
+    /// agent + its undo. The pill's Cancel is the intended way out.
+    var isDevBusy: Bool {
+        isDevDispatchActive || state == .devReverting
+    }
+
+    /// Restore the working tree to `checkpoint` off-main and confirm it fully
+    /// restored (zero residual diff vs. the checkpoint). Shared by explicit
+    /// Revert and revert-then-retry. Returns false if a git op threw or a
+    /// residual diff remained.
+    private func performRevert(_ checkpoint: GitCheckpoint, service: GitCheckpointService) async -> Bool {
+        await Task.detached {
+            do {
+                try service.revert(checkpoint)
+                return (try? service.diffStat(since: checkpoint))?.filesChanged == 0
+            } catch {
+                return false
+            }
+        }.value
+    }
+
+    /// Explicit Revert (the `.devDone`/`.devFailed` button). The agent has
+    /// already exited, so this just restores the tree to the checkpoint and —
+    /// having confirmed nothing remains different — returns to idle. A revert
+    /// that doesn't fully restore drops back to `.devFailed` (keeping the
+    /// checkpoint) so the user can try again.
+    func revertDevDispatch() {
+        guard let checkpoint = devCheckpoint, let service = devCheckpointService else { return }
+        // M8: user-initiated undo. Metadata only (no path/content), behind the
+        // central opt-out gate.
+        Analytics.capture("dev_revert_used", ["agent_id": recordingAgentID ?? "unknown"])
+        state = .devReverting
+        devDispatchTask = Task { @MainActor [weak self] in
+            let restored = await self?.performRevert(checkpoint, service: service) ?? false
+            guard let self, self.recordingIsDevMode else { return }
+            if restored {
+                Log.dev.notice("Dev revert restored the working tree")
+                self.resetToIdle() // discards the snapshot via resetTransientRecordingState
+            } else {
+                self.devFailure = .revertFailed
+                self.state = .devFailed
+            }
+        }
+    }
+
+    /// Retry a failed dispatch with the same generated prompt (the `.devFailed`
+    /// button). REVERT-THEN-RETRY: first restore the ORIGINAL pre-run tree so the
+    /// retry runs against a clean slate (never a partially-edited one), THEN take
+    /// a fresh checkpoint and re-dispatch. `parsedResponse`/`recordingProjectURL`/
+    /// `recordingAgentID` are still set from the original run, so `beginDevDispatch`
+    /// re-runs the same prompt. A revert that doesn't fully restore aborts the
+    /// retry (we won't re-dispatch onto a tree we couldn't clean) and keeps the
+    /// checkpoint so Revert stays available.
+    func retryDevDispatch() {
+        guard let checkpoint = devCheckpoint, let service = devCheckpointService else {
+            // Nothing was edited yet (a failure before the checkpoint) — just
+            // re-run; `beginDevDispatch` takes the first checkpoint.
+            beginDevDispatch()
+            return
+        }
+        state = .devReverting
+        devDispatchTask = Task { @MainActor [weak self] in
+            let restored = await self?.performRevert(checkpoint, service: service) ?? false
+            guard let self, self.recordingIsDevMode else { return }
+            if restored {
+                Log.dev.notice("Dev retry — reverted to the clean checkpoint, re-dispatching")
+                // Clean slate: drop the old snapshot and re-dispatch. The fresh
+                // run takes a NEW checkpoint of the restored tree, so a later
+                // Revert restores to the true pre-run state.
+                service.discardSnapshot(checkpoint)
+                self.devCheckpoint = nil
+                self.devCheckpointService = nil
+                self.beginDevDispatch()
+            } else {
+                self.devFailure = .revertFailed
+                self.state = .devFailed
+            }
+        }
+    }
+
+    /// Safe cancel of an in-flight dispatch (M7 #3): terminate the agent
+    /// (SIGTERM→SIGKILL via the runner), wait for the process to actually die,
+    /// then auto-revert to the checkpoint so the working tree returns to its
+    /// pre-run state before going idle. Makes "cancelled but files changed with
+    /// no undo" unreachable. Routed from `cancelRecording` when a dispatch is
+    /// active.
+    private func cancelDevDispatchSafely() {
+        guard isDevDispatchActive else { return }
+        let runningTask = devDispatchTask
+        devCancelInFlight = true
+        devDispatchTask = nil
+        state = .devReverting
+        // Terminate the agent; the in-flight dispatch resolves `.cancelled`.
+        devDispatchCoordinator.cancel()
+        Task { @MainActor [weak self] in
+            // Wait for the agent run to finish so a late write can't race the
+            // revert. `onCheckpoint` has set `devCheckpoint` by now iff a
+            // checkpoint was taken (a cancel during checkpointing leaves it nil
+            // — and there's nothing to revert, since checkpoint() doesn't touch
+            // the tree).
+            await runningTask?.value
+            // Re-check liveness after the await: if a superseding teardown
+            // already cleared the cancel flag (and owns the snapshot/state), this
+            // stale continuation must NOT also revert/reset — let the newer path
+            // win cleanly rather than have two paths drive state.
+            guard let self, self.devCancelInFlight else { return }
+            if let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
+                let restored = await self.performRevert(checkpoint, service: service)
+                Log.dev.notice("Dev dispatch cancelled — auto-revert restored: \(restored, privacy: .public)")
+            }
+            self.devCancelInFlight = false
+            self.resetTransientRecordingState() // discards the snapshot + clears dev state
+            self.state = .idle
+        }
     }
 
     // MARK: - Conversion fallback (Phase 6 — "Write agent prompt")

@@ -74,7 +74,7 @@ final class AreaSelectorWindowController {
     func present(
         preferences: PreferencesStore,
         entitlements: EntitlementStore? = nil,
-        onConfirm: @escaping (SelectionRect, String) -> Void,
+        onConfirm: @escaping (SelectionRect, String, DevModeSelection?) -> Void,
         onCancel: @escaping () -> Void
     ) {
         Log.ui.debug("AreaSelector present() called")
@@ -113,6 +113,25 @@ final class AreaSelectorWindowController {
             selectedID: preferences.selectedModelID
         )
 
+        // Dev Mode (Phase 1): seed the mode switch + remembered folder WITHOUT
+        // probing for the agent — detection runs a slow login-shell PATH lookup
+        // and must stay off the hotkey→overlay path. The agent is resolved
+        // asynchronously, and only when Dev Mode is (or becomes) active, so a
+        // normal-mode user never triggers the shell probe.
+        state.setDevState(
+            isDevMode: preferences.devModeEnabled,
+            agentID: nil,
+            agentName: "Claude Code",
+            projectURL: preferences.devProjectURL
+        )
+        if preferences.devModeEnabled {
+            beginAgentDetection(for: state)
+            // Verify the remembered folder is still a git repo (Milestone 7).
+            if let folder = preferences.devProjectURL {
+                beginGitRepoCheck(for: folder, state: state)
+            }
+        }
+
         state.onConfirm = { [weak self] rect in
             // Read the toolbar's model pick BEFORE dismiss() nils the
             // state. Fallback can only fire if confirm raced dismiss.
@@ -131,8 +150,16 @@ final class AreaSelectorWindowController {
                 ])
                 preferences.selectedModelID = modelID
             }
+            // Dev Mode: carry the agent + folder when the mode switch is on and
+            // both are set (record-time validation guarantees this — Record is
+            // blocked otherwise). nil → a normal clipboard recording.
+            let devSelection: DevModeSelection? = {
+                guard let s = self?.state, s.isDevMode,
+                      let agentID = s.selectedAgentID, let projectURL = s.projectURL else { return nil }
+                return DevModeSelection(agentID: agentID, projectURL: projectURL)
+            }()
             self?.dismiss()
-            onConfirm(rect, modelID)
+            onConfirm(rect, modelID, devSelection)
         }
         state.onCancel = { [weak self] in
             self?.dismiss()
@@ -310,31 +337,46 @@ final class AreaSelectorWindowController {
             // than re-dragging or re-settling underneath it.
             let size = contentView.bounds.size
             let fullScreen = state.mode == .fullScreen
+            let devMode = state.isDevMode
             let selectionRect = state.confirmableSelectionRect
             let recordFrame = selectionRect.map {
-                AreaSelectorView.recordButtonFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+                AreaSelectorView.recordButtonFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
             let micFrame = selectionRect.map {
-                AreaSelectorView.micChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+                AreaSelectorView.micChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
             let modelFrame = selectionRect.map {
-                AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+                AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
+            }
+            // Standalone mode switch — always available; the agent + folder
+            // chips only exist while Dev Mode is on.
+            let devToggleFrame = selectionRect.map {
+                AreaSelectorView.devToggleFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
+            }
+            let agentFrame = (devMode ? selectionRect : nil).map {
+                AreaSelectorView.agentChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+            }
+            let folderFrame = (devMode ? selectionRect : nil).map {
+                AreaSelectorView.folderChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
             }
 
             if event.type == .mouseMoved {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
                 state.setModelChipHovered(modelFrame?.contains(point) ?? false)
+                state.setDevToggleHovered(devToggleFrame?.contains(point) ?? false)
+                state.setAgentChipHovered(agentFrame?.contains(point) ?? false)
+                state.setFolderChipHovered(folderFrame?.contains(point) ?? false)
                 if state.isMicMenuOpen, let rect = selectionRect {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count, fullScreen: fullScreen
+                        itemCount: state.micMenuItems.count, fullScreen: fullScreen, devMode: devMode
                     ))
                 }
                 if state.isModelMenuOpen, let rect = selectionRect {
                     state.setHighlightedModelIndex(AreaSelectorView.modelMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count, fullScreen: fullScreen
+                        itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
                     ))
                 }
             }
@@ -351,6 +393,27 @@ final class AreaSelectorWindowController {
                 // overlay. makeKey() (not NSApp.activate) keeps this scoped
                 // to the panel and never re-orders other Zerro windows.
                 if !window.isKeyWindow { window.makeKey() }
+                // Dev Mode switch — flip the mode (persist + analytics). Handled
+                // before the cluster controls since it's a standalone affordance.
+                if let devToggleFrame, devToggleFrame.contains(point) {
+                    self?.toggleDevMode(state: state)
+                    return nil
+                }
+                // Folder chip (Dev Mode) — open the directory picker.
+                if let folderFrame, folderFrame.contains(point) {
+                    self?.presentFolderPicker(window: window, state: state)
+                    return nil
+                }
+                // Agent chip (Dev Mode) — Phase 1 ships a single agent, so the
+                // chip is a confirmation, not a picker. When the agent isn't
+                // installed, clicking opens the install docs; otherwise it's a
+                // no-op. Either way consume the click so it doesn't start a drag.
+                if let agentFrame, agentFrame.contains(point) {
+                    if state.isAgentMissing {
+                        NSWorkspace.shared.open(Self.claudeCodeInstallURL)
+                    }
+                    return nil
+                }
                 // Record button — start recording.
                 if let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
@@ -376,7 +439,7 @@ final class AreaSelectorWindowController {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.modelMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count, fullScreen: fullScreen
+                        itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
                        ) {
                         let item = state.models[idx]
                         if !item.gated {
@@ -398,7 +461,7 @@ final class AreaSelectorWindowController {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count, fullScreen: fullScreen
+                        itemCount: state.micMenuItems.count, fullScreen: fullScreen, devMode: devMode
                        ) {
                         let id = state.micMenuItems[idx].id
                         self?.preferences?.microphoneDeviceID = id
@@ -482,6 +545,24 @@ final class AreaSelectorWindowController {
     /// Return without a real drag doesn't kick off a recording of nothing.
     /// In `.fullScreen`, the whole display is always confirmable.
     private func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
+        // Dev Mode record-time validation: both an agent and a folder must be
+        // chosen before a recording can dispatch to the agent. Replaces the
+        // first-run popover as the dead-end guard (design §1). Inert in normal
+        // mode (`devRequirementsMet` is always true there).
+        guard state.devRequirementsMet else {
+            // Agent state takes precedence — picking a folder won't unblock until
+            // the CLI resolves. Order: still detecting → not installed → folder.
+            let message: String
+            if state.isDetectingAgent {
+                message = "Checking for Claude Code…"
+            } else if state.isAgentMissing {
+                message = "Install Claude Code to use Dev Mode."
+            } else {
+                message = "Pick a folder to work in before recording."
+            }
+            state.setDevValidationMessage(message)
+            return
+        }
         switch state.mode {
         case .area:
             confirmAreaSelection(window: window, state: state)
@@ -536,6 +617,124 @@ final class AreaSelectorWindowController {
             height: viewLocal.height
         )
         return windowLocal.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+    }
+
+    // MARK: - Dev Mode (Phase 1)
+    //
+    // The mode switch + folder picker mirror how the controller owns the
+    // mic/model pickers: state holds the selection, the controller persists it
+    // to PreferencesStore and runs the native panel. Milestone 2 replaces the
+    // hard-coded agent default with live `DevAgentRegistry` detection.
+
+    /// Where the agent chip's "· install" affordance points when Claude Code
+    /// isn't found on PATH.
+    private static let claudeCodeInstallURL = URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!
+
+    /// Flip the Dev Mode switch: update state, persist the mode, kick off agent
+    /// detection on turn-on, and fire the toggle analytics (metadata only).
+    private func toggleDevMode(state: AreaSelectorState) {
+        state.toggleDevMode()
+        let enabled = state.isDevMode
+        preferences?.devModeEnabled = enabled
+        if enabled {
+            // First time a normal-mode user turns Dev Mode on: resolve the agent
+            // off-main. The chip shows "checking" until it lands.
+            beginAgentDetection(for: state)
+            // Verify a remembered folder is a git repo (Milestone 7).
+            if let folder = state.projectURL {
+                beginGitRepoCheck(for: folder, state: state)
+            }
+        }
+        Analytics.capture("dev_mode_toggled", ["enabled": enabled])
+    }
+
+    /// Warm agent detection (background, cached) and apply the result to the
+    /// live overlay state when it lands — even if it finishes after `present()`
+    /// (the chip + validation update reactively via `@Observable`). Synchronous
+    /// when detection already completed this launch (no flicker).
+    private func beginAgentDetection(for state: AreaSelectorState) {
+        state.setDetectingAgent(true)
+        DevAgentDetection.shared.warm { [weak self, weak state] entries in
+            guard let state else { return }
+            self?.applyAgentDetection(entries, to: state)
+        }
+    }
+
+    /// Reconcile detection results into `state`: select the installed agent (or
+    /// nil → install attention state) and remember it for next time.
+    private func applyAgentDetection(_ entries: [DevAgentEntry], to state: AreaSelectorState) {
+        state.setDetectingAgent(false)
+        let claude = entries.first { $0.id == DevAgentRegistry.recommendedID }
+        guard claude?.installed == true, let claude else {
+            // Not installed: agent stays unset so validation blocks; keep the
+            // display name for the chip's install affordance.
+            state.setSelectedAgent(id: nil, name: claude?.displayName ?? "Claude Code")
+            return
+        }
+        let id = preferences?.selectedAgentID ?? claude.id
+        state.setSelectedAgent(id: id, name: claude.displayName)
+        // Persist the detected agent so a returning user lands pre-filled.
+        if preferences?.selectedAgentID == nil {
+            preferences?.selectedAgentID = id
+        }
+    }
+
+    /// Open a directories-only `NSOpenPanel` to choose the project folder.
+    /// Because the overlay sits at `.screenSaver` level (and the app isn't
+    /// activated when the overlay shows), the overlay is temporarily dropped
+    /// below the panel and the app is activated for the modal, then the overlay
+    /// is restored + re-keyed so ESC/Return keep working.
+    private func presentFolderPicker(window: NSWindow, state: AreaSelectorState) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        panel.message = "Choose the project folder Dev Mode will work in"
+        if let current = state.projectURL { panel.directoryURL = current }
+
+        // The overlay sits at `.screenSaver` level, and Zerro is a menu-bar app
+        // that shows the overlay WITHOUT activating (so other apps' windows keep
+        // their order). An NSOpenPanel from a non-active app at the default
+        // window level therefore opens BEHIND the screenSaver-level overlay —
+        // and setting `panel.level` before `runModal()` is unreliable (the panel
+        // re-levels itself when shown). So for the duration of the modal: drop
+        // the overlay below the panel, raise the panel, and bring the app
+        // forward; restore the overlay afterward.
+        let overlayLevel = window.level
+        window.level = .normal
+        panel.level = .modalPanel
+        NSApp.activate(ignoringOtherApps: true)
+
+        let response = panel.runModal()
+
+        // Restore the overlay to its on-top level + re-key it so ESC/Return work.
+        window.level = overlayLevel
+        window.makeKeyAndOrderFront(nil)
+
+        if response == .OK, let url = panel.url {
+            state.setProjectURL(url)
+            preferences?.devProjectURL = url
+            // Dev Mode needs a git repo for its checkpoint/revert (Milestone 7).
+            // Verify async so the user learns BEFORE recording if the folder
+            // isn't one — non-blocking, mirrors agent detection.
+            beginGitRepoCheck(for: url, state: state)
+        }
+    }
+
+    /// Verify `url` is inside a git work tree off the main thread and reflect the
+    /// verdict on the folder chip (Milestone 7). Guarded against a stale result
+    /// (the user picking a second folder before the first probe lands) by
+    /// re-checking the live `projectURL` on apply.
+    private func beginGitRepoCheck(for url: URL, state: AreaSelectorState) {
+        state.setCheckingGitRepo(true)
+        Task.detached(priority: .utility) { [weak state] in
+            let isRepo = (try? GitCheckpointService(projectURL: url))?.isRepository() ?? false
+            await MainActor.run {
+                guard let state, state.projectURL == url else { return }
+                state.setProjectGitRepo(isRepo)
+            }
+        }
     }
 
     // MARK: - Model picker rows
