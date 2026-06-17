@@ -301,6 +301,9 @@ struct ZerroApp: App {
                 // Dock icon while open (all four real windows carry this;
                 // the pill/selector/menu-bar surfaces deliberately don't).
                 .dockIconVisibility(windowID: SettingsScene.windowID)
+                // Never restored on relaunch — AppKit clamp paired with the
+                // scene's `.restorationBehavior(.disabled)` (see below).
+                .disablesWindowRestoration()
                 .environment(preferences)
                 .environment(permissions)
                 .environment(onboarding)
@@ -360,6 +363,7 @@ struct ZerroApp: App {
         Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
             PaywallView()
                 .dockIconVisibility(windowID: PaywallScene.windowID)
+                .disablesWindowRestoration()
                 .environment(entitlements)
         }
         .windowResizability(.contentSize)
@@ -373,6 +377,7 @@ struct ZerroApp: App {
         Window("Zerro \u{2014} Free Trial", id: TrialEmailScene.windowID) {
             TrialEmailCaptureView()
                 .dockIconVisibility(windowID: TrialEmailScene.windowID)
+                .disablesWindowRestoration()
                 .environment(appState)
                 .environment(trialCredits)
                 .environment(entitlements)
@@ -388,6 +393,7 @@ struct ZerroApp: App {
         Window("Zerro \u{2014} Feedback", id: FeedbackScene.windowID) {
             FeedbackView()
                 .dockIconVisibility(windowID: FeedbackScene.windowID)
+                .disablesWindowRestoration()
                 // The verified trial email (when present) attributes the report;
                 // FeedbackView reads `rememberedEmail` and sends null otherwise.
                 .environment(trialCredits)

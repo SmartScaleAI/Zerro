@@ -63,12 +63,12 @@ struct MenuBarBillingAction: Equatable {
             }
             // Low balance (but paid up) → buy more credits.
             if isLowBalance {
-                return MenuBarBillingAction(label: "Add Credits...", secondary: nil, trigger: .topup)
+                return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
             }
             // Healthy Managed → the manage portal (already top tier; no plan
             // ladder to sell), but lead the label with adding credits since
             // that's what a paid-up user comes here for.
-            return MenuBarBillingAction(label: "Add Credits...", secondary: nil, trigger: .manage)
+            return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .manage)
         }
     }
 }
