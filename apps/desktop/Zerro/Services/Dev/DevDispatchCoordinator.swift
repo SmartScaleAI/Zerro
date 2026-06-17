@@ -44,6 +44,9 @@ enum DevDispatchFailure: Equatable, Sendable {
     /// (a git op threw, or a residual diff remained). The checkpoint is kept
     /// so the user can try Revert again. (Milestone 7.)
     case revertFailed
+    /// The user declined at the confirmAnchors gate (M6) — the agent never ran,
+    /// so the caller discards the checkpoint (nothing to revert). Never rendered.
+    case confirmDeclined
     /// The agent process itself failed (non-zero exit, timeout, …).
     case agent(DevRunFailureReason)
 
@@ -61,6 +64,8 @@ enum DevDispatchFailure: Equatable, Sendable {
             return "No concrete change to make — I didn't catch an edit to dispatch."
         case .revertFailed:
             return "Couldn't fully restore your files — check your working tree."
+        case .confirmDeclined:
+            return "Cancelled."
         case .agent(let reason):
             switch reason {
             case .timeout(.wallClock):  return "The agent ran past the time limit and was stopped."
@@ -127,6 +132,11 @@ final class DevDispatchCoordinator {
         agent: DevAgentEntry,
         permission: DevAgentPermission,
         onCheckpoint: @escaping @MainActor (GitCheckpoint, GitCheckpointService) -> Void = { _, _ in },
+        // M6 (§8): the confirmAnchors gate, run AFTER the checkpoint and BEFORE
+        // the agent. Returns true to proceed, false to abort (low-confidence
+        // anchor declined / cancelled). Defaults to "proceed" so non-dev callers
+        // and the no-low-confidence path are unaffected.
+        confirmGate: @escaping @MainActor () async -> Bool = { true },
         onPhase: @escaping @MainActor (DevDispatchPhase) -> Void
     ) async -> Outcome {
         cancelled = false
@@ -158,6 +168,17 @@ final class DevDispatchCoordinator {
         // A cancel that landed during checkpointing aborts BEFORE the agent runs
         // — nothing to revert (checkpoint() doesn't touch the tree), but the
         // checkpoint rides back so the caller's teardown is uniform.
+        if cancelled {
+            return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
+        }
+
+        // M6 confirmAnchors gate (§8): checkpoint taken, agent NOT yet run. A
+        // declined/cancelled gate aborts here; the checkpoint rides back so the
+        // caller discards it (the tree is untouched — nothing to revert).
+        let proceed = await confirmGate()
+        if !proceed {
+            return .failed(.confirmDeclined, checkpoint: checkpoint, service: service, diff: nil)
+        }
         if cancelled {
             return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
         }

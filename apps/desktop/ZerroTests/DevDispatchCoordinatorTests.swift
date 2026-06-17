@@ -175,6 +175,51 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.runCount, 0, "agent must NOT run after a pre-dispatch cancel")
     }
 
+    // MARK: - confirmAnchors gate (Milestone 6, §8)
+
+    func testConfirmGateDeclineSkipsTheAgentAfterCheckpoint() async throws {
+        initRepo()
+        write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
+
+        let runner = FakeRunner(result: .succeeded)
+        let coordinator = DevDispatchCoordinator(runner: runner)
+        // The gate runs AFTER the checkpoint, BEFORE the agent. A declined gate
+        // aborts with the checkpoint (so the caller discards it) and the agent
+        // NEVER runs.
+        var checkpointSurfaced = false
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            onCheckpoint: { _, _ in checkpointSurfaced = true },
+            confirmGate: {
+                XCTAssertTrue(checkpointSurfaced, "the gate runs AFTER the checkpoint (§8)")
+                return false // user declined
+            },
+            onPhase: { _ in }
+        )
+        guard case .failed(let failure, let checkpoint, let service, _) = outcome else {
+            return XCTFail("expected declined failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .confirmDeclined)
+        XCTAssertNotNil(checkpoint, "checkpoint rides back so the caller can discard it")
+        XCTAssertNotNil(service)
+        XCTAssertEqual(runner.runCount, 0, "agent must NOT run when the gate is declined")
+    }
+
+    func testConfirmGateAcceptRunsTheAgent() async throws {
+        initRepo()
+        write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
+
+        let runner = FakeRunner(result: .succeeded)
+        let coordinator = DevDispatchCoordinator(runner: runner)
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            confirmGate: { true }, // user confirmed
+            onPhase: { _ in }
+        )
+        guard case .succeeded = outcome else { return XCTFail("expected success, got \(outcome)") }
+        XCTAssertEqual(runner.runCount, 1, "agent runs after the gate is confirmed")
+    }
+
     // MARK: - Phase reporting
 
     func testReportsCheckpointingThenDispatching() async throws {

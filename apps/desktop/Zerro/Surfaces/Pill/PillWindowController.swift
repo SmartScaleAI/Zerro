@@ -333,6 +333,10 @@ private struct PillHostView: View {
             // checkpoint, or re-dispatch the same prompt.
             onDevRevert: { appState.revertDevDispatch() },
             onDevRetry: { appState.retryDevDispatch() },
+            // Dev Mode (M6) confirmAnchors gate: Confirm proceeds with the
+            // dispatch; Cancel aborts before the agent runs (safe teardown).
+            onConfirmAnchors: { appState.confirmAnchorsAndProceed() },
+            onDeclineAnchors: { appState.declineAnchors() },
             // Phase 5: the parsed result — chat text + optional artifact
             // card.
             result: appState.resultPresentation,

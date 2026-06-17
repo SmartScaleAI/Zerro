@@ -79,6 +79,13 @@ public enum RecordingState: Equatable {
     /// an active dispatch, which terminates the agent then auto-reverts. Brief;
     /// resolves to `.idle` on success or back to `.devFailed` if revert failed.
     case devReverting
+    /// Phase 2 (M6) — the low-confidence anchor confirm gate (§7/§8). Inserted
+    /// AFTER `devCheckpointing` and BEFORE `devAgentDispatching` when any resolved
+    /// anchor's combined (client × model) confidence is low: the pill shows the
+    /// resolved label(s) for a one-glance confirm, and the agent runs ONLY on
+    /// confirm. A checkpoint has already been taken here, so a decline/cancel must
+    /// discard it (the agent never ran — nothing to revert).
+    case confirmAnchors
 }
 
 // MARK: - DevModeSelection
@@ -433,6 +440,38 @@ final class AppState {
     /// When the current dispatch started (set in `beginDevDispatch`), for the
     /// M8 `duration_ms` analytics metric. Cleared on teardown.
     @ObservationIgnored private var devDispatchStartTime: Date?
+    /// True once the AGENT actually started (past the confirmAnchors gate, into
+    /// dispatching/running) — so a safe-cancel knows whether the tree could have
+    /// been edited. A cancel BEFORE this (e.g. at confirmAnchors) skips the revert
+    /// entirely: the agent never touched the tree, so reverting would needlessly
+    /// remove + re-copy the user's untracked files (and risk a restore failure).
+    @ObservationIgnored private var devAgentStarted = false
+
+    // MARK: Dev Mode (Phase 2, M5/M6) — resolved deixis anchors + the confirm gate
+
+    /// The client-resolved anchors for THIS dev recording (M4 deixis + M5 OCR/
+    /// marker/client-confidence). Drives the confirmAnchors gate + its label list.
+    /// Empty for a normal recording or a managed dev recording (no client resolver
+    /// without the 2-call). Rendered by the bridge → not observation-ignored is
+    /// unnecessary; the pill reads a derived summary.
+    @ObservationIgnored var devResolvedAnchors: [ResolvedDeixisAnchor] = []
+    /// The model's structured anchors parsed from the generation response (M5).
+    /// Empty when the model returned none — the gate then falls back to the CLIENT
+    /// confidence alone (never `min`-ing against a missing model value).
+    @ObservationIgnored var devModelAnchors: [DevAnchor] = []
+    /// Suspends the dispatch at the confirmAnchors gate until the user resolves it
+    /// (Confirm → true, Cancel/teardown → false). Nil when not waiting. Resolved
+    /// EXACTLY once (guarded), so a double-tap or a racing teardown can't
+    /// double-dispatch.
+    @ObservationIgnored private var devConfirmContinuation: CheckedContinuation<Bool, Never>?
+    /// Monotonic token bumped on every `beginDevDispatch` AND every teardown. The
+    /// in-flight dispatch captures its value; a stale confirm/outcome whose token
+    /// no longer matches is dropped — so a late Confirm can't dispatch into a
+    /// torn-down (or superseded) recording.
+    @ObservationIgnored private var devDispatchGeneration = 0
+
+    /// Combined confidence below this is "low" → routes to confirmAnchors (§7).
+    static let devLowConfidenceThreshold = 0.45
 
     /// One shared coordinator (and its single runner) so the cap-1 dispatch
     /// guard spans the app, not one call.
@@ -1035,11 +1074,20 @@ final class AppState {
         devDispatchTask?.cancel()
         devDispatchTask = nil
         devDispatchCoordinator.cancel()
+        // M6 teardown floor: invalidate any in-flight dispatch (a late
+        // confirm/outcome is dropped by the generation token) and unblock a
+        // suspended confirmAnchors gate (declining it) so the dispatch can't hang.
+        // Safe everywhere — a no-op when nothing is pending.
+        devDispatchGeneration += 1
+        resolvePendingAnchorConfirmation(false)
+        devResolvedAnchors = []
+        devModelAnchors = []
         // Discard the checkpoint's on-disk untracked snapshot (a temp dir not
         // under the `zerro-` sweep prefix) so it doesn't leak when the dev
         // result is dismissed/reset without a Revert.
         if let checkpoint = devCheckpoint { devCheckpointService?.discardSnapshot(checkpoint) }
         devCancelInFlight = false
+        devAgentStarted = false
         devDispatchStartTime = nil
         recordingIsDevMode = false
         recordingProjectURL = nil
@@ -1178,7 +1226,20 @@ final class AppState {
             // termination, but the git checkpoint (a `stash create` commit +
             // saved untracked snapshot) persists, and terminating the agent
             // bounds the edits rather than leaving an orphaned process writing.
+            // KEEP the snapshot on disk for a future quit-recovery (tracked
+            // follow-up) — the agent may have edited, so it's the only undo.
             devDispatchCoordinator.cancel()
+        case .confirmAnchors:
+            // M6: suspended at the confirm gate — the agent NEVER ran, so the tree
+            // is untouched and the checkpoint protects nothing. Terminate the
+            // (idle) coordinator and DISCARD the snapshot: it isn't persisted
+            // across launch (so it can never be reverted after quit), and without
+            // this its `dev-checkpoint-*` temp dir — created OUTSIDE the `zerro-`
+            // launch-sweep prefix — would leak until the OS clears tmp. (Adversarial
+            // review finding.) `discardSnapshot` is best-effort + synchronous, so
+            // it's safe on the termination path.
+            devDispatchCoordinator.cancel()
+            if let cp = devCheckpoint { devCheckpointService?.discardSnapshot(cp) }
         case .idle, .done, .failed, .confirmingRecovery,
              .devDone, .devFailed, .devReverting:
             // Terminal/idle dev states: the agent has exited; nothing to tear
@@ -2013,8 +2074,34 @@ final class AppState {
                     transcript = dictionary.corrected(transcript)
                 }
 
+                // Phase 2 (M4/M5): resolve deixis anchors (hover-dwell + click)
+                // and build the per-reference element-ID input — CROPPED
+                // native-res MARKED frames + OCR + the client confidence. Off-main
+                // (frame extraction). Empty when not Dev Mode / no words / no
+                // source video → the dev path degrades to click anchoring. The
+                // marked crops ride to the model as trailing frames (uniform
+                // across providers; no per-provider request change).
+                self.devResolvedAnchors = []
+                self.devModelAnchors = []
+                var anchorFrames: [ExtractedFrame] = []
+                if self.recordingIsDevMode {
+                    let candidates = DeixisResolver.resolve(
+                        words: transcript.words,
+                        cursorTrack: processed.cursorTrack,
+                        clickTimes: processed.clicks.map(\.seconds)
+                    )
+                    let resolved = await DevAnchorPipeline.build(
+                        candidates: candidates,
+                        sourceVideoURL: processed.sourceVideoURL
+                    )
+                    self.devResolvedAnchors = resolved
+                    anchorFrames = Self.writeAnchorFrames(
+                        resolved, baseTimestamp: processed.duration, into: processed.workingDirectory
+                    )
+                }
+
                 let timeline = Interleaver.merge(
-                    frames: processed.frames,
+                    frames: processed.frames + anchorFrames,
                     transcript: transcript,
                     clicks: processed.clicks
                 )
@@ -2113,6 +2200,14 @@ final class AppState {
 
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
+                // Phase 2 (M5): the model returns its structured anchors in a
+                // `zerro_anchors` block alongside the agent_prompt artifact — parse
+                // them DEFENSIVELY (unknown shapes → []). They sharpen the confirm
+                // gate's labels + confidence; absent → the gate uses the client
+                // signal alone.
+                if self.recordingIsDevMode {
+                    self.devModelAnchors = DevAnchorParser.parse(result.prompt)
+                }
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
                 self.finishGenerationOrDispatch()
                 Analytics.capture("generation_succeeded", [
@@ -2298,12 +2393,20 @@ final class AppState {
         // Analytics: the dispatch start (metadata only). The succeeded/failed
         // counterparts (M8) read `devDispatchStartTime` for `duration_ms`.
         Analytics.capture("dev_dispatch_started", ["agent_id": agentID])
+        // M6 anchor-resolution analytics (metadata only — counts + a confidence
+        // histogram, never labels/paths/content).
+        captureAnchorResolutionAnalytics()
         devDispatchStartTime = Date()
 
         devRunSubstatus = nil
         devDiffStat = nil
         devFailure = nil
         devCancelInFlight = false
+        devAgentStarted = false
+        // New dispatch → new generation token; any prior in-flight confirm/outcome
+        // is now stale and will be dropped.
+        devDispatchGeneration += 1
+        let gen = devDispatchGeneration
         state = .devCheckpointing
 
         let body = artifact.body
@@ -2323,11 +2426,17 @@ final class AppState {
                     self?.devCheckpoint = checkpoint
                     self?.devCheckpointService = service
                 },
+                // M6 (§8): the confirmAnchors gate runs AFTER the checkpoint and
+                // BEFORE the agent. Returns true to dispatch, false to abort
+                // (decline/cancel) — the agent never runs on false, so the caller
+                // discards the checkpoint (nothing to revert).
+                confirmGate: { [weak self] in await self?.awaitAnchorConfirmation(gen: gen) ?? false },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
-            // Ignore a stale completion if the user moved on (new recording /
-            // reset cleared the dev state).
-            guard self.recordingIsDevMode else { return }
+            // Stale guard: drop the outcome if the recording was torn down or
+            // superseded while in flight (the safe-cancel path owns its own
+            // teardown; a bumped generation means a new/reset recording).
+            guard self.recordingIsDevMode, self.devDispatchGeneration == gen else { return }
             self.applyDevOutcome(outcome)
         }
     }
@@ -2343,11 +2452,137 @@ final class AppState {
         case .checkpointing:
             state = .devCheckpointing
         case .dispatching:
+            // Past the confirmAnchors gate — the agent is now spawning/editing, so
+            // a subsequent cancel must auto-revert.
+            devAgentStarted = true
             state = .devAgentDispatching
         case .running(let substatus):
+            devAgentStarted = true
             devRunSubstatus = substatus
             state = .devAgentRunning
         }
+    }
+
+    // MARK: - Dev Mode confirmAnchors gate (Phase 2, M6)
+
+    /// Combined per-reference confidence (§7): the client dwell/OCR signal, MIN'd
+    /// with the model's agreement WHEN the model returned an anchor for it —
+    /// otherwise the client signal alone (never `min`-ing against a missing
+    /// model value). Model anchors pair by echoed `ref`, falling back to position.
+    private func combinedConfidence(_ r: ResolvedDeixisAnchor) -> Double {
+        let client = r.clientConfidence
+        let model = devModelAnchors.first { $0.refIndex == r.refIndex }
+            ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
+        guard let model else { return client }
+        return Swift.min(client, model.modelConfidence)
+    }
+
+    /// True when ANY resolved anchor is low-confidence — the dispatch must pause
+    /// at confirmAnchors (§7: all high/medium → dispatch; any low → confirm).
+    var devNeedsConfirm: Bool {
+        devResolvedAnchors.contains { combinedConfidence($0) < Self.devLowConfidenceThreshold }
+    }
+
+    /// The resolved label per reference for the confirm UI: the model's verbatim
+    /// label, else the nearest OCR string, else the spoken phrase. Paired with
+    /// whether it's the low-confidence one(s) the user most needs to check.
+    var devConfirmAnchorSummaries: [(label: String, isLow: Bool)] {
+        devResolvedAnchors.map { r in
+            let model = devModelAnchors.first { $0.refIndex == r.refIndex }
+                ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
+            let label = model?.label ?? r.ocrStrings.first ?? r.candidate.phrase
+            return (label, combinedConfidence(r) < Self.devLowConfidenceThreshold)
+        }
+    }
+
+    /// The dispatch's confirmAnchors gate. Returns immediately when no anchor is
+    /// low-confidence; otherwise shows the confirm pill and SUSPENDS until the
+    /// user resolves it (or a teardown declines it). The `gen` token drops a
+    /// resume that lands after the recording was superseded/reset.
+    private func awaitAnchorConfirmation(gen: Int) async -> Bool {
+        guard devDispatchGeneration == gen else { return false }
+        guard devNeedsConfirm else { return true }
+        state = .confirmAnchors
+        let proceed = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            devConfirmContinuation = cont
+        }
+        // A late resume into a superseded recording must not dispatch.
+        guard devDispatchGeneration == gen else { return false }
+        return proceed
+    }
+
+    /// Confirm button — proceed with the dispatch. Resolves the gate EXACTLY once
+    /// (a double-tap finds the continuation already cleared → no-op), so the agent
+    /// can't be dispatched twice.
+    func confirmAnchorsAndProceed() {
+        guard state == .confirmAnchors, let cont = devConfirmContinuation else { return }
+        devConfirmContinuation = nil
+        Analytics.capture("dev_anchor_confirm", ["decision": "proceed"])
+        state = .devAgentDispatching // immediate feedback; the dispatch advances it
+        cont.resume(returning: true)
+    }
+
+    /// Cancel button on the confirmAnchors card — abort before the agent runs.
+    /// Routes through the safe teardown (it discards the checkpoint snapshot and
+    /// returns to idle), exactly like cancelling any active dispatch. A double-tap
+    /// is a no-op (the second finds `state != .confirmAnchors`).
+    func declineAnchors() {
+        guard state == .confirmAnchors else { return }
+        Analytics.capture("dev_anchor_confirm", ["decision": "cancel"])
+        cancelDevDispatchSafely()
+    }
+
+    /// Resolve a pending confirm gate with `proceed`, if any. Used by teardown
+    /// paths (cancel/reset) so the suspended dispatch unblocks instead of hanging.
+    /// Resolves once.
+    private func resolvePendingAnchorConfirmation(_ proceed: Bool) {
+        guard let cont = devConfirmContinuation else { return }
+        devConfirmContinuation = nil
+        cont.resume(returning: proceed)
+    }
+
+    /// M6 analytics — count + confidence histogram + whether a confirm is needed.
+    /// Metadata only (§14.5): counts/buckets/booleans, never labels/content.
+    private func captureAnchorResolutionAnalytics() {
+        guard recordingIsDevMode, !devResolvedAnchors.isEmpty else { return }
+        var high = 0, medium = 0, low = 0
+        for r in devResolvedAnchors {
+            let c = combinedConfidence(r)
+            if c >= 0.7 { high += 1 } else if c >= Self.devLowConfidenceThreshold { medium += 1 } else { low += 1 }
+        }
+        Analytics.capture("dev_anchor_resolution", [
+            "count": devResolvedAnchors.count,
+            "high": high, "medium": medium, "low": low,
+            "needs_confirm": devNeedsConfirm,
+            "model_anchors": devModelAnchors.count,
+        ])
+    }
+
+    /// Write the cropped native-res MARKED anchor crops to the working dir as
+    /// trailing frames (timestamps after the recording, so they sort last), each
+    /// tagged with a `DEIXIS REFERENCE` hint the dev prompt keys on. Skips an
+    /// anchor with no marked frame. The frames ride to the model through the
+    /// normal timeline → no per-provider request change.
+    nonisolated static func writeAnchorFrames(
+        _ anchors: [ResolvedDeixisAnchor], baseTimestamp: CMTime, into dir: URL
+    ) -> [ExtractedFrame] {
+        let base = CMTimeGetSeconds(baseTimestamp)
+        let baseSeconds = base.isFinite ? base : 0
+        var frames: [ExtractedFrame] = []
+        for a in anchors {
+            guard let b64 = a.markedJPEGBase64, let data = Data(base64Encoded: b64) else { continue }
+            let url = dir.appendingPathComponent("anchor-\(a.refIndex).jpg")
+            guard (try? data.write(to: url, options: .atomic)) != nil else { continue }
+            let nearby = a.ocrStrings.prefix(8).joined(separator: ", ")
+            let hint = "DEIXIS REFERENCE \(a.refIndex): the developer pointed here while saying \"\(a.candidate.phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+            frames.append(ExtractedFrame(
+                url: url,
+                timestamp: CMTime(seconds: baseSeconds + 1 + Double(a.refIndex), preferredTimescale: 600),
+                index: 100_000 + a.refIndex,
+                ocrText: hint
+            ))
+        }
+        return frames
     }
 
     private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
@@ -2369,6 +2604,17 @@ final class AppState {
                 "files_changed": success.diff.filesChanged,
             ])
         case .failed(let failure, let checkpoint, let service, let diff):
+            // Defensive: a declined confirmAnchors gate means the agent never ran
+            // (the tree is untouched). The decline path (cancelDevDispatchSafely)
+            // normally owns teardown and suppresses this via `devCancelInFlight`,
+            // so this is belt-and-suspenders — discard the checkpoint, go idle,
+            // never show a failure card.
+            if failure == .confirmDeclined {
+                devCheckpoint = checkpoint
+                devCheckpointService = service
+                resetToIdle()
+                return
+            }
             // No auto-revert (§8): keep the checkpoint (when one was taken) so
             // Milestone 7's Revert can restore the partial edits.
             devCheckpoint = checkpoint
@@ -2405,6 +2651,7 @@ final class AppState {
         case .agentUnavailable:   return "agent_unavailable"
         case .noChangeRequested:  return "no_change_requested"
         case .revertFailed:       return "revert_failed"
+        case .confirmDeclined:    return "confirm_declined"
         case .agent(let reason):
             switch reason {
             case .timeout(.wallClock):  return "agent_timeout_wallclock"
@@ -2428,7 +2675,11 @@ final class AppState {
     /// progress card shows a Cancel that routes to the safe terminate→revert).
     private var isDevDispatchActive: Bool {
         switch state {
-        case .devCheckpointing, .devAgentDispatching, .devAgentRunning: return true
+        // `.confirmAnchors` is INCLUDED (M6): the dispatch is suspended at the
+        // gate with a checkpoint already taken, so a cancel/hotkey/quit there must
+        // route through the safe teardown (discard the snapshot, unblock the
+        // gate), not drop the UI and leak the checkpoint.
+        case .devCheckpointing, .devAgentDispatching, .devAgentRunning, .confirmAnchors: return true
         default: return false
         }
     }
@@ -2528,6 +2779,9 @@ final class AppState {
         devCancelInFlight = true
         devDispatchTask = nil
         state = .devReverting
+        // If suspended at the confirmAnchors gate (M6), decline it so the dispatch
+        // unblocks and returns (the agent never ran → the revert below is a no-op).
+        resolvePendingAnchorConfirmation(false)
         // Terminate the agent; the in-flight dispatch resolves `.cancelled`.
         devDispatchCoordinator.cancel()
         Task { @MainActor [weak self] in
@@ -2542,9 +2796,16 @@ final class AppState {
             // stale continuation must NOT also revert/reset — let the newer path
             // win cleanly rather than have two paths drive state.
             guard let self, self.devCancelInFlight else { return }
-            if let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
+            // Revert ONLY if the agent actually started (could have edited). A
+            // cancel/decline at the confirmAnchors gate (agent never ran) skips
+            // the revert: the tree is already the pre-run state, so reverting
+            // would needlessly remove + re-copy the user's untracked files (and
+            // risk a restore failure). The snapshot is still discarded below.
+            if self.devAgentStarted, let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
                 let restored = await self.performRevert(checkpoint, service: service)
                 Log.dev.notice("Dev dispatch cancelled — auto-revert restored: \(restored, privacy: .public)")
+            } else {
+                Log.dev.notice("Dev dispatch cancelled before the agent ran — no revert needed")
             }
             self.devCancelInFlight = false
             self.resetTransientRecordingState() // discards the snapshot + clears dev state

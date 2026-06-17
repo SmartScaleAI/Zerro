@@ -79,6 +79,17 @@ enum PillState: Equatable {
     /// the Revert button (a failure before the checkpoint has nothing to undo).
     /// Renders [Revert] + Retry (M7).
     case devFailed(detail: String, canRevert: Bool)
+    /// Phase 2 (M6) — the low-confidence anchor confirm gate (§7/§8). Shows the
+    /// resolved label(s) the agent will act on (low-confidence ones flagged) so a
+    /// wrong anchor is catchable before any edit, with Confirm / Cancel.
+    case confirmAnchors(anchors: [ConfirmAnchorRow])
+}
+
+/// One resolved-anchor row in the confirmAnchors card: the label the agent will
+/// act on, and whether it's the low-confidence one the user most needs to check.
+struct ConfirmAnchorRow: Equatable {
+    let label: String
+    let isLow: Bool
 }
 
 // MARK: - PillView
@@ -129,6 +140,11 @@ struct PillView: View {
     /// idle). Default no-ops so `#Preview` blocks can pass literal dev states.
     var onDevRevert: () -> Void = {}
     var onDevRetry: () -> Void = {}
+
+    /// Dev Mode (M6) confirmAnchors actions: Confirm proceeds with the dispatch;
+    /// Cancel aborts before the agent runs (safe teardown). Default no-ops.
+    var onConfirmAnchors: () -> Void = {}
+    var onDeclineAnchors: () -> Void = {}
 
     /// The parsed result the pill renders (Phase 5): chat text and the
     /// optional artifact card. Threaded from
@@ -215,7 +231,7 @@ struct PillView: View {
         case .recording, .wrappingUp, .processing, .error, .devProgress:
             return Self.capsuleWidth
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .paidBlockResume, .devDone, .devFailed:
+             .paidBlockResume, .devDone, .devFailed, .confirmAnchors:
             return nil
         }
     }
@@ -231,7 +247,7 @@ struct PillView: View {
         // down rather than truncating or overflowing the fixed frame.
         // ErrorPillContent floors itself at capsuleHeight so short messages
         // still render as the familiar 50pt capsule.
-        case .resultExpanded, .failureExpanded, .error, .devDone, .devFailed:
+        case .resultExpanded, .failureExpanded, .error, .devDone, .devFailed, .confirmAnchors:
             return nil
         }
     }
@@ -368,6 +384,12 @@ struct PillView: View {
                 // Keep the partial edits and close (no auto-revert, §8).
                 onDismiss: onDismissResult
             )
+        case .confirmAnchors(let anchors):
+            ConfirmAnchorsPillContent(
+                anchors: anchors,
+                onConfirm: onConfirmAnchors,
+                onCancel: onDeclineAnchors
+            )
         }
     }
 
@@ -467,6 +489,76 @@ private struct DevResultPillContent: View {
             .buttonStyle(.plain)
             .fixedSize()
         }
+    }
+}
+
+// MARK: - ConfirmAnchorsPillContent (Dev Mode, Phase 2 — Milestone 6)
+//
+// The low-confidence anchor confirm gate (§7/§8). A checkpoint is already taken;
+// the agent runs ONLY on Confirm. Shows the resolved label(s) the agent will act
+// on so a wrong low-confidence anchor is catchable before any edit. Low-
+// confidence rows are flagged amber (those are the ones to double-check).
+
+private struct ConfirmAnchorsPillContent: View {
+    let anchors: [ConfirmAnchorRow]
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+            HStack(spacing: VFSpacing.sm) {
+                Image(systemName: "scope")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.vfWarningAmber)
+                Text("Edit these?")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+            }
+
+            // The resolved labels — low-confidence ones flagged so the user knows
+            // which to scrutinize.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(anchors.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 6) {
+                        Image(systemName: row.isLow ? "questionmark.circle.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(row.isLow ? Color.vfWarningAmber : Color.vfTextSecondary)
+                        Text(row.label)
+                            .font(.system(size: 12))
+                            .foregroundStyle(row.isLow ? Color.vfTextPrimary : Color.vfTextSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+
+            HStack(spacing: VFSpacing.sm) {
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                Button(action: onConfirm) {
+                    Text("Confirm")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .padding(.horizontal, VFSpacing.sm)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.10)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+            }
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, VFSpacing.md)
+        .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
     }
 }
 
