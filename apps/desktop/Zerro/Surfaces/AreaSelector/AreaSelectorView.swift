@@ -440,12 +440,18 @@ struct AreaSelectorView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if item.recommended {
-                            // Compact dot-star stand-in for the picker's
-                            // "Recommended" capsule — kept compact to match the
-                            // toolbar dropdown's tight row height.
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 8))
+                            // "Recommended" capsule badge (the row is tight,
+                            // so the badge stays small — 9pt semibold on a
+                            // tinted capsule, matching the brand accent).
+                            Text("Recommended")
+                                .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(Color.vfBrandAccent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(
+                                    Capsule().fill(Color.vfBrandAccent.opacity(0.15))
+                                )
+                                .fixedSize()
                         }
                         Spacer(minLength: VFSpacing.xs)
                         // `detail` is now only the BYOK "add key" hint (no

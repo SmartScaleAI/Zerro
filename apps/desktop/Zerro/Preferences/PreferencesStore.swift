@@ -70,12 +70,14 @@ final class PreferencesStore {
         didSet { defaults.set(redactSecrets, forKey: Keys.redactSecrets) }
     }
 
-    /// Phase 6 (multi-model) — the user's last-selected generation model, by
-    /// registry wire id. Written by the model picker; read by the generation
-    /// path, which sends it as the `model` field of `/generate`. Defaults to
-    /// `ModelRegistry.defaultModelID` (the recommended model), and re-defaults
-    /// if a persisted id ever drops out of the registry (kill-switched model),
-    /// so the app never sends an id the server would 400.
+    /// Phase 6 (multi-model) — the last model the user recorded with, by
+    /// registry wire id. Seeds the capture toolbar's model chip (the only
+    /// model picker) and is read by the generation path, which sends it as the
+    /// `model` field of `/generate`. Written back at record-start when the
+    /// toolbar pick differs. Defaults to `ModelRegistry.defaultModelID` (the
+    /// recommended model), and re-defaults if a persisted id ever drops out of
+    /// the registry (kill-switched model), so the app never sends an id the
+    /// server would 400.
     var selectedModelID: String {
         didSet { defaults.set(selectedModelID, forKey: Keys.selectedModelID) }
     }

@@ -55,9 +55,9 @@ final class AreaSelectorWindowController {
     /// Builds and shows the overlay on the screen containing the
     /// cursor. `onConfirm` fires when the user accepts a selection
     /// (Checkpoint 3) — its second argument is the generation model
-    /// chosen on the toolbar for THIS recording (the Preferences
-    /// default unless the user changed the chip; never persisted
-    /// here). `onCancel` fires on ESC. Either callback is invoked
+    /// chosen on the toolbar for this recording (seeded from the
+    /// last-used model and persisted back as last-used at confirm).
+    /// `onCancel` fires on ESC. Either callback is invoked
     /// exactly once per presentation; both implicitly dismiss the
     /// overlay before invocation.
     ///
@@ -102,10 +102,12 @@ final class AreaSelectorWindowController {
             selectedID: preferences.microphoneDeviceID
         )
 
-        // Multi-model: seed the model chip from the Preferences default.
-        // Unlike the mic, a dropdown pick here is a PER-RECORDING
-        // override — it is handed to onConfirm but NEVER written back to
-        // PreferencesStore, so the next recording starts on the default.
+        // Multi-model: seed the model chip from the last model the user
+        // recorded with (PreferencesStore.selectedModelID). The toolbar is
+        // the ONLY model picker now; the pick lives in `state` until confirm,
+        // where it is written back as the new last-used (see state.onConfirm).
+        // Holding it in state until then means abandoning the overlay (ESC)
+        // leaves the persisted last-used model untouched.
         state.setModels(
             Self.modelMenuItems(entitlements: entitlements),
             selectedID: preferences.selectedModelID
@@ -115,6 +117,20 @@ final class AreaSelectorWindowController {
             // Read the toolbar's model pick BEFORE dismiss() nils the
             // state. Fallback can only fire if confirm raced dismiss.
             let modelID = self?.state?.selectedModelID ?? preferences.selectedModelID
+            // Persist as the last-used model so the next recording (and the
+            // chip seed) starts here. Persisted at confirm (record-start), not
+            // on every dropdown tap — only models actually used to record
+            // become last-used. Tier 4 analytics parity with the removed
+            // Settings / menu-bar pickers: fire `model_changed` only on a real
+            // change, before the write.
+            if modelID != preferences.selectedModelID {
+                Analytics.capture("model_changed", [
+                    "from_model": preferences.selectedModelID,
+                    "to_model": modelID,
+                    "surface": "capture_toolbar",
+                ])
+                preferences.selectedModelID = modelID
+            }
             self?.dismiss()
             onConfirm(rect, modelID)
         }
@@ -352,9 +368,10 @@ final class AreaSelectorWindowController {
                     return nil
                 }
                 // Model dropdown open — a click selects the (non-gated) row
-                // under the cursor or, if outside, dismisses. PER-RECORDING
-                // override: state only, never PreferencesStore (the mic
-                // dropdown below persists; this one deliberately doesn't).
+                // under the cursor or, if outside, dismisses. The pick lands
+                // in `state` only; it's persisted as last-used at confirm
+                // (state.onConfirm), not here — so a pick the user backs out
+                // of never changes the stored last-used model.
                 if state.isModelMenuOpen {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.modelMenuRowIndex(
@@ -524,10 +541,10 @@ final class AreaSelectorWindowController {
     // MARK: - Model picker rows
     //
     // Display data for the toolbar's model dropdown, computed once at
-    // present time (same lifecycle as the mic list). Mirrors the menu-bar
-    // ModelPickerSubmenu's mode rules: rows are model names only — NO per-model
-    // cost anywhere (metered-credits Phase 4). BYOK rows key-gate by provider,
-    // carrying an "add key" hint as the only detail text.
+    // present time (same lifecycle as the mic list). Rows are model names
+    // only — NO per-model cost anywhere (metered-credits Phase 4). BYOK
+    // key-gates by provider, carrying an "add key" hint as the only detail
+    // text; every other mode renders plain names.
     private static func modelMenuItems(
         entitlements: EntitlementStore?
     ) -> [AreaSelectorState.ModelMenuItem] {

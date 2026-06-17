@@ -32,7 +32,9 @@ import SwiftUI
 ///   • `.expired`          → "Upgrade"     (blocked) — the gated wall.
 ///   • `.managed` past-due → "Manage Plan" (manage) + "update your card" nudge.
 ///   • `.managed` low      → "Add Credits" (topup) — lead with top-up packs.
-///   • `.managed` healthy  → "Manage Plan" (manage).
+///   • `.managed` healthy  → "Add more credits" (manage) — the portal is where
+///     a paid-up Managed user tops up; label leads with that even though the
+///     trigger is the general manage surface.
 ///   • `.byok`             → "Manage Plan" (manage) — nothing to upgrade/top up.
 struct MenuBarBillingAction: Equatable {
     let label: String
@@ -63,8 +65,10 @@ struct MenuBarBillingAction: Equatable {
             if isLowBalance {
                 return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
             }
-            // Healthy Managed → manage (already top tier; no plan ladder to sell).
-            return MenuBarBillingAction(label: "Manage Plan", secondary: nil, trigger: .manage)
+            // Healthy Managed → the manage portal (already top tier; no plan
+            // ladder to sell), but lead the label with adding credits since
+            // that's what a paid-up user comes here for.
+            return MenuBarBillingAction(label: "Add more credits", secondary: nil, trigger: .manage)
         }
     }
 }
@@ -100,11 +104,6 @@ struct MenuBarPanelView: View {
     @State private var showMicrophonePicker = false
     @State private var micRowHovered = false
     @State private var micPanelHovered = false
-    /// Drives the Model picker side panel (multi-model 6A) — same
-    /// hover-driven submenu shape as Microphone.
-    @State private var showModelPicker = false
-    @State private var modelRowHovered = false
-    @State private var modelPanelHovered = false
     /// Bumped when the Settings recorder finishes a rebind so the
     /// Start/Stop Recording hotkey hint re-reads the current shortcut
     /// from KeyboardShortcuts (which persists to UserDefaults — there's
@@ -208,38 +207,9 @@ struct MenuBarPanelView: View {
             menuDivider
 
             primaryRecordingRow
-            // Multi-model 6A: the model picker — mode-aware (credit column in
-            // Managed/Trial; names only in BYOK). Writes the selection to
-            // PreferencesStore.selectedModelID; the generation path reads it
-            // fresh at request time.
-            MenuRow(
-                label: "Model",
-                trailing: .submenu,
-                forceSelected: showModelPicker
-            ) {
-                showModelPicker = true
-            }
-            .onHover { hovering in
-                modelRowHovered = hovering
-                updatePanelVisibility(
-                    hovered: modelRowHovered || modelPanelHovered,
-                    isStillHovered: { modelRowHovered || modelPanelHovered },
-                    setVisible: { showModelPicker = $0 }
-                )
-            }
-            .submenuFlyout(isPresented: $showModelPicker) {
-                ModelPickerSubmenu()
-                    .environment(preferences)
-                    .environment(entitlements)
-                    .onHover { hovering in
-                        modelPanelHovered = hovering
-                        updatePanelVisibility(
-                            hovered: modelRowHovered || modelPanelHovered,
-                            isStillHovered: { modelRowHovered || modelPanelHovered },
-                            setVisible: { showModelPicker = $0 }
-                        )
-                    }
-            }
+            // The model is chosen on the capture toolbar's model chip (which
+            // now persists the pick as the last-used model) — there is no
+            // menu-bar Model row.
             MenuRow(
                 label: "Microphone",
                 trailing: .submenu,

@@ -224,18 +224,18 @@ final class AreaSelectorState {
         if highlightedMicIndex != index { highlightedMicIndex = index }
     }
 
-    // MARK: - Model selection (multi-model — per-recording override)
+    // MARK: - Model selection (multi-model — last-used model)
     //
-    // The toolbar carries a model chip so the generation model for THIS
-    // recording can be chosen at capture time. Unlike the mic dropdown
-    // (which persists immediately) and the mode toggle (which persists at
-    // record-start), the model chip is a PER-RECORDING override: it seeds
-    // from `PreferencesStore.selectedModelID` (the Preferences "Default
-    // model") and a change here is handed to `startRecording` WITHOUT
-    // touching the persisted default — the next recording starts back on
-    // the default. Rendering + row hit-testing mirror the mic dropdown
-    // (in-tree menu, controller-owned monitor) for the same .screenSaver
-    // window-level reason.
+    // The toolbar's model chip is the only model picker. It seeds from
+    // `PreferencesStore.selectedModelID` (the last model the user recorded
+    // with) and a pick is held in this state until record-start, where the
+    // controller writes it back as the new last-used (see
+    // AreaSelectorWindowController.onConfirm) — so picking a model and
+    // recording makes it stick, while abandoning the overlay leaves the
+    // stored model untouched. Like the mode toggle, the pick persists at
+    // record-start (the mic dropdown, by contrast, persists immediately).
+    // Rendering + row hit-testing mirror the mic dropdown (in-tree menu,
+    // controller-owned monitor) for the same .screenSaver window-level reason.
 
     /// One row of the model dropdown — display data precomputed by the
     /// controller at present time (the view stays free of registry +
@@ -259,8 +259,9 @@ final class AreaSelectorState {
     /// controller at present time.
     private(set) var models: [ModelMenuItem] = []
 
-    /// The model THIS recording will use. Seeded from the persisted
-    /// default; a dropdown pick changes only this copy.
+    /// The model THIS recording will use. Seeded from the last-used model; a
+    /// dropdown pick changes only this copy until the controller persists it
+    /// back as last-used at record-start.
     private(set) var selectedModelID: String = ""
 
     /// Label for the toolbar chip.

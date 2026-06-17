@@ -106,12 +106,13 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
         )
     }
 
-    // MARK: - Per-recording override semantics
+    // MARK: - Model pick state semantics
 
     func testModelSelectionDoesNotTouchPreferences() {
-        // The state-level pick is the whole override — there is no
-        // PreferencesStore write anywhere in the model-chip path (the
-        // controller hands state.selectedModelID to onConfirm instead).
+        // The state-level pick only mutates `state.selectedModelID`; it never
+        // writes PreferencesStore. The last-used model is persisted by the
+        // controller at record-start (onConfirm), not by the state pick — so
+        // a pick the user backs out of leaves the stored model untouched.
         let state = AreaSelectorState()
         state.setModels(
             [.init(id: "a", name: "A", detail: nil, recommended: false, gated: false),

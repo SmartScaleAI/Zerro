@@ -157,9 +157,6 @@ struct SettingsView: View {
                 switch selection {
                 case .general:
                     CaptureSection()
-                    // Multi-model: the persistent default the capture
-                    // toolbar's per-recording model chip seeds from.
-                    ModelSection()
                 case .history:
                     HistorySection(onOpenRecentPrompts: { route = .recentPrompts })
                 case .advanced:
