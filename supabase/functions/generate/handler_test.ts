@@ -1327,3 +1327,29 @@ Deno.test("dev_transcribe applies the audio fuse (missing audio → 400, no STT)
   assertEquals(res.status, 400);
   assertEquals(openai.transcribeCalls, 0);
 });
+
+// ---- Dev Mode generation: mode selects the dev prompt (Phase 2 M5/M7) --------
+
+Deno.test("mode:\"dev\" selects the repo-scoped dev prompt server-side (gap fix); normal omits it", async () => {
+  // Dev recording → the server composes the dev prompt.
+  const devStore = activeStore(0);
+  const devAI = new StubProvider();
+  const devRes = await handleGenerate(makeReq(await mintToken(), makeBody({ mode: "dev" })), deps(devStore, devAI));
+  assertEquals(devRes.status, 200);
+  // The dev prompt is the repo-scoped EYES/HANDS spec, not the clipboard prompt.
+  assertEquals(devAI.lastSystem.includes("repo-scoped coding instruction"), true);
+  assertEquals(devAI.lastSystem.includes("Goal:"), true);
+
+  // Normal recording (no mode) → the normal prompt, unchanged.
+  const normStore = activeStore(0);
+  const normAI = new StubProvider();
+  await handleGenerate(makeReq(await mintToken(), makeBody()), deps(normStore, normAI));
+  assertEquals(normAI.lastSystem.includes("repo-scoped coding instruction"), false);
+});
+
+Deno.test("an unknown mode value falls back to the normal prompt (selector, not free-form)", async () => {
+  const store = activeStore(0);
+  const ai = new StubProvider();
+  await handleGenerate(makeReq(await mintToken(), makeBody({ mode: "pwn" })), deps(store, ai));
+  assertEquals(ai.lastSystem.includes("repo-scoped coding instruction"), false);
+});

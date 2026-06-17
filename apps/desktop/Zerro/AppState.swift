@@ -1761,6 +1761,11 @@ final class AppState {
                     model: self.recordingModelID
                         ?? self.preferences?.selectedModelID
                         ?? ModelRegistry.defaultModelID,
+                    // Phase 2 (M5/M7): select the server's dev prompt for a Dev
+                    // Mode recording — same gap fix as the BYOK path (the managed
+                    // generation otherwise composed the normal prompt for dev
+                    // recordings). nil for a normal recording (byte-identical body).
+                    mode: self.generationPromptMode == .dev ? "dev" : nil,
                     tokenProvider: tokenProvider,
                     // M1: the recording's stable key — reused across every retry
                     // (here and `retryFailedPrompt`) so a charged-but-dropped
@@ -2086,7 +2091,13 @@ final class AppState {
                 }
                 let result = try await BYOKRouting.service(for: entry).generatePrompt(
                     timeline: timeline,
-                    systemPrompt: PromptGenerationSystemPrompt.composed()
+                    // Phase 2 (M5/M7): a Dev Mode recording MUST generate with the
+                    // dev prompt (Goal/Changes/Scope, anchored to visible labels) —
+                    // not the normal clipboard prompt. This selection seam fixes a
+                    // Phase-1 gap (the call site hard-coded `composed()` = normal,
+                    // so dev recordings silently used the wrong prompt) and is
+                    // guarded by `DevPromptSelectionTests`.
+                    systemPrompt: PromptGenerationSystemPrompt.composed(mode: self.generationPromptMode)
                 )
                 // Model name (.public — a registry id we control) and token
                 // counts (.public — metrics, not content). result.prompt.count
@@ -2229,6 +2240,15 @@ final class AppState {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
         return artifact.body
+    }
+
+    /// The system-prompt mode for the CURRENT recording's generation: `.dev` for
+    /// a Dev Mode recording (the repo-scoped Goal/Changes/Scope spec), `.normal`
+    /// otherwise (the clipboard prompt). The single seam both generation paths
+    /// read so a Dev recording can never silently fall back to the normal prompt
+    /// (Phase-1 gap). Guarded by `DevPromptSelectionTests`.
+    var generationPromptMode: PromptMode {
+        recordingIsDevMode ? .dev : .normal
     }
 
     // MARK: - Dev Mode dispatch (Phase 1, Milestone 6)

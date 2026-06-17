@@ -53,6 +53,12 @@ export interface ParsedRequest {
    *  forged body never silently suppresses transcription. A cost hint only —
    *  it never influences the (server-owned) system prompt. */
   hasSpeech: boolean;
+
+  /** Phase 2 (Dev Mode) — `"dev"` selects the repo-scoped dev system prompt
+   *  (Goal/Changes/Scope); undefined → the normal v2 prompt. This is a SELECTOR
+   *  among server-owned prompts ONLY — the client never supplies prompt content
+   *  (Appendix C #3). Any value other than `"dev"` resolves to normal. */
+  mode: "dev" | undefined;
 }
 
 export type ValidationResult =
@@ -235,8 +241,12 @@ export function validateBody(body: unknown): ValidationResult {
   // defaults to transcribing, the safe direction.
   const hasSpeech = b.has_speech !== false;
 
+  // Phase 2 — Dev Mode prompt selector (server-owned prompts only). Only the
+  // exact string "dev" selects the dev prompt; anything else → normal.
+  const mode: "dev" | undefined = b.mode === "dev" ? "dev" : undefined;
+
   return {
     ok: true,
-    value: { model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
+    value: { model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech, mode },
   };
 }

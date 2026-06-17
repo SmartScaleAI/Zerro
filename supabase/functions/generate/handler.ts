@@ -171,7 +171,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
+  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech, mode } = parsed.value;
 
   // 5.5 Resolve the validated model → provider + fixed credit price (Phase 4).
   //     validateBody already gated on ALLOWED_MODELS, so a miss here is a
@@ -347,9 +347,11 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     }
 
     // 11. Compose the system prompt SERVER-SIDE (the server owns the whole
-    //     text; the client supplies nothing that influences it), interleave,
-    //     and call chat.
-    const systemPrompt = composedSystemPrompt();
+    //     text; the client supplies only the `mode` SELECTOR, never content),
+    //     interleave, and call chat. Phase 2: `mode:"dev"` selects the
+    //     repo-scoped dev prompt so a Dev Mode recording generates the
+    //     Goal/Changes/Scope agent spec, not the clipboard prompt.
+    const systemPrompt = composedSystemPrompt(mode);
     const userContent = buildInterleavedContent(frames, segments, clicks);
 
     let chat;

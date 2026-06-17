@@ -138,6 +138,10 @@ final class ManagedProxyClient {
         clicks: [ResolvedClick] = [],
         hasSpeech: Bool = true,
         model: String = ModelRegistry.defaultModelID,
+        // Phase 2 (Dev Mode): `"dev"` selects the server's repo-scoped dev prompt
+        // (Goal/Changes/Scope). nil → the normal v2 prompt. A SELECTOR only — the
+        // client never supplies prompt content.
+        mode: String? = nil,
         tokenProvider: ProxyTokenProviding? = nil,
         idempotencyKey: String = UUID().uuidString
     ) async throws -> ManagedGenerationResult {
@@ -156,7 +160,8 @@ final class ManagedProxyClient {
                 durationSeconds: durationSeconds,
                 clicks: clicks,
                 hasSpeech: hasSpeech,
-                model: model
+                model: model,
+                mode: mode
             )
         }.value
 
@@ -352,7 +357,8 @@ final class ManagedProxyClient {
         durationSeconds: Double?,
         clicks: [ResolvedClick] = [],
         hasSpeech: Bool = true,
-        model: String = ModelRegistry.defaultModelID
+        model: String = ModelRegistry.defaultModelID,
+        mode: String? = nil
     ) throws -> Data {
         let audioData: Data
         do {
@@ -404,13 +410,16 @@ final class ManagedProxyClient {
         // server to skip the Whisper call (empty segments). `model`
         // (multi-model 6B) selects the provider adapter server-side (charging
         // is metered on real cost) — never the prompt (Appendix C #3).
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": model,
             "audio": audio,
             "frames": frameObjects,
             "clicks": clickObjects,
             "has_speech": hasSpeech,
         ]
+        // Phase 2 (Dev Mode): the prompt SELECTOR. Only sent when set, so a
+        // normal recording's body is byte-identical to before.
+        if let mode { payload["mode"] = mode }
 
         do {
             return try JSONSerialization.data(withJSONObject: payload)
