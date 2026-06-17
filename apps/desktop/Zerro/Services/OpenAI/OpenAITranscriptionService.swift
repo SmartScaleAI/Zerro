@@ -19,8 +19,10 @@
 //              - model=whisper-1
 //              - response_format=verbose_json
 //              - timestamp_granularities[]=segment
+//              - timestamp_granularities[]=word   (Dev Mode only — §7 deixis)
 //  Response (verbose_json):
-//    { duration, language, text, segments: [{id, start, end, text, ...}] }
+//    { duration, language, text, segments: [{id, start, end, text, ...}],
+//      words: [{word, start, end}]   (only when word granularity requested) }
 //
 
 import Foundation
@@ -33,7 +35,7 @@ struct OpenAITranscriptionService: TranscriptionService {
     /// before/after cost log diff to back the decision.
     static let model = "whisper-1"
 
-    func transcribe(audioFileURL: URL) async throws -> Transcript {
+    func transcribe(audioFileURL: URL, wordTimestamps: Bool) async throws -> Transcript {
         guard let apiKey = OpenAIClient.resolveAPIKey() else {
             throw TranscriptionError.missingAPIKey
         }
@@ -50,7 +52,7 @@ struct OpenAITranscriptionService: TranscriptionService {
         }
 
         let builder = OpenAIClient.MultipartBuilder()
-        let body = builder.build(parts: [
+        var parts: [OpenAIClient.MultipartBuilder.Part] = [
             .file(
                 name: "file",
                 filename: audioFileURL.lastPathComponent,
@@ -62,7 +64,15 @@ struct OpenAITranscriptionService: TranscriptionService {
             // The trailing [] is required — OpenAI expects this exact
             // form field name for repeated values.
             .text(name: "timestamp_granularities[]", value: "segment")
-        ])
+        ]
+        // Phase 2 (Dev Mode deixis): also request WORD-level timing. Gated so a
+        // normal recording's request is byte-identical — only a Dev Mode
+        // transcription adds this field. Whisper then returns a top-level
+        // `words: [{word,start,end}]` array alongside `segments`.
+        if wordTimestamps {
+            parts.append(.text(name: "timestamp_granularities[]", value: "word"))
+        }
+        let body = builder.build(parts: parts)
 
         var request = URLRequest(url: OpenAIClient.baseURL.appendingPathComponent("audio/transcriptions"))
         request.httpMethod = "POST"
@@ -97,19 +107,23 @@ struct OpenAITranscriptionService: TranscriptionService {
             throw TranscriptionError.server(status: response.statusCode)
         }
 
-        let decoded: WhisperResponse
         do {
-            decoded = try JSONDecoder().decode(WhisperResponse.self, from: data)
+            return try Self.parseTranscript(from: data)
         } catch {
             throw TranscriptionError.decodeFailure(underlying: error)
         }
+    }
 
-        // Whisper segment text comes back with a leading space ("
-        // Okay, so..."). Trim leading/trailing whitespace so it
-        // doesn't leak into the interleaved timeline view as
-        // `[0:00-0:11] " Okay..."`. fullText is preserved as Whisper
-        // returned it — that string is what the model would see as a
-        // standalone narration if we ever ran a frames-only pass.
+    /// Decode a Whisper `verbose_json` body into a `Transcript`. Split out from
+    /// the network path so the segment/word mapping is unit-testable against a
+    /// fixture (no live request). Throws the raw decode error; the caller wraps
+    /// it as `TranscriptionError.decodeFailure`.
+    static func parseTranscript(from data: Data) throws -> Transcript {
+        let decoded = try JSONDecoder().decode(WhisperResponse.self, from: data)
+        // Whisper segment text comes back with a leading space (" Okay, so...").
+        // Trim leading/trailing whitespace so it doesn't leak into the
+        // interleaved timeline view as `[0:00-0:11] " Okay..."`. fullText is
+        // preserved as Whisper returned it.
         return Transcript(
             segments: (decoded.segments ?? []).map {
                 TranscriptSegment(
@@ -118,7 +132,16 @@ struct OpenAITranscriptionService: TranscriptionService {
                     text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             },
-            fullText: decoded.text
+            fullText: decoded.text,
+            // Phase 2 (Dev Mode deixis): present only when `wordTimestamps` was
+            // requested (Whisper omits the array otherwise → empty).
+            words: (decoded.words ?? []).map {
+                WordTiming(
+                    word: $0.word.trimmingCharacters(in: .whitespacesAndNewlines),
+                    start: $0.start,
+                    end: $0.end
+                )
+            }
         )
     }
 
@@ -132,12 +155,21 @@ struct OpenAITranscriptionService: TranscriptionService {
     private struct WhisperResponse: Decodable {
         let text: String
         let segments: [WhisperSegment]?
+        /// Present only when `timestamp_granularities[]=word` was requested
+        /// (Dev Mode). Absent → nil → empty `Transcript.words`.
+        let words: [WhisperWord]?
     }
 
     private struct WhisperSegment: Decodable {
         let start: Double
         let end: Double
         let text: String
+    }
+
+    private struct WhisperWord: Decodable {
+        let word: String
+        let start: Double
+        let end: Double
     }
 
     // MARK: - Cost estimate

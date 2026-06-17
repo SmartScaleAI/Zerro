@@ -19,10 +19,21 @@ export interface SpeechSegment {
   text: string;
 }
 
+/** Phase 2 (Dev Mode deixis §7) — one word with its start/end in seconds. */
+export interface WordTiming {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface TranscriptionResult {
   segments: SpeechSegment[];
   /** The STT provider's measured audio duration (seconds). */
   durationSeconds: number;
+  /** Phase 2 (Dev Mode deixis) — WORD-level timing, present only when the
+   *  caller requested it (`transcribe(audio, { words: true })`, the Dev Mode
+   *  "dev-transcribe" path). Undefined on the normal generation path. */
+  words?: WordTiming[];
 }
 
 export interface ChatResult {
@@ -52,7 +63,9 @@ export type TimelineBlock =
   | { type: "image"; mime: string; base64: string };
 
 export interface SttClient {
-  transcribe(audio: AudioInput): Promise<TranscriptionResult>;
+  /** `opts.words` (Phase 2, Dev Mode) requests WORD-level timing in the result.
+   *  Optional so existing impls/fakes that ignore it still satisfy the type. */
+  transcribe(audio: AudioInput, opts?: { words?: boolean }): Promise<TranscriptionResult>;
 }
 
 export interface ChatClient {

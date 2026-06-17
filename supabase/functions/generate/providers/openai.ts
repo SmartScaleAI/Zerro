@@ -27,6 +27,7 @@ import {
   type SttClient,
   type TimelineBlock,
   type TranscriptionResult,
+  type WordTiming,
 } from "./types.ts";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -89,7 +90,7 @@ export class OpenAISttClient extends OpenAITransport implements SttClient {
     super(apiKey, timeoutMs, base);
   }
 
-  async transcribe(audio: AudioInput): Promise<TranscriptionResult> {
+  async transcribe(audio: AudioInput, opts?: { words?: boolean }): Promise<TranscriptionResult> {
     const send = async (): Promise<Response> => {
       const form = new FormData();
       // copy into a fresh ArrayBuffer-backed view so the Blob owns clean bytes.
@@ -99,6 +100,11 @@ export class OpenAISttClient extends OpenAITransport implements SttClient {
       form.append("response_format", "verbose_json");
       // The trailing [] is required for this repeated field.
       form.append("timestamp_granularities[]", "segment");
+      // Phase 2 (Dev Mode deixis): also request WORD-level timing. Whisper then
+      // returns a top-level `words: [{word,start,end}]` array. Only the
+      // "dev-transcribe" path passes this; the normal generation request is
+      // byte-identical to before.
+      if (opts?.words) form.append("timestamp_granularities[]", "word");
       return await this.fetchWithTimeout(`${this.base}/audio/transcriptions`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -119,7 +125,14 @@ export class OpenAISttClient extends OpenAITransport implements SttClient {
         text: String(s.text ?? "").trim(),
       }))
       : [];
-    return { segments, durationSeconds: Number(json.duration ?? 0) };
+    const words: WordTiming[] | undefined = opts?.words && Array.isArray(json.words)
+      ? json.words.map((w: { word: string; start: number; end: number }) => ({
+        word: String(w.word ?? "").trim(),
+        start: Number(w.start),
+        end: Number(w.end),
+      }))
+      : undefined;
+    return { segments, durationSeconds: Number(json.duration ?? 0), words };
   }
 }
 

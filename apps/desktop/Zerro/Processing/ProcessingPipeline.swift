@@ -139,6 +139,8 @@ struct ProcessingPipeline {
     func process(
         sourceURL: URL,
         clicks: [RecordedClick] = [],
+        cursor: [CursorSample] = [],
+        retainSourceForDev: Bool = false,
         redactSecrets: Bool = ProcessingConfig.redactSecretsDefault,
         onStage: @MainActor (Stage) -> Void = { _ in }
     ) async throws -> ProcessedRecording {
@@ -216,13 +218,34 @@ struct ProcessingPipeline {
             )
             Log.processing.info("manifest written")
 
+            // Phase 2 (Dev Mode deixis, M3): retain the source video for native-
+            // res anchor frames (M5). MOVE it into the working dir (the single
+            // cleanup unit) so it's reclaimed with everything else and the
+            // caller's usual source deletion becomes a harmless no-op. Best-
+            // effort: a move failure just leaves `sourceVideoURL` nil (M5 then
+            // degrades to the downsampled keyframe). nil for a normal recording.
+            var retainedSourceURL: URL?
+            if retainSourceForDev {
+                let dest = workingDirectory.appendingPathComponent("source.mov")
+                do {
+                    try FileManager.default.moveItem(at: sourceURL, to: dest)
+                    retainedSourceURL = dest
+                } catch {
+                    Log.processing.error("dev source retain failed: \(error.localizedDescription, privacy: .private)")
+                }
+            }
+
             return ProcessedRecording(
                 audioURL: audioURL,
                 frames: frames,
                 duration: duration,
                 workingDirectory: workingDirectory,
                 clicks: resolvedClicks,
-                hasSpeech: hasSpeech
+                hasSpeech: hasSpeech,
+                // Phase 2 (Dev Mode deixis): carry the raw cursor track through
+                // unchanged for the resolver (M4). Empty for a normal recording.
+                cursorTrack: cursor,
+                sourceVideoURL: retainedSourceURL
             )
         } catch {
             // Mid-pipeline failure: tear down the partial working dir

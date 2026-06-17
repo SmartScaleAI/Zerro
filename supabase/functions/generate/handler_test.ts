@@ -30,6 +30,10 @@ class InMemoryStore implements BillingStore {
   used = new Map<string, number>(); // subId → credits_used (latest period)
   topup = new Map<string, number>(); // subId → remaining non-expired top-up credits
   slots = new Set<string>();
+  /** Phase 2 — count slot acquisitions so a test can assert the dev-transcribe
+   *  path takes NO slot (the normal path acquires+releases, ending at size 0,
+   *  so the set size alone can't distinguish "never acquired"). */
+  acquireSlotCalls = 0;
   log: GenerationLogRow[] = [];
   rateOk = true;
   forceConsumeNull = false;
@@ -82,6 +86,7 @@ class InMemoryStore implements BillingStore {
     return Promise.resolve(planAvail + topupAvail - credits);
   }
   acquireSlot(subId: string) {
+    this.acquireSlotCalls++;
     if (this.slots.has(subId)) return Promise.resolve(false);
     this.slots.add(subId);
     return Promise.resolve(true);
@@ -164,11 +169,17 @@ class StubProvider implements SttClient, ChatClient {
   chatInputTokens = 2000;
   chatOutputTokens = 3500;
 
-  async transcribe(_audio: AudioInput) {
+  async transcribe(_audio: AudioInput, opts?: { words?: boolean }) {
     this.transcribeCalls++;
     if (this.hang) await new Promise<void>((res) => (this.hangResolve = res));
     if (this.failTranscribe) throw this.failTranscribe;
-    return { segments: [{ start: 0, end: 2, text: "hello world" }], durationSeconds: this.duration };
+    return {
+      segments: [{ start: 0, end: 2, text: "hello world" }],
+      durationSeconds: this.duration,
+      // Phase 2: honor the word-timing request (the dev-transcribe path) so a
+      // test can assert it propagates; undefined otherwise (normal path).
+      words: opts?.words ? [{ word: "hello", start: 0, end: 1 }, { word: "world", start: 1, end: 2 }] : undefined,
+    };
   }
   releaseHang() {
     this.hangResolve?.();
@@ -1233,4 +1244,86 @@ Deno.test("chat failure on an explicit model logs that model/provider, charges n
   assertEquals(store.log[0].success, false);
   assertEquals(store.log[0].model, "gpt-5.5"); // failed attempts stay attributable
   assertEquals(store.log[0].provider, "openai");
+});
+
+// ---- Dev Mode call 1: free word-level transcription (Phase 2 §7) ------------
+
+function devTranscribeBody(over: Record<string, unknown> = {}) {
+  return {
+    mode: "dev_transcribe",
+    audio: { mime: "audio/m4a", filename: "rec.m4a", data: btoa("audio-bytes-here") },
+    ...over,
+  };
+}
+
+Deno.test("dev_transcribe: returns word timing, and charges/runs/holds NOTHING (no credit, chat, slot, idempotency)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  // Pass an Idempotency-Key to prove the free path ignores it (writes no entry).
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "idem-dev-1"), deps(store, openai));
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  // Word-level transcript flows back to the client.
+  assertEquals(json.transcript.words, [{ word: "hello", start: 0, end: 1 }, { word: "world", start: 1, end: 2 }]);
+  assertEquals(json.transcript.segments.length, 1);
+  assertEquals(json.transcript.durationSeconds, 10);
+
+  // STT ran exactly once (with word timing); the chat model never did.
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 0, "no chat model on call 1");
+  assertEquals(openai.makeChatCalls.length, 0, "no chat client built on call 1");
+
+  // No billing machinery: no slot, no credit, no idempotency, not logged.
+  assertEquals(store.acquireSlotCalls, 0, "call 1 acquires NO concurrency slot");
+  assertEquals(store.slots.size, 0);
+  assertEquals(store.used.get("sub-1") ?? 0, 0, "no credit consumed on call 1");
+  assertEquals(store.idempotent.size, 0, "no idempotency entry written on call 1");
+  assertEquals(store.log.length, 0, "call 1 is not a billable generation — not logged");
+});
+
+Deno.test("dev_transcribe with has_speech:false → empty transcript, no STT (graceful fallback to click/dwell)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), devTranscribeBody({ has_speech: false }), undefined),
+    deps(store, openai),
+  );
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.transcript.words, []);
+  assertEquals(json.transcript.segments, []);
+  assertEquals(openai.transcribeCalls, 0, "no-speech → no STT round-trip");
+  assertEquals(store.acquireSlotCalls, 0);
+});
+
+Deno.test("dev_transcribe is rate-limited (bounds free-STT abuse) without taking a slot", async () => {
+  const store = activeStore(0);
+  store.rateOk = false;
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody()), deps(store, openai));
+
+  assertEquals(res.status, 429);
+  assertEquals(openai.transcribeCalls, 0, "rate-limited before any STT");
+  assertEquals(store.acquireSlotCalls, 0);
+});
+
+Deno.test("dev_transcribe requires a valid identity (unauth → 401, no STT)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(null, devTranscribeBody()), deps(store, openai));
+  assertEquals(res.status, 401);
+  assertEquals(openai.transcribeCalls, 0);
+});
+
+Deno.test("dev_transcribe applies the audio fuse (missing audio → 400, no STT)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), { mode: "dev_transcribe" }),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 400);
+  assertEquals(openai.transcribeCalls, 0);
 });

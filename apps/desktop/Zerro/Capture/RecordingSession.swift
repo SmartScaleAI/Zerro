@@ -99,9 +99,11 @@ final class RecordingSession: NSObject {
         /// `clicks` (Phase 4) are the left-clicks captured live during the
         /// recording, normalized into the captured region — handed to the
         /// pipeline, which resolves each to the on-screen label under the cursor.
-        /// Only the success path carries clicks; `.interrupted` (recovered later,
-        /// clicks lost on sleep) and the failure/cancel paths carry none.
-        case finished(URL, clicks: [RecordedClick])
+        /// `cursor` (Phase 2) is the continuous ~30Hz cursor track, captured ONLY
+        /// for a Dev Mode recording (empty otherwise) and fed to the deixis
+        /// resolver. Only the success path carries either; `.interrupted`
+        /// (recovered later, both lost on sleep) and the failure/cancel paths none.
+        case finished(URL, clicks: [RecordedClick], cursor: [CursorSample])
         case cancelled
         /// M2 (rev 2): the recording was abandoned because the system was
         /// about to sleep — deliberately WITHOUT finalizing the writer (a
@@ -174,6 +176,11 @@ final class RecordingSession: NSObject {
     /// MUST construct with 1.0. The wall-clock file duration is
     /// unchanged — only the published "elapsed" reading is scaled.
     private let clockMultiplier: Double
+
+    /// Phase 2 (Dev Mode deixis) — when true, capture the continuous ~30Hz cursor
+    /// track (the hover signal §7 needs). Set ONLY for a Dev Mode recording; a
+    /// normal recording leaves the tracker nil and is byte-identical to before.
+    private let capturesCursorTrack: Bool
 
     // MARK: - Queues
 
@@ -254,6 +261,13 @@ final class RecordingSession: NSObject {
     private var clickMonitor: Any?
     private var recordedClicks: [RecordedClick] = []
 
+    /// Phase 2 (Dev Mode deixis) — the continuous cursor poller, created at the
+    /// end of `start()` ONLY when `capturesCursorTrack`, on the same clock/region
+    /// as the click monitor, and stopped in `removeCaptureMonitors()` (its samples
+    /// collected for the success Outcome). nil for a normal recording.
+    private var cursorTracker: CursorTracker?
+    private var recordedCursorSamples: [CursorSample] = []
+
     /// Phase 4 — the captured region in GLOBAL AppKit coords (points, bottom-left
     /// origin) that a click is normalized against: the selection rect when one
     /// was made, else the recorded display's full frame. Captured at `start()`
@@ -326,7 +340,8 @@ final class RecordingSession: NSObject {
         onElapsed: @escaping (TimeInterval) -> Void,
         onFinish: @escaping (Outcome) -> Void,
         onAudioLevel: (@MainActor @Sendable (Float) -> Void)? = nil,
-        clockMultiplier: Double = 1.0
+        clockMultiplier: Double = 1.0,
+        capturesCursorTrack: Bool = false
     ) {
         self.selection = selection
         self.microphoneDeviceID = microphoneDeviceID
@@ -334,6 +349,7 @@ final class RecordingSession: NSObject {
         self.onFinish = onFinish
         self.onAudioLevel = onAudioLevel
         self.clockMultiplier = clockMultiplier
+        self.capturesCursorTrack = capturesCursorTrack
         self.outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("zerro-\(UUID().uuidString).mov")
         super.init()
@@ -664,6 +680,20 @@ final class RecordingSession: NSObject {
             }
         }
 
+        // Phase 2 (Dev Mode deixis): start the continuous cursor poller on the
+        // SAME anchor + region the click monitor just used, so cursor samples,
+        // clicks, and frames share one clock + coordinate space (§7). Only for a
+        // Dev Mode recording — a normal recording installs nothing here.
+        if capturesCursorTrack, let anchor = sessionStartInstant {
+            let tracker = CursorTracker(
+                region: captureRegionGlobalRect ?? screen.frame,
+                anchor: anchor,
+                clockMultiplier: clockMultiplier
+            )
+            cursorTracker = tracker
+            tracker.start()
+        }
+
         elapsedPublishTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
@@ -843,6 +873,13 @@ final class RecordingSession: NSObject {
         }
         self.clickMonitor = nil
         self.captureRegionGlobalRect = nil
+        // Phase 2 (Dev Mode deixis): stop the cursor poller and KEEP its samples
+        // (like `recordedClicks`, read once at finalize, after this runs). nil for
+        // a normal recording — a no-op.
+        if let cursorTracker {
+            recordedCursorSamples = cursorTracker.stop()
+        }
+        self.cursorTracker = nil
     }
 
     // MARK: - Finalize
@@ -932,7 +969,11 @@ final class RecordingSession: NSObject {
                             // clicks to the pipeline via the Outcome.
                             let clicks = self.recordedClicks
                             Self.writeClicksSidecar(clicks, beside: outputURL)
-                            self.onFinish(.finished(outputURL, clicks: clicks))
+                            // Phase 2 (Dev Mode deixis): same for the cursor track
+                            // (empty + no sidecar for a normal recording).
+                            let cursor = self.recordedCursorSamples
+                            Self.writeCursorSidecar(cursor, beside: outputURL)
+                            self.onFinish(.finished(outputURL, clicks: clicks, cursor: cursor))
                         default:
                             let err = writer.error
                                 ?? SessionError.writerFailedToStart(underlying: nil)
@@ -1279,6 +1320,23 @@ final class RecordingSession: NSObject {
             Log.capture.info("wrote \(clicks.count, privacy: .public) click(s) sidecar")
         } catch {
             Log.capture.error("clicks sidecar write failed: \(error.localizedDescription, privacy: .private)")
+        }
+    }
+
+    /// Phase 2 (Dev Mode deixis) — writes the `<stem>.cursor.json` sidecar (a
+    /// `[CursorSample]` array) beside the finished `.mov`, mirroring the clicks
+    /// sidecar so the eval loop can replay the exact track. Empty track (a normal
+    /// recording, or a Dev Mode one where the cursor never entered the region) →
+    /// no file. Best-effort: a failure is logged, never thrown.
+    nonisolated static func writeCursorSidecar(_ samples: [CursorSample], beside movURL: URL) {
+        guard !samples.isEmpty else { return }
+        let sidecarURL = movURL.deletingPathExtension().appendingPathExtension("cursor.json")
+        do {
+            let data = try JSONEncoder().encode(samples)
+            try data.write(to: sidecarURL, options: .atomic)
+            Log.capture.info("wrote \(samples.count, privacy: .public) cursor sample(s) sidecar")
+        } catch {
+            Log.capture.error("cursor sidecar write failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 

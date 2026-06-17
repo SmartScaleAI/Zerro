@@ -71,6 +71,57 @@ function decodeBase64(b64: string): Uint8Array {
   return out;
 }
 
+// =============================================================================
+// Dev Mode "dev-transcribe" (Phase 2, call 1) — a FREE word-level transcription
+// (§7). The request carries AUDIO ONLY (no frames, no model, no clicks): the
+// client needs the word transcript to resolve anchors before the billable
+// generation (call 2). Validated separately + minimally so a transcribe-only
+// body isn't rejected for "missing_frames", and so the audio fuse (mime, size,
+// duration) still applies. `validateBody` is deliberately left untouched.
+// =============================================================================
+
+export interface TranscribeRequest {
+  audio: { bytes: Uint8Array; mime: string; filename: string };
+  hasSpeech: boolean;
+}
+
+export type TranscribeValidationResult =
+  | { ok: true; value: TranscribeRequest }
+  | { ok: false; status: number; error: string };
+
+export function validateTranscribeBody(body: unknown): TranscribeValidationResult {
+  if (typeof body !== "object" || body === null) return { ok: false, status: 400, error: "invalid_body" };
+  const b = body as Record<string, unknown>;
+
+  // audio (same fuse as validateBody — mime allow-list, base64, size cap).
+  const audio = b.audio as Record<string, unknown> | undefined;
+  if (!audio || typeof audio !== "object") return { ok: false, status: 400, error: "missing_audio" };
+  const audioMime = String(audio.mime ?? "");
+  if (!ALLOWED_AUDIO_MIME.includes(audioMime)) return { ok: false, status: 415, error: "unsupported_audio_mime" };
+  const audioData = audio.data;
+  if (typeof audioData !== "string" || audioData.length === 0) return { ok: false, status: 400, error: "missing_audio_data" };
+
+  let audioBytes: Uint8Array;
+  try {
+    audioBytes = decodeBase64(audioData);
+  } catch {
+    return { ok: false, status: 400, error: "invalid_audio_encoding" };
+  }
+  if (audioBytes.byteLength === 0) return { ok: false, status: 400, error: "empty_audio" };
+  if (audioBytes.byteLength > MAX_AUDIO_BYTES) return { ok: false, status: 413, error: "audio_too_large" };
+
+  if (audio.duration_seconds !== undefined && audio.duration_seconds !== null) {
+    const d = Number(audio.duration_seconds);
+    if (!Number.isFinite(d) || d < 0) return { ok: false, status: 400, error: "invalid_audio_duration" };
+    if (d > MAX_AUDIO_SECONDS) return { ok: false, status: 413, error: "audio_too_long" };
+  }
+
+  const filename = typeof audio.filename === "string" && audio.filename ? audio.filename : "recording.m4a";
+  const hasSpeech = b.has_speech !== false;
+
+  return { ok: true, value: { audio: { bytes: audioBytes, mime: audioMime, filename }, hasSpeech } };
+}
+
 /**
  * Validate an already-parsed JSON body against the input fuse. The caller has
  * already enforced MAX_PAYLOAD_BYTES on the raw bytes (cheapest gate, pre-parse)

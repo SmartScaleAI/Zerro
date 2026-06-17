@@ -821,7 +821,12 @@ final class AppState {
                 // mutate @Observable state on every emit. MainActor-
                 // hopped on the session side.
                 self?.handleAudioLevel(level)
-            }
+            },
+            // Phase 2 (Dev Mode deixis): capture the continuous cursor track ONLY
+            // for a Dev Mode recording. `recordingIsDevMode` is already set above
+            // from the `devMode` selection; a normal recording captures none and
+            // stays byte-identical.
+            capturesCursorTrack: recordingIsDevMode
         )
         recordingSession = session
 
@@ -1245,7 +1250,7 @@ final class AppState {
         }
         permissions?.stopMonitoring()
         switch outcome {
-        case .finished(let url, let clicks):
+        case .finished(let url, let clicks, let cursor):
             // Tier 1 analytics: the recording loop's terminal event. Read the
             // pre-transition state for `end_reason` — the auto-stop path set
             // `.autoStopped` before finalizing; a manual stop leaves
@@ -1266,7 +1271,7 @@ final class AppState {
             // existing placeholder result. The working-dir path is
             // logged so the isolated audio can be played + verified.
             state = .processing
-            runProcessing(sourceURL: url, clicks: clicks)
+            runProcessing(sourceURL: url, clicks: clicks, cursor: cursor)
         case .interrupted:
             // M2 (rev 2): the recording was abandoned for sleep WITHOUT
             // finalizing, leaving a recoverable fragmented `.mov` on disk
@@ -1449,7 +1454,7 @@ final class AppState {
     /// defense, the `state == .processing` guards after each await mean
     /// a cancel that resets to .idle wins — we never stomp a newer state
     /// with a late-arriving pipeline result, even if the abort raced.
-    private func runProcessing(sourceURL: URL, clicks: [RecordedClick] = []) {
+    private func runProcessing(sourceURL: URL, clicks: [RecordedClick] = [], cursor: [CursorSample] = []) {
         // Reset the placeholder explicitly — handleSessionFinish set
         // state = .processing before this Task starts running, so for
         // ~ms before the pipeline fires its first onStage the pill
@@ -1465,6 +1470,11 @@ final class AppState {
                 let result = try await ProcessingPipeline().process(
                     sourceURL: sourceURL,
                     clicks: clicks,
+                    cursor: cursor,
+                    // Phase 2 (Dev Mode deixis, M3): retain the source video for
+                    // native-res anchor frames. The pipeline moves it into the
+                    // working dir, so the source deletion below becomes a no-op.
+                    retainSourceForDev: self.recordingIsDevMode,
                     redactSecrets: self.recordingRedactSecrets,
                     onStage: { [weak self] stage in
                         self?.setProcessingLabel(stage.userMessage)
@@ -1957,7 +1967,7 @@ final class AppState {
                 // empty transcript. The timeline is then frames + OCR + clicks
                 // only; the prompt's empty-narration rule covers the output
                 // (one brief chat line, no artifact).
-                let transcript: Transcript
+                var transcript: Transcript
                 if processed.hasSpeech {
                     // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
                     // failure can be triaged by the breadcrumb sequence
@@ -1965,7 +1975,11 @@ final class AppState {
                     Log.breadcrumb(category: .pipelineStage, message: "transcription started")
                     let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
                     transcript = try await OpenAITranscriptionService().transcribe(
-                        audioFileURL: audioURL
+                        audioFileURL: audioURL,
+                        // Phase 2 (Dev Mode deixis): request word-level timing only
+                        // for a Dev Mode recording (the resolver needs it); a normal
+                        // recording's request stays byte-identical.
+                        wordTimestamps: self.recordingIsDevMode
                     )
                     // Counts are .public — segment count and char count
                     // are metrics, not content. The transcript TEXT itself
@@ -1981,6 +1995,17 @@ final class AppState {
                 guard self.state == .processing else {
                     self.stopThinkingRotation()
                     return
+                }
+
+                // Phase 2 (Dev Mode deixis §11): snap mangled library/component
+                // names ("Versel"→"Vercel") back to the project's canonical
+                // spellings before they reach the resolver + the dev prompt.
+                // Dev-Mode-only + best-effort (an empty/seedless dictionary is a
+                // no-op); a normal recording's transcript is untouched.
+                if self.recordingIsDevMode, let projectURL = self.recordingProjectURL,
+                   !transcript.fullText.isEmpty {
+                    let dictionary = await Task.detached { DevDomainDictionary.seed(projectURL: projectURL) }.value
+                    transcript = dictionary.corrected(transcript)
                 }
 
                 let timeline = Interleaver.merge(

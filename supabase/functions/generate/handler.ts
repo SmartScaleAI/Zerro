@@ -54,7 +54,7 @@ import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
 import { creditCostForModel, estimatedCostUsd, estimateGenerationCredits, sttCostUsd } from "./cost.ts";
 import { modelById } from "./models.ts";
-import { validateBody } from "./limits.ts";
+import { validateBody, validateTranscribeBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
@@ -153,6 +153,19 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     : await resolveSubscription(deps, claims.sub);
   if ("error" in resolved) return json({ error: resolved.error }, resolved.status);
   const account = resolved.account;
+
+  // 4.5 Dev Mode call 1 (Phase 2 §7) — a FREE word-level transcription. The
+  //     client needs the word transcript to resolve deixis anchors BEFORE the
+  //     billable generation (call 2). This path deliberately does NONE of the
+  //     billing machinery: no credit, no chat model, no concurrency SLOT, no
+  //     idempotency entry. It is still auth-gated (above) and rate-limited
+  //     (inside) because STT costs us real money — but it takes NO slot, so it
+  //     can neither block nor be blocked by the paired generation (cap-1 is
+  //     enforced by call 2). The pair therefore consumes two rate-limit tokens
+  //     and exactly one credit (on call 2).
+  if (isDevTranscribeRequest(body)) {
+    return await handleDevTranscribe(body, account, deps);
+  }
 
   // 5. Server-side input fuse — BEFORE any OpenAI call or credit work. A legit
   //    recording can never trip this; only a forged/oversized payload does.
@@ -491,6 +504,57 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
 
 function usageBody(chat: { inputTokens: number; outputTokens: number; model: string }) {
   return { input_tokens: chat.inputTokens, output_tokens: chat.outputTokens, model: chat.model };
+}
+
+// =============================================================================
+// Dev Mode call 1 — free word-level transcription (Phase 2 §7)
+// =============================================================================
+
+/** True when the body is a Dev Mode "dev-transcribe" request (the only place a
+ *  `mode` field is read again — the normal generation path ignores it). */
+function isDevTranscribeRequest(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    (body as Record<string, unknown>).mode === "dev_transcribe";
+}
+
+/** Handle Dev Mode call 1: transcribe audio with WORD-level timing and return
+ *  it. NO credit / chat / slot / idempotency (see the call site). Rate-limited
+ *  (STT costs money) but slot-free. `has_speech:false` → an empty transcript so
+ *  call 2 falls back to click/dwell anchoring without breaking the 2-call flow. */
+async function handleDevTranscribe(
+  body: unknown,
+  account: ResolvedAccount,
+  deps: GenerateDeps,
+): Promise<Response> {
+  const v = validateTranscribeBody(body);
+  if (!v.ok) return json({ error: v.error }, v.status);
+
+  // Rate-limit (same coarse per-identity limiter as generation) so this can't be
+  // abused as a free unlimited transcription service. NO slot acquired.
+  const withinRate = await deps.store.rateLimitOk(
+    account.key,
+    GENERATE_RATE_LIMIT_PER_SUB,
+    GENERATE_RATE_LIMIT_WINDOW_SECONDS,
+  );
+  if (!withinRate) return json({ error: "rate_limited" }, 429);
+
+  // No speech → nothing to transcribe. Return an empty transcript; the client
+  // falls back to click/dwell anchoring (build requirement #3).
+  if (!v.value.hasSpeech) {
+    return json({ transcript: { segments: [], words: [], durationSeconds: 0 } }, 200);
+  }
+
+  try {
+    const tr = await deps.stt.transcribe(v.value.audio, { words: true });
+    return json(
+      { transcript: { segments: tr.segments, words: tr.words ?? [], durationSeconds: tr.durationSeconds } },
+      200,
+    );
+  } catch (e) {
+    // A transcription failure charges nothing (nothing was charged anyway) and
+    // is NOT logged as a generation — call 1 is not a billable generation.
+    return providerErrorResponse(e);
+  }
 }
 
 /** Map a provider failure to a client response. Retryable → 503; else 502. The

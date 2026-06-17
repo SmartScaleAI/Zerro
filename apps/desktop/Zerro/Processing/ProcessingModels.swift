@@ -36,6 +36,30 @@ struct RecordedClick: Codable, Sendable, Equatable {
     let y: Double
 }
 
+// MARK: - CursorSample
+
+/// Phase 2 (Dev Mode deixis, §7) — one cursor-position sample from the
+/// continuous ~30Hz track captured during a **Dev Mode** recording. The track is
+/// the missing signal that turns "make *this* bigger" into an element: clicks are
+/// too sparse (pointing is usually a hover), so we poll the cursor and detect the
+/// dwell under a referring expression.
+///
+/// `seconds` is on the SAME clock as `RecordedClick`/frames — SuspendingClock
+/// since the session's first-sample anchor × `clockMultiplier` (§7 clock sync) —
+/// so a sample timestamp lines up with the transcript word timings and the
+/// keyframe PTS. `x`/`y` are normalized `[0,1]` within the captured region with a
+/// TOP-LEFT origin, matching the frame images (same transform as `RecordedClick`,
+/// via `RecordingSession.normalizedClick`). Out-of-region positions are dropped
+/// at capture (no element to point at), so every sample sits inside a frame.
+///
+/// Only produced for Dev Mode recordings; a normal recording captures none and is
+/// byte-identical to before.
+struct CursorSample: Codable, Sendable, Equatable {
+    let seconds: Double
+    let x: Double
+    let y: Double
+}
+
 // MARK: - ResolvedClick
 
 /// Phase 4 — a `RecordedClick` after its on-screen label has been resolved from
@@ -81,6 +105,21 @@ struct ProcessedRecording {
     /// harness can rebuild the same timeline.
     let clicks: [ResolvedClick]
 
+    /// Phase 2 (Dev Mode deixis, §7) — the continuous cursor track captured during
+    /// a Dev Mode recording, raw `[(t, x, y)]` (normalized, top-left). Empty for a
+    /// normal recording (none captured) or an old recording with no cursor
+    /// sidecar. The `DeixisResolver` (M4) consumes it to find the dwell under each
+    /// referring expression; the pipeline carries it through unchanged.
+    let cursorTrack: [CursorSample]
+
+    /// Phase 2 (Dev Mode deixis §11, M3) — the source `.mov`, RETAINED inside the
+    /// working directory for a Dev Mode recording so native-resolution anchor
+    /// frames can be extracted on-demand at the aligned moments (M5), once the
+    /// downsampled keyframes prove too low-res for OCR. nil for a normal
+    /// recording (the source is deleted post-processing, as before). Cleaned up
+    /// with the working directory.
+    let sourceVideoURL: URL?
+
     /// Phase 6 — whether the isolated audio carries any detectable speech
     /// (`AudioActivity.hasSpeech`), computed post-hoc from `audio.m4a`. `false`
     /// means a silent/screen-only clip: the generation paths skip the Whisper
@@ -116,6 +155,8 @@ struct ProcessedRecording {
         workingDirectory: URL,
         clicks: [ResolvedClick],
         hasSpeech: Bool,
+        cursorTrack: [CursorSample] = [],
+        sourceVideoURL: URL? = nil,
         idempotencyKey: String = UUID().uuidString
     ) {
         self.audioURL = audioURL
@@ -124,6 +165,8 @@ struct ProcessedRecording {
         self.workingDirectory = workingDirectory
         self.clicks = clicks
         self.hasSpeech = hasSpeech
+        self.cursorTrack = cursorTrack
+        self.sourceVideoURL = sourceVideoURL
         self.idempotencyKey = idempotencyKey
     }
 }
