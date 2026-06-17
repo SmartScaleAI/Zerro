@@ -346,6 +346,14 @@ struct MenuBarPanelView: View {
                         )
                     }
             }
+            // Refill the displayed credit balance to full (managed plan
+            // allowance or trial grant limit) so the credits line, low-balance
+            // nudge, and out-of-credits gate can be re-tested without burning
+            // real generations. Display-only — a real /entitlement refresh
+            // restores the true balance.
+            MenuRow(label: "Reset Credits") {
+                entitlements.devResetCredits()
+            }
             // Trial dev control. The trial is now a pure credit pool (no clock),
             // so forcing trial/expired is done via the Entitlement picker above;
             // what remains is wiping the local Phase F email-verification cache
@@ -571,7 +579,7 @@ struct MenuBarPanelView: View {
         let action = MenuBarBillingAction.resolve(
             state: entitlements.state,
             isPastDue: entitlements.managedSnapshot?.isPastDue == true,
-            isLowBalance: isBalanceLowForSelectedModel
+            isLowBalance: isBalanceLow
         )
         return BillingActionRow(label: action.label, secondary: action.secondary) {
             entitlements.paywallTrigger = action.trigger
@@ -624,21 +632,18 @@ struct MenuBarPanelView: View {
 
     // MARK: - Low-balance top-up / upgrade (multi-model 6B.4)
 
-    /// True when the spendable balance can't cover the SELECTED model's next
-    /// generation. Managed reads the snapshot's combined plan+top-up balance
-    /// (F4 — the same number the server's spend gate checks); BYOK/expired
-    /// have no balance to be low on.
-    private var isBalanceLowForSelectedModel: Bool {
-        guard let price = ModelRegistry.entry(id: preferences.selectedModelID)?.creditPrice else {
-            return false
-        }
+    /// True when the spendable balance has dropped to the low-balance nudge
+    /// threshold (price-agnostic — charging is metered server-side). Managed
+    /// reads the snapshot's combined plan+top-up balance (F4 — the same number
+    /// the server's spend gate checks); BYOK/expired have no balance to nudge on.
+    private var isBalanceLow: Bool {
         switch entitlements.state {
         case .managed:
             guard let snapshot = entitlements.managedSnapshot else { return false }
-            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining, selectedModelPrice: price)
+            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining)
         case .trial(let credits):
             guard let credits else { return false }
-            return CreditDisplay.isLowBalance(balance: credits, selectedModelPrice: price)
+            return CreditDisplay.isLowBalance(balance: credits)
         case .byok, .expired:
             return false
         }
@@ -1394,7 +1399,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
             .environment(AppState())
             .environment(previewRecentPromptStore())
             .environment(EntitlementStore.preview(
-                .managed(tier: .pro, creditsRemaining: 142, resetDate: .now)
+                .managed(creditsRemaining: 142, resetDate: .now)
             ))
             .environmentObject(UpdaterViewModel())
     }

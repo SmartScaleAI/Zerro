@@ -97,25 +97,23 @@ function composedSystemPrompt() {
 // outputTokens, matching the server). Anthropic output rates likewise fold in
 // any thinking tokens that ride in output_tokens.
 //
-// PHASE 0 NOTE (multi-model gate): cost.ts has NOT been updated yet — that lands
-// in Phase 2. This table is ahead of cost.ts on purpose so the harness can price
-// the six candidate models now. Re-sync cost.ts against this block in Phase 2.
+// SOURCE OF TRUTH: cost.ts is now the metered-charge pricing table (the server
+// charges ceil(est_cost_usd / $0.01) off it). This block must AGREE with it
+// exactly — neither table leads the other; a rate change lands in BOTH.
 //
 // Rates verified against provider docs 2026-06-09:
 //   OpenAI    https://developers.openai.com/api/docs/pricing
 //   Gemini    https://ai.google.dev/gemini-api/docs/pricing
 //   Anthropic https://platform.claude.com/docs/en/about-claude/models/overview
 //
-// ⚠️ FLAG: the plan's §1.1 "GPT-5 mini" placeholder model id `gpt-5-mini` does
-// NOT exist at OpenAI (confirmed against the pricing/models docs above). The
-// current cheapest GPT-5-family mini is `gpt-5.4-mini` ($0.75/$4.50), priced
-// below as the stand-in "Lowest cost" OpenAI model. Confirm the intended id with
-// Colin before Phase 2 wires the registry.
+// NOTE: `gpt-5.4-mini` is the cheapest GPT-5-family mini that actually exists at
+// OpenAI (the plan's §1.1 "gpt-5-mini" id was a non-existent placeholder); it is
+// the registry's "Lowest cost" OpenAI model (models.ts), priced below.
 const CHAT_PRICING = {
   // — legacy / prior eval baseline —
   "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list
   // — the six Phase 0 candidates —
-  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 }, // stand-in for plan's "gpt-5-mini" (does not exist)
+  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 }, // registry's lowest-cost OpenAI model
   "openai:gpt-5.5": { inPerM: 5.0, outPerM: 30.0 },
   "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // flat
   "gemini:gemini-3.1-pro-preview": { // tiered by input tokens (>200k raises both rates)

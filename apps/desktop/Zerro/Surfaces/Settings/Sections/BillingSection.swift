@@ -281,13 +281,11 @@ private struct CurrentPlanRow: View {
             PlanPill(text: "Expired", tint: Color.vfRecordingRed)
         case .byok:
             PlanPill(text: "BYOK", tint: Color.vfSuccessGreen)
-        case .managed(let tier, _, _):
+        case .managed:
             // Past-due tints amber (a soft warning, not a block); active is green.
             let pastDue = entitlements.managedSnapshot?.isPastDue == true
             PlanPill(
-                text: pastDue
-                    ? "Managed \u{00B7} \(tier.rawValue.capitalized) \u{00B7} Past due"
-                    : "Managed \u{00B7} \(tier.rawValue.capitalized)",
+                text: pastDue ? "Managed \u{00B7} Past due" : "Managed",
                 tint: pastDue ? Color.vfWarningAmber : Color.vfSuccessGreen
             )
         }
@@ -571,10 +569,9 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
 ///   when that's unknown (older server / pre-update cache) the trial
 ///   variant degrades to bar-less.
 /// • Inline prompt: the SAME low-balance threshold as the generation-flow
-///   prompt (CreditDisplay.isLowBalance against the SELECTED model's price).
+///   prompt (CreditDisplay.isLowBalance — a price-agnostic balance floor).
 private struct UsageMeterRow: View {
     @Environment(EntitlementStore.self) private var entitlements
-    @Environment(PreferencesStore.self) private var preferences
 
     var body: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
@@ -628,12 +625,6 @@ private struct UsageMeterRow: View {
             }
         }
 
-        if let helper = CreditDisplay.translationLine(balance: snapshot.creditsRemaining) {
-            Text(helper)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-        }
-
         topupPrompt(balance: snapshot.creditsRemaining)
     }
 
@@ -653,12 +644,6 @@ private struct UsageMeterRow: View {
 
         if let limit = entitlements.trialCreditsLimit, limit > 0 {
             meterBar(fraction: CreditDisplay.trialFractionRemaining(remaining: credits, limit: limit))
-        }
-
-        if let helper = CreditDisplay.translationLine(balance: credits) {
-            Text(helper)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
         }
 
         // Trials can't buy top-ups (plan §1.4) — the inline prompt is the
@@ -689,10 +674,7 @@ private struct UsageMeterRow: View {
     }
 
     private func isLow(balance: Int) -> Bool {
-        guard let price = ModelRegistry.entry(id: preferences.selectedModelID)?.creditPrice else {
-            return false
-        }
-        return CreditDisplay.isLowBalance(balance: balance, selectedModelPrice: price)
+        CreditDisplay.isLowBalance(balance: balance)
     }
 
     /// 6F.4 — comfortable balance: a quiet packs line; low balance: escalate
@@ -801,7 +783,7 @@ private struct DevRevalidateRow: View {
 #Preview("Plan & Credits · managed") {
     BillingSection()
         .environment(EntitlementStore.preview(
-            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
+            .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
         ))
         .environment(PreferencesStore())
         .padding()

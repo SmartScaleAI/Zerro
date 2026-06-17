@@ -31,7 +31,7 @@ final class PaywallCopyTests: XCTestCase {
     }
 
     func testTopupOnManaged() {
-        let state = EntitlementState.managed(tier: .pro, creditsRemaining: 2, resetDate: .distantFuture)
+        let state = EntitlementState.managed(creditsRemaining: 2, resetDate: .distantFuture)
         XCTAssertEqual(headline(.topup, state), "Add more credits")
     }
 
@@ -40,19 +40,19 @@ final class PaywallCopyTests: XCTestCase {
     }
 
     func testManageOnHealthyManaged() {
-        let state = EntitlementState.managed(tier: .pro, creditsRemaining: 250, resetDate: .distantFuture)
+        let state = EntitlementState.managed(creditsRemaining: 250, resetDate: .distantFuture)
         XCTAssertEqual(headline(.manage, state), "Manage your plan")
     }
 
     // MARK: - Pre-flight block triggers map onto the same copy
 
     func testOutOfCreditsMapsToTopup() {
-        let state = EntitlementState.managed(tier: .pro, creditsRemaining: 0, resetDate: .distantFuture)
+        let state = EntitlementState.managed(creditsRemaining: 0, resetDate: .distantFuture)
         XCTAssertEqual(headline(.outOfCredits, state), PaywallCopy.topup.headline)
     }
 
     func testSubscriptionInactiveMapsToManage() {
-        let state = EntitlementState.managed(tier: .pro, creditsRemaining: 50, resetDate: .distantFuture)
+        let state = EntitlementState.managed(creditsRemaining: 50, resetDate: .distantFuture)
         XCTAssertEqual(headline(.subscriptionInactive, state), PaywallCopy.manage.headline)
     }
 
@@ -77,7 +77,7 @@ final class PaywallCopyTests: XCTestCase {
         XCTAssertEqual(headline(nil, .expired), PaywallCopy.blocked.headline)
         XCTAssertEqual(headline(nil, .byok), PaywallCopy.manage.headline)
         XCTAssertEqual(
-            headline(nil, .managed(tier: .pro, creditsRemaining: 100, resetDate: .distantFuture)),
+            headline(nil, .managed(creditsRemaining: 100, resetDate: .distantFuture)),
             PaywallCopy.manage.headline
         )
     }

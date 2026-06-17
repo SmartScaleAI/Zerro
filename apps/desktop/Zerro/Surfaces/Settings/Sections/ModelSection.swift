@@ -10,11 +10,11 @@
 //
 //  Mode rules mirror ModelPickerSubmenu (one rendering contract for
 //  every model list):
-//  • Managed / Trial — each row shows its credit price
-//    ("Claude Opus 4.7 · 10 credits", §1.5: credits are the unit).
-//  • BYOK — names only (credits are meaningless) + per-provider
-//    key-gating: a model whose provider has no key on file renders
-//    disabled with an "add key" hint.
+//  • Rows are NAME-ONLY — no per-model credit price (charging is metered
+//    server-side; the only per-recording number the user sees is the actual
+//    `credits_charged` after a generation).
+//  • BYOK — per-provider key-gating: a model whose provider has no key on
+//    file renders disabled with an "add key" hint.
 //
 //  A Menu (not Picker(.menu)) because Picker rows can't be individually
 //  disabled, and BYOK gating needs exactly that.
@@ -87,8 +87,8 @@ struct ModelSection: View {
         .frame(width: 240, alignment: .trailing)
     }
 
-    /// The closed-state label: the current default, with its price in
-    /// Managed/Trial ("Gemini 3.5 Flash · 4 credits").
+    /// The closed-state label: the current default model name. No per-model
+    /// cost (metered-credits Phase 4).
     private var selectedTitle: String {
         guard let entry = ModelRegistry.entry(id: preferences.selectedModelID) else {
             return preferences.selectedModelID
@@ -96,8 +96,8 @@ struct ModelSection: View {
         return title(for: entry, withBadge: false)
     }
 
-    /// Row label: name, price (Managed/Trial), Recommended marker, or
-    /// the BYOK "add key" hint on gated rows.
+    /// Row label: name, Recommended marker, or the BYOK "add key" hint on
+    /// gated rows. No per-model cost (metered-credits Phase 4).
     private func rowTitle(_ model: ModelEntry) -> String {
         if isGated(model) {
             return "\(model.displayName) \u{2014} add \(model.provider.displayName) key"
@@ -107,23 +107,10 @@ struct ModelSection: View {
 
     private func title(for model: ModelEntry, withBadge: Bool) -> String {
         var text = model.displayName
-        if showsCredits {
-            let credits = model.creditPrice == 1 ? "1 credit" : "\(model.creditPrice) credits"
-            text += " \u{00B7} \(credits)"
-        }
         if withBadge && model.recommended {
             text += " \u{00B7} Recommended"
         }
         return text
-    }
-
-    /// Credits render in Managed/Trial only — never BYOK/expired (§1.5;
-    /// same rule as ModelPickerSubmenu and the toolbar dropdown).
-    private var showsCredits: Bool {
-        switch entitlements.state {
-        case .managed, .trial: return true
-        case .byok, .expired: return false
-        }
     }
 
     private func isGated(_ model: ModelEntry) -> Bool {
@@ -151,7 +138,7 @@ struct ModelSection: View {
     ModelSection()
         .environment(PreferencesStore())
         .environment(EntitlementStore.preview(
-            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now)
+            .managed(creditsRemaining: 248, resetDate: .now)
         ))
         .padding()
         .frame(width: 720)

@@ -268,7 +268,7 @@ public enum RecordingFailureReason: Equatable {
         case .artifactUnreadable:
             return "Couldn\u{2019}t process the recording."
         case .outOfCredits:
-            return "Not enough credits for this model. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
+            return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
         case .subscriptionInactive:
             return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
         case .trialVerificationRequired:
@@ -432,10 +432,10 @@ final class AppState {
     /// Multi-model 6B — the SERVER-reported spend of the result currently
     /// shown: `(credits_charged, credits_remaining)` from the `/generate` 200
     /// (D2). Drives the result pill's "−N credits · M left" toast line.
-    /// `charged` is exact (the circuit-breaker can meter above the fixed
-    /// price; an idempotent replay reports the original charge) — never
-    /// derived from the local price table. `nil` for BYOK/local results, on a
-    /// pre-D2 backend, and outside `.done`; reset wherever `generatedPrompt`
+    /// `charged` is exact: the server METERS the real cost of each generation
+    /// (an idempotent replay reports the original charge), so this is never
+    /// derived from any local per-model number. `nil` for BYOK/local results,
+    /// on a pre-D2 backend, and outside `.done`; reset wherever `generatedPrompt`
     /// is.
     var lastGenerationCharge: GenerationCharge?
 
@@ -1606,8 +1606,8 @@ final class AppState {
                     // Multi-model 6B: the toolbar's per-recording pick when
                     // the recording came through the overlay, else the user's
                     // persisted picker selection (registry-validated in
-                    // PreferencesStore). Selects the provider + per-model
-                    // price SERVER-side; never steers the prompt.
+                    // PreferencesStore). Selects the provider adapter SERVER-side
+                    // (charging is metered on real cost); never steers the prompt.
                     model: self.recordingModelID
                         ?? self.preferences?.selectedModelID
                         ?? ModelRegistry.defaultModelID,
@@ -1648,12 +1648,20 @@ final class AppState {
                 // entitlement (and flips it to `.expired` once credits hit zero,
                 // for the NEXT record attempt — the current result is unaffected).
                 if let remaining = managed.creditsRemaining {
-                    if isTrial {
-                        self.entitlements?.applyTrialCreditsRemaining(remaining)
-                    } else {
-                        self.entitlements?.applyCreditsRemaining(remaining)
+                    let effective = self.entitlements?.applyGenerationSpend(
+                        charged: managed.creditsCharged,
+                        remaining: remaining,
+                        isTrial: isTrial
+                    ) ?? remaining
+                    // Keep the result pill's "M left" consistent with the
+                    // (possibly DEBUG-sandboxed) displayed balance.
+                    if let charged = managed.creditsCharged {
+                        self.lastGenerationCharge = GenerationCharge(charged: charged, remaining: effective)
                     }
                 }
+                // Refresh the authoritative /entitlement snapshot in the
+                // background (subscription only). Under a DEBUG dev override this
+                // is suppressed inside the store so a pinned test balance holds.
                 if !isTrial, let entitlements = self.entitlements {
                     Task { await entitlements.refreshManagedEntitlement() }
                 }

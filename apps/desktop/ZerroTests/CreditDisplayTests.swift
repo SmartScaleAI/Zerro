@@ -2,10 +2,11 @@
 //  CreditDisplayTests.swift
 //  ZerroTests
 //
-//  Phase 6 (multi-model 6B) — the credit-UX helpers behind the picker's
-//  "~N left", the low-balance threshold (one source of truth for both the
-//  generation-flow prompt and the billing card), the §1.5 strings, and the
-//  post-generation toast.
+//  Phase 6 (multi-model 6B) — the credit-UX helpers: the price-agnostic
+//  low-balance threshold (one source of truth for both the generation-flow
+//  prompt and the billing card), the §1.5 strings, the usage meter, and the
+//  post-generation toast. Per-model "~N left" / translation helpers were
+//  removed in metered-credits Phase 4 (the app shows no per-model cost).
 //
 
 import XCTest
@@ -14,30 +15,15 @@ import XCTest
 @MainActor
 final class CreditDisplayTests: XCTestCase {
 
-    // MARK: - "~N left"
+    // MARK: - Low-balance threshold (price-agnostic — metered-credits Phase 4)
 
-    func testEstimatedLeftIsFloorDivision() {
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: 248, creditPrice: 4), 62)
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: 248, creditPrice: 10), 24)
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: 9, creditPrice: 10), 0)
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: 0, creditPrice: 4), 0)
-    }
-
-    func testEstimatedLeftNeverNegativeOrDivByZero() {
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: -5, creditPrice: 4), 0)
-        XCTAssertEqual(CreditDisplay.estimatedLeft(balance: 100, creditPrice: 0), 0)
-    }
-
-    // MARK: - Low-balance threshold (6B.4 / 6F.4)
-
-    func testLowBalanceIsModelRelative_notExactlyZero() {
-        // 9 credits with Opus (10) selected is already blocked → low.
-        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 9, selectedModelPrice: 10))
-        // The same 9 credits with Flash (4) selected is fine.
-        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 9, selectedModelPrice: 4))
-        // Exactly affordable is NOT low.
-        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 10, selectedModelPrice: 10))
-        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 0, selectedModelPrice: 2))
+    func testLowBalanceTripsAtOrBelowThreshold() {
+        // LOW_BALANCE_CREDITS = 30: at/below is low, just above is not.
+        XCTAssertEqual(CreditDisplay.LOW_BALANCE_CREDITS, 30)
+        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 31)) // above → fine
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 30))  // at threshold → low
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 29))  // below → low
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 0))   // empty → low
     }
 
     // MARK: - §1.5 strings
@@ -46,20 +32,6 @@ final class CreditDisplayTests: XCTestCase {
         XCTAssertEqual(CreditDisplay.creditsHeadline(248), "248 credits")
         XCTAssertEqual(CreditDisplay.creditsHeadline(1), "1 credit")
         XCTAssertEqual(CreditDisplay.creditsHeadline(0), "0 credits")
-    }
-
-    func testTranslationLineUsesRecommendedAndPriciest() {
-        // 248 credits: ≈ 62 with Flash (4) · 22 with GPT-5.5 (11 — priciest).
-        XCTAssertEqual(
-            CreditDisplay.translationLine(balance: 248),
-            "\u{2248} 62 with Flash \u{00B7} 22 with GPT-5.5"
-        )
-    }
-
-    func testTranslationLineHiddenWhenBalanceBuysNothing() {
-        // 3 credits can't cover even the recommended model (4) — the low/out
-        // states carry their own copy, so the helper stays quiet.
-        XCTAssertNil(CreditDisplay.translationLine(balance: 3))
     }
 
     // MARK: - Usage meter (6F)
@@ -117,7 +89,7 @@ final class CreditDisplayTests: XCTestCase {
 
     func testWithCreditsRemainingPreservesPlanBreakdown() {
         let snapshot = ManagedEntitlementSnapshot(
-            tier: .pro, status: .active, creditsRemaining: 100, creditsLimit: 300,
+            status: .active, creditsRemaining: 100, creditsLimit: 300,
             resetDate: nil, planCreditsUsed: 200, planCreditsLimit: 300, topupCreditsRemaining: 0
         )
         let updated = snapshot.withCreditsRemaining(93)
@@ -126,11 +98,21 @@ final class CreditDisplayTests: XCTestCase {
         XCTAssertEqual(updated.planCreditsLimit, 300)
     }
 
-    // MARK: - Post-generation toast (D2)
+    // MARK: - Post-generation toast (D2 — metered charge passthrough)
 
     func testChargeLineFormatsExactServerCharge() {
         XCTAssertEqual(CreditDisplay.chargeLine(charged: 4, remaining: 96), "\u{2212}4 credits \u{00B7} 96 left")
         XCTAssertEqual(CreditDisplay.chargeLine(charged: 1, remaining: 0), "\u{2212}1 credit \u{00B7} 0 left")
+    }
+
+    func testChargeLineRendersExactMeteredValue() {
+        // Charging is METERED server-side: the toast must show whatever
+        // `credits_charged` the server returns — never a client-side per-model
+        // number. A heavy recording (e.g. 24 credits of real cost) renders as-is.
+        XCTAssertEqual(CreditDisplay.chargeLine(charged: 24, remaining: 276), "\u{2212}24 credits \u{00B7} 276 left")
+        // An arbitrary metered value that matches no old fixed price still
+        // renders verbatim — proving there's no price-table coupling.
+        XCTAssertEqual(CreditDisplay.chargeLine(charged: 17, remaining: 3), "\u{2212}17 credits \u{00B7} 3 left")
     }
 
     func testChargeLineZeroChargeReadsNoCharge() {

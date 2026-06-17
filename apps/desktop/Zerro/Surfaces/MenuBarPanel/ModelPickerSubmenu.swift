@@ -6,15 +6,16 @@
 //  "Model" row's trailing popover (the same hover-driven submenu shape as
 //  Recent Prompts / Microphone). ONE component, mode-aware:
 //
-//  • Managed / Trial: a balance header (credits primary, §1.5 translation
-//    helper secondary) and per-row credit price + live "~N left"
-//    (= floor(balance / price), CreditDisplay).
-//  • BYOK / other: model names only — NO credit column, no balance header
-//    (credits are meaningless when the user pays their provider directly).
-//    Per-provider key-gating lands with multi-provider BYOK (6C/6D).
+//  • Managed / Trial: a balance header (credits remaining, §1.5) above the
+//    model rows. NO per-model cost (metered-credits Phase 4): rows are model
+//    names only; the only per-recording number the user sees is the actual
+//    `credits_charged` post-generation.
+//  • BYOK / other: model names only — no balance header (credits are
+//    meaningless when the user pays their provider directly). Per-provider
+//    key-gating lands with multi-provider BYOK (6C/6D).
 //
-//  Rows render cheapest-first (ModelRegistry order); Gemini 3.5 Flash carries
-//  the "Recommended" badge. Selecting writes
+//  Rows render in registry order; Gemini 3.5 Flash carries the
+//  "Recommended" badge. Selecting writes
 //  `PreferencesStore.selectedModelID` — the generation path reads it fresh at
 //  request time — and dismisses the panel.
 //
@@ -58,9 +59,6 @@ struct ModelPickerSubmenu: View {
                 ModelPickerRow(
                     model: model,
                     isSelected: preferences.selectedModelID == model.id,
-                    estimatedLeft: creditBalance.map {
-                        CreditDisplay.estimatedLeft(balance: $0, creditPrice: model.creditPrice)
-                    },
                     gatedHint: gated ? "Add \(model.provider.displayName) key" : nil
                 ) {
                     // Tier 4 analytics: capture the prior id BEFORE the write;
@@ -101,23 +99,17 @@ struct ModelPickerSubmenu: View {
         }
     }
 
-    /// Balance header: credits as the §1.5 PRIMARY number, with the
-    /// model-range translation helper as a secondary line when meaningful.
+    /// Balance header: credits remaining as the §1.5 PRIMARY number. No
+    /// per-model translation line (metered-credits Phase 4) — the balance is
+    /// the only credit figure shown here.
     private func balanceHeader(_ balance: Int) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("\(CreditDisplay.creditsHeadline(balance)) left")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.vfTextPrimary)
-            if let helper = CreditDisplay.translationLine(balance: balance) {
-                Text(helper)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.vfTextTertiary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
+        Text("\(CreditDisplay.creditsHeadline(balance)) left")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.vfTextPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
     }
 }
 
@@ -126,10 +118,8 @@ struct ModelPickerSubmenu: View {
 private struct ModelPickerRow: View {
     let model: ModelEntry
     let isSelected: Bool
-    /// "~N left" for this row, or `nil` to hide the credit column (BYOK).
-    let estimatedLeft: Int?
     /// Non-nil = BYOK key-gated: the row renders dimmed + unselectable with
-    /// this trailing hint ("Add Gemini key") in place of the credit column.
+    /// this trailing hint ("Add Gemini key") as the only trailing element.
     var gatedHint: String? = nil
     let action: () -> Void
 
@@ -167,21 +157,11 @@ private struct ModelPickerRow: View {
                 Spacer(minLength: VFSpacing.sm)
 
                 if let hint = gatedHint {
-                    // BYOK key-gating hint — where the credit column would be.
+                    // BYOK key-gating hint — the only trailing element now that
+                    // the per-model credit column is gone (metered-credits P4).
                     Text(hint)
                         .font(.system(size: 11))
                         .foregroundStyle(Color.vfTextTertiary)
-                        .fixedSize()
-                } else if let left = estimatedLeft {
-                    // Credit column — Managed/Trial only. Price first (the
-                    // stable fact), then what the current balance buys.
-                    // Brightens on hover so it stays legible on the blue
-                    // fill, matching MenuRow's trailing-hint treatment.
-                    Text("\(model.creditPrice) cr \u{00B7} ~\(left) left")
-                        .font(.system(size: 11))
-                        .foregroundStyle(
-                            isHovered ? Color.vfTextPrimary.opacity(0.75) : Color.vfTextSecondary
-                        )
                         .fixedSize()
                 }
             }
@@ -214,7 +194,7 @@ private struct ModelPickerRow: View {
     ModelPickerSubmenu()
         .environment(PreferencesStore())
         .environment(EntitlementStore.preview(
-            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now)
+            .managed(creditsRemaining: 248, resetDate: .now)
         ))
         .background(.regularMaterial)
 }

@@ -4,41 +4,33 @@
 
 import { optionalEnvInt, optionalEnv } from "./env.ts";
 
-// ---- Per-tier monthly credit allowance -------------------------------------
-// Defaults mirror the Swift preview/UI (EntitlementStore: Starter 100, Pro 300)
-// and §3.2. Override per environment without a code change.
-export const CREDITS_STARTER = optionalEnvInt("CREDITS_STARTER", 100);
-export const CREDITS_PRO = optionalEnvInt("CREDITS_PRO", 300);
+// ---- Managed-plan monthly credit allowance ---------------------------------
+// One managed tier (metered-credits Phase 6): 300 credits / $15. Override per
+// environment without a code change.
+export const CREDITS_MANAGED = optionalEnvInt("CREDITS_MANAGED", 300);
 
-export type Tier = "starter" | "pro";
-
-/** Credit allowance for a tier. */
-export function creditsForTier(tier: Tier): number {
-  return tier === "pro" ? CREDITS_PRO : CREDITS_STARTER;
-}
+// The single billing tier. Kept as a (one-member) union + type so every
+// passthrough site (jwt claims, store rows, entitlement snapshot) stays typed.
+export type Tier = "managed";
 
 // ---- Tier resolution from LemonSqueezy variant ids -------------------------
-// Variant ids are only known once the Starter/Pro products exist (Phase E
-// prereq). Set LS_VARIANT_STARTER / LS_VARIANT_PRO as secrets; the webhook maps
-// the subscription's variant_id → tier. A `meta.custom_data.tier` value (if the
-// checkout passes one) is honored as a fallback. If nothing matches we default
-// to 'starter' (the cheaper allowance) and log a warning — never silently
-// over-grant Pro credits.
+// There is one managed product (with a monthly AND a yearly variant), so every
+// subscription variant resolves to the single 'managed' tier — see
+// lemonsqueezy-webhook/tier.ts `resolveTier`. The variant ids are still needed
+// to distinguish the YEARLY variant for billing_interval (display/analytics
+// only — both intervals share the managed allowance and 30-day reset cadence).
 //
-// SECRET FORMAT: each is a COMMA-SEPARATED LIST of variant ids, because one
-// product carries a monthly AND a yearly variant (e.g. the Managed plan's
-// $15/mo + $144/yr checkouts). BOTH Managed variants go in LS_VARIANT_PRO —
-// monthly and yearly map to the SAME pro tier / CREDITS_PRO allowance (F1).
-//   LS_VARIANT_PRO="1735329,1735330"   # Managed monthly, Managed yearly
-export const LS_VARIANT_STARTER = optionalEnv("LS_VARIANT_STARTER", "");
-export const LS_VARIANT_PRO = optionalEnv("LS_VARIANT_PRO", "");
+// SECRET FORMAT: a COMMA-SEPARATED LIST of variant ids, because the managed
+// product carries a monthly AND a yearly variant (the $15/mo + $144/yr
+// checkouts). BOTH go in LS_VARIANT_MANAGED.
+//   LS_VARIANT_MANAGED="1735329,1735330"   # Managed monthly, Managed yearly
+export const LS_VARIANT_MANAGED = optionalEnv("LS_VARIANT_MANAGED", "");
 
-// Which of the tier-mapped variant ids are the YEARLY ones (any tier, one
-// combined comma-separated list). Drives subscriptions.billing_interval ONLY —
-// display/analytics metadata, never a credit gate: yearly subs still roll the
-// same 300-credit period every 30 days via subscription_payment_success. A
-// tier-mapped variant NOT in this list is recorded as 'monthly'; an unmapped
-// variant records NULL (never guess).
+// Which managed variant id is the YEARLY one. Drives
+// subscriptions.billing_interval ONLY — display/analytics metadata, never a
+// credit gate: yearly subs still roll the same 300-credit period every 30 days
+// via subscription_payment_success. A subscription variant NOT in this list is
+// recorded as 'monthly'; a missing variant id records NULL (never guess).
 //   LS_VARIANT_YEARLY="1735330"        # Managed yearly
 export const LS_VARIANT_YEARLY = optionalEnv("LS_VARIANT_YEARLY", "");
 

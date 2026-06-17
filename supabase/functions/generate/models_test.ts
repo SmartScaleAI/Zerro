@@ -13,12 +13,12 @@ Deno.test("registry: exactly the six Phase 0 models, cheapest-first", () => {
       "gpt-5.5",
     ],
   );
-  // creditPrice ascending is a product invariant the picker relies on (6A).
-  const prices = MODEL_REGISTRY.map((m) => m.creditPrice);
+  // fallbackCredits ascending is a product invariant the picker relies on (6A).
+  const prices = MODEL_REGISTRY.map((m) => m.fallbackCredits);
   assertEquals(prices, [...prices].sort((a, b) => a - b));
 });
 
-Deno.test("registry: fixed credit prices match plan §1.2", () => {
+Deno.test("registry: fallback credit estimates match plan §1.2", () => {
   const expect: Record<string, number> = {
     "gpt-5.4-mini": 2,
     "gemini-3.5-flash": 4,
@@ -27,7 +27,7 @@ Deno.test("registry: fixed credit prices match plan §1.2", () => {
     "claude-opus-4-7": 10,
     "gpt-5.5": 11,
   };
-  for (const m of MODEL_REGISTRY) assertEquals(m.creditPrice, expect[m.id], m.id);
+  for (const m of MODEL_REGISTRY) assertEquals(m.fallbackCredits, expect[m.id], m.id);
 });
 
 Deno.test("registry: exactly one recommended model (Gemini 3.5 Flash)", () => {

@@ -1,21 +1,16 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { parseVariantList, resolveBillingInterval, resolveTier, resolveTopupPack } from "./tier.ts";
 
-// Realistic config: each product has a monthly + a yearly variant, supplied as
-// one comma-separated secret (the shape that previously failed === matching).
-// LS_VARIANT_YEARLY lists which of those mapped ids are the yearly ones.
+// Single managed tier: the only variant distinction that still matters is which
+// id is the YEARLY one (for billing_interval). LS_VARIANT_YEARLY lists it.
 const CONFIG = {
-  starterVariantIds: "1735300,1735301",
-  proVariantIds: "1735329,1735330",
-  yearlyVariantIds: "1735301,1735330",
+  yearlyVariantIds: "1735330",
 };
 
-// LemonSqueezy sends variant_id as a NUMBER; resolveTier coerces with String()
-// before the membership check against the (string) configured list.
-const PRO_MONTHLY = 1735329;
-const PRO_YEARLY = 1735330;
-const STARTER_MONTHLY = 1735300;
-const UNKNOWN = 9999999;
+// LemonSqueezy sends variant_id as a NUMBER; the helpers coerce with String().
+const MANAGED_MONTHLY = 1735329;
+const MANAGED_YEARLY = 1735330;
+const OTHER = 9999999;
 
 function attrs(variantId: number | undefined) {
   return { variant_id: variantId };
@@ -27,53 +22,27 @@ Deno.test("parseVariantList trims and drops empties", () => {
   assertEquals(parseVariantList("  "), []);
 });
 
-Deno.test("Pro monthly variant resolves to pro", () => {
-  assertEquals(resolveTier(attrs(PRO_MONTHLY), null, CONFIG), "pro");
+Deno.test("every subscription variant resolves to the single managed tier", () => {
+  assertEquals(resolveTier(attrs(MANAGED_MONTHLY), null, CONFIG), "managed");
+  assertEquals(resolveTier(attrs(MANAGED_YEARLY), null, CONFIG), "managed");
+  assertEquals(resolveTier(attrs(OTHER), null, CONFIG), "managed");
+  assertEquals(resolveTier(attrs(undefined), null, CONFIG), "managed");
 });
 
-Deno.test("Pro yearly variant resolves to pro", () => {
-  assertEquals(resolveTier(attrs(PRO_YEARLY), null, CONFIG), "pro");
-});
-
-Deno.test("Starter variant resolves to starter", () => {
-  assertEquals(resolveTier(attrs(STARTER_MONTHLY), null, CONFIG), "starter");
-});
-
-Deno.test("unknown variant defaults to starter with a warning", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg?: unknown) => { warnings.push(String(msg)); };
-  try {
-    assertEquals(resolveTier(attrs(UNKNOWN), null, CONFIG), "starter");
-  } finally {
-    console.warn = original;
-  }
-  assertEquals(warnings.length, 1);
-  const logged = JSON.parse(warnings[0]);
-  assertEquals(logged.warn, "unmapped_variant_defaulting_to_starter");
-  assertEquals(logged.variant_id, UNKNOWN);
-});
-
-Deno.test("custom_data.tier is the fallback when the variant is unmapped", () => {
-  assertEquals(resolveTier(attrs(UNKNOWN), { tier: "pro" }, CONFIG), "pro");
-  assertEquals(resolveTier(attrs(UNKNOWN), { tier: "starter" }, CONFIG), "starter");
-});
-
-Deno.test("a mapped variant wins over custom_data.tier", () => {
-  // A real Pro variant resolves to pro even if custom_data claims starter.
-  assertEquals(resolveTier(attrs(PRO_MONTHLY), { tier: "starter" }, CONFIG), "pro");
+Deno.test("custom_data no longer changes the tier (single managed tier)", () => {
+  assertEquals(resolveTier(attrs(OTHER), { tier: "pro" }, CONFIG), "managed");
+  assertEquals(resolveTier(attrs(MANAGED_MONTHLY), { tier: "starter" }, CONFIG), "managed");
 });
 
 // ---- billing_interval (Phase 5) ----------------------------------------------
 
-Deno.test("billing interval: yearly-listed variant → yearly, other mapped → monthly", () => {
-  assertEquals(resolveBillingInterval(attrs(PRO_YEARLY), CONFIG), "yearly");
-  assertEquals(resolveBillingInterval(attrs(PRO_MONTHLY), CONFIG), "monthly");
-  assertEquals(resolveBillingInterval(attrs(STARTER_MONTHLY), CONFIG), "monthly");
+Deno.test("billing interval: yearly-listed variant → yearly, any other present → monthly", () => {
+  assertEquals(resolveBillingInterval(attrs(MANAGED_YEARLY), CONFIG), "yearly");
+  assertEquals(resolveBillingInterval(attrs(MANAGED_MONTHLY), CONFIG), "monthly");
+  assertEquals(resolveBillingInterval(attrs(OTHER), CONFIG), "monthly");
 });
 
-Deno.test("billing interval: unmapped or missing variant → null (never guessed)", () => {
-  assertEquals(resolveBillingInterval(attrs(UNKNOWN), CONFIG), null);
+Deno.test("billing interval: a MISSING variant id → null (never guessed)", () => {
   assertEquals(resolveBillingInterval(attrs(undefined), CONFIG), null);
 });
 

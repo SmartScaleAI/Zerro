@@ -23,7 +23,7 @@ final class MenuBarBillingActionTests: XCTestCase {
     }
 
     private func managed(credits: Int = 200) -> EntitlementState {
-        .managed(tier: .pro, creditsRemaining: credits, resetDate: .distantFuture)
+        .managed(creditsRemaining: credits, resetDate: .distantFuture)
     }
 
     // MARK: - Trial / Expired both read "Upgrade", different triggers

@@ -233,10 +233,9 @@ final class EntitlementStore {
         guard let snapshot else {
             // No snapshot yet (e.g. a same-build reinstall cleared the cache but
             // the Keychain license + kind survived). Placeholder until refresh.
-            return .managed(tier: .starter, creditsRemaining: 0, resetDate: .distantFuture)
+            return .managed(creditsRemaining: 0, resetDate: .distantFuture)
         }
         return .managed(
-            tier: snapshot.tier,
             creditsRemaining: snapshot.creditsRemaining,
             resetDate: snapshot.resetDate ?? .distantFuture
         )
@@ -346,7 +345,7 @@ final class EntitlementStore {
             // It's a live Managed subscription.
             recordProductKind(.managed)
             applyManagedSnapshot(snapshot)
-            Log.billing.notice("entitlement → managed via activation (tier=\(snapshot.tier.rawValue, privacy: .public) instance=\(result.instanceID, privacy: .public))")
+            Log.billing.notice("entitlement → managed via activation (instance=\(result.instanceID, privacy: .public))")
         } catch ManagedSessionError.notEntitled {
             // Not in the subscriptions mirror → a BYOK one-time license.
             recordProductKind(.byok)
@@ -611,6 +610,16 @@ final class EntitlementStore {
     /// No-op unless the user is currently `.managed`.
     func refreshManagedEntitlement() async {
         guard routesThroughManagedProxy else { return }
+        #if DEBUG
+        // A pinned dev override (e.g. the "Reset Credits" sandbox) is the source
+        // of truth for the displayed balance — the authoritative server snapshot
+        // must not overwrite it, or a forced test balance would snap back to the
+        // real account after the first generation.
+        if devOverrideActive {
+            Log.state.notice("managed entitlement refresh suppressed — dev override pinned")
+            return
+        }
+        #endif
         do {
             let snapshot = try await sessionTokens.fetchEntitlement()
             guard snapshot.status.isLive else {
@@ -625,6 +634,39 @@ final class EntitlementStore {
         } catch {
             // Transient — fail open, keep the cached managed state.
             Log.billing.info("managed entitlement refresh inconclusive — keeping cached snapshot (fail-open)")
+        }
+    }
+
+    /// Applies a just-completed generation's spend to the displayed balance and
+    /// returns the EFFECTIVE remaining now shown (so the result pill's "M left"
+    /// stays consistent with the menu-bar line). Normally adopts the server's
+    /// authoritative `remaining`. Under a DEBUG dev override (the "Reset Credits"
+    /// sandbox) it instead DECREMENTS the pinned local balance by `charged`, so a
+    /// forced test balance holds and decrements naturally across generations
+    /// instead of snapping back to the real account.
+    @discardableResult
+    func applyGenerationSpend(charged: Int?, remaining: Int, isTrial: Bool) -> Int {
+        #if DEBUG
+        if devOverrideActive {
+            if let charged { devDecrementCredits(by: charged, isTrial: isTrial) }
+            return displayedCreditsRemaining ?? remaining
+        }
+        #endif
+        if isTrial {
+            applyTrialCreditsRemaining(remaining)
+        } else {
+            applyCreditsRemaining(remaining)
+        }
+        return remaining
+    }
+
+    /// The credit balance currently shown for the active state (managed snapshot
+    /// or trial pool), or nil for states with no credit balance (byok/expired).
+    private var displayedCreditsRemaining: Int? {
+        switch state {
+        case .managed(let creditsRemaining, _): return creditsRemaining
+        case .trial(let creditsRemaining): return creditsRemaining
+        case .byok, .expired: return nil
         }
     }
 
@@ -777,10 +819,9 @@ final class EntitlementStore {
         // the credits line / past-due nudge (which read `managedSnapshot`) match
         // the dev selection. A forced `.managed` synthesizes an `active`
         // snapshot from its associated values; any other state clears it.
-        if case .managed(let tier, let credits, let reset) = newState {
+        if case .managed(let credits, let reset) = newState {
             let limit = max(credits, credits == 0 ? 100 : credits)
             managedSnapshot = ManagedEntitlementSnapshot(
-                tier: tier,
                 status: .active,
                 creditsRemaining: credits,
                 creditsLimit: limit,
@@ -801,16 +842,73 @@ final class EntitlementStore {
     /// `.managed` state so the "update your card" nudge (§9.1) can be exercised
     /// without a real failed renewal. No-op unless currently `.managed`.
     func devForceManagedPastDue() {
-        guard case .managed(let tier, let credits, let reset) = state else { return }
+        guard case .managed(let credits, let reset) = state else { return }
         devOverrideActive = true
         managedSnapshot = ManagedEntitlementSnapshot(
-            tier: tier,
             status: .pastDue,
             creditsRemaining: credits,
             creditsLimit: max(credits, 100),
             resetDate: reset == .distantFuture ? nil : reset
         )
         Log.ui.notice("entitlement dev override → managed past_due")
+    }
+
+    /// DEBUG: restore the displayed credit balance to FULL — the managed plan's
+    /// allowance, or the trial grant's limit — so credit-dependent UI (the
+    /// menu-bar credits line, the low-balance nudge, the out-of-credits gate)
+    /// can be re-exercised without burning real generations. Display-only, like
+    /// the other dev overrides: it pins a local state and does NOT touch the
+    /// server ledger, so the next real `/entitlement` refresh restores the true
+    /// balance (or use "Reset Onboarding"/clear-override to drop the pin).
+    func devResetCredits() {
+        devOverrideActive = true
+        switch state {
+        case .managed:
+            let limit = managedSnapshot?.creditsLimit ?? 300
+            let reset = managedSnapshot?.resetDate
+            managedSnapshot = ManagedEntitlementSnapshot(
+                status: managedSnapshot?.status ?? .active,
+                creditsRemaining: limit,
+                creditsLimit: limit,
+                resetDate: reset,
+                planCreditsUsed: 0,
+                planCreditsLimit: limit,
+                topupCreditsRemaining: 0
+            )
+            state = .managed(creditsRemaining: limit, resetDate: reset ?? .distantFuture)
+            Log.ui.notice("entitlement dev → reset managed credits to \(limit, privacy: .public)")
+        case .trial, .expired:
+            // Trial is a pure credit pool; `.expired` is that pool at zero. Either
+            // way, refill it to the grant limit (refilling re-enters `.trial`).
+            let limit = trialCreditsLimit ?? 40
+            trialCredits?.applyCreditsRemaining(limit)
+            state = .trial(creditsRemaining: limit)
+            Log.ui.notice("entitlement dev → reset trial credits to \(limit, privacy: .public)")
+        case .byok:
+            // No managed/trial credit pool to reset.
+            Log.ui.notice("entitlement dev → reset credits no-op (byok)")
+        }
+    }
+
+    /// DEBUG sandbox: decrement the PINNED local balance by a just-completed
+    /// generation's real charge, instead of adopting the server's authoritative
+    /// remaining (which reflects the real account). Lets a "Reset Credits" test
+    /// balance decrement naturally — down toward the low-balance nudge and the
+    /// out-of-credits gate — across generations. Keeps the dev override pinned.
+    private func devDecrementCredits(by charged: Int, isTrial: Bool) {
+        if isTrial {
+            let remaining = max(0, (trialCredits?.creditsRemaining ?? 0) - charged)
+            trialCredits?.applyCreditsRemaining(remaining)
+            state = remaining <= 0 ? .expired : .trial(creditsRemaining: remaining)
+            Log.ui.notice("entitlement dev → charged \(charged, privacy: .public), trial now \(remaining, privacy: .public)")
+        } else {
+            guard let snapshot = managedSnapshot else { return }
+            let remaining = max(0, snapshot.creditsRemaining - charged)
+            // applyManagedSnapshot keeps state↔snapshot in lockstep and (by
+            // design) does NOT clear the pin.
+            applyManagedSnapshot(snapshot.withCreditsRemaining(remaining))
+            Log.ui.notice("entitlement dev → charged \(charged, privacy: .public), managed now \(remaining, privacy: .public)")
+        }
     }
 
     /// Releases a pinned override and recomputes from the trial clock, so
@@ -866,36 +964,30 @@ final class EntitlementStore {
         await performRevalidation()
     }
 
-    /// The states the dev panel can force, paired with short labels — only
-    /// the plans we actually SELL (one Managed plan + BYOK), so the debug
-    /// menu never suggests a tier structure that isn't on the paywall.
-    /// `ManagedTier.starter` deliberately does NOT appear here: the case is
-    /// retained in the model as future-proofing for a possible cheaper tier
-    /// (finding F1), but it's unsold and forcing it would only mislead.
+    /// The states the dev panel can force, paired with short labels — the
+    /// plans we actually SELL (the single Managed plan + BYOK). The managed
+    /// `resetDate` is a plausible ~30-days-out display value; nothing gates on
+    /// it (display-only per `EntitlementState`).
     /// Consumed by the menu-bar `EntitlementDebugPicker` (the single
     /// force-entitlement surface; the paywall's copy was removed).
-    /// The managed `resetDate` is a plausible ~30-days-out display value;
-    /// nothing gates on it (display-only per `EntitlementState`).
     static var devStates: [(label: String, state: EntitlementState)] {
         let resetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
         return [
             ("Trial", .trial(creditsRemaining: 15)),
             ("Expired", .expired),
             ("BYOK", .byok),
-            ("Managed", .managed(tier: .pro, creditsRemaining: 300, resetDate: resetDate)),
+            ("Managed", .managed(creditsRemaining: 300, resetDate: resetDate)),
         ]
     }
 
     /// Whether `candidate` is the currently-active state, for selected-pill
-    /// rendering in the dev panel. Compares by case identity so two
-    /// `.managed` tiers (or two `.trial`s with different credit counts) read
-    /// as the "same" dev selection regardless of the throwaway numbers.
+    /// rendering in the dev panel. Compares by case identity so two `.managed`
+    /// states (or two `.trial`s with different credit counts) read as the
+    /// "same" dev selection regardless of the throwaway numbers.
     func devMatches(_ candidate: EntitlementState) -> Bool {
         switch (state, candidate) {
-        case (.trial, .trial), (.expired, .expired), (.byok, .byok):
+        case (.trial, .trial), (.expired, .expired), (.byok, .byok), (.managed, .managed):
             return true
-        case let (.managed(lhsTier, _, _), .managed(rhsTier, _, _)):
-            return lhsTier == rhsTier
         default:
             return false
         }

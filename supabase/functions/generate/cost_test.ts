@@ -1,9 +1,20 @@
 import "./test_setup.ts"; // sets test env before config.ts loads.
 
-import { assertAlmostEquals, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { chatCostUsd, creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
-import { CIRCUIT_BREAKER_MULTIPLIER, USD_PER_CREDIT } from "./config.ts";
+import { assert, assertAlmostEquals, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import {
+  chatCostUsd,
+  creditCostForModel,
+  estimateGenerationCredits,
+  estimatedCostUsd,
+  sttCostUsd,
+} from "./cost.ts";
 import { modelById } from "./models.ts";
+import {
+  FRAME_TOKENS_OPENAI,
+  HEADROOM_CREDITS,
+  OUTPUT_TOKENS_ESTIMATE,
+  SYSTEM_PROMPT_TOKENS,
+} from "./config.ts";
 
 const M = 1_000_000;
 
@@ -68,39 +79,131 @@ Deno.test("chatCostUsd: anthropic:claude-opus-4-7 priced from the table", () => 
   assertAlmostEquals(chatCostUsd("anthropic", "claude-opus-4-7", M, M)!, 30.0, 1e-9);
 });
 
-// ---- creditCostForModel: fixed price + circuit-breaker (plan §1.2) ----------
+// ---- creditCostForModel: always metered on real cost (plan §1.2) ------------
 
-Deno.test("creditCostForModel: normal cost charges the fixed price", () => {
-  // Realistic flash generation (~$0.04) is far below 3 × 4 × $0.01 = $0.12.
-  assertEquals(creditCostForModel("gemini-3.5-flash", 0.04), 4);
-  // Opus at its expected ~$0.07 is below 3 × 10 × $0.01 = $0.30.
-  assertEquals(creditCostForModel("claude-opus-4-7", 0.07), 10);
-});
-
-Deno.test("creditCostForModel: boundary — exactly 3× the fixed price still charges fixed (> not >=)", () => {
-  const fixed = modelById("gemini-3.5-flash")!.creditPrice; // 4
-  const breakerUsd = CIRCUIT_BREAKER_MULTIPLIER * fixed * USD_PER_CREDIT; // computed exactly as the impl does
-  assertEquals(creditCostForModel("gemini-3.5-flash", breakerUsd), fixed);
-});
-
-Deno.test("creditCostForModel: just above the boundary charges the metered ceil amount", () => {
-  // $0.121 > $0.12 → ceil(0.121 / 0.01) = 13 credits.
-  assertEquals(creditCostForModel("gemini-3.5-flash", 0.121), 13);
-  // Way over (abuse case): $1.00 on gpt-5.4-mini (fixed 2, breaker at $0.06) → 100.
+Deno.test("creditCostForModel: normal cost meters to ceil(usd / USD_PER_CREDIT)", () => {
+  // $0.045 → ceil(4.5) = 5 credits, independent of the model's fallbackCredits.
+  assertEquals(creditCostForModel("gemini-3.5-flash", 0.045), 5);
+  // $0.025 → ceil(2.5) = 3, NOT opus's fallbackCredits of 10 — the charge is the
+  // real metered cost, not the per-model fallback.
+  assertEquals(creditCostForModel("claude-opus-4-7", 0.025), 3);
+  // Rounds UP to the next whole credit: $0.305 → ceil(30.5) = 31, never 30.
+  assertEquals(creditCostForModel("gemini-3.5-flash", 0.305), 31);
+  // A heavy/abusive workload is metered straight through (no breaker cap):
+  // $1.00 → 100 credits.
   assertEquals(creditCostForModel("gpt-5.4-mini", 1.0), 100);
 });
 
-Deno.test("creditCostForModel: metered amount rounds UP to the next whole credit", () => {
-  // $0.305 on flash → ceil(30.5) = 31, never 30.
-  assertEquals(creditCostForModel("gemini-3.5-flash", 0.305), 31);
+Deno.test("creditCostForModel: a tiny cost still charges the floor of 1 credit", () => {
+  // Sub-cent real cost must never charge 0 on a successful generation.
+  assertEquals(creditCostForModel("gemini-3.5-flash", 0.002), 1);
+  assertEquals(creditCostForModel("gpt-5.4-mini", 0.0001), 1);
+  // Exactly $0 (e.g. a no-speech, no-priced-frames edge) still floors to 1.
+  assertEquals(creditCostForModel("claude-sonnet-4-6", 0), 1);
 });
 
-Deno.test("creditCostForModel: null/non-finite est cost falls back to the fixed price", () => {
-  assertEquals(creditCostForModel("claude-sonnet-4-6", null), 7);
+Deno.test("creditCostForModel: null/non-finite est cost falls back to fallbackCredits", () => {
+  // Unpriced model / missing usage → the per-model fallback estimate, never 0.
+  assertEquals(creditCostForModel("claude-sonnet-4-6", null), modelById("claude-sonnet-4-6")!.fallbackCredits);
   assertEquals(creditCostForModel("claude-sonnet-4-6", Number.NaN), 7);
   assertEquals(creditCostForModel("claude-sonnet-4-6", Number.POSITIVE_INFINITY), 7);
+  assertEquals(creditCostForModel("gpt-5.4-mini", null), 2);
 });
 
 Deno.test("creditCostForModel: unknown model throws (caller bug — validation is upstream)", () => {
   assertThrows(() => creditCostForModel("gpt-9-imaginary", 0.01), Error, "unknown model");
+});
+
+// ---- estimateGenerationCredits: preflight estimate for the gate (Phase 2) ----
+
+Deno.test("estimateGenerationCredits: a heavy recording estimates higher than a light one", () => {
+  const light = estimateGenerationCredits({
+    provider: "gemini",
+    model: "gemini-3.5-flash",
+    frameCount: 3,
+    transcriptChars: 200,
+    ocrChars: 0,
+    audioSeconds: 15,
+  });
+  const heavy = estimateGenerationCredits({
+    provider: "gemini",
+    model: "gemini-3.5-flash",
+    frameCount: 28,
+    transcriptChars: 4000,
+    ocrChars: 2000,
+    audioSeconds: 180,
+  });
+  // More frames + transcript + OCR + audio must cost more.
+  assert(heavy > light, `heavy (${heavy}) should exceed light (${light})`);
+  // Both land in a sane range — a light recording is a handful of credits, a
+  // heavy one is bounded well under the per-recording hard cap (~44).
+  assert(light >= 1 && light <= 10, `light out of range: ${light}`);
+  assert(heavy >= light && heavy <= 44, `heavy out of range: ${heavy}`);
+});
+
+Deno.test("estimateGenerationCredits: a pricier model estimates higher for the same inputs", () => {
+  const inputs = { frameCount: 10, transcriptChars: 1000, ocrChars: 500, audioSeconds: 60 };
+  const flash = estimateGenerationCredits({ provider: "gemini", model: "gemini-3.5-flash", ...inputs });
+  const opus = estimateGenerationCredits({ provider: "anthropic", model: "claude-opus-4-7", ...inputs });
+  assert(opus > flash, `opus (${opus}) should exceed flash (${flash}) on identical inputs`);
+});
+
+Deno.test("estimateGenerationCredits: unpriced model falls back to fallbackCredits, never 0", () => {
+  // gpt-4o has no registry entry → modelById is undefined → floor of 1. But more
+  // importantly, an unknown chat model makes estimatedCostUsd null, exercising the
+  // fallback branch. Using a real registry model with an unpriced *id* isn't
+  // possible (all six are priced), so assert the unknown-id floor here.
+  const est = estimateGenerationCredits({
+    provider: "openai",
+    model: "gpt-9-imaginary",
+    frameCount: 5,
+    transcriptChars: 100,
+    ocrChars: 0,
+    audioSeconds: 30,
+  });
+  assertEquals(est, 1); // unknown id → fallbackCredits ?? 1
+});
+
+// ---- gate ↔ charge consistency (the headroom holds) -------------------------
+
+Deno.test("estimate and metered charge agree within HEADROOM for a heavy gpt-5.5 recording", () => {
+  // A representative heavy gpt-5.5 recording (28 frames, long transcript + OCR,
+  // 3 min). The PREFLIGHT estimate (gate input) is computed from the known
+  // inputs + a conservative output allowance; the ACTUAL metered charge is
+  // computed post-chat from real token usage. The gate is only sound if the
+  // estimate doesn't UNDER-shoot the real charge by more than the headroom —
+  // i.e. estimate >= actual - HEADROOM_CREDITS. Here we model the real output
+  // OVERSHOOTING the estimate's allowance to prove the headroom absorbs it.
+  const heavy = {
+    provider: "openai",
+    model: "gpt-5.5",
+    frameCount: 28,
+    transcriptChars: 4000,
+    ocrChars: 2000,
+    audioSeconds: 180,
+  };
+  const estimate = estimateGenerationCredits(heavy);
+
+  // Reconstruct the input tokens the estimator used (these are KNOWN exactly
+  // pre-chat — system prompt + per-frame image tokens + chars/4), then model a
+  // real generation whose OUTPUT ran 1000 tokens past the conservative
+  // OUTPUT_TOKENS_ESTIMATE allowance.
+  const inputTokens = SYSTEM_PROMPT_TOKENS +
+    heavy.frameCount * FRAME_TOKENS_OPENAI +
+    Math.ceil(heavy.transcriptChars / 4) +
+    Math.ceil(heavy.ocrChars / 4);
+  const actualOutputTokens = OUTPUT_TOKENS_ESTIMATE + 1000;
+  const actualUsd = estimatedCostUsd(heavy.audioSeconds, heavy.provider, heavy.model, inputTokens, actualOutputTokens);
+  const actual = creditCostForModel(heavy.model, actualUsd);
+
+  // The gate's estimate is within HEADROOM of the real charge — it never
+  // under-estimates the spend by more than the tolerance the gate allows.
+  assert(
+    estimate >= actual - HEADROOM_CREDITS,
+    `estimate ${estimate} should be >= actual ${actual} - headroom ${HEADROOM_CREDITS}`,
+  );
+  // And both are in the sane heavy range (well under the ~44-credit per-recording
+  // hard cap), confirming neither blew up.
+  assert(estimate >= 20 && estimate <= 44, `estimate out of range: ${estimate}`);
+  assert(actual >= 20 && actual <= 44, `actual out of range: ${actual}`);
 });

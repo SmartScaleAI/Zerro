@@ -11,7 +11,7 @@ import {
   type TimelineBlock,
 } from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
-import { creditCostForModel, estimatedCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { MODEL_REGISTRY } from "./models.ts";
 import type { BillingStore, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
@@ -156,9 +156,13 @@ class StubProvider implements SttClient, ChatClient {
   // Phase 4: every makeChat() construction is recorded so tests can assert the
   // VALIDATED per-request provider+model reached the factory.
   makeChatCalls: { provider: string; model: string }[] = [];
-  // Configurable usage so the circuit-breaker (cost-driven) path is testable.
-  chatInputTokens = 120;
-  chatOutputTokens = 60;
+  // Configurable token usage so the METERED charge is testable. These defaults
+  // are chosen so the default model (gemini-3.5-flash) + 10s STT meters to
+  // exactly 4 credits and Opus to 10 — the amounts this suite's balance
+  // arithmetic is written against. The charge is `ceil(est_cost_usd/0.01)`
+  // (cost.ts), so credit amounts below are metered cost, not a fixed price.
+  chatInputTokens = 2000;
+  chatOutputTokens = 3500;
 
   async transcribe(_audio: AudioInput) {
     this.transcribeCalls++;
@@ -191,7 +195,7 @@ class StubProvider implements SttClient, ChatClient {
 // ---- helpers ----------------------------------------------------------------
 async function mintToken(
   sub = "sub-1",
-  tier: "starter" | "pro" = "starter",
+  tier: "managed" = "managed",
   kind: "subscription" | "trial" = "subscription",
 ) {
   // Trial tokens carry no tier (matches the real trial-start mint).
@@ -251,12 +255,12 @@ function deps(store: InMemoryStore, provider: StubProvider): GenerateDeps {
 
 function activeStore(usedCredits = 0): InMemoryStore {
   const s = new InMemoryStore();
-  s.seed({ id: "sub-1", tier: "starter", status: "active", credits_limit: 100 }, usedCredits);
+  s.seed({ id: "sub-1", tier: "managed", status: "active", credits_limit: 100 }, usedCredits);
   return s;
 }
 
 // ---- happy path -------------------------------------------------------------
-Deno.test("happy path: model absent → default model, charges its fixed price, logs cost (no content)", async () => {
+Deno.test("happy path: model absent → default model, meters its real cost, logs cost (no content)", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
@@ -265,11 +269,11 @@ Deno.test("happy path: model absent → default model, charges its fixed price, 
   const json = await res.json();
   assertEquals(json.prompt, "GENERATED PROMPT");
   // No `model` in the body → the registry's recommended default
-  // (gemini-3.5-flash, 4 credits): charged exactly once (100→96).
+  // (gemini-3.5-flash): the metered cost of this workload is 4 credits (100→96).
   assertEquals(json.credits_remaining, 96);
-  assertEquals(json.credits_charged, 4); // D2: the exact spend, stated explicitly
-  assertEquals(json.usage.input_tokens, 120);
-  assertEquals(json.usage.output_tokens, 60);
+  assertEquals(json.credits_charged, 4); // D2: the exact metered spend, stated explicitly
+  assertEquals(json.usage.input_tokens, 2000);
+  assertEquals(json.usage.output_tokens, 3500);
 
   // The chat client was built for the DEFAULT model's provider.
   assertEquals(openai.makeChatCalls, [{ provider: "gemini", model: "gemini-3.5-flash" }]);
@@ -282,17 +286,35 @@ Deno.test("happy path: model absent → default model, charges its fixed price, 
   assertEquals(store.log.length, 1);
   const row = store.log[0];
   assertEquals(row.success, true);
-  assertEquals(row.tokensIn, 120);
-  assertEquals(row.tokensOut, 60);
+  assertEquals(row.tokensIn, 2000);
+  assertEquals(row.tokensOut, 3500);
   assertEquals(row.model, "gemini-3.5-flash");
   assertEquals(row.provider, "gemini");
   assert(row.estCostUsd !== null && row.estCostUsd > 0);
+  // Phase 3 calibration metadata: the actual metered charge, the Whisper-measured
+  // duration, and the keyframe count (makeBody sends 2 frames; StubProvider
+  // reports a 10s duration). credits_charged for this workload is 4 (default flow).
+  assertEquals(row.creditsUsed, 4);
+  assertEquals(row.durationSeconds, 10);
+  assertEquals(row.frameCount, 2);
   assertEquals(store.slots.size, 0);
 
-  // NO CONTENT LEAKAGE: token/cost/success + non-content model attribution only.
+  // NO CONTENT LEAKAGE: token/cost/success + non-content attribution + Phase 3
+  // calibration metadata only — still never transcript/audio/frames/prompt.
   assertEquals(
     Object.keys(row).sort(),
-    ["estCostUsd", "model", "provider", "subscriptionId", "success", "tokensIn", "tokensOut"],
+    [
+      "creditsUsed",
+      "durationSeconds",
+      "estCostUsd",
+      "frameCount",
+      "model",
+      "provider",
+      "subscriptionId",
+      "success",
+      "tokensIn",
+      "tokensOut",
+    ],
   );
 });
 
@@ -485,7 +507,7 @@ Deno.test("empty-label clicks render nothing; absent clicks are backward-compati
 
 Deno.test("past_due still generates on remaining credits", async () => {
   const store = new InMemoryStore();
-  store.seed({ id: "sub-1", tier: "starter", status: "past_due", credits_limit: 100 }, 40);
+  store.seed({ id: "sub-1", tier: "managed", status: "past_due", credits_limit: 100 }, 40);
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 200);
@@ -608,25 +630,29 @@ Deno.test("trial path dedupes on its own key and charges the grant exactly once"
 });
 
 // ---- credit gating ----------------------------------------------------------
-Deno.test("zero credits → 402 with {credits_remaining, model_price}, no provider call, no decrement", async () => {
-  const store = activeStore(100); // used == limit
+Deno.test("zero credits (< 1) → 402 {credits_remaining, estimate:null} BEFORE Whisper, no spend", async () => {
+  const store = activeStore(100); // used == limit → 0 remaining
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 402);
-  // F3: the body carries the numbers the app's top-up prompt needs.
+  // F3: the body carries the numbers the app's top-up prompt needs. The pre-
+  // Whisper floor check fires before any cost is known, so `estimate` is null.
   const json = await res.json();
   assertEquals(json.error, "out_of_credits");
   assertEquals(json.credits_remaining, 0);
-  assertEquals(json.model_price, 4); // default model (gemini-3.5-flash)
-  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(json.estimate, null);
+  assertEquals(openai.transcribeCalls, 0); // STT NOT paid on an empty account
   assertEquals(openai.chatCalls, 0);
   assertEquals(store.used.get("sub-1"), 100); // unchanged
-  assertEquals(store.log.length, 0);
+  assertEquals(store.log.length, 0); // nothing paid → nothing logged
   assertEquals(store.slots.size, 0);
 });
 
-Deno.test("balance below the SELECTED model's price → 402 with the model's price, nothing spent", async () => {
-  const store = activeStore(95); // 5 remaining — enough for Flash (4), not Opus (10)
+Deno.test("estimate gate: balance below (estimate − HEADROOM) → 402 after Whisper, before chat", async () => {
+  // Opus on the makeBody workload (2 frames, short transcript, 10s) estimates to
+  // 11 credits; HEADROOM is 5, so the gate blocks when remaining < 11 − 5 = 6.
+  // Balance 5 blocks — but only AFTER STT was paid (the gate is post-Whisper).
+  const store = activeStore(95); // 5 remaining
   const openai = new StubProvider();
   const res = await handleGenerate(
     makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
@@ -636,10 +662,81 @@ Deno.test("balance below the SELECTED model's price → 402 with the model's pri
   const json = await res.json();
   assertEquals(json.error, "out_of_credits");
   assertEquals(json.credits_remaining, 5);
-  assertEquals(json.model_price, 10);
-  assertEquals(openai.transcribeCalls, 0); // rejected before any spend
-  assertEquals(store.used.get("sub-1"), 95); // unchanged
+  assertEquals(json.estimate, 11); // the preflight estimate the app surfaces
+  assertEquals(openai.transcribeCalls, 1); // STT WAS paid — gate runs after it
+  assertEquals(openai.chatCalls, 0); // chat never ran (the expensive call is gated)
+  assertEquals(store.used.get("sub-1"), 95); // no credit charged
+  // STT cost recorded honestly as a failed generation (same as the seconds gate).
+  assertEquals(store.log.length, 1);
+  assertEquals(store.log[0].success, false);
+  assertEquals(store.log[0].estCostUsd, sttCostUsd(10));
+  // Phase 3 calibration metadata on a failure row: nothing charged → null;
+  // the measured duration + keyframe count are still recorded.
+  assertEquals(store.log[0].creditsUsed, null);
+  assertEquals(store.log[0].durationSeconds, 10);
+  assertEquals(store.log[0].frameCount, 2);
   assertEquals(store.slots.size, 0);
+});
+
+Deno.test("estimate gate: balance exactly AT (estimate − HEADROOM) passes the gate to the chat call", async () => {
+  // Threshold is estimate(11) − HEADROOM(5) = 6; `< 6` blocks, so 6 passes. Proof
+  // the gate let the request through: the chat call ran (vs the blocked case
+  // above where it never does). The headroom is what lets a 6-credit balance
+  // start an 11-estimate recording — the residual is handled post-charge.
+  const store = activeStore(94); // 6 remaining
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200); // NOT 402 — the gate passed
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1); // got past the gate to the expensive call
+});
+
+Deno.test("estimate gate passes with ample balance → the real metered charge still applies", async () => {
+  // Balance well above the threshold: gate passes, and the post-chat charge is
+  // the METERED cost (Phase 1), not the estimate. Opus meters this workload to 10.
+  const store = activeStore(0); // 100 remaining
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.credits_charged, 10); // metered, not the estimate of 11
+  assertEquals(json.credits_remaining, 90);
+});
+
+Deno.test("idempotent replay returns the cached result WITHOUT re-running the estimate gate", async () => {
+  // First call (ample balance) charges + caches. Then the balance is driven below
+  // the estimate gate's threshold; a replay with the SAME key must still return
+  // the cached 200, never a fresh 402 — the cache check sits before the gate.
+  const store = activeStore(0); // 100 remaining
+  const openai = new StubProvider();
+  const KEY = "rec-uuid-gate-replay";
+
+  const first = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" }), KEY),
+    deps(store, openai),
+  );
+  assertEquals(first.status, 200);
+  const firstJson = await first.json();
+  assertEquals(firstJson.credits_charged, 10); // 100 → 90
+
+  // Drain the account below the gate threshold (estimate 11 − headroom 5 = 6).
+  store.used.set("sub-1", 100); // 0 remaining now
+
+  const retry = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" }), KEY),
+    deps(store, openai),
+  );
+  assertEquals(retry.status, 200); // cached replay, NOT 402 from the gate
+  const retryJson = await retry.json();
+  assertEquals(retryJson.prompt, firstJson.prompt);
+  assertEquals(retryJson.credits_charged, 10); // the original metered charge
+  assertEquals(openai.chatCalls, 1); // replay did NO new provider work
 });
 
 // ---- input fuse (before any OpenAI call / credit work) ----------------------
@@ -772,7 +869,7 @@ Deno.test("invalid token → 401", async () => {
 Deno.test("expired token → 401", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
-  const { token } = await signSessionToken({ sub: "sub-1", tier: "starter" }, SECRET, 60, NOW);
+  const { token } = await signSessionToken({ sub: "sub-1", tier: "managed" }, SECRET, 60, NOW);
   // verify with a clock past expiry
   const res = await handleGenerate(makeReq(token, makeBody()), { store, stt: openai, makeChat: () => openai, jwtSecret: SECRET, nowSeconds: NOW + 61 });
   assertEquals(res.status, 401);
@@ -879,7 +976,7 @@ Deno.test("trial token: cannot exceed the cap across sequential requests", async
 // ---- subscriber status ------------------------------------------------------
 Deno.test("cancelled subscriber → 403, no OpenAI call", async () => {
   const store = new InMemoryStore();
-  store.seed({ id: "sub-1", tier: "starter", status: "cancelled", credits_limit: 100 }, 0);
+  store.seed({ id: "sub-1", tier: "managed", status: "cancelled", credits_limit: 100 }, 0);
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 403);
@@ -888,7 +985,7 @@ Deno.test("cancelled subscriber → 403, no OpenAI call", async () => {
 
 Deno.test("expired subscriber → 403", async () => {
   const store = new InMemoryStore();
-  store.seed({ id: "sub-1", tier: "starter", status: "expired", credits_limit: 100 }, 0);
+  store.seed({ id: "sub-1", tier: "managed", status: "expired", credits_limit: 100 }, 0);
   const openai = new StubProvider();
   const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
   assertEquals(res.status, 403);
@@ -956,7 +1053,7 @@ Deno.test("credit becomes unspendable after the check → result returned once, 
 // Phase 4 — per-request model selection + variable credits
 // =============================================================================
 
-Deno.test("explicit model: routes to its provider, charges its fixed price, prompt unaffected", async () => {
+Deno.test("explicit model: routes to its provider, meters its real cost, prompt unaffected", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
   const res = await handleGenerate(
@@ -965,7 +1062,7 @@ Deno.test("explicit model: routes to its provider, charges its fixed price, prom
   );
   assertEquals(res.status, 200);
   const json = await res.json();
-  // Opus price is 10 credits: 100 → 90.
+  // Opus meters this workload to 10 credits: 100 → 90.
   assertEquals(json.credits_remaining, 90);
   assertEquals(json.credits_charged, 10);
   // The factory received the VALIDATED model's provider+id.
@@ -977,7 +1074,7 @@ Deno.test("explicit model: routes to its provider, charges its fixed price, prom
   assertEquals(store.log[0].provider, "anthropic");
 });
 
-Deno.test("each registry model charges exactly its creditPrice", async () => {
+Deno.test("each registry model charges its METERED cost (ceil of real $ / $0.01)", async () => {
   for (const m of MODEL_REGISTRY.filter((m) => m.enabled)) {
     const store = activeStore(0);
     const openai = new StubProvider();
@@ -986,7 +1083,12 @@ Deno.test("each registry model charges exactly its creditPrice", async () => {
       deps(store, openai),
     );
     assertEquals(res.status, 200, m.id);
-    assertEquals((await res.json()).credits_remaining, 100 - m.creditPrice, m.id);
+    // Expected = the production metering of this StubProvider workload for THIS
+    // model (10s STT + 2000 in / 3500 out at the model's rates), not a fixed
+    // per-model price. fallbackCredits is only used when est cost is null.
+    const est = estimatedCostUsd(10, m.provider, m.id, openai.chatInputTokens, openai.chatOutputTokens);
+    const expected = creditCostForModel(m.id, est);
+    assertEquals((await res.json()).credits_remaining, 100 - expected, m.id);
     assertEquals(openai.makeChatCalls, [{ provider: m.provider, model: m.id }], m.id);
   }
 });
@@ -1062,25 +1164,26 @@ Deno.test("makeChat throws (provider key unset) → clean 503 provider_unavailab
   assertEquals(store.slots.size, 0); // slot released on the early exit
 });
 
-Deno.test("circuit-breaker: abusive real cost charges the metered amount, never blocks the result", async () => {
+Deno.test("metering: a heavy real cost is charged straight through, never blocks the result", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
-  openai.chatOutputTokens = 30_000; // forged/abusive workload → real cost ≫ 3× fixed price
+  openai.chatOutputTokens = 30_000; // heavy/abusive workload → large real cost
   const res = await handleGenerate(
     makeReq(await mintToken(), makeBody({ model: "gpt-5.4-mini" })),
     deps(store, openai),
   );
-  assertEquals(res.status, 200); // the breaker changes the AMOUNT, never the outcome
+  assertEquals(res.status, 200); // metering changes the AMOUNT, never the outcome
 
-  // Expected metered charge, computed with the production helpers (duration 10s).
-  const est = estimatedCostUsd(10, "openai", "gpt-5.4-mini", 120, 30_000);
+  // Expected metered charge, computed with the production helpers (duration 10s,
+  // the StubProvider's default input tokens, the overridden output tokens).
+  const est = estimatedCostUsd(10, "openai", "gpt-5.4-mini", openai.chatInputTokens, 30_000);
   const metered = creditCostForModel("gpt-5.4-mini", est);
-  assert(metered > 2, `breaker should exceed the 2-credit fixed price, got ${metered}`);
+  assert(metered > 2, `metered charge should exceed gpt-5.4-mini's fallback of 2, got ${metered}`);
 
   const json = await res.json();
   assertEquals(json.credits_remaining, 100 - metered);
   // D2: credits_charged reports the METERED amount — exactly why the app must
-  // read it instead of deriving the toast from the fixed price table.
+  // read it instead of deriving the toast from any fixed/fallback table.
   assertEquals(json.credits_charged, metered);
   assertEquals(store.used.get("sub-1"), metered);
 });

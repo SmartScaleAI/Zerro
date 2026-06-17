@@ -4,9 +4,11 @@
 //
 //  Phase 6 (multi-model) — the Swift model registry (the third mirror of
 //  supabase/functions/generate/models.ts). These tests pin the CONTRACT the
-//  server enforces: the exact wire ids + prices + ordering + the recommended
-//  default. If a server registry change lands without this mirror following,
-//  the literal expectations here fail — that's the sync alarm working.
+//  server enforces: the exact wire ids + provider + ordering + the recommended
+//  default. The app-side mirror omits the server's charge field and shows no
+//  per-model cost (metered-credits Phase 4), so there's nothing to assert about
+//  prices here. If a server registry change lands without this mirror
+//  following, the literal id/order expectations fail — the sync alarm working.
 //
 
 import XCTest
@@ -17,27 +19,23 @@ final class ModelRegistryTests: XCTestCase {
 
     // MARK: - Mirror contract (literal — intentionally NOT derived)
 
-    func testRegistryMirrorsServerIdsAndPrices() {
-        // (id, provider, creditPrice) exactly as in generate/models.ts.
-        let expected: [(String, ModelProvider, Int)] = [
-            ("gpt-5.4-mini", .openai, 2),
-            ("gemini-3.5-flash", .gemini, 4),
-            ("gemini-3.1-pro-preview", .gemini, 5),
-            ("claude-sonnet-4-6", .anthropic, 7),
-            ("claude-opus-4-7", .anthropic, 10),
-            ("gpt-5.5", .openai, 11),
+    func testRegistryMirrorsServerIdsAndProviders() {
+        // (id, provider) and ORDER exactly as in generate/models.ts. No price
+        // mirror — the app shows no per-model cost (metered-credits Phase 4).
+        let expected: [(String, ModelProvider)] = [
+            ("gpt-5.4-mini", .openai),
+            ("gemini-3.5-flash", .gemini),
+            ("gemini-3.1-pro-preview", .gemini),
+            ("claude-sonnet-4-6", .anthropic),
+            ("claude-opus-4-7", .anthropic),
+            ("gpt-5.5", .openai),
         ]
         XCTAssertEqual(ModelRegistry.all.count, expected.count)
-        for (entry, (id, provider, price)) in zip(ModelRegistry.all, expected) {
+        for (entry, (id, provider)) in zip(ModelRegistry.all, expected) {
             XCTAssertEqual(entry.id, id)
-            XCTAssertEqual(entry.provider, provider)
-            XCTAssertEqual(entry.creditPrice, price, entry.id)
+            XCTAssertEqual(entry.provider, provider, entry.id)
+            XCTAssertTrue(entry.enabled, entry.id) // all six ship enabled
         }
-    }
-
-    func testSortedCheapestFirst() {
-        let prices = ModelRegistry.all.map(\.creditPrice)
-        XCTAssertEqual(prices, prices.sorted(), "picker order is by cost ascending (plan 6A)")
     }
 
     func testExactlyOneRecommended_andItIsFlash() {

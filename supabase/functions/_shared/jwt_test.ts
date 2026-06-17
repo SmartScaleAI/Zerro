@@ -6,7 +6,7 @@ const SECRET = "test_session_jwt_secret";
 Deno.test("round-trips claims and exp", async () => {
   const now = 1_000_000;
   const { token, exp } = await signSessionToken(
-    { sub: "sub-123", tier: "pro" },
+    { sub: "sub-123", tier: "managed" },
     SECRET,
     1800,
     now,
@@ -16,7 +16,7 @@ Deno.test("round-trips claims and exp", async () => {
   const claims = await verifySessionToken(token, SECRET, now + 1);
   assert(claims);
   assertEquals(claims!.sub, "sub-123");
-  assertEquals(claims!.tier, "pro");
+  assertEquals(claims!.tier, "managed");
   assertEquals(claims!.kind, "subscription");
   assertEquals(claims!.exp, now + 1800);
 });
@@ -38,19 +38,19 @@ Deno.test("mints a trial token with no tier (Phase F)", async () => {
 
 Deno.test("rejects an expired token", async () => {
   const now = 1_000_000;
-  const { token } = await signSessionToken({ sub: "s", tier: "starter" }, SECRET, 60, now);
+  const { token } = await signSessionToken({ sub: "s", tier: "managed" }, SECRET, 60, now);
   assertEquals(await verifySessionToken(token, SECRET, now + 61), null);
 });
 
 Deno.test("rejects a wrong secret", async () => {
   const now = 1_000_000;
-  const { token } = await signSessionToken({ sub: "s", tier: "starter" }, SECRET, 60, now);
+  const { token } = await signSessionToken({ sub: "s", tier: "managed" }, SECRET, 60, now);
   assertEquals(await verifySessionToken(token, "wrong_secret", now + 1), null);
 });
 
 Deno.test("rejects a tampered payload", async () => {
   const now = 1_000_000;
-  const { token } = await signSessionToken({ sub: "s", tier: "starter" }, SECRET, 60, now);
+  const { token } = await signSessionToken({ sub: "s", tier: "managed" }, SECRET, 60, now);
   const [h, _p, s] = token.split(".");
   // swap in a forged payload claiming pro tier + far-future exp
   const forged = btoa(JSON.stringify({ sub: "s", tier: "pro", kind: "subscription", iat: now, exp: now + 99999 }))

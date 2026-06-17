@@ -40,6 +40,14 @@ export interface GenerationLogRow {
    *  failure rows are attributable too (per-model failure-rate calibration). */
   model: string;
   provider: string;
+  /** Phase 3 calibration metadata (non-content, §14.5-compatible) — see the
+   *  20260616120000_generation_log_calibration migration.
+   *  creditsUsed: credits ACTUALLY charged (0 on the uncharged free-result
+   *  path; null on any failure row). durationSeconds: recording length in
+   *  seconds (Whisper-measured where available). frameCount: keyframes sent. */
+  creditsUsed: number | null;
+  durationSeconds: number | null;
+  frameCount: number | null;
 }
 
 /** A cached generation result, replayed verbatim for a retry carrying the same
@@ -202,8 +210,10 @@ export class SupabaseBillingStore implements BillingStore {
   }
 
   async logGeneration(row: GenerationLogRow): Promise<void> {
-    // Token counts + cost + success ONLY. NEVER transcript / audio / frames /
-    // prompt (§14.5). The table has no content columns by design.
+    // Token counts + cost + success + model/provider + Phase 3 calibration
+    // metadata (credits_used / duration_seconds / frame_count) ONLY. All of it
+    // is NON-CONTENT — NEVER transcript / audio / frames / prompt (§14.5). The
+    // table has no content columns by design.
     const { error } = await this.db.from("generation_log").insert({
       subscription_id: row.subscriptionId,
       tokens_in: row.tokensIn,
@@ -212,6 +222,9 @@ export class SupabaseBillingStore implements BillingStore {
       success: row.success,
       model: row.model,
       provider: row.provider,
+      credits_used: row.creditsUsed,
+      duration_seconds: row.durationSeconds,
+      frame_count: row.frameCount,
     });
     if (error) {
       // Logging is best-effort analytics; never fail a paid generation over it.

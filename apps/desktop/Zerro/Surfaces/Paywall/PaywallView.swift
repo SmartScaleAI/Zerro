@@ -208,7 +208,6 @@ struct PaywallView: View {
                     // yearly ($12/mo billed annually) is chosen on the
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
-                        tier: .pro,
                         title: "Managed",
                         subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
                     )
@@ -271,20 +270,9 @@ struct PaywallView: View {
 private enum Price {
     // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
     // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
-    // The retired Starter tier is not sold (it survives server-side as a
-    // future cheaper tier only).
     static let byok = "$69 one-time"
     static let managedMonthly = "$15/mo"
     static let managedYearly = "$144/yr"
-
-    /// The price label shown on a subscription card (the monthly figure).
-    /// Only `.pro` (the Managed plan) is rendered; `.starter` is unsold.
-    static func subscription(tier: ManagedTier) -> String {
-        switch tier {
-        case .starter: return managedMonthly
-        case .pro:     return managedMonthly
-        }
-    }
 }
 
 // MARK: - Activation model
@@ -407,7 +395,6 @@ private struct BuyOnceCard: View {
 /// monthly vs yearly is chosen on the checkout page. The user activates the
 /// issued key afterward via the shared `ActivateLicenseCard`.
 private struct SubscriptionOptionCard: View {
-    let tier: ManagedTier
     let title: String
     let subtitle: String
 
@@ -419,7 +406,7 @@ private struct SubscriptionOptionCard: View {
                     .foregroundStyle(Color.vfTextPrimary)
                 MostPopularBadge()
                 Spacer(minLength: VFSpacing.sm)
-                Text(Price.subscription(tier: tier))
+                Text(Price.managedMonthly)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.vfTextPrimary)
             }
@@ -437,12 +424,12 @@ private struct SubscriptionOptionCard: View {
     }
 
     private func openCheckout() {
-        guard let url = BillingLinks.subscriptionCheckoutURL(tier: tier) else {
-            Log.billing.notice("paywall: \(tier.rawValue, privacy: .public) checkout URL not configured yet (placeholder)")
+        guard let url = BillingLinks.subscriptionCheckoutURL() else {
+            Log.billing.notice("paywall: managed checkout URL not configured yet (placeholder)")
             return
         }
-        Log.billing.notice("paywall: opening \(tier.rawValue, privacy: .public) subscription checkout")
-        // Tier 3 analytics: only the Managed (Pro) subscription is sold here.
+        Log.billing.notice("paywall: opening managed subscription checkout")
+        // Tier 3 analytics: the single Managed subscription is sold here.
         Analytics.capture("checkout_opened", [
             "product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue,
             "placement": "paywall"
@@ -779,7 +766,7 @@ private func paywallPreviewStore(
 #Preview("Paywall \u{00B7} Add credits (managed)") {
     PaywallView()
         .environment(paywallPreviewStore(
-            .managed(tier: .pro, creditsRemaining: 4, resetDate: .now.addingTimeInterval(86_400 * 12)),
+            .managed(creditsRemaining: 4, resetDate: .now.addingTimeInterval(86_400 * 12)),
             trigger: .topup
         ))
 }

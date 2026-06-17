@@ -132,7 +132,7 @@ struct AccountBillingPane: View {
 #Preview("Managed") {
     AccountBillingPane()
         .environment(EntitlementStore.preview(
-            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
+            .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
         ))
         .environment(PreferencesStore())
         .padding()

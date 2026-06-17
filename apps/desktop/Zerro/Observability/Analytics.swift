@@ -157,11 +157,9 @@ enum Analytics {
             return "expired"
         case .byok:
             return "byok"
-        case .managed(let tier, _, _):
-            switch tier {
-            case .starter: return "managed_starter"
-            case .pro:     return "managed_pro"
-            }
+        case .managed:
+            // Single managed tier (metered-credits Phase 6) — no starter/pro split.
+            return "managed"
         }
     }
 
@@ -174,7 +172,7 @@ enum Analytics {
         case .trial(let creditsRemaining):
             guard let creditsRemaining else { return "n/a" } // pre-trial
             balance = creditsRemaining
-        case .managed(_, let creditsRemaining, _):
+        case .managed(let creditsRemaining, _):
             balance = creditsRemaining
         case .byok, .expired:
             return "n/a"

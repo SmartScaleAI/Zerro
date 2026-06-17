@@ -52,7 +52,7 @@ import { json } from "../_shared/http.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
-import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd, estimateGenerationCredits, sttCostUsd } from "./cost.ts";
 import { modelById } from "./models.ts";
 import { validateBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
@@ -61,6 +61,7 @@ import {
   GENERATE_RATE_LIMIT_PER_SUB,
   GENERATE_RATE_LIMIT_WINDOW_SECONDS,
   GENERATE_SLOT_STALE_SECONDS,
+  HEADROOM_CREDITS,
   IDEMPOTENCY_TTL_SECONDS,
   MAX_AUDIO_SECONDS,
   MAX_PAYLOAD_BYTES,
@@ -227,14 +228,17 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       return json({ error: "provider_unavailable", retryable: false }, 503);
     }
 
-    // 8. Credit availability for THIS model's price (read-only; do NOT
-    //    decrement yet). The combined balance must cover the model's fixed
-    //    price; otherwise 402 with the numbers the app's top-up prompt needs
-    //    (F3 — the NULL-stranding → top-up mapping).
+    // 8. Pre-Whisper FLOOR check (read-only; do NOT decrement yet). The real
+    //    cost isn't known until after the chat call, so the full estimate gate
+    //    runs post-Whisper (step 10.5). Here we only refuse to pay for STT on an
+    //    account that can't afford even the 1-credit floor of a successful
+    //    generation. `remaining` is stable for the rest of this request (the
+    //    concurrency slot is 1), so the post-Whisper gate REUSES this read.
+    //    402 carries `estimate: null` — no estimate exists this early.
     const remaining = await account.creditsRemaining();
-    if (remaining < modelEntry.creditPrice) {
+    if (remaining < 1) {
       return json(
-        { error: "out_of_credits", credits_remaining: remaining, model_price: modelEntry.creditPrice },
+        { error: "out_of_credits", credits_remaining: remaining, estimate: null },
         402,
       );
     }
@@ -265,6 +269,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
           success: false,
           model,
           provider: modelEntry.provider,
+          creditsUsed: null, // nothing charged
+          durationSeconds: declaredAudioSeconds ?? null, // measured not yet known here
+          frameCount: frames.length,
         });
         return providerErrorResponse(e);
       }
@@ -284,8 +291,46 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         success: false,
         model,
         provider: modelEntry.provider,
+        creditsUsed: null, // nothing charged
+        durationSeconds: measured,
+        frameCount: frames.length,
       });
       return json({ error: "audio_too_long" }, 413);
+    }
+
+    // 10.5 ESTIMATE + HEADROOM gate (Phase 2). The charge is metered on the REAL
+    //      cost post-chat, but we must decide affordability BEFORE paying for the
+    //      chat call. Estimate the cost from the known inputs (frames, transcript,
+    //      OCR, audio) plus a conservative output allowance, and block if the
+    //      balance can't cover it minus a small headroom tolerance. STT was
+    //      already paid, so a rejection logs success=false with the STT cost —
+    //      same honest-accounting pattern the true-seconds gate (step 10) uses.
+    //      `remaining` is the step-8 read, still current under the cap=1 slot.
+    const estimate = estimateGenerationCredits({
+      provider: modelEntry.provider,
+      model,
+      frameCount: frames.length,
+      transcriptChars: segments.reduce((n, s) => n + s.text.length, 0),
+      ocrChars: frames.reduce((n, f) => n + (f.ocrText?.length ?? 0), 0),
+      audioSeconds: measured,
+    });
+    if (remaining < estimate - HEADROOM_CREDITS) {
+      await deps.store.logGeneration({
+        subscriptionId: account.logSubscriptionId,
+        tokensIn: null,
+        tokensOut: null,
+        estCostUsd: sttCostUsd(measured), // STT was paid; chat never ran
+        success: false,
+        model,
+        provider: modelEntry.provider,
+        creditsUsed: null, // nothing charged
+        durationSeconds: measured,
+        frameCount: frames.length,
+      });
+      return json(
+        { error: "out_of_credits", credits_remaining: remaining, estimate },
+        402,
+      );
     }
 
     // 11. Compose the system prompt SERVER-SIDE (the server owns the whole
@@ -306,16 +351,20 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         success: false,
         model,
         provider: modelEntry.provider,
+        creditsUsed: null, // nothing charged
+        durationSeconds: measured,
+        frameCount: frames.length,
       });
       return providerErrorResponse(e);
     }
 
-    // 12. Fully successful + usable result → consume the model's credit price.
+    // 12. Fully successful + usable result → consume the METERED credit charge.
     // Cost keys on the VALIDATED selected model, not chat.model — a provider
-    // may report a dated modelVersion the price table doesn't carry. estCost
-    // is computed FIRST so the circuit-breaker (anti-abuse metered charge,
-    // §1.2) can compare it against the fixed price; the breaker only ever
-    // changes the AMOUNT — whether the generation runs was decided long ago.
+    // may report a dated modelVersion the price table doesn't carry. estCost is
+    // the real measured cost; `creditCostForModel` meters it to
+    // `ceil(estCost / USD_PER_CREDIT)` (floor 1), falling back to the model's
+    // fallbackCredits only when estCost is unavailable. Whether the generation
+    // runs was decided long ago; this only sets the AMOUNT.
     const estCost = estimatedCostUsd(measured, modelEntry.provider, model, chat.inputTokens, chat.outputTokens);
     const credits = creditCostForModel(model, estCost);
     const afterConsume = await account.consume(credits);
@@ -334,6 +383,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         success: true,
         model,
         provider: modelEntry.provider,
+        creditsUsed: 0, // free-result path: result returned but NOT charged
+        durationSeconds: measured,
+        frameCount: frames.length,
       });
       // Cache this (uncharged) result too: a retry should replay it, not re-run.
       if (idemKey) {
@@ -341,7 +393,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
           prompt: chat.content,
           usage: usageBody(chat),
           creditsRemaining: 0,
-          creditsCharged: 0, // circuit-breaker race: nothing was charged (D2)
+          creditsCharged: 0, // residual-overshoot race: nothing was charged (D2)
         }, IDEMPOTENCY_TTL_SECONDS);
       }
       return json(
@@ -350,8 +402,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       );
     }
 
-    // 13. Log token counts + cost + model/provider + success ONLY (no content,
-    //     §14.5 — model/provider are non-content attribution metadata).
+    // 13. Log token counts + cost + model/provider + Phase 3 calibration
+    //     metadata + success ONLY (no content, §14.5 — all of it is non-content
+    //     attribution: credits charged, recording seconds, keyframe count).
     await deps.store.logGeneration({
       subscriptionId: account.logSubscriptionId,
       tokensIn: chat.inputTokens,
@@ -360,6 +413,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       success: true,
       model,
       provider: modelEntry.provider,
+      creditsUsed: credits, // the metered charge actually consumed
+      durationSeconds: measured,
+      frameCount: frames.length,
     });
 
     // 13b. Cache the result for an idempotent retry (M1) — BEFORE the finally
@@ -376,9 +432,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       }, IDEMPOTENCY_TTL_SECONDS);
     }
 
-    // 14. Return the prompt to the app. `credits_charged` is the exact spend
-    //     (D2) — usually the model's fixed price, but the §1.2 circuit-breaker
-    //     can meter it higher, so the app must not derive it from the price.
+    // 14. Return the prompt to the app. `credits_charged` is the exact METERED
+    //     spend (D2) — the real `ceil(est_cost_usd / USD_PER_CREDIT)`, not any
+    //     fixed/fallback price, so the app must read it rather than derive it.
     return json(
       { prompt: chat.content, usage: usageBody(chat), credits_remaining: afterConsume, credits_charged: credits },
       200,

@@ -75,12 +75,12 @@ final class BillingLicenseModelScopingTests: XCTestCase {
 
     func testSyncLicensesManagedRowOnlyForManagedState() {
         let model = makeModel(expectedProduct: .managed, storedKey: "MANAGED-KEY", onFileKind: .managed)
-        model.syncToEntitlement(.managed(tier: .pro, creditsRemaining: 100, resetDate: .distantFuture))
+        model.syncToEntitlement(.managed(creditsRemaining: 100, resetDate: .distantFuture))
         XCTAssertEqual(model.phase, .licensed)
 
         // A BYOK-row model must NOT light up on a managed entitlement.
         let byokRow = makeModel(expectedProduct: .byok, storedKey: nil, onFileKind: nil)
-        byokRow.syncToEntitlement(.managed(tier: .pro, creditsRemaining: 100, resetDate: .distantFuture))
+        byokRow.syncToEntitlement(.managed(creditsRemaining: 100, resetDate: .distantFuture))
         XCTAssertEqual(byokRow.phase, .unverified)
     }
 
