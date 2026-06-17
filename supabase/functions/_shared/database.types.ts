@@ -173,6 +173,7 @@ export type Database = {
           created_at: string
           credits_limit: number
           current_period_end: string | null
+          email_normalized: string | null
           id: string
           license_key_hash: string | null
           ls_customer_id: string | null
@@ -188,6 +189,7 @@ export type Database = {
           created_at?: string
           credits_limit: number
           current_period_end?: string | null
+          email_normalized?: string | null
           id?: string
           license_key_hash?: string | null
           ls_customer_id?: string | null
@@ -203,6 +205,7 @@ export type Database = {
           created_at?: string
           credits_limit?: number
           current_period_end?: string | null
+          email_normalized?: string | null
           id?: string
           license_key_hash?: string | null
           ls_customer_id?: string | null

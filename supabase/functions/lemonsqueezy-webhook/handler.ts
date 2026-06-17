@@ -98,6 +98,20 @@ function isStale(existing: string | null | undefined, incoming: string | null | 
 }
 
 /**
+ * Canonicalize a buyer email for the subscription mirror's human-readable
+ * `email_normalized` column. Lowercases + trims only — deliberately NOT the
+ * trial-cap normalization (which strips Gmail dots/+tags to defeat farming):
+ * here the goal is recognizing the ACTUAL address a customer used, so the stored
+ * form must stay faithful to it. Returns null for missing/blank/`@`-less input
+ * so a bad value lands as NULL rather than a junk string.
+ */
+function normalizeSubscriberEmail(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed.includes("@") ? trimmed : null;
+}
+
+/**
  * Handle a raw webhook delivery. `rawBody` MUST be the exact bytes received (the
  * signature is HMAC'd over them); `signature` is the X-Signature header; the
  * `X-Event-Name` header (if present) wins over meta.event_name.
@@ -220,6 +234,7 @@ async function handleSubscriptionUpsert(
   const { id: subscriptionId, ls_order_id } = await deps.store.upsertSubscription({
     ls_subscription_id: lsSubId,
     ls_customer_id: attrs.customer_id !== undefined ? String(attrs.customer_id) : null,
+    email_normalized: normalizeSubscriberEmail(attrs.user_email),
     ls_order_id: orderId,
     tier,
     status: opts.status,
@@ -265,12 +280,16 @@ async function handleSubscriptionUpdated(deps: WebhookDeps, payload: LsWebhook) 
   // v1: update tier + credits_limit (new limit applies NEXT period only — the
   // open usage_period is untouched) and refresh the period-end anchor. Status is
   // NOT changed here; it is driven by the payment/cancel events.
+  const email = normalizeSubscriberEmail(attrs.user_email);
   await deps.store.updateSubscription(existing.id, {
     tier,
     credits_limit: creditsLimit,
     current_period_end: attrs.renews_at ?? null,
     billing_interval: billingInterval,
     ls_updated_at: attrs.updated_at ?? null,
+    // Only refresh when the event actually carries an email — never overwrite a
+    // known address with a null from an event that omits user_email.
+    ...(email ? { email_normalized: email } : {}),
   });
 
   logAction("subscription_updated", existing.id, `tier_changed_to_${tier}_next_period`);
