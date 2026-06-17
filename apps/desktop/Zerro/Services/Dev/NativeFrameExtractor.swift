@@ -52,23 +52,37 @@ enum NativeFrameExtractor {
     /// Crop a square-ish region of `cropSize` (native pixels) centered on the
     /// normalized point `(x, y)` (`[0,1]`, top-left — the cursor-track / frame
     /// space). Clamped to the image bounds, so a point near an edge yields a
-    /// smaller in-bounds crop rather than going out of range. Used by M5 to bound
-    /// the OCR + marker region and the vision-token cost.
-    static func crop(_ image: CGImage, around point: (x: Double, y: Double), cropSize: Int) -> CGImage? {
+    /// smaller in-bounds crop rather than going out of range. Returns the cropped
+    /// image AND the point's normalized position WITHIN that crop (which is not
+    /// exactly center after edge-clamping), so M5 places the marker + orders OCR
+    /// against the true in-crop point. Used to bound OCR + marker + vision-token
+    /// cost.
+    static func crop(
+        _ image: CGImage,
+        around point: (x: Double, y: Double),
+        cropSize: Int
+    ) -> (image: CGImage, pointInCrop: (x: Double, y: Double))? {
         let w = image.width, h = image.height
         guard w > 0, h > 0, cropSize > 0 else { return nil }
-        let cx = Int((point.x * Double(w)).rounded())
-        let cy = Int((point.y * Double(h)).rounded())
+        let pxX = point.x * Double(w)
+        let pxY = point.y * Double(h)
         let half = cropSize / 2
-        var minX = cx - half
-        var minY = cy - half
+        var minX = Int(pxX.rounded()) - half
+        var minY = Int(pxY.rounded()) - half
         // Clamp the rect fully inside the image.
         minX = Swift.max(0, Swift.min(minX, w - 1))
         minY = Swift.max(0, Swift.min(minY, h - 1))
         let width = Swift.min(cropSize, w - minX)
         let height = Swift.min(cropSize, h - minY)
         guard width > 0, height > 0 else { return nil }
-        return image.cropping(to: CGRect(x: minX, y: minY, width: width, height: height))
+        let cropped = image.cropping(to: CGRect(x: minX, y: minY, width: width, height: height))
+        guard let cropped else { return nil }
+        let inCropX = (pxX - Double(minX)) / Double(width)
+        let inCropY = (pxY - Double(minY)) / Double(height)
+        // Clamp into [0,1] (a point exactly on the far edge can round to 1.0+).
+        let cx = Swift.min(1, Swift.max(0, inCropX))
+        let cy = Swift.min(1, Swift.max(0, inCropY))
+        return (cropped, (cx, cy))
     }
 
     /// Encode a CGImage to JPEG bytes (for shipping a cropped native-res anchor

@@ -35,8 +35,11 @@ final class NativeFrameExtractorTests: XCTestCase {
         let image = makeSolidCGImage(width: 1600, height: 900)
         let crop = NativeFrameExtractor.crop(image, around: (x: 0.5, y: 0.5), cropSize: 400)
         XCTAssertNotNil(crop)
-        XCTAssertEqual(crop?.width, 400)
-        XCTAssertEqual(crop?.height, 400)
+        XCTAssertEqual(crop?.image.width, 400)
+        XCTAssertEqual(crop?.image.height, 400)
+        // A centered point lands at the crop center.
+        XCTAssertEqual(crop?.pointInCrop.x ?? 0, 0.5, accuracy: 0.01)
+        XCTAssertEqual(crop?.pointInCrop.y ?? 0, 0.5, accuracy: 0.01)
     }
 
     func testCropNearEdgeClampsInsideBounds() {
@@ -45,10 +48,13 @@ final class NativeFrameExtractorTests: XCTestCase {
         let crop = NativeFrameExtractor.crop(image, around: (x: 0.0, y: 0.0), cropSize: 400)
         XCTAssertNotNil(crop)
         // Stays within bounds (≤ requested), never out of range.
-        XCTAssertLessThanOrEqual(crop!.width, 400)
-        XCTAssertLessThanOrEqual(crop!.height, 400)
-        XCTAssertGreaterThan(crop!.width, 0)
-        XCTAssertGreaterThan(crop!.height, 0)
+        XCTAssertLessThanOrEqual(crop!.image.width, 400)
+        XCTAssertLessThanOrEqual(crop!.image.height, 400)
+        XCTAssertGreaterThan(crop!.image.width, 0)
+        XCTAssertGreaterThan(crop!.image.height, 0)
+        // The corner point sits at the crop's top-left, not its center.
+        XCTAssertEqual(crop!.pointInCrop.x, 0.0, accuracy: 0.01)
+        XCTAssertEqual(crop!.pointInCrop.y, 0.0, accuracy: 0.01)
     }
 
     func testJPEGEncodeRoundTrips() {
