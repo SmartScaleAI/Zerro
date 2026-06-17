@@ -39,45 +39,24 @@ final class AreaSelectorState {
     // MARK: - Capture mode
 
     /// Which selection affordance is active. `.area` is the default
-    /// drag-to-select region; `.window` is the CleanShot-style mode
-    /// where moving the cursor highlights the window underneath and a
-    /// click settles it (Space toggles between the two).
+    /// drag-to-select region; `.fullScreen` selects the entire display
+    /// the overlay is on. Space enters `.fullScreen` one-way; drawing a
+    /// new drag rectangle returns to `.area`.
     enum Mode: Equatable {
         case area
-        case window
+        case fullScreen
     }
 
     private(set) var mode: Mode = .area
 
-    /// One on-screen window the user can target in `.window` mode.
-    /// `frame` is in the overlay's view-local, TOP-LEFT coordinate
-    /// space (same as drag points) so the view can render it without
-    /// further conversion. `id` is the `CGWindowID` threaded into the
-    /// resulting `SelectionRect` for clean per-window capture.
-    struct WindowCandidate: Identifiable, Equatable {
-        let id: CGWindowID
-        let frame: CGRect
-        let title: String?
-    }
+    /// Overlay bounds (view-local, top-left) in points, set by the
+    /// controller at present time. Used to build the full-display
+    /// `confirmableSelectionRect` in `.fullScreen` mode — the whole
+    /// overlay covers exactly one display.
+    private(set) var overlaySize: CGSize = .zero
 
-    /// On-screen windows for the current display, front-to-back. Set
-    /// by the controller when entering window mode.
-    private(set) var windows: [WindowCandidate] = []
-
-    /// Window currently under the cursor (not yet clicked). Drives the
-    /// live hover highlight.
-    private(set) var highlightedWindowID: CGWindowID?
-
-    /// Window the user clicked to settle on. Once set, Enter confirms
-    /// it. nil until a click lands on a candidate.
-    private(set) var settledWindowID: CGWindowID?
-
-    /// The candidate the user is acting on: the settled one if present,
-    /// otherwise the hovered one.
-    var activeWindow: WindowCandidate? {
-        let target = settledWindowID ?? highlightedWindowID
-        guard let target else { return nil }
-        return windows.first { $0.id == target }
+    func setOverlaySize(_ size: CGSize) {
+        overlaySize = size
     }
 
     // MARK: - Drag state
@@ -130,7 +109,7 @@ final class AreaSelectorState {
     /// both the floating Record button's appearance and the controller's
     /// click hit-test:
     ///   • area: a finished drag (not in flight) meeting the min size.
-    ///   • window: a window the user has clicked to settle.
+    ///   • fullScreen: the whole overlay (== the whole display).
     var confirmableSelectionRect: CGRect? {
         switch mode {
         case .area:
@@ -138,9 +117,9 @@ final class AreaSelectorState {
                   rect.width >= Self.minimumSelectionSize,
                   rect.height >= Self.minimumSelectionSize else { return nil }
             return rect
-        case .window:
-            guard settledWindowID != nil, let candidate = activeWindow else { return nil }
-            return candidate.frame
+        case .fullScreen:
+            guard overlaySize.width > 0, overlaySize.height > 0 else { return nil }
+            return CGRect(origin: .zero, size: overlaySize)
         }
     }
 
@@ -332,6 +311,10 @@ final class AreaSelectorState {
     // MARK: - Mutations driven by AreaSelectorEventView
 
     func beginDrag(at point: CGPoint) {
+        // Starting a drag supersedes a prior full-screen selection: drawing
+        // a rectangle returns to a normal area selection (Space is one-way
+        // into full-screen, but a fresh drag drops back out).
+        mode = .area
         dragOrigin = point
         dragCurrent = point
         isDragging = true
@@ -346,53 +329,22 @@ final class AreaSelectorState {
         isDragging = false
     }
 
-    // MARK: - Window-mode mutations
+    // MARK: - Full-screen mode
 
-    /// Switch into window mode with a freshly enumerated candidate
-    /// list. Clears any in-progress drag so the area selection doesn't
-    /// bleed through the window-mode rendering.
-    func enterWindowMode(windows: [WindowCandidate]) {
-        mode = .window
-        self.windows = windows
+    /// Switch into full-screen mode (Space). Selects the entire display
+    /// the overlay is on. One-way: there is no Space toggle back — the
+    /// user draws a new drag rectangle (see `beginDrag`) to return to an
+    /// area selection. Clears any in-flight drag so a half-drawn rect
+    /// doesn't bleed through. `overlaySize` is the overlay's view-local
+    /// bounds, supplied by the controller, used to build the full-display
+    /// `confirmableSelectionRect`.
+    func enterFullScreenMode(overlaySize: CGSize) {
+        mode = .fullScreen
+        self.overlaySize = overlaySize
         dragOrigin = nil
         dragCurrent = nil
         isDragging = false
-        settledWindowID = nil
-        highlightedWindowID = nil
         isRecordButtonHovered = false
-    }
-
-    /// Return to free-draw area mode, discarding window state.
-    func enterAreaMode() {
-        mode = .area
-        windows = []
-        highlightedWindowID = nil
-        settledWindowID = nil
-        isRecordButtonHovered = false
-    }
-
-    /// Highlight the front-most window whose frame contains `point`
-    /// (view-local, top-left). Front-to-back order means the first
-    /// match wins. Once a window is settled (clicked), the highlight is
-    /// locked to it — moving the cursor toward the floating Record
-    /// button must not re-target or clear the selection. A fresh click
-    /// re-settles (see `settleWindow`).
-    func hoverWindow(at point: CGPoint) {
-        guard settledWindowID == nil else { return }
-        highlightedWindowID = windows.first { $0.frame.contains(point) }?.id
-    }
-
-    /// Settle on the window under `point`, if any. Returns the settled
-    /// candidate so the controller can decide whether a click was a
-    /// hit. A click on empty space is a no-op (keeps prior settle).
-    @discardableResult
-    func settleWindow(at point: CGPoint) -> WindowCandidate? {
-        guard let hit = windows.first(where: { $0.frame.contains(point) }) else {
-            return nil
-        }
-        settledWindowID = hit.id
-        highlightedWindowID = hit.id
-        return hit
     }
 
     // MARK: - Confirm / cancel

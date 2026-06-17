@@ -395,18 +395,15 @@ final class RecordingSession: NSObject {
         self.capturedMicDevice = micDevice
 
         // Three capture shapes, in priority order:
-        //   1. Window target whose SCWindow is still on screen — clean
-        //      per-window capture via desktopIndependentWindow (no
-        //      overlapping windows bleed in, sized to the window).
-        //   2. Any selection rect (area, or a window target whose window
-        //      has since closed) — crop the display to the rect.
+        //   1. Full-screen target — capture the whole display, no crop,
+        //      at its full pixel dimensions (menu bar included).
+        //   2. Area selection rect — crop the display to the rect.
         //   3. No selection — full display.
         let filter: SCContentFilter
-        if case let .window(windowID, _)? = selection?.target,
-           let scWindow = content.windows.first(where: { $0.windowID == windowID }) {
-            filter = SCContentFilter(desktopIndependentWindow: scWindow)
-            config.width = Int(scWindow.frame.width.rounded())
-            config.height = Int(scWindow.frame.height.rounded())
+        if case .fullScreen? = selection?.target {
+            config.width = display.width
+            config.height = display.height
+            filter = SCContentFilter(display: display, excludingWindows: [])
         } else if let selection {
             let source = Self.displayLocalSourceRect(global: selection.rect, on: screen)
             config.sourceRect = source

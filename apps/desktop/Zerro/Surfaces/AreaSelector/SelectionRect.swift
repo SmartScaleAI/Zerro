@@ -25,20 +25,18 @@ import Foundation
 
 struct SelectionRect: Equatable, Sendable {
     /// What the user picked. `.area` is a free-drawn region cropped out
-    /// of the display; `.window` targets a single on-screen window by its
-    /// CoreGraphics window ID, captured cleanly via ScreenCaptureKit's
-    /// per-window filter (no overlapping windows bleed in).
+    /// of the display; `.fullScreen` targets the entire display the
+    /// overlay is on, captured cleanly via ScreenCaptureKit's
+    /// `SCContentFilter(display:excludingWindows:)` with no crop.
     enum Target: Equatable, Sendable {
         case area
-        /// `id` is the `CGWindowID` (matches `SCWindow.windowID`); `title`
-        /// is a best-effort label for diagnostics only.
-        case window(id: CGWindowID, title: String?)
+        case fullScreen
     }
 
     /// The selected rectangle in points, in the global AppKit screen
-    /// coordinate space. For `.window` targets this is the window's
-    /// last-known frame — used for sizing and as a crop fallback if the
-    /// window has closed by the time capture starts.
+    /// coordinate space. For `.fullScreen` targets this is the whole
+    /// display's frame — carried for forensics; capture ignores it and
+    /// filters on `screenDisplayID` instead.
     let rect: CGRect
 
     /// `localizedName` of the screen the selection was made on. Held

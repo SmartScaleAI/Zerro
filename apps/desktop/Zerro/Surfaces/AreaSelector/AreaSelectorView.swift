@@ -46,8 +46,8 @@ struct AreaSelectorView: View {
                 switch state.mode {
                 case .area:
                     areaModeContent(bounds: bounds)
-                case .window:
-                    windowModeContent(bounds: bounds)
+                case .fullScreen:
+                    fullScreenModeContent(bounds: bounds)
                 }
                 instructionPill(in: bounds)
                 recordButton(in: bounds)
@@ -69,19 +69,15 @@ struct AreaSelectorView: View {
         }
     }
 
+    /// Full-screen mode: the whole display is the selection. No dimming —
+    /// the entire screen reads as "selected" — with a 1.5pt brand-accent
+    /// border tracing the display edge as the only chrome. The floating
+    /// toolbar (pinned bottom-center) carries the Record affordance.
     @ViewBuilder
-    private func windowModeContent(bounds: CGSize) -> some View {
-        let active = state.activeWindow
-        dimCutout(bounds: bounds, selection: active?.frame)
-        if let active {
-            selectionBorder(at: active.frame)
-            // Handles only once the window is settled (clicked), matching
-            // the area-mode language: live hover is borderless-only, a
-            // committed target gets the 8-handle treatment.
-            if state.settledWindowID == active.id {
-                windowHandles(at: active.frame)
-            }
-        }
+    private func fullScreenModeContent(bounds: CGSize) -> some View {
+        Rectangle()
+            .strokeBorder(Color.vfBrandAccent, lineWidth: 1.5)
+            .frame(width: bounds.width, height: bounds.height)
     }
 
     // MARK: - Dim cutout
@@ -128,19 +124,6 @@ struct AreaSelectorView: View {
             ? cornerHandlePositions(at: rect)
             : cornerHandlePositions(at: rect) + edgeMidpointHandlePositions(at: rect)
 
-        return ForEach(positions.indices, id: \.self) { i in
-            Rectangle()
-                .fill(Color.white)
-                .overlay(Rectangle().strokeBorder(Color.vfOnBrand, lineWidth: 1))
-                .frame(width: 8, height: 8)
-                .position(positions[i])
-        }
-    }
-
-    /// Window-mode handles: always the full 8 (corners + edge
-    /// midpoints), since a settled window is a committed target.
-    private func windowHandles(at rect: CGRect) -> some View {
-        let positions = cornerHandlePositions(at: rect) + edgeMidpointHandlePositions(at: rect)
         return ForEach(positions.indices, id: \.self) { i in
             Rectangle()
                 .fill(Color.white)
@@ -213,14 +196,19 @@ struct AreaSelectorView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextPrimary)
                 .fixedSize()
-            Text("\u{00B7}")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextTertiary)
-            KeyCapView(label: "space")
-            Text(modeToggleHint)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize()
+            // Space is a one-way hint shown only in area mode: press it to
+            // jump to full screen. Once in full-screen mode there's no
+            // toggle back, so the hint is hidden (only esc/cancel remains).
+            if state.mode == .area {
+                Text("\u{00B7}")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextTertiary)
+                KeyCapView(label: "space")
+                Text("full screen")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .fixedSize()
+            }
             Text("\u{00B7}")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextTertiary)
@@ -245,17 +233,8 @@ struct AreaSelectorView: View {
         switch state.mode {
         case .area:
             return "Drag to select an area to narrate"
-        case .window:
-            return state.settledWindowID == nil
-                ? "Click a window to select it"
-                : "Window selected \u{00B7} press return to record"
-        }
-    }
-
-    private var modeToggleHint: String {
-        switch state.mode {
-        case .area:   return "window"
-        case .window: return "area"
+        case .fullScreen:
+            return "Full screen selected \u{00B7} press return to record"
         }
     }
 
@@ -282,15 +261,24 @@ struct AreaSelectorView: View {
     private static let toolbarGap: CGFloat = 14
     private static let toolbarMargin: CGFloat = 8
 
-    /// View-local frame (top-left origin) of the whole floating toolbar
-    /// for a given selection. Placed `toolbarGap` below the selection,
-    /// flipped above if there isn't room, and clamped so it never spills
-    /// past the overlay bounds. Cluster order, left → right: model chip,
+    /// Total toolbar width: model chip + mic chip + Record, gap-separated.
+    private static var toolbarClusterWidth: CGFloat {
+        modelChipWidth + toolbarItemGap + micChipWidth + toolbarItemGap + recordButtonWidth
+    }
+
+    /// View-local frame (top-left origin) of the whole floating toolbar.
+    ///
+    /// In `.area` mode (`fullScreen == false`) it hangs `toolbarGap` below
+    /// the selection, flips above if there isn't room, and clamps inside
+    /// the overlay bounds. In `.fullScreen` mode the selection IS the whole
+    /// display, so anchoring under it would flip awkwardly — instead the
+    /// toolbar is pinned bottom-center of the overlay (see
+    /// `fullScreenToolbarFrame`). Cluster order, left → right: model chip,
     /// mic chip, Record button.
-    static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
-        let width = modelChipWidth + toolbarItemGap
-            + micChipWidth + toolbarItemGap + recordButtonWidth
-        let size = CGSize(width: width, height: toolbarHeight)
+    static func toolbarFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        if fullScreen { return fullScreenToolbarFrame(in: bounds) }
+
+        let size = CGSize(width: toolbarClusterWidth, height: toolbarHeight)
 
         var originY = rect.maxY + toolbarGap
         // Flip above the selection if the toolbar would fall off the
@@ -310,24 +298,33 @@ struct AreaSelectorView: View {
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
     }
 
+    /// Full-screen toolbar: pinned bottom-center of the overlay, floating
+    /// above the bottom edge by the standard `toolbarMargin`.
+    static func fullScreenToolbarFrame(in bounds: CGSize) -> CGRect {
+        let size = CGSize(width: toolbarClusterWidth, height: toolbarHeight)
+        let originX = (bounds.width - size.width) / 2
+        let originY = bounds.height - size.height - toolbarMargin
+        return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
+    }
+
     /// Model-picker chip: leftmost segment of the toolbar (multi-model
     /// per-recording override).
-    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds)
+    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         return CGRect(x: t.minX, y: t.minY, width: modelChipWidth, height: t.height)
     }
 
     /// Mic-picker chip: second segment of the toolbar, after the model
     /// chip.
-    static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds)
+    static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         let x = t.minX + modelChipWidth + toolbarItemGap
         return CGRect(x: x, y: t.minY, width: micChipWidth, height: t.height)
     }
 
     /// Record button: the right segment of the toolbar.
-    static func recordButtonFrame(forSelection rect: CGRect, in bounds: CGSize) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds)
+    static func recordButtonFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false) -> CGRect {
+        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         return CGRect(x: t.maxX - recordButtonWidth, y: t.minY, width: recordButtonWidth, height: t.height)
     }
 
@@ -343,8 +340,8 @@ struct AreaSelectorView: View {
 
     /// View-local frame of the open dropdown panel, anchored under the
     /// mic chip (flipped above if there isn't room below).
-    static func micMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int) -> CGRect {
-        let chip = micChipFrame(forSelection: rect, in: bounds)
+    static func micMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false) -> CGRect {
+        let chip = micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         let height = CGFloat(itemCount) * micMenuRowHeight + micMenuPadding * 2
         let width = micChipWidth
 
@@ -363,9 +360,10 @@ struct AreaSelectorView: View {
         at point: CGPoint,
         forSelection rect: CGRect,
         in bounds: CGSize,
-        itemCount: Int
+        itemCount: Int,
+        fullScreen: Bool = false
     ) -> Int? {
-        let frame = micMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount)
+        let frame = micMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen)
         guard frame.contains(point) else { return nil }
         let localY = point.y - frame.minY - micMenuPadding
         guard localY >= 0 else { return nil }
@@ -389,8 +387,8 @@ struct AreaSelectorView: View {
     /// View-local frame of the open model dropdown, anchored at the model
     /// chip's leading edge (flipped above if there isn't room below,
     /// clamped inside the overlay horizontally).
-    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int) -> CGRect {
-        let chip = modelChipFrame(forSelection: rect, in: bounds)
+    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false) -> CGRect {
+        let chip = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         let height = CGFloat(itemCount) * modelMenuRowHeight + modelMenuPadding * 2
         let width = modelMenuWidth
 
@@ -411,9 +409,10 @@ struct AreaSelectorView: View {
         at point: CGPoint,
         forSelection rect: CGRect,
         in bounds: CGSize,
-        itemCount: Int
+        itemCount: Int,
+        fullScreen: Bool = false
     ) -> Int? {
-        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount)
+        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen)
         guard frame.contains(point) else { return nil }
         let localY = point.y - frame.minY - modelMenuPadding
         guard localY >= 0 else { return nil }
@@ -426,7 +425,7 @@ struct AreaSelectorView: View {
     private func modelMenu(in bounds: CGSize) -> some View {
         if state.isModelMenuOpen, let rect = state.confirmableSelectionRect {
             let items = state.models
-            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count)
+            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen)
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: VFSpacing.xs) {
@@ -488,7 +487,7 @@ struct AreaSelectorView: View {
     private func micMenu(in bounds: CGSize) -> some View {
         if state.isMicMenuOpen, let rect = state.confirmableSelectionRect {
             let items = state.micMenuItems
-            let frame = Self.micMenuFrame(forSelection: rect, in: bounds, itemCount: items.count)
+            let frame = Self.micMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen)
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     HStack(spacing: VFSpacing.xs) {
@@ -532,9 +531,10 @@ struct AreaSelectorView: View {
     @ViewBuilder
     private func recordButton(in bounds: CGSize) -> some View {
         if let rect = state.confirmableSelectionRect {
-            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds)
-            let micFrame = Self.micChipFrame(forSelection: rect, in: bounds)
-            let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds)
+            let fullScreen = state.mode == .fullScreen
+            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+            let micFrame = Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+            let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
 
             modelChip
                 .frame(width: modelFrame.width, height: modelFrame.height)
@@ -769,9 +769,9 @@ private struct PulseLoginBackdrop: View {
 }
 
 /// Settled-selection variant: the drag has ENDED, so the full floating
-/// toolbar renders — mode toggle, model chip, mic chip, Record — the
-/// state to eyeball after any frame-math change (the controls must not
-/// overlap and the cluster must stay centered under the selection).
+/// toolbar renders — model chip, mic chip, Record — the state to eyeball
+/// after any frame-math change (the controls must not overlap and the
+/// cluster must stay centered under the selection).
 #Preview("Settled — toolbar") {
     ZStack {
         PulseLoginBackdrop()
@@ -787,6 +787,21 @@ private struct PulseLoginBackdrop: View {
         AreaSelectorView(state: {
             let s = makeSettledPreviewState()
             s.toggleModelMenu()
+            return s
+        }())
+    }
+    .frame(width: 1000, height: 640)
+}
+
+/// Full-screen variant: Space-selected, the whole display reads as
+/// selected (brand-accent edge, no dim) with the toolbar pinned
+/// bottom-center.
+#Preview("Full screen") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.enterFullScreenMode(overlaySize: CGSize(width: 1000, height: 640))
             return s
         }())
     }

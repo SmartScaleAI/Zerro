@@ -126,6 +126,11 @@ final class AreaSelectorWindowController {
         let win = makeOverlayWindow(on: screen, state: state)
         self.window = win
 
+        // Seed the overlay bounds so a Space-press into full-screen mode
+        // (which selects the whole display) has the display size on hand.
+        // The borderless window's contentView fills screen.frame.
+        state.setOverlaySize(win.contentView?.bounds.size ?? screen.frame.size)
+
         // No NSApp.activate here: under .accessory policy, activating the
         // whole app re-orders EVERY Zerro window to the front (Settings,
         // onboarding, …). The overlay is a non-activating panel (see
@@ -255,9 +260,9 @@ final class AreaSelectorWindowController {
     // MARK: - Event monitors
 
     private func installEventMonitors(for window: NSWindow, state: AreaSelectorState) {
-        // .mouseMoved is needed for the window-mode live hover; the
-        // window also has to accept moved events for the monitor to
-        // see them while it isn't tracking a drag.
+        // .mouseMoved drives the toolbar hover feedback (Record button,
+        // mic/model chips, open dropdown rows); the window has to accept
+        // moved events for the monitor to see them while not tracking a drag.
         window.acceptsMouseMovedEvents = true
         let mouseTypes: NSEvent.EventTypeMask = [
             .leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved
@@ -288,15 +293,16 @@ final class AreaSelectorWindowController {
             // drag/settle logic so a click on the toolbar acts on it rather
             // than re-dragging or re-settling underneath it.
             let size = contentView.bounds.size
+            let fullScreen = state.mode == .fullScreen
             let selectionRect = state.confirmableSelectionRect
             let recordFrame = selectionRect.map {
-                AreaSelectorView.recordButtonFrame(forSelection: $0, in: size)
+                AreaSelectorView.recordButtonFrame(forSelection: $0, in: size, fullScreen: fullScreen)
             }
             let micFrame = selectionRect.map {
-                AreaSelectorView.micChipFrame(forSelection: $0, in: size)
+                AreaSelectorView.micChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
             }
             let modelFrame = selectionRect.map {
-                AreaSelectorView.modelChipFrame(forSelection: $0, in: size)
+                AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
             }
 
             if event.type == .mouseMoved {
@@ -306,13 +312,13 @@ final class AreaSelectorWindowController {
                 if state.isMicMenuOpen, let rect = selectionRect {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count
+                        itemCount: state.micMenuItems.count, fullScreen: fullScreen
                     ))
                 }
                 if state.isModelMenuOpen, let rect = selectionRect {
                     state.setHighlightedModelIndex(AreaSelectorView.modelMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count
+                        itemCount: state.models.count, fullScreen: fullScreen
                     ))
                 }
             }
@@ -353,7 +359,7 @@ final class AreaSelectorWindowController {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.modelMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count
+                        itemCount: state.models.count, fullScreen: fullScreen
                        ) {
                         let item = state.models[idx]
                         if !item.gated {
@@ -375,7 +381,7 @@ final class AreaSelectorWindowController {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count
+                        itemCount: state.micMenuItems.count, fullScreen: fullScreen
                        ) {
                         let id = state.micMenuItems[idx].id
                         self?.preferences?.microphoneDeviceID = id
@@ -386,32 +392,23 @@ final class AreaSelectorWindowController {
                 }
             }
 
-            switch state.mode {
-            case .area:
-                switch event.type {
-                case .leftMouseDown:
-                    state.beginDrag(at: point)
-                case .leftMouseDragged:
-                    // Only extend an in-flight drag. A press that began on a
-                    // toolbar control (mode toggle, mic chip, dropdown row)
-                    // was consumed at mouseDown without calling beginDrag, so
-                    // isDragging is false here — and its trailing dragged/up
-                    // events must NOT resize the already-settled selection.
-                    if state.isDragging { state.updateDrag(to: point) }
-                case .leftMouseUp:
-                    if state.isDragging { state.endDrag(at: point) }
-                default:
-                    break
-                }
-            case .window:
-                switch event.type {
-                case .mouseMoved, .leftMouseDragged:
-                    state.hoverWindow(at: point)
-                case .leftMouseDown:
-                    state.settleWindow(at: point)
-                default:
-                    break
-                }
+            // Drag-to-select. A mouseDown starting a drag flips back to
+            // .area (see beginDrag), so drawing a rectangle after Space
+            // supersedes the full-screen selection.
+            switch event.type {
+            case .leftMouseDown:
+                state.beginDrag(at: point)
+            case .leftMouseDragged:
+                // Only extend an in-flight drag. A press that began on a
+                // toolbar control (model/mic chip, dropdown row) was
+                // consumed at mouseDown without calling beginDrag, so
+                // isDragging is false here — and its trailing dragged/up
+                // events must NOT resize the already-settled selection.
+                if state.isDragging { state.updateDrag(to: point) }
+            case .leftMouseUp:
+                if state.isDragging { state.endDrag(at: point) }
+            default:
+                break
             }
             // Consume so SwiftUI never receives the event.
             return nil
@@ -436,8 +433,8 @@ final class AreaSelectorWindowController {
                 }
                 state.cancel()
                 return nil
-            case 49: // Space — toggle area/window mode
-                self?.toggleMode(window: window, state: state)
+            case 49: // Space — select the whole display (one-way)
+                self?.enterFullScreen(window: window, state: state)
                 return nil
             case 36, 76: // Return, Enter (keypad)
                 self?.confirmCurrentSelection(window: window, state: state)
@@ -450,42 +447,29 @@ final class AreaSelectorWindowController {
         }
     }
 
-    /// Flips between area and window mode in response to Space. When
-    /// entering window mode we (re)enumerate on-screen windows for the
-    /// overlay's display and seed the hover with whatever sits under
-    /// the cursor right now, so the highlight appears immediately
-    /// rather than only after the first mouse move.
-    private func toggleMode(window: NSWindow, state: AreaSelectorState) {
-        switch state.mode {
-        case .area:
-            let candidates = enumerateWindows(on: window)
-            state.enterWindowMode(windows: candidates)
-            if let contentView = window.contentView {
-                let mouse = NSEvent.mouseLocation
-                let windowPoint = window.convertPoint(fromScreen: mouse)
-                state.hoverWindow(at: CGPoint(
-                    x: windowPoint.x,
-                    y: contentView.bounds.height - windowPoint.y
-                ))
-            }
-        case .window:
-            state.enterAreaMode()
-        }
+    /// Enter full-screen mode in response to Space: select the entire
+    /// display the overlay is on. One-way — there is no Space toggle back
+    /// to drag mode; drawing a new rectangle returns to an area selection.
+    /// Seeds the overlay bounds so the full-display `confirmableSelectionRect`
+    /// (and the bottom-center toolbar) resolve immediately.
+    private func enterFullScreen(window: NSWindow, state: AreaSelectorState) {
+        let size = window.contentView?.bounds.size ?? window.frame.size
+        state.enterFullScreenMode(overlaySize: size)
     }
 
-    /// Builds a `SelectionRect` in global AppKit screen coordinates
-    /// from the current view-local drag rect and forwards it to the
-    /// state's confirm callback. Selections below
+    /// Builds a `SelectionRect` in global AppKit screen coordinates from
+    /// the current selection and forwards it to the state's confirm
+    /// callback. In `.area`, selections below
     /// `AreaSelectorState.minimumSelectionSize` on either axis (including
     /// zero-size) are a no-op — the overlay stays open — so an accidental
-    /// Return without a real drag doesn't kick off a recording of nothing
-    /// (or of a too-small region).
+    /// Return without a real drag doesn't kick off a recording of nothing.
+    /// In `.fullScreen`, the whole display is always confirmable.
     private func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
         switch state.mode {
         case .area:
             confirmAreaSelection(window: window, state: state)
-        case .window:
-            confirmWindowSelection(window: window, state: state)
+        case .fullScreen:
+            confirmFullScreenSelection(window: window, state: state)
         }
     }
 
@@ -505,20 +489,17 @@ final class AreaSelectorWindowController {
         state.confirm(with: selection)
     }
 
-    /// Confirms the window the user has acted on (settled by click, or
-    /// merely hovered). No-op if nothing is targeted, so a stray Return
-    /// keeps the overlay open. The rect we pass is the window's frame
-    /// in global AppKit space — capture uses the `.window` target's id
-    /// for a clean per-window filter and falls back to cropping this
-    /// rect only if the window has closed by the time recording starts.
-    private func confirmWindowSelection(window: NSWindow, state: AreaSelectorState) {
-        guard let candidate = state.activeWindow else { return }
-        let global = viewLocalToGlobal(candidate.frame, window: window)
+    /// Confirms a full-screen selection: the whole display the overlay is
+    /// on. The rect is the display's full frame in global AppKit space
+    /// (`window.frame` already lives there); capture ignores the rect and
+    /// filters on `screenDisplayID` via `SCContentFilter(display:)`, so the
+    /// menu bar and everything else is captured with no crop.
+    private func confirmFullScreenSelection(window: NSWindow, state: AreaSelectorState) {
         let selection = SelectionRect(
-            rect: global,
+            rect: window.frame,
             screenLocalizedName: window.screen?.localizedName,
             screenDisplayID: window.screen?.displayID,
-            target: .window(id: candidate.id, title: candidate.title)
+            target: .fullScreen
         )
         state.confirm(with: selection)
     }
@@ -527,7 +508,8 @@ final class AreaSelectorWindowController {
     /// contentView fills the borderless window, so its bounds height
     /// equals the window's content height; the window's frame origin is
     /// already in the global AppKit space, so a Y-flip plus an offset
-    /// lands us there. Shared by area and window confirm paths.
+    /// lands us there. Used by the area confirm path (full-screen confirm
+    /// uses `window.frame` directly, already global).
     private func viewLocalToGlobal(_ viewLocal: CGRect, window: NSWindow) -> CGRect {
         let h = window.contentView?.bounds.height ?? window.frame.height
         let windowLocal = CGRect(
@@ -583,75 +565,6 @@ final class AreaSelectorWindowController {
             position: .unspecified
         )
         return session.devices.map { .init(id: $0.uniqueID, name: $0.localizedName) }
-    }
-
-    // MARK: - Window enumeration
-
-    /// On-screen windows for the overlay's display, front-to-back, with
-    /// frames converted into the overlay's view-local (top-left) space.
-    ///
-    /// `CGWindowListCopyWindowInfo` returns bounds in Quartz global
-    /// coordinates (top-left origin of the main display, y down). The
-    /// overlay's display origin in that same space is `CGDisplayBounds`,
-    /// so subtracting it yields a top-left point relative to the display
-    /// — which is exactly the overlay's view-local space.
-    ///
-    /// We filter to "real" windows: our own overlay is excluded, as are
-    /// menu-bar/dock layer windows (layer != 0), fully transparent
-    /// windows, and anything not intersecting this display.
-    private func enumerateWindows(on window: NSWindow) -> [AreaSelectorState.WindowCandidate] {
-        guard let screen = window.screen,
-              let screenNumber = screen.deviceDescription[
-                NSDeviceDescriptionKey("NSScreenNumber")
-              ] as? NSNumber else {
-            return []
-        }
-        let displayID = CGDirectDisplayID(screenNumber.uint32Value)
-        let displayBounds = CGDisplayBounds(displayID)
-
-        let ownWindowNumber = CGWindowID(window.windowNumber)
-
-        guard let infoList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return []
-        }
-
-        var candidates: [AreaSelectorState.WindowCandidate] = []
-        for info in infoList {
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let windowNumber = info[kCGWindowNumber as String] as? CGWindowID,
-                  windowNumber != ownWindowNumber,
-                  let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
-                  let quartzBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-            else { continue }
-
-            // Skip effectively invisible windows.
-            if let alpha = info[kCGWindowAlpha as String] as? Double, alpha < 0.05 {
-                continue
-            }
-            // Only windows on this display.
-            guard quartzBounds.intersects(displayBounds) else { continue }
-
-            let viewLocal = CGRect(
-                x: quartzBounds.minX - displayBounds.minX,
-                y: quartzBounds.minY - displayBounds.minY,
-                width: quartzBounds.width,
-                height: quartzBounds.height
-            )
-            // Ignore degenerate / tiny windows that can't carry context.
-            guard viewLocal.width >= 40, viewLocal.height >= 40 else { continue }
-
-            let owner = info[kCGWindowOwnerName as String] as? String
-            let name = info[kCGWindowName as String] as? String
-            let title = [name, owner].compactMap { $0 }.first(where: { !$0.isEmpty })
-
-            candidates.append(
-                .init(id: windowNumber, frame: viewLocal, title: title)
-            )
-        }
-        return candidates
     }
 
     // MARK: - Window construction
