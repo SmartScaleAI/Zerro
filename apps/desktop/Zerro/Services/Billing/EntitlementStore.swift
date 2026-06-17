@@ -558,6 +558,20 @@ final class EntitlementStore {
     /// like `paywallTrigger`. UI only.
     var focusActivationFieldOnOpen = false
 
+    /// One-shot prefill for the activation field, set by the checkout-return deep
+    /// link when an AUTOMATIC activation FAILED: the paywall opens focused on the
+    /// field with the attempted key already populated so the user can see and
+    /// retry it. `ActivateLicenseCard` reads + clears it on appear (travels with
+    /// `focusActivationFieldOnOpen`). UI only.
+    var prefillLicenseKey: String?
+
+    /// One-shot purchase confirmation to render after a successful activation
+    /// (deep-link OR manual paste) or a Managed top-up. When non-nil,
+    /// `PaywallView` shows the "you're all set" success screen INSTEAD of the
+    /// buy/manage matrix; cleared when the user taps the confirmation's button.
+    /// `@Observable` drives the swap. UI only.
+    var purchaseSuccess: PurchaseSuccessInfo?
+
     /// True when the user already holds a PURCHASED entitlement (Managed or
     /// BYOK) — nothing left to buy/activate. The checkout-return deep link reads
     /// this to choose silent-refresh (an already-activated Managed user's top-up)
@@ -577,6 +591,18 @@ final class EntitlementStore {
     /// network work. Matches the presence check in `revalidateLicenseIfNeeded`.
     var hasLicenseOnFile: Bool {
         licenseService.currentLicenseState().presence == .present
+    }
+
+    /// True when `key` is the license ALREADY on file AND the user is currently
+    /// paid-entitled — the idempotent "already active" signal the checkout-return
+    /// deep link uses to treat a repeat click (or a key that already activated
+    /// this device) as success, instead of re-POSTing to LemonSqueezy. Compared
+    /// trimmed, since the on-file key was stored trimmed.
+    func isActiveLicenseKey(_ key: String) -> Bool {
+        guard isPaidEntitled else { return false }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return licenseService.currentLicenseKey() == trimmed
     }
 
     /// Reflect a just-completed trial generation's `credits_remaining` and
@@ -669,6 +695,12 @@ final class EntitlementStore {
         case .byok, .expired: return nil
         }
     }
+
+    /// The credits currently shown for the active state (Managed snapshot / trial
+    /// pool), or `nil` for byok/expired. Exposed so the checkout-return top-up
+    /// path can diff the balance across an entitlement refresh and confirm how
+    /// many credits were added. Display-only — nothing gates on it.
+    var currentDisplayedCredits: Int? { displayedCreditsRemaining }
 
     /// Updates the credits line immediately from a just-completed generation's
     /// `credits_remaining`, before the authoritative `/entitlement` refresh

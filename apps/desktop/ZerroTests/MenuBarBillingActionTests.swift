@@ -57,7 +57,7 @@ final class MenuBarBillingActionTests: XCTestCase {
         // Healthy Managed leads the label with adding credits (where a paid-up
         // user comes to top up), but still routes through the manage portal.
         let action = resolve(managed())
-        XCTAssertEqual(action.label, "Add more credits")
+        XCTAssertEqual(action.label, "Add Credits")
         XCTAssertNil(action.secondary)
         XCTAssertEqual(action.trigger, .manage)
     }

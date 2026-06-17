@@ -32,7 +32,7 @@ final class PaywallCopyTests: XCTestCase {
 
     func testTopupOnManaged() {
         let state = EntitlementState.managed(creditsRemaining: 2, resetDate: .distantFuture)
-        XCTAssertEqual(headline(.topup, state), "Add more credits")
+        XCTAssertEqual(headline(.topup, state), "Add Credits")
     }
 
     func testManageOnByok() {

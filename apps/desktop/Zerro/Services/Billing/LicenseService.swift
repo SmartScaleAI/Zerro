@@ -442,6 +442,15 @@ final class LicenseService {
         return id
     }
 
+    /// The license key currently on file (trimmed), or `nil` when none is
+    /// readable. Used by the checkout-return deep link to detect an already-
+    /// active key (idempotent re-activation) without re-POSTing to LemonSqueezy.
+    func currentLicenseKey() -> String? {
+        guard case .found(let key) = licenseKeySlot.readResult() else { return nil }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Whether enough time has elapsed since the last successful validation to
     /// warrant another network round-trip. True when never validated (no
     /// stamp) or when the stamp is older than `revalidationInterval`.

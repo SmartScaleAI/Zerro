@@ -181,6 +181,11 @@ struct ZerroApp: App {
             // app-activation refresh can reach it (both live outside the SwiftUI
             // view tree). Weak (like `appState`), set only in this one-shot block.
             AppDelegate.entitlements = ent
+            // Cold-launch checkout return: if a `zerro://checkout-complete` deep
+            // link arrived before this wiring (clicking "Return to Zerro" can beat
+            // scene mount on a cold launch), `handleCheckoutReturn` buffered it —
+            // replay it now that the store is reachable, then clear it.
+            AppDelegate.replayPendingCheckoutURLIfNeeded()
             // Wire onboarding gating for recovery (AppState owns the recovery
             // logic + the wake observer but not the OnboardingStore).
             state.onboardingCompleteProvider = { [weak onb] in
@@ -618,6 +623,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// buyer (a Managed top-up that updated credits silently).
     nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
 
+    /// One-shot: the Settings category to preselect the next time the Settings
+    /// window opens. Set right before `openWindow(id: SettingsScene.windowID)` —
+    /// the BYOK success confirmation's "Open Settings" button routes to Account &
+    /// Billing, where the API-key field lives. `SettingsView` reads + clears it on
+    /// appear. UI only.
+    nonisolated(unsafe) static var pendingSettingsCategory: SettingsCategory?
+
     /// Set by `ZerroApp.init`'s one-shot block to the long-lived entitlement
     /// store. Read by the `zerro://` checkout-return deep link and the
     /// app-activation refresh. Weak, like `appState` — owned by ZerroApp's
@@ -695,40 +707,185 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Resolves a checkout return: refresh the entitlement, then either bring the
-    /// user back silently (already entitled — a top-up or a prior activation) or
-    /// open the paywall with the activation field focused (a brand-new buyer who
-    /// must paste their license key — the backend stores only a hash, so the app
-    /// can't fetch it). Never claims success on its own; activation does that.
+    /// A checkout-return deep link that arrived BEFORE the entitlement store was
+    /// wired (cold launch from clicking "Return to Zerro" — macOS routes the open
+    /// URL before SwiftUI mounts our scene and `ZerroApp.init` runs). Stashed by
+    /// `handleCheckoutReturn` and replayed by `replayPendingCheckoutURLIfNeeded`
+    /// from `ZerroApp.init`'s one-shot wiring block. MainActor-isolated.
+    @MainActor static var pendingCheckoutURL: URL?
+
+    /// Side effects the checkout-return resolution performs, injected so tests can
+    /// observe them without driving real AppKit / analytics. Production passes
+    /// `.live`.
+    @MainActor
+    struct CheckoutReturnEffects {
+        var bringAppForward: () -> Void
+        var dismissPaywall: () -> Void
+        var openPaywall: () -> Void
+        var capture: (_ event: String, _ properties: [String: Any]) -> Void
+
+        static let live = CheckoutReturnEffects(
+            bringAppForward: { NSApp.activate(ignoringOtherApps: true) },
+            dismissPaywall: { AppDelegate.requestDismissPaywall?() },
+            openPaywall: { AppDelegate.openPaywall() },
+            capture: { Analytics.capture($0, $1) }
+        )
+    }
+
+    /// Resolves a checkout return. Two shapes:
+    ///
+    ///   • The link carries a `license_key` (LemonSqueezy's bounce page forwards
+    ///     the issued key): activate AUTOMATICALLY so the buyer never has to
+    ///     paste. On success refresh + surface the app + dismiss the paywall; on
+    ///     failure open the paywall with the attempted key prefilled and a mapped
+    ///     error. An already-active key/device is idempotent — a success, never
+    ///     an error.
+    ///   • No `license_key` (a Managed top-up or an older link): keep the prior
+    ///     behavior exactly — refresh, then silently surface an already-entitled
+    ///     user or open the paywall focused on the activation field.
+    ///
+    /// `handleCheckoutReturn` is the AppKit entry point; the work lives here in a
+    /// resolver that takes the parsed link + injected `effects` so it's unit-
+    /// testable. Returns the `CheckoutOutcome` it took (also the analytics
+    /// `outcome`).
     @MainActor
     static func handleCheckoutReturn(_ url: URL) {
-        guard url.host == "checkout-complete" else {
+        guard let parsed = CheckoutReturn.parse(url) else {
             Log.billing.notice("deep link: ignoring \(url.absoluteString, privacy: .public)")
             return
         }
         guard let entitlements else {
-            Log.billing.error("deep link: checkout-complete but entitlements not wired")
+            // Cold launch: the deep link beat the store wiring. Stash it; the
+            // one-shot block in `ZerroApp.init` replays it once the store is set.
+            pendingCheckoutURL = url
+            Log.billing.notice("deep link: checkout-complete before store wired — buffering")
             return
         }
-        Log.billing.notice("deep link: checkout-complete received")
+        Log.billing.notice(
+            "deep link: checkout-complete received (key=\(parsed.licenseKey != nil, privacy: .public) product=\(parsed.productKind?.rawValue ?? "none", privacy: .public))"
+        )
         Task { @MainActor in
-            entitlements.refresh()
-            await entitlements.refreshManagedEntitlement()
-            if entitlements.isPaidEntitled {
-                // Already activated (e.g. a Managed top-up) — credits updated
-                // silently. Surface the app and dismiss the paywall if it's open.
-                NSApp.activate(ignoringOtherApps: true)
-                requestDismissPaywall?()
-                Log.billing.notice("deep link: already entitled — refreshed silently")
-            } else {
-                // Brand-new buyer must paste the key — open the paywall straight
-                // into the focused activation field, in the manage/activate copy.
-                entitlements.paywallTrigger = .manage
-                entitlements.focusActivationFieldOnOpen = true
-                openPaywall()
-                Log.billing.notice("deep link: not yet entitled — opening paywall focused on activation")
-            }
+            _ = await resolveCheckoutReturn(parsed, entitlements: entitlements)
         }
+    }
+
+    /// Replays a checkout-return deep link buffered before the store was wired
+    /// (cold launch). Called from `ZerroApp.init`'s one-shot block right after
+    /// `AppDelegate.entitlements` is set. No-op when nothing is buffered.
+    @MainActor
+    static func replayPendingCheckoutURLIfNeeded() {
+        guard let pending = pendingCheckoutURL else { return }
+        pendingCheckoutURL = nil
+        Log.billing.notice("deep link: replaying buffered checkout-complete")
+        handleCheckoutReturn(pending)
+    }
+
+    @MainActor
+    @discardableResult
+    static func resolveCheckoutReturn(
+        _ parsed: CheckoutReturn,
+        entitlements: EntitlementStore,
+        effects: CheckoutReturnEffects = .live
+    ) async -> CheckoutOutcome {
+        guard let key = parsed.licenseKey else {
+            return await resolveCheckoutReturnWithoutKey(entitlements: entitlements, effects: effects)
+        }
+
+        let productProperty = parsed.productKind?.rawValue ?? "unknown"
+
+        // Idempotency: an already-entitled user clicking the link again (or whose
+        // key already activated THIS device) is a SUCCESS — don't re-POST to
+        // LemonSqueezy, which could needlessly burn a machine slot.
+        entitlements.refresh()
+        if entitlements.isActiveLicenseKey(key) {
+            await finishSuccessfulActivation(entitlements: entitlements, effects: effects)
+            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "already_active"])
+            Log.billing.notice("deep link: key already active — treated as success")
+            return .alreadyActive
+        }
+
+        do {
+            _ = try await entitlements.activate(licenseKey: key, expectedProduct: parsed.productKind)
+            await finishSuccessfulActivation(entitlements: entitlements, effects: effects)
+            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "success"])
+            Log.billing.notice("deep link: license activated automatically")
+            return .activated
+        } catch {
+            // Failure: open the paywall focused on the activation field with the
+            // attempted key prefilled so the user sees + can retry it. The card
+            // surfaces the mapped `LicenseError` copy when they re-submit; the
+            // typed reason is logged here.
+            entitlements.prefillLicenseKey = key
+            entitlements.paywallTrigger = .manage
+            entitlements.focusActivationFieldOnOpen = true
+            effects.openPaywall()
+            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "failed"])
+            Log.billing.error("deep link: automatic activation failed — \(String(describing: error), privacy: .public)")
+            return .activationFailed
+        }
+    }
+
+    /// The no-key checkout return (a Managed top-up or an older link): refresh,
+    /// then either confirm a top-up (when the credit balance went up) or, for an
+    /// entitled user with no observable delta, surface silently as before. A
+    /// not-yet-entitled user opens the paywall focused on the activation field
+    /// (a brand-new buyer who must paste).
+    @MainActor
+    private static func resolveCheckoutReturnWithoutKey(
+        entitlements: EntitlementStore,
+        effects: CheckoutReturnEffects
+    ) async -> CheckoutOutcome {
+        // Snapshot the balance BEFORE the refresh so a top-up's delta is visible.
+        let creditsBefore = entitlements.currentDisplayedCredits
+        entitlements.refresh()
+        await entitlements.refreshManagedEntitlement()
+        if entitlements.isPaidEntitled {
+            // Top-up: if credits demonstrably went up, confirm how many landed.
+            if let info = PurchaseSuccessInfo.topupDelta(
+                before: creditsBefore,
+                after: entitlements.currentDisplayedCredits
+            ) {
+                entitlements.purchaseSuccess = info
+                effects.capture("purchase_success_shown", ["method": "deeplink", "plan": "topup"])
+                effects.openPaywall()
+                Log.billing.notice("deep link: top-up confirmed")
+                return .topupConfirmed
+            }
+            // No computable delta (no credit balance, or no increase) → silent.
+            effects.bringAppForward()
+            effects.dismissPaywall()
+            Log.billing.notice("deep link: already entitled — refreshed silently")
+            return .silentRefresh
+        }
+        entitlements.paywallTrigger = .manage
+        entitlements.focusActivationFieldOnOpen = true
+        effects.openPaywall()
+        Log.billing.notice("deep link: not yet entitled — opening paywall focused on activation")
+        return .openedPaywallNoKey
+    }
+
+    /// Shared success tail for an automatic activation (fresh or already-active):
+    /// re-derive the entitlement, pull the latest Managed credits, then SHOW the
+    /// success confirmation rather than dismissing — the user dismisses it via
+    /// the confirmation's own button. The paywall window is opened to host the
+    /// confirmation (it may not be open after a deep-link activation).
+    @MainActor
+    private static func finishSuccessfulActivation(
+        entitlements: EntitlementStore,
+        effects: CheckoutReturnEffects
+    ) async {
+        entitlements.refresh()
+        await entitlements.refreshManagedEntitlement()
+        guard let info = PurchaseSuccessInfo.fromActivatedState(entitlements.state) else {
+            // Defensive: no paid state to confirm — fall back to surfacing the
+            // app + dismissing the paywall (the prior success behavior).
+            effects.bringAppForward()
+            effects.dismissPaywall()
+            return
+        }
+        entitlements.purchaseSuccess = info
+        effects.capture("purchase_success_shown", ["method": "deeplink", "plan": info.analyticsPlan])
+        effects.openPaywall()
     }
 
     /// M1 — quit (⌘Q / menu "Quit Zerro") routing. `NSApplication.terminate`

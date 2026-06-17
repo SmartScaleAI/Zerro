@@ -149,7 +149,7 @@ already present (it currently distinguishes the blocked/preflight case from
 |-------------------------------------------------------------|---------------------------------------|----------------------------------------------|
 | Blocked — `.expired` (trial credits gone)                   | "You've used your free generations"   | (current copy — keep)                        |
 | Voluntary upgrade — `.trial` with credits left              | "Upgrade your plan"                   | Lead with Managed value; trial still works   |
-| Low balance / top-up — `.managed` low credits               | "Add more credits"                    | Show top-up packs prominently                |
+| Low balance / top-up — `.managed` low credits               | "Add credits"                    | Show top-up packs prominently                |
 | Manage — `.byok` or `.managed` healthy                      | "Manage your plan"                    | De-emphasize sell; show activation/manage    |
 
 Keep the existing `paywall_shown` analytics; the `trigger` value now carries the

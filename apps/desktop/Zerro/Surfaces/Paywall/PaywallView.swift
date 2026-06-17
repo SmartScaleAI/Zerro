@@ -96,7 +96,7 @@ struct PaywallCopy: Equatable {
     )
     /// Managed user adding credits — point straight at the top-up packs.
     static let topup = PaywallCopy(
-        headline: "Add more credits",
+        headline: "Add Credits",
         subheadline: "Top up your balance to keep generating this month. Credits attach to your subscription instantly and carry over for 12 months."
     )
     /// Entitled user managing their plan — de-emphasize the sell.
@@ -131,7 +131,16 @@ struct PaywallView: View {
     }
 
     var body: some View {
-        mainPanel
+        // The purchase-success confirmation takes precedence over the whole
+        // PaywallCopy matrix: once an activation/top-up lands, the window shows
+        // "you're all set" instead of the headline + plan cards + activate field.
+        Group {
+            if let success = entitlements.purchaseSuccess {
+                PurchaseSuccessView(info: success)
+            } else {
+                mainPanel
+            }
+        }
             .frame(width: Self.windowWidth)
             .background(Color.vfCardBackground)
             .onAppear {
@@ -234,11 +243,25 @@ struct PaywallView: View {
             }
 
             // One shared activation path for an already-purchased key (BYOK or
-            // subscription). On success the paywall dismisses.
+            // subscription). On success, show the same "you're all set"
+            // confirmation the deep-link path uses — don't bare-dismiss.
             ActivateLicenseCard(
-                onActivated: { dismissWindow(id: PaywallScene.windowID) }
+                onActivated: showManualActivationSuccess
             )
         }
+    }
+
+    /// Manual-paste activation succeeded: derive the confirmation from the
+    /// now-paid state and route through `purchaseSuccess` so the success screen
+    /// shows (mirrors the deep-link path). Defensively dismisses if there's
+    /// somehow no paid state to confirm.
+    private func showManualActivationSuccess() {
+        guard let info = PurchaseSuccessInfo.fromActivatedState(entitlements.state) else {
+            dismissWindow(id: PaywallScene.windowID)
+            return
+        }
+        entitlements.purchaseSuccess = info
+        Analytics.capture("purchase_success_shown", ["method": "manual_paste", "plan": info.analyticsPlan])
     }
 
     /// The plan sell shows only to users who don't have a plan yet.
@@ -573,8 +596,16 @@ private struct ActivateLicenseCard: View {
         // window; `onChange` covers the flag flipping while the window is already
         // on screen (the deep link re-routes to the existing window).
         .onAppear(perform: focusActivationIfRequested)
+        .onAppear(perform: adoptPrefillIfPresent)
         .onChange(of: entitlements.focusActivationFieldOnOpen) { _, requested in
             if requested { focusActivationIfRequested() }
+        }
+        // Checkout-return FAILURE: the deep link set `prefillLicenseKey` to the
+        // attempted (rejected) key so the user can see + retry it. Adopt it
+        // whether the window was just opened (onAppear) or the flag flipped while
+        // it was already on screen (onChange).
+        .onChange(of: entitlements.prefillLicenseKey) { _, key in
+            if key != nil { adoptPrefillIfPresent() }
         }
     }
 
@@ -585,6 +616,17 @@ private struct ActivateLicenseCard: View {
         entitlements.focusActivationFieldOnOpen = false
         isEntering = true
         Task { @MainActor in fieldFocused = true }
+    }
+
+    /// Reads + clears the one-shot prefill, populating the field with the key an
+    /// automatic (deep-link) activation just failed on so the user can correct or
+    /// retry it. Demotes the phase to `.idle` so no stale pill shows over it.
+    private func adoptPrefillIfPresent() {
+        guard let key = entitlements.prefillLicenseKey else { return }
+        entitlements.prefillLicenseKey = nil
+        isEntering = true
+        model.licenseKey = key
+        model.phase = .idle
     }
 
     // MARK: Activation field
@@ -730,6 +772,93 @@ private struct ManageDevicesLink: View {
     }
 }
 
+// MARK: - Purchase-success confirmation
+
+/// The shared "you're all set" screen shown after an activation (deep-link OR
+/// manual paste) or a Managed top-up. Mirrors the onboarding window chrome
+/// (`OnboardingStepLayout` + logo-tile-sized badge) so it reads as one app. The
+/// detail copy + analytics plan live on `PurchaseSuccessInfo`; this view only
+/// renders them and owns the dismiss / route-to-Settings actions.
+private struct PurchaseSuccessView: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
+    @Environment(EntitlementStore.self) private var entitlements
+    let info: PurchaseSuccessInfo
+
+    /// Medium-style date for the Managed reset line (e.g. "Jul 1, 2026").
+    private static let resetDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+    var body: some View {
+        OnboardingStepLayout {
+            SuccessBadge()
+        } content: {
+            VStack(spacing: VFSpacing.md) {
+                Text("You\u{2019}re all set")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text(info.detailLine(formatDate: Self.resetDateFormatter.string(from:)))
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } actions: {
+            OnboardingPrimaryButton("Start using Zerro") { finish() }
+
+            // BYOK still needs the user's own provider key before generating —
+            // give them a direct route to the Settings API-key section.
+            if case .byok = info {
+                OnboardingSecondaryButton("Open Settings") { openSettings() }
+            }
+        }
+        .frame(minHeight: 600)
+    }
+
+    /// Clear the one-shot confirmation and close the window.
+    private func finish() {
+        entitlements.purchaseSuccess = nil
+        dismissWindow(id: PaywallScene.windowID)
+    }
+
+    /// Route to the Settings API-key (Account & Billing) section, then close the
+    /// paywall. Clears the confirmation first so the paywall doesn't flash the
+    /// success screen if it's reopened later.
+    private func openSettings() {
+        entitlements.purchaseSuccess = nil
+        AppDelegate.pendingSettingsCategory = .accountBilling
+        openWindow(id: SettingsScene.windowID)
+        dismissWindow(id: PaywallScene.windowID)
+    }
+}
+
+/// The success checkmark badge — same footprint as `OnboardingLogoTile` but in
+/// success green with a bold checkmark glyph.
+private struct SuccessBadge: View {
+    var size: CGFloat = 80
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(Color.vfSuccessGreen)
+            .frame(width: size, height: size)
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.42, weight: .bold))
+                    .foregroundStyle(.white)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            )
+    }
+}
+
 // MARK: - Previews
 
 #Preview("Paywall") {
@@ -774,5 +903,28 @@ private func paywallPreviewStore(
 #Preview("Paywall \u{00B7} Manage (byok)") {
     PaywallView()
         .environment(paywallPreviewStore(.byok, trigger: .manage))
+}
+
+// The three purchase-success confirmation variants (Step 5). Each pins the
+// matching entitlement state, then sets the one-shot `purchaseSuccess` so the
+// view renders the success screen instead of the buy/manage matrix.
+private let previewResetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
+
+#Preview("Paywall \u{00B7} Success (managed)") {
+    let store = EntitlementStore.preview(.managed(creditsRemaining: 300, resetDate: previewResetDate))
+    store.purchaseSuccess = .managed(credits: 300, resetDate: previewResetDate)
+    return PaywallView().environment(store)
+}
+
+#Preview("Paywall \u{00B7} Success (byok)") {
+    let store = EntitlementStore.preview(.byok)
+    store.purchaseSuccess = .byok
+    return PaywallView().environment(store)
+}
+
+#Preview("Paywall \u{00B7} Success (top-up)") {
+    let store = EntitlementStore.preview(.managed(creditsRemaining: 220, resetDate: previewResetDate))
+    store.purchaseSuccess = .topup(added: 100, total: 220)
+    return PaywallView().environment(store)
 }
 #endif

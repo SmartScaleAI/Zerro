@@ -32,7 +32,7 @@ import SwiftUI
 ///   • `.expired`          → "Upgrade"     (blocked) — the gated wall.
 ///   • `.managed` past-due → "Manage Plan" (manage) + "update your card" nudge.
 ///   • `.managed` low      → "Add Credits" (topup) — lead with top-up packs.
-///   • `.managed` healthy  → "Add more credits" (manage) — the portal is where
+///   • `.managed` healthy  → "Add Credits" (manage) — the portal is where
 ///     a paid-up Managed user tops up; label leads with that even though the
 ///     trigger is the general manage surface.
 ///   • `.byok`             → "Manage Plan" (manage) — nothing to upgrade/top up.
@@ -63,12 +63,12 @@ struct MenuBarBillingAction: Equatable {
             }
             // Low balance (but paid up) → buy more credits.
             if isLowBalance {
-                return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
+                return MenuBarBillingAction(label: "Add Credits...", secondary: nil, trigger: .topup)
             }
             // Healthy Managed → the manage portal (already top tier; no plan
             // ladder to sell), but lead the label with adding credits since
             // that's what a paid-up user comes here for.
-            return MenuBarBillingAction(label: "Add more credits", secondary: nil, trigger: .manage)
+            return MenuBarBillingAction(label: "Add Credits...", secondary: nil, trigger: .manage)
         }
     }
 }

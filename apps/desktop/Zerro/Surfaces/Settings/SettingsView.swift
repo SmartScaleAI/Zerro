@@ -126,6 +126,15 @@ struct SettingsView: View {
         // Leaving the History pane (or any category swap) drops any
         // pushed subpage so the new pane always opens at its root.
         .onChange(of: selection) { _, _ in route = .root }
+        // Deep-link preselect: a caller (e.g. the BYOK purchase-success "Open
+        // Settings" button) can stash a category to land on. Read + clear it once
+        // when the window appears.
+        .onAppear {
+            if let pending = AppDelegate.pendingSettingsCategory {
+                AppDelegate.pendingSettingsCategory = nil
+                selection = pending
+            }
+        }
     }
 
     // MARK: Detail pane
