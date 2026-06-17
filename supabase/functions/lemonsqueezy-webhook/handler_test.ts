@@ -197,7 +197,7 @@ function subPayload(over: {
       attributes: {
         customer_id: 5,
         order_id: over.order_id ?? "order_1",
-        variant_id: over.variant_id ?? 101, // starter by default (test_setup mapping)
+        variant_id: over.variant_id ?? 101, // a managed variant by default (test_setup mapping)
         status: over.status ?? "active",
         renews_at: over.renews_at ?? "2026-07-02T00:00:00.000Z",
         created_at: over.created_at ?? "2026-06-02T00:00:00.000Z",
@@ -264,13 +264,13 @@ Deno.test("replay: identical event delivered twice → processed once (composite
 // ===========================================================================
 // §3 — full subscription lifecycle
 // ===========================================================================
-Deno.test("created → active + first period + correct tier (Starter)", async () => {
+Deno.test("created → active + first period + the single managed tier", async () => {
   const store = new InMemoryWebhookStore();
   await deliver(store, "subscription_created", subPayload({ variant_id: 101 }));
   const s = store.sub("ls_1")!;
   assertEquals(s.status, "active");
-  assertEquals(s.tier, "starter");
-  assertEquals(s.credits_limit, 100);
+  assertEquals(s.tier, "managed");
+  assertEquals(s.credits_limit, 300);
   assertEquals(s.current_period_end, "2026-07-02T00:00:00.000Z");
   const periods = store.periodsFor(s.id);
   assertEquals(periods.length, 1);
@@ -278,17 +278,17 @@ Deno.test("created → active + first period + correct tier (Starter)", async ()
   assertEquals(periods[0].period_start, "2026-06-02T00:00:00.000Z");
 });
 
-Deno.test("created → correct tier (Pro) for both Pro variants (variant→tier mapping fix)", async () => {
-  for (const variant of [201, 202]) {
+Deno.test("created → every subscription variant resolves to managed + 300 credits", async () => {
+  for (const variant of [101, 201, 202, 9999]) {
     const store = new InMemoryWebhookStore();
     await deliver(store, "subscription_created", subPayload({ id: `ls_${variant}`, variant_id: variant }));
     const s = store.sub(`ls_${variant}`)!;
-    assertEquals(s.tier, "pro", `variant ${variant} → pro`);
+    assertEquals(s.tier, "managed", `variant ${variant} → managed`);
     assertEquals(s.credits_limit, 300);
   }
 });
 
-Deno.test("created → billing_interval from the matched variant (monthly vs yearly, same pro tier)", async () => {
+Deno.test("created → billing_interval from the matched variant (monthly vs yearly, same managed tier)", async () => {
   // 201 = Managed monthly, 202 = Managed yearly (test_setup): SAME tier + 300
   // credits, only the interval flag differs (F1 — yearly is NOT 12×300 up front).
   const cases: [number, string][] = [[201, "monthly"], [202, "yearly"]];
@@ -296,7 +296,7 @@ Deno.test("created → billing_interval from the matched variant (monthly vs yea
     const store = new InMemoryWebhookStore();
     await deliver(store, "subscription_created", subPayload({ id: `ls_${variant}`, variant_id: variant }));
     const s = store.sub(`ls_${variant}`)!;
-    assertEquals(s.tier, "pro");
+    assertEquals(s.tier, "managed");
     assertEquals(s.credits_limit, 300);
     assertEquals(s.billing_interval, interval, `variant ${variant} → ${interval}`);
     // One period, one 300-credit allowance — identical for both intervals.
@@ -304,12 +304,16 @@ Deno.test("created → billing_interval from the matched variant (monthly vs yea
   }
 });
 
-Deno.test("created with an UNMAPPED variant → billing_interval null (never guessed)", async () => {
+Deno.test("created with an unrecognized variant → still managed, billing_interval monthly", async () => {
+  // No per-tier variant lists anymore: an unrecognized subscription variant is
+  // managed like any other, and (being a present, non-yearly variant) records
+  // monthly. The interval-unknown null case is now only a MISSING variant id
+  // (covered in tier_test.ts).
   const store = new InMemoryWebhookStore();
-  await deliver(store, "subscription_created", subPayload({ variant_id: 9999, custom_tier: "pro" }));
+  await deliver(store, "subscription_created", subPayload({ variant_id: 9999 }));
   const s = store.sub("ls_1")!;
-  assertEquals(s.tier, "pro"); // custom_data fallback still resolves the tier
-  assertEquals(s.billing_interval, null);
+  assertEquals(s.tier, "managed");
+  assertEquals(s.billing_interval, "monthly");
 });
 
 Deno.test("payment_success (renewal) → new period + credits reset, status active", async () => {
@@ -333,15 +337,17 @@ Deno.test("payment_success NON-renewal (initial/updated) → active but NO new p
   assertEquals(store.periodsFor("sub-1").length, 1); // no roll
 });
 
-Deno.test("updated (tier change Starter→Pro) → new limit, current period unchanged", async () => {
+Deno.test("updated → managed tier + limit refreshed, current period unchanged", async () => {
+  // Single tier now, so subscription_updated never changes the tier; it still
+  // refreshes credits_limit/interval and leaves the open period untouched.
   const store = new InMemoryWebhookStore();
   await deliver(store, "subscription_created", subPayload({ variant_id: 101 }));
   store.periodsFor("sub-1")[0].credits_used = 25;
 
   await deliver(store, "subscription_updated", subPayload({ variant_id: 201, updated_at: "2026-06-03T00:00:00.000Z" }));
   const s = store.sub("ls_1")!;
-  assertEquals(s.tier, "pro");
-  assertEquals(s.credits_limit, 300); // new limit (applies next period)
+  assertEquals(s.tier, "managed");
+  assertEquals(s.credits_limit, 300); // managed allowance (applies next period)
   // Current open period is untouched — same row, same credits_used, no new period.
   const periods = store.periodsFor("sub-1");
   assertEquals(periods.length, 1);

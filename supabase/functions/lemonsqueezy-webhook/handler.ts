@@ -21,9 +21,7 @@
 import { verifyLemonSqueezySignature } from "../_shared/ls-signature.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
 import {
-  creditsForTier,
-  LS_VARIANT_PRO,
-  LS_VARIANT_STARTER,
+  CREDITS_MANAGED,
   LS_VARIANT_TOPUP_BOOST,
   LS_VARIANT_TOPUP_POWER,
   LS_VARIANT_YEARLY,
@@ -62,8 +60,6 @@ export interface WebhookDeps {
 }
 
 const TIER_CONFIG: TierVariantConfig = {
-  starterVariantIds: LS_VARIANT_STARTER,
-  proVariantIds: LS_VARIANT_PRO,
   yearlyVariantIds: LS_VARIANT_YEARLY,
 };
 
@@ -210,7 +206,7 @@ async function handleSubscriptionUpsert(
   const attrs = payload.data.attributes as LsSubscriptionAttributes;
   const lsSubId = payload.data.id;
   const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
-  const creditsLimit = creditsForTier(tier);
+  const creditsLimit = CREDITS_MANAGED;
   const billingInterval = resolveBillingInterval(attrs, TIER_CONFIG);
   const renewsAt = attrs.renews_at ?? null;
 
@@ -254,7 +250,7 @@ async function handleSubscriptionUpdated(deps: WebhookDeps, payload: LsWebhook) 
   const attrs = payload.data.attributes as LsSubscriptionAttributes;
   const lsSubId = payload.data.id;
   const tier = resolveTier(attrs, payload.meta?.custom_data, TIER_CONFIG);
-  const creditsLimit = creditsForTier(tier);
+  const creditsLimit = CREDITS_MANAGED;
   const billingInterval = resolveBillingInterval(attrs, TIER_CONFIG);
 
   const existing = await deps.store.getSubByLsId(lsSubId);

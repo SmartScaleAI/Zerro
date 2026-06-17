@@ -43,6 +43,69 @@ import AppKit
 import os
 import SwiftUI
 
+// MARK: - Dynamic paywall copy
+
+/// The headline + subheadline shown at the top of the paywall, derived from
+/// WHY the window was opened (`EntitlementStore.paywallTrigger`) and the
+/// current entitlement (`EntitlementState`). The window is no longer only the
+/// blocked-trial wall — the menu-bar "Upgrade" entry point opens it in a
+/// voluntary-upgrade / add-credits / manage context too, so the copy adapts
+/// instead of always saying "You've used your free generations".
+///
+/// Pure + `Equatable` so it's unit-tested directly (trigger + state → copy)
+/// without standing up the view.
+struct PaywallCopy: Equatable {
+    let headline: String
+    let subheadline: String
+
+    /// Resolves the copy. `.expired` is the genuinely-gated state, so it ALWAYS
+    /// gets the blocked copy even if a stale trigger survived; otherwise the
+    /// explicit trigger wins, and a `nil` trigger falls back to a sensible copy
+    /// for the state so the window never shows the wrong context.
+    static func resolve(trigger: EntitlementStore.PaywallTrigger?, state: EntitlementState) -> PaywallCopy {
+        if case .expired = state { return .blocked }
+
+        switch trigger {
+        case .blocked:
+            return .blocked
+        case .voluntaryUpgrade:
+            return .upgrade
+        case .topup, .outOfCredits:
+            return .topup
+        case .manage, .subscriptionInactive, .apiKeyMissing:
+            return .manage
+        case nil:
+            switch state {
+            case .trial:            return .upgrade
+            case .managed, .byok:   return .manage
+            case .expired:          return .blocked  // unreachable (handled above)
+            }
+        }
+    }
+
+    /// Trial exhausted (the original wall). Copy unchanged from v1.
+    static let blocked = PaywallCopy(
+        headline: "You\u{2019}ve used your free generations",
+        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work."
+    )
+    /// Voluntary upgrade from an active trial — lead with the Managed value,
+    /// reassure the trial still works.
+    static let upgrade = PaywallCopy(
+        headline: "Upgrade your plan",
+        subheadline: "Your free trial is still active \u{2014} upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage."
+    )
+    /// Managed user adding credits — point straight at the top-up packs.
+    static let topup = PaywallCopy(
+        headline: "Add more credits",
+        subheadline: "Top up your balance to keep generating this month. Credits attach to your subscription instantly and carry over for 12 months."
+    )
+    /// Entitled user managing their plan — de-emphasize the sell.
+    static let manage = PaywallCopy(
+        headline: "Manage your plan",
+        subheadline: "Switch options, activate a key, or manage your devices and billing \u{2014} everything for your plan lives here."
+    )
+}
+
 struct PaywallView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(EntitlementStore.self) private var entitlements
@@ -52,6 +115,20 @@ struct PaywallView: View {
     /// The Window scene uses `.windowResizability(.contentSize)`, so this
     /// frame IS the window size; nothing else pins it.
     private static let windowWidth: CGFloat = 760
+
+    /// The trigger captured at open time. `paywallTrigger` is read-then-cleared
+    /// on appear (so a later open isn't mislabeled), but the dynamic copy needs
+    /// the value for the window's whole lifetime — so we snapshot it here. Until
+    /// the first capture, `copy` reads the live store directly (no first-render
+    /// flash); `onChange` re-captures if a fresh trigger is set while the window
+    /// stays mounted (the menu re-opens an already-open window).
+    @State private var capturedTrigger: EntitlementStore.PaywallTrigger?
+    @State private var didCaptureTrigger = false
+
+    private var copy: PaywallCopy {
+        let trigger = didCaptureTrigger ? capturedTrigger : entitlements.paywallTrigger
+        return PaywallCopy.resolve(trigger: trigger, state: entitlements.state)
+    }
 
     var body: some View {
         mainPanel
@@ -64,6 +141,17 @@ struct PaywallView: View {
                 Analytics.capture("paywall_shown", [
                     "trigger": entitlements.paywallTrigger?.rawValue ?? "manual"
                 ])
+                capturedTrigger = entitlements.paywallTrigger
+                didCaptureTrigger = true
+                entitlements.paywallTrigger = nil
+            }
+            .onChange(of: entitlements.paywallTrigger) { _, newValue in
+                // A fresh open while the window is already on screen (the menu
+                // re-routes openWindow to the existing window, so onAppear won't
+                // fire again) — re-snapshot so the copy tracks the new context.
+                guard let newValue else { return }
+                capturedTrigger = newValue
+                didCaptureTrigger = true
                 entitlements.paywallTrigger = nil
             }
     }
@@ -75,12 +163,12 @@ struct PaywallView: View {
             OnboardingLogoTile()
         } content: {
             VStack(spacing: VFSpacing.md) {
-                Text("You\u{2019}ve used your free generations")
+                Text(copy.headline)
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text("Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work.")
+                Text(copy.subheadline)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -94,42 +182,78 @@ struct PaywallView: View {
 
     // MARK: - Options
 
+    /// The option stack adapts to the entitlement (the consolidation target):
+    ///   • Managed   → top-up packs lead (the only purchasable thing left) +
+    ///                 a manage link. No re-sell of a plan they already have.
+    ///   • BYOK      → a manage link only (BYOK funds locally; no credits to
+    ///                 top up, no plan to upgrade to).
+    ///   • Trial/Expired → the plan sell: Managed + BYOK side by side.
+    /// The shared activation field is always present.
     private var optionStack: some View {
         VStack(spacing: VFSpacing.md) {
-            // The two plans SIDE BY SIDE (website pricing parity): Managed
-            // leads left — the recommended path, accent-highlighted — BYOK
-            // right. Equal widths (each card maxWidth .infinity), equal
-            // heights (both fill the fixed row), CTAs bottom-aligned.
-            HStack(alignment: .top, spacing: VFSpacing.md) {
-                // Managed — THE plan (multi-model §1.3): Zerro-hosted
-                // credits, all six models, no API keys to manage. Monthly vs
-                // yearly ($12/mo billed annually) is chosen on the
-                // LemonSqueezy page.
-                SubscriptionOptionCard(
-                    tier: .pro,
-                    title: "Managed",
-                    subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
-                )
-
-                // BYOK — $69 one-time license; the user funds generation with
-                // their own provider API keys. Fully local.
-                BuyOnceCard()
+            // Credit packs are Managed-only (decision §6): `.byok` carries no
+            // credit balance, and trial/expired buy a plan, not a top-up.
+            if case .managed = entitlements.state {
+                TopupPacksSection()
             }
-            // Size the row to the TALLER card's natural content height rather
-            // than a fixed pixel height: both cards still fill it (`fillsHeight`)
-            // so they stay EQUAL height with bottom-aligned CTAs, but there's no
-            // dead space above the buttons when the copy is short.
-            .fixedSize(horizontal: false, vertical: true)
 
-            // Honest privacy note (§14.5): Managed transits the server; BYOK
-            // stays local. Don't let the local-first claim cover Managed.
-            ManagedPrivacyNote()
+            if showsPlanCards {
+                // The two plans SIDE BY SIDE (website pricing parity): Managed
+                // leads left — the recommended path, accent-highlighted — BYOK
+                // right. Shown only to users without a plan yet (trial/expired);
+                // an entitled user sees the manage link instead, not a re-sell.
+                HStack(alignment: .top, spacing: VFSpacing.md) {
+                    // Managed — THE plan (multi-model §1.3): Zerro-hosted
+                    // credits, all six models, no API keys to manage. Monthly vs
+                    // yearly ($12/mo billed annually) is chosen on the
+                    // LemonSqueezy page.
+                    SubscriptionOptionCard(
+                        title: "Managed",
+                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
+                    )
+
+                    // BYOK — $69 one-time license; the user funds generation with
+                    // their own provider API keys. Fully local.
+                    BuyOnceCard()
+                }
+                // Size the row to the TALLER card's natural content height rather
+                // than a fixed pixel height: both cards still fill it (`fillsHeight`)
+                // so they stay EQUAL height with bottom-aligned CTAs, but there's no
+                // dead space above the buttons when the copy is short.
+                .fixedSize(horizontal: false, vertical: true)
+
+                // Honest privacy note (§14.5): Managed transits the server; BYOK
+                // stays local. Don't let the local-first claim cover Managed.
+                ManagedPrivacyNote()
+            }
+
+            // An entitled user (Managed/BYOK) gets a manage affordance instead of
+            // the sell cards — change card / plan / devices in the portal.
+            if showsManageLink {
+                ManagePlanLink()
+            }
 
             // One shared activation path for an already-purchased key (BYOK or
             // subscription). On success the paywall dismisses.
             ActivateLicenseCard(
                 onActivated: { dismissWindow(id: PaywallScene.windowID) }
             )
+        }
+    }
+
+    /// The plan sell shows only to users who don't have a plan yet.
+    private var showsPlanCards: Bool {
+        switch entitlements.state {
+        case .trial, .expired: return true
+        case .byok, .managed:  return false
+        }
+    }
+
+    /// The manage link shows only to users who already hold a plan.
+    private var showsManageLink: Bool {
+        switch entitlements.state {
+        case .byok, .managed:  return true
+        case .trial, .expired: return false
         }
     }
 }
@@ -146,20 +270,9 @@ struct PaywallView: View {
 private enum Price {
     // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
     // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
-    // The retired Starter tier is not sold (it survives server-side as a
-    // future cheaper tier only).
     static let byok = "$69 one-time"
     static let managedMonthly = "$15/mo"
     static let managedYearly = "$144/yr"
-
-    /// The price label shown on a subscription card (the monthly figure).
-    /// Only `.pro` (the Managed plan) is rendered; `.starter` is unsold.
-    static func subscription(tier: ManagedTier) -> String {
-        switch tier {
-        case .starter: return managedMonthly
-        case .pro:     return managedMonthly
-        }
-    }
 }
 
 // MARK: - Activation model
@@ -265,7 +378,10 @@ private struct BuyOnceCard: View {
         Log.billing.notice("paywall: opening BYOK checkout in browser")
         // Tier 3 analytics: fire `checkout_opened` and open the custom-data-
         // decorated URL (carries ph_distinct_id + product for webhook stitching).
-        Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.byok.rawValue])
+        Analytics.capture("checkout_opened", [
+            "product": BillingLinks.CheckoutProduct.byok.rawValue,
+            "placement": "paywall"
+        ])
         NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .byok))
     }
 }
@@ -279,7 +395,6 @@ private struct BuyOnceCard: View {
 /// monthly vs yearly is chosen on the checkout page. The user activates the
 /// issued key afterward via the shared `ActivateLicenseCard`.
 private struct SubscriptionOptionCard: View {
-    let tier: ManagedTier
     let title: String
     let subtitle: String
 
@@ -291,7 +406,7 @@ private struct SubscriptionOptionCard: View {
                     .foregroundStyle(Color.vfTextPrimary)
                 MostPopularBadge()
                 Spacer(minLength: VFSpacing.sm)
-                Text(Price.subscription(tier: tier))
+                Text(Price.managedMonthly)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.vfTextPrimary)
             }
@@ -309,13 +424,16 @@ private struct SubscriptionOptionCard: View {
     }
 
     private func openCheckout() {
-        guard let url = BillingLinks.subscriptionCheckoutURL(tier: tier) else {
-            Log.billing.notice("paywall: \(tier.rawValue, privacy: .public) checkout URL not configured yet (placeholder)")
+        guard let url = BillingLinks.subscriptionCheckoutURL() else {
+            Log.billing.notice("paywall: managed checkout URL not configured yet (placeholder)")
             return
         }
-        Log.billing.notice("paywall: opening \(tier.rawValue, privacy: .public) subscription checkout")
-        // Tier 3 analytics: only the Managed (Pro) subscription is sold here.
-        Analytics.capture("checkout_opened", ["product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue])
+        Log.billing.notice("paywall: opening managed subscription checkout")
+        // Tier 3 analytics: the single Managed subscription is sold here.
+        Analytics.capture("checkout_opened", [
+            "product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue,
+            "placement": "paywall"
+        ])
         NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .subscriptionPro))
     }
 }
@@ -331,6 +449,93 @@ private struct ManagedPrivacyNote: View {
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Top-up packs (Managed only)
+
+/// The two one-time top-up packs (Boost · 200 · $10, Power · 500 · $22),
+/// surfaced in the paywall for a Managed user choosing "Add Credits". These
+/// used to live only in the menu-bar panel (`topupPackRow`); the menu-bar
+/// consolidation folded that prompt into the single "Upgrade" entry, so the
+/// paywall now owns the buy surface. Managed-only by construction — the caller
+/// gates on `.managed`, and BYOK/trial never reach it. A pack whose checkout
+/// link isn't configured yet resolves to `nil` and its chip is simply absent
+/// (the BillingLinks placeholder pattern).
+private struct TopupPacksSection: View {
+    var body: some View {
+        OptionCardChrome(alignment: .leading) {
+            Text("Top-up packs")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.vfTextPrimary)
+            Text("Credits attach to your subscription instantly and carry over for 12 months.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: VFSpacing.sm) {
+                TopupChip(
+                    label: "Boost \u{00B7} 200 credits \u{00B7} $10",
+                    url: BillingLinks.boostTopupCheckoutURL,
+                    product: .topupBoost
+                )
+                TopupChip(
+                    label: "Power \u{00B7} 500 credits \u{00B7} $22",
+                    url: BillingLinks.powerTopupCheckoutURL,
+                    product: .topupPower
+                )
+            }
+            .padding(.top, VFSpacing.xs)
+        }
+    }
+}
+
+/// A single top-up checkout chip. Fires `checkout_opened` (with the `paywall`
+/// placement tag, Tier 3 §0) and opens the custom-data-decorated URL. Absent
+/// when its checkout link is still a placeholder. Lifted out of the menu-bar
+/// panel so the paywall and any remaining caller share one chip.
+private struct TopupChip: View {
+    let label: String
+    let url: URL?
+    let product: BillingLinks.CheckoutProduct
+
+    var body: some View {
+        if let url {
+            Button {
+                Analytics.capture("checkout_opened", [
+                    "product": product.rawValue,
+                    "placement": "paywall"
+                ])
+                NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
+            } label: {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .padding(.horizontal, VFSpacing.md)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+// MARK: - Manage plan link (entitled users)
+
+/// Shown to an entitled user (Managed/BYOK) in place of the sell cards: a quiet
+/// link to the LemonSqueezy customer portal to change card / plan / devices or
+/// cancel. No-op (with a log) until the portal URL placeholder is filled.
+private struct ManagePlanLink: View {
+    var body: some View {
+        OptionCardChrome(alignment: .leading) {
+            OnboardingSecondaryButton("Manage plan & billing") {
+                guard let url = BillingLinks.customerPortalURL else {
+                    Log.billing.notice("paywall: customer portal URL not configured yet (placeholder)")
+                    return
+                }
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 }
 
@@ -362,6 +567,24 @@ private struct ActivateLicenseCard: View {
                 }
             }
         }
+        // Checkout-return deep link: a brand-new buyer who must paste their key
+        // lands here with the field already open + focused (the store sets the
+        // one-shot flag before opening the window). `onAppear` covers a fresh
+        // window; `onChange` covers the flag flipping while the window is already
+        // on screen (the deep link re-routes to the existing window).
+        .onAppear(perform: focusActivationIfRequested)
+        .onChange(of: entitlements.focusActivationFieldOnOpen) { _, requested in
+            if requested { focusActivationIfRequested() }
+        }
+    }
+
+    /// Reads + clears the one-shot focus flag, opening straight into the
+    /// activation field. The async hop lets the TextField mount before we focus.
+    private func focusActivationIfRequested() {
+        guard entitlements.focusActivationFieldOnOpen else { return }
+        entitlements.focusActivationFieldOnOpen = false
+        isEntering = true
+        Task { @MainActor in fieldFocused = true }
     }
 
     // MARK: Activation field
@@ -516,3 +739,40 @@ private struct ManageDevicesLink: View {
     PaywallView()
         .environment(EntitlementStore(licenseService: .inMemory()))
 }
+
+// The four dynamic-copy contexts (Step 1). `EntitlementStore.preview` pins the
+// state via the DEBUG dev override, so these are `#if DEBUG`-guarded.
+#if DEBUG
+@MainActor
+private func paywallPreviewStore(
+    _ state: EntitlementState,
+    trigger: EntitlementStore.PaywallTrigger
+) -> EntitlementStore {
+    let store = EntitlementStore.preview(state)
+    store.paywallTrigger = trigger
+    return store
+}
+
+#Preview("Paywall \u{00B7} Blocked (expired)") {
+    PaywallView()
+        .environment(paywallPreviewStore(.expired, trigger: .blocked))
+}
+
+#Preview("Paywall \u{00B7} Voluntary upgrade (trial)") {
+    PaywallView()
+        .environment(paywallPreviewStore(.trial(creditsRemaining: 8), trigger: .voluntaryUpgrade))
+}
+
+#Preview("Paywall \u{00B7} Add credits (managed)") {
+    PaywallView()
+        .environment(paywallPreviewStore(
+            .managed(creditsRemaining: 4, resetDate: .now.addingTimeInterval(86_400 * 12)),
+            trigger: .topup
+        ))
+}
+
+#Preview("Paywall \u{00B7} Manage (byok)") {
+    PaywallView()
+        .environment(paywallPreviewStore(.byok, trigger: .manage))
+}
+#endif

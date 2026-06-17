@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { optionalEnv, optionalEnvInt } from "../_shared/env.ts";
+import { composedSystemPrompt } from "./prompt.ts";
 
 // ---- Providers + models — server-configurable from day one (§ models) ------
 // Defaults match the BYOK path (OpenAI / gpt-4o) so Managed output is identical
@@ -26,17 +27,37 @@ export const GEMINI_THINKING_LEVEL = optionalEnv("GEMINI_THINKING_LEVEL", "low")
 // ---- Credit economics (multi-model plan §1.2) -------------------------------
 // 1 credit = $0.01 of real provider cost. This is the UNIT DEFINITION the whole
 // credit system is denominated in — deliberately NOT env-tunable, because
-// changing it would silently re-price every model at once; retuning happens per
-// model via creditPrice in models.ts.
+// changing it would silently re-price every model at once. Every generation is
+// METERED on real cost (`ceil(est_cost_usd / USD_PER_CREDIT)`, floor 1; see
+// cost.ts `creditCostForModel`), so a user's credit allowance is a true dollar
+// COGS cap.
 export const USD_PER_CREDIT = 0.01;
-// Anti-abuse circuit-breaker: when a single generation's REAL est_cost_usd
-// exceeds CIRCUIT_BREAKER_MULTIPLIER × the model's fixed price (in dollars),
-// charge the metered amount instead of the fixed price (plan §1.2). Normal
-// users never trigger it; env-tunable for emergencies without a redeploy.
-export const CIRCUIT_BREAKER_MULTIPLIER = optionalEnvInt(
-  "GENERATE_CIRCUIT_BREAKER_MULTIPLIER",
-  3,
-);
+
+// ---- Preflight estimator (Phase 2 — estimate + headroom gate) ---------------
+// The charge is metered on REAL cost post-chat, but the out-of-credits gate runs
+// BEFORE the chat call, so it needs an estimate of the cost from the known
+// inputs (frames, transcript, OCR, audio) plus a conservative output allowance.
+// All env-overridable so the estimator can be retuned from real
+// (frames, tokens_in, tokens_out) data without an app update.
+//
+// SYSTEM_PROMPT_TOKENS is NOT a magic number: it's derived once at module load
+// from the real composed system prompt (~chars/4), so a prompt edit retunes the
+// floor automatically. prompt.ts has no imports, so this can't cycle.
+export const SYSTEM_PROMPT_TOKENS = Math.ceil(composedSystemPrompt().length / 4);
+// Conservative per-generation output-token allowance (real avg out ≈ 1.5–3k in
+// generation_log). Deliberately on the high side so the gate errs toward
+// over-, not under-, estimating the spend.
+export const OUTPUT_TOKENS_ESTIMATE = optionalEnvInt("GENERATE_OUTPUT_TOKENS_ESTIMATE", 3000);
+// Per-frame input-token cost by provider (a frame is a fixed-resolution image,
+// so its token cost is provider-determined, not size-determined).
+export const FRAME_TOKENS_GEMINI = optionalEnvInt("GENERATE_FRAME_TOKENS_GEMINI", 1120); // media_resolution_high
+export const FRAME_TOKENS_OPENAI = optionalEnvInt("GENERATE_FRAME_TOKENS_OPENAI", 1100); // ~6×512px tiles, 16:9; tune later
+export const FRAME_TOKENS_ANTHROPIC = optionalEnvInt("GENERATE_FRAME_TOKENS_ANTHROPIC", 1200); // tune later
+// The gate allows when `balance >= estimate - HEADROOM_CREDITS`: a small
+// tolerance so a user who is a few credits short of a slightly-over estimate
+// isn't blocked from a recording that will, in reality, cost a little less. The
+// residual-overshoot free-result path (handler step 12) covers any remainder.
+export const HEADROOM_CREDITS = optionalEnvInt("GENERATE_HEADROOM_CREDITS", 5);
 
 // ---- Server-side input limits — the "generous fuse" (§ input limits) -------
 // Set ABOVE anything a real recording can produce (app hard-caps at 3 min,

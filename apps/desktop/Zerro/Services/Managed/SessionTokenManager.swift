@@ -282,7 +282,7 @@ final class SessionTokenManager: ProxyTokenProviding {
             ?? clock().addingTimeInterval(Self.refreshLeeway)
         cached = CachedToken(token: decoded.token, expiresAt: expiresAt)
         let snapshot = ManagedEntitlementSnapshot(dto: decoded.entitlement)
-        Log.billing.notice("session token minted — tier=\(snapshot.tier.rawValue, privacy: .public) status=\(snapshot.status.rawValue, privacy: .public) credits=\(snapshot.creditsRemaining, privacy: .public)")
+        Log.billing.notice("session token minted — status=\(snapshot.status.rawValue, privacy: .public) credits=\(snapshot.creditsRemaining, privacy: .public)")
         return ExchangeResult(token: decoded.token, snapshot: snapshot)
     }
 

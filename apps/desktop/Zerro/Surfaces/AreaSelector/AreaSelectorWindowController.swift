@@ -543,47 +543,26 @@ final class AreaSelectorWindowController {
     //
     // Display data for the toolbar's model dropdown, computed once at
     // present time (same lifecycle as the mic list). Mirrors the menu-bar
-    // ModelPickerSubmenu's mode rules: Managed/Trial rows carry the credit
-    // price + live "~N left" (CreditDisplay); BYOK rows carry NO credit
-    // text and key-gate by provider; an unknown entitlement (nil store —
-    // tests/previews) renders plain names.
+    // ModelPickerSubmenu's mode rules: rows are model names only — NO per-model
+    // cost anywhere (metered-credits Phase 4). BYOK rows key-gate by provider,
+    // carrying an "add key" hint as the only detail text.
     private static func modelMenuItems(
         entitlements: EntitlementStore?
     ) -> [AreaSelectorState.ModelMenuItem] {
-        // The spendable balance, or nil when credits don't apply — the
-        // same resolution the menu-bar picker uses.
-        let balance: Int?
+        // Only BYOK needs per-provider key-gating; every other mode renders
+        // plain names with no detail.
         var gatedProviders: Set<ModelProvider> = []
-        switch entitlements?.state {
-        case .managed:
-            balance = entitlements?.managedSnapshot?.creditsRemaining
-        case .trial(let creditsRemaining):
-            balance = creditsRemaining
-        case .byok:
-            balance = nil
+        if case .byok = entitlements?.state {
             let available = ProviderKeys.availableProviders()
             gatedProviders = Set(ModelProvider.allCases).subtracting(available)
-        case .expired, nil:
-            balance = nil
         }
 
         return ModelRegistry.enabled.map { model in
             let gated = gatedProviders.contains(model.provider)
-            let detail: String?
-            if gated {
-                detail = "Add \(model.provider.displayName) key"
-            } else if let balance {
-                let left = CreditDisplay.estimatedLeft(
-                    balance: balance, creditPrice: model.creditPrice
-                )
-                detail = "\(model.creditPrice) cr \u{00B7} ~\(left) left"
-            } else {
-                detail = nil
-            }
             return .init(
                 id: model.id,
                 name: model.displayName,
-                detail: detail,
+                detail: gated ? "Add \(model.provider.displayName) key" : nil,
                 recommended: model.recommended,
                 gated: gated
             )

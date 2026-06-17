@@ -6,17 +6,21 @@
 //
 //  ⚠️ THIRD MIRROR — KEEP IN SYNC. This table intentionally duplicates:
 //    1. supabase/functions/generate/models.ts   (the server source of truth:
-//       request validation + per-model credit charge)
+//       request validation + the per-model fallback estimate; the charge
+//       itself is metered on real cost)
 //    2. apps/desktop/Scripts/eval-models.mjs    (the eval harness)
-//  Any change to the model list, credit prices, or the recommended default
-//  must land in all three places (F8-style contract; the server file carries
-//  the same note). The ids are the exact wire values `/generate` validates
-//  against ALLOWED_MODELS — a drifted id here means 400s for users.
+//  Any change to the model list or the recommended default must land in all
+//  three places (F8-style contract; the server file carries the same note).
+//  The ids are the exact wire values `/generate` validates against
+//  ALLOWED_MODELS — a drifted id here means 400s for users.
 //
-//  CALIBRATION CAVEAT (plan §2): creditPrice values are calibration v1 from
-//  June-2026 published rates; the server retunes post-launch and this mirror
-//  follows. Prices here are DISPLAY data (picker rows, "~N left") — the
-//  authoritative charge is the server's, returned as `credits_charged`.
+//  APP-SIDE MIRROR CONTRACT (metered-credits Phase 4): the app no longer
+//  charges or displays any per-model cost, so it INTENTIONALLY OMITS the
+//  server's charge field (`fallbackCredits`, formerly the app's `creditPrice`)
+//  and the display-only `shortName`. The app-side mirror is now exactly
+//  id / provider / displayName / recommended / enabled. Charging is metered on
+//  the server; the only per-recording number the user sees is the actual
+//  `credits_charged` the server returns post-generation.
 //
 //  `enabled` mirrors the server's kill switch. The picker only renders
 //  enabled entries; a model disabled server-side after this build ships
@@ -47,7 +51,10 @@ enum ModelProvider: String, Codable, CaseIterable, Equatable, Sendable {
 
 // MARK: - ModelEntry
 
-/// One selectable model — mirrors the server's `ModelEntry` field-for-field.
+/// One selectable model. Mirrors the server's `ModelEntry` for the fields the
+/// app needs — id/provider/displayName/recommended/enabled. The server's
+/// per-model charge field (`fallbackCredits`) is deliberately NOT mirrored: the
+/// app shows no per-model cost (metered-credits Phase 4).
 struct ModelEntry: Equatable, Identifiable, Sendable {
     /// The exact wire value sent as `model` in the `/generate` body (and the
     /// provider API model id the BYOK path calls directly).
@@ -55,13 +62,6 @@ struct ModelEntry: Equatable, Identifiable, Sendable {
     let provider: ModelProvider
     /// User-facing name in the picker.
     let displayName: String
-    /// Compact name for tight surfaces (the "≈ N with Flash · M with Opus"
-    /// translation line, §1.5). App-side display only — NOT part of the
-    /// server-mirror contract.
-    let shortName: String
-    /// Fixed credits charged per generation (1 credit = $0.01). Display-only
-    /// on the client; the server's charge is authoritative.
-    let creditPrice: Int
     /// The picker's "Recommended for Zerro" badge (exactly one model).
     let recommended: Bool
     /// Mirrors the server kill switch — disabled entries never render.
@@ -71,16 +71,12 @@ struct ModelEntry: Equatable, Identifiable, Sendable {
         id: String,
         provider: ModelProvider,
         displayName: String,
-        shortName: String,
-        creditPrice: Int,
         recommended: Bool = false,
         enabled: Bool = true
     ) {
         self.id = id
         self.provider = provider
         self.displayName = displayName
-        self.shortName = shortName
-        self.creditPrice = creditPrice
         self.recommended = recommended
         self.enabled = enabled
     }
@@ -92,15 +88,16 @@ struct ModelEntry: Equatable, Identifiable, Sendable {
 /// persistence (the user's selection lives in `PreferencesStore`).
 enum ModelRegistry {
 
-    /// Ordered by creditPrice ascending — the picker renders cheapest-first
-    /// (plan 6A): the product labels models by cost, not quality.
+    /// Registry order mirrors the server's (the historical cheapest-first
+    /// ordering, plan 6A). The app shows no per-model cost, so this is just the
+    /// stable render order; ids/order stay in lockstep with models.ts.
     static let all: [ModelEntry] = [
-        ModelEntry(id: "gpt-5.4-mini", provider: .openai, displayName: "GPT-5.4 mini", shortName: "GPT mini", creditPrice: 2),
-        ModelEntry(id: "gemini-3.5-flash", provider: .gemini, displayName: "Gemini 3.5 Flash", shortName: "Flash", creditPrice: 4, recommended: true),
-        ModelEntry(id: "gemini-3.1-pro-preview", provider: .gemini, displayName: "Gemini 3.1 Pro", shortName: "Gemini Pro", creditPrice: 5),
-        ModelEntry(id: "claude-sonnet-4-6", provider: .anthropic, displayName: "Claude Sonnet 4.6", shortName: "Sonnet", creditPrice: 7),
-        ModelEntry(id: "claude-opus-4-7", provider: .anthropic, displayName: "Claude Opus 4.7", shortName: "Opus", creditPrice: 10),
-        ModelEntry(id: "gpt-5.5", provider: .openai, displayName: "GPT-5.5", shortName: "GPT-5.5", creditPrice: 11),
+        ModelEntry(id: "gpt-5.4-mini", provider: .openai, displayName: "GPT-5.4 mini"),
+        ModelEntry(id: "gemini-3.5-flash", provider: .gemini, displayName: "Gemini 3.5 Flash", recommended: true),
+        ModelEntry(id: "gemini-3.1-pro-preview", provider: .gemini, displayName: "Gemini 3.1 Pro"),
+        ModelEntry(id: "claude-sonnet-4-6", provider: .anthropic, displayName: "Claude Sonnet 4.6"),
+        ModelEntry(id: "claude-opus-4-7", provider: .anthropic, displayName: "Claude Opus 4.7"),
+        ModelEntry(id: "gpt-5.5", provider: .openai, displayName: "GPT-5.5"),
     ]
 
     /// What the picker renders (mirrors the server's ALLOWED_MODELS gate).

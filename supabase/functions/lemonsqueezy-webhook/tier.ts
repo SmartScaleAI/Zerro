@@ -6,11 +6,9 @@
 // variant-id config explicitly rather than reading env, so a test can drive
 // every branch deterministically.
 //
-// IMPORTANT: `LS_VARIANT_STARTER` / `LS_VARIANT_PRO` are COMMA-SEPARATED LISTS
-// of variant ids — one product has a monthly AND a yearly variant (e.g. Pro =
-// "1735329,1735330"). We must test MEMBERSHIP of the incoming variant in the
-// list, not equality against the whole string (that never matched a single id
-// and silently defaulted everything to starter).
+// IMPORTANT: `LS_VARIANT_YEARLY` is a COMMA-SEPARATED LIST of variant ids — the
+// managed product has a monthly AND a yearly variant. We test MEMBERSHIP of the
+// incoming variant in the list, not equality against the whole string.
 
 import type { Tier } from "../_shared/config.ts";
 import type { LsSubscriptionAttributes } from "../_shared/types.ts";
@@ -24,13 +22,10 @@ export function parseVariantList(raw: string): string[] {
 }
 
 export interface TierVariantConfig {
-  /** Raw comma-separated starter variant ids (monthly + yearly). */
-  starterVariantIds: string;
-  /** Raw comma-separated pro variant ids (monthly + yearly). */
-  proVariantIds: string;
-  /** Raw comma-separated YEARLY variant ids across all tiers (LS_VARIANT_YEARLY).
-   *  Drives billing_interval only — both intervals share the tier's allowance
-   *  and 30-day reset cadence. */
+  /** Raw comma-separated YEARLY variant ids (LS_VARIANT_YEARLY). Drives
+   *  billing_interval only — both intervals share the managed allowance and
+   *  30-day reset cadence. (Tier itself is always 'managed' now, so no
+   *  per-tier variant lists are needed.) */
   yearlyVariantIds: string;
 }
 
@@ -40,8 +35,9 @@ export type BillingInterval = "monthly" | "yearly";
  * Derive billing_interval from which variant matched. The LS subscription
  * payload carries no interval field (the interval lives on the variant, which
  * webhooks don't expand), so the yearly variant ids are configured explicitly.
- * A tier-mapped variant not in the yearly list is monthly; an UNMAPPED variant
- * returns null (interval unknown — never guess; the column is nullable).
+ * A subscription variant in the yearly list is yearly; any other present
+ * variant is monthly; a MISSING variant id returns null (the column is
+ * nullable — never guess).
  */
 export function resolveBillingInterval(
   attrs: LsSubscriptionAttributes,
@@ -50,9 +46,7 @@ export function resolveBillingInterval(
   const variant = attrs.variant_id !== undefined ? String(attrs.variant_id) : "";
   if (!variant) return null;
   if (parseVariantList(config.yearlyVariantIds).includes(variant)) return "yearly";
-  const mapped = parseVariantList(config.proVariantIds).includes(variant) ||
-    parseVariantList(config.starterVariantIds).includes(variant);
-  return mapped ? "monthly" : null;
+  return "monthly";
 }
 
 // ---- Top-up packs (one-time orders, plan §1.4) -------------------------------
@@ -86,32 +80,16 @@ export function resolveTopupPack(
 }
 
 /**
- * Resolve a LemonSqueezy variant id (+ optional `custom_data.tier` fallback) to
- * our tier. Pro is checked first, then starter; an unmapped variant FAILS SAFE
- * to starter with a warning (the smaller allowance — never over-grant on a
- * mis-config).
+ * Resolve a subscription variant to our tier. There is a single managed tier
+ * now, so EVERY subscription variant resolves to "managed". Kept as a function
+ * (rather than inlining the constant) so the webhook's tier resolution stays a
+ * single, unit-testable seam. Args are unused but retained so call sites and
+ * tests don't churn if per-variant logic ever returns.
  */
 export function resolveTier(
-  attrs: LsSubscriptionAttributes,
-  customData: Record<string, unknown> | null | undefined,
-  config: TierVariantConfig,
+  _attrs: LsSubscriptionAttributes,
+  _customData: Record<string, unknown> | null | undefined,
+  _config: TierVariantConfig,
 ): Tier {
-  const variant = attrs.variant_id !== undefined ? String(attrs.variant_id) : "";
-  const proIds = parseVariantList(config.proVariantIds);
-  const starterIds = parseVariantList(config.starterVariantIds);
-
-  if (variant && proIds.includes(variant)) return "pro";
-  if (variant && starterIds.includes(variant)) return "starter";
-
-  const custom = customData?.tier;
-  if (custom === "pro" || custom === "starter") return custom;
-
-  console.warn(
-    JSON.stringify({
-      fn: "lemonsqueezy-webhook",
-      warn: "unmapped_variant_defaulting_to_starter",
-      variant_id: attrs.variant_id ?? null,
-    }),
-  );
-  return "starter";
+  return "managed";
 }

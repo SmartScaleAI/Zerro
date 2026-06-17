@@ -33,7 +33,11 @@ const HIGHLIGHT_STYLE = {
         // gradient border would need a masked padding-box/border-box layer).
         "shadow-[0_0_0_1px_rgba(40,160,130,0.25),0_40px_100px_-20px_rgba(40,160,130,0.30)]",
     title: "text-foreground",
-    badge: "bg-gradient-to-r from-[#5aa0ff] via-[#28a082] to-[#8c3cc8] text-white",
+    // "Most popular" badge — solid white (the limited-offer ribbon now carries
+    // the blue→teal→purple gradient instead).
+    badge: "bg-white text-neutral-900",
+    // Floating "Limited offer" ribbon that straddles the card's top edge.
+    limitedBadge: "bg-gradient-to-r from-[#5aa0ff] via-[#28a082] to-[#8c3cc8] text-white",
     blurb: "text-muted-foreground",
     toggleTrack: "bg-white/15",
     toggleActive: "bg-white text-neutral-900 shadow-xs",
@@ -65,10 +69,21 @@ type Tier = {
     // becomes `yearlyMonthly` (the discounted per-month rate) — still shown as
     // "per month" — and `yearlyTotal` (the full annual charge) moves to the badge.
     // The one-time tier (BYOK) uses `price` + `cadence` and ignores the toggle.
-    monthly?: { price: string; yearlyMonthly: string; yearlyTotal: string };
+    monthly?: {
+        price: string;
+        yearlyMonthly: string;
+        yearlyTotal: string;
+        // Limited-offer "was" prices, struck through beside the active price.
+        // compareMonthly is a full per-month string ("$25 per month");
+        // compareYearlyTotal mirrors yearlyTotal's "$N billed yearly" framing.
+        compareMonthly?: string;
+        compareYearlyTotal?: string;
+    };
     price?: string;
     cadence?: string;
     badge?: string;
+    // Renders a "Limited offer" urgency badge on the card (highlighted tier only).
+    limitedOffer?: boolean;
     // A feature is either a plain bullet, or a bullet with a smaller muted
     // sub-line beneath it (e.g. translating an abstract credit count into
     // concrete generations per model).
@@ -85,8 +100,16 @@ const tiers: Tier[] = [
     {
         name: "Managed",
         blurb: "We handle the AI — no keys, no setup.",
-        monthly: { price: "$15", yearlyMonthly: "$12", yearlyTotal: "$144 billed yearly" },
+        monthly: {
+            price: "$15",
+            yearlyMonthly: "$12",
+            yearlyTotal: "$144 billed yearly",
+            // Limited-offer comparison: full price $25/mo → $300/yr.
+            compareMonthly: "$25 per month",
+            compareYearlyTotal: "$300 billed yearly",
+        },
         badge: "Most popular",
+        limitedOffer: true,
         features: [
             "40 free credits to start",
             {
@@ -140,7 +163,7 @@ const Pricing = () => {
                 className="top-0 bottom-0 left-1/2 -translate-x-1/2 z-0 w-screen"
             />
 
-            <div className="relative z-10 mb-8 lg:mb-10 flex flex-col items-center gap-3 text-center">
+            <div className="relative z-10 mb-5 lg:mb-7 flex flex-col items-center gap-3 text-center">
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
                     Pricing
                 </p>
@@ -153,9 +176,9 @@ const Pricing = () => {
             </div>
 
             {/* Trial lead-in — applies to every path. Not a card, just a prominent
-                hook. Its top (header mb) and bottom margins are kept symmetric so
-                the badge sits centered in the gap between the subtitle and the cards. */}
-            <div className="relative z-10 mb-8 lg:mb-10 flex justify-center">
+                hook. Extra bottom margin lifts it clear of the Managed card's
+                "Limited offer" ribbon, which straddles the card's top edge. */}
+            <div className="relative z-10 mb-12 lg:mb-16 flex justify-center">
                 <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-1.5 text-sm font-medium text-primary">
                     <Sparkles className="h-4 w-4" strokeWidth={2} />
                     Start free — 40 credits. No card, no key, no time limit.
@@ -193,6 +216,19 @@ const Pricing = () => {
                                     : "z-0 h-full"
                             )}
                         >
+                            {/* Limited-offer ribbon — lives on the wrapper (not the Card,
+                                which is overflow-hidden) so it can straddle the top edge:
+                                centered, half above the card and half over its border. */}
+                            {tier.limitedOffer && (
+                                <span
+                                    className={cn(
+                                        "absolute left-1/2 top-0 z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full px-3 py-1 text-sm font-semibold uppercase tracking-wider shadow-lg",
+                                        HIGHLIGHT_STYLE.limitedBadge
+                                    )}
+                                >
+                                    Limited offer
+                                </span>
+                            )}
                             <Card
                                 className={cn(
                                     "relative flex h-full flex-col gap-5 p-6",
@@ -305,6 +341,25 @@ const Pricing = () => {
                                             {tier.monthly!.yearlyTotal}
                                         </span>
                                     )}
+                                    {/* Limited-offer "was" price, struck through and muted so it
+                                        reads as clearly secondary to the active discounted price.
+                                        Monthly compares per-month ($25); yearly compares the full
+                                        annual total ($300 billed yearly). */}
+                                    {isSubscription &&
+                                        (showYearly
+                                            ? tier.monthly!.compareYearlyTotal
+                                            : tier.monthly!.compareMonthly) && (
+                                            <span
+                                                className={cn(
+                                                    "text-sm line-through",
+                                                    tier.highlight ? "text-foreground/45" : "text-muted-foreground/70"
+                                                )}
+                                            >
+                                                {showYearly
+                                                    ? tier.monthly!.compareYearlyTotal
+                                                    : tier.monthly!.compareMonthly}
+                                            </span>
+                                        )}
                                 </div>
 
                                 <ul className="flex flex-col gap-2.5 flex-grow">

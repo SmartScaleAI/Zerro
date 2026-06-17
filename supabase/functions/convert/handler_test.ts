@@ -87,7 +87,7 @@ function makeHarness(): Harness {
 }
 
 async function subToken(sub = "sub_1"): Promise<string> {
-  const { token } = await signSessionToken({ sub, tier: "starter" }, SECRET, 3600, NOW);
+  const { token } = await signSessionToken({ sub, tier: "managed" }, SECRET, 3600, NOW);
   return token;
 }
 

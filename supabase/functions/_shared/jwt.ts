@@ -6,8 +6,8 @@
 //   sub   — the subject identity. For kind='subscription' it's the subscription
 //           id; for kind='trial' (Phase F) it's the trial_grants row id (an
 //           opaque uuid — the raw email never travels in the token).
-//   tier  — 'starter' | 'pro' (subscription only; OMITTED on trial tokens,
-//           which have no tier concept)
+//   tier  — 'managed' (subscription only; OMITTED on trial tokens, which have
+//           no tier concept)
 //   kind  — 'subscription' | 'trial'; lets `generate` branch onto the right
 //           credit ledger (usage_periods vs trial_grants)
 //   iat   — issued-at (epoch seconds)

@@ -64,11 +64,9 @@ final class PreflightGateTests: XCTestCase {
 
     private func snapshot(
         _ status: ManagedStatus,
-        credits: Int,
-        tier: ManagedTier = .starter
+        credits: Int
     ) -> ManagedEntitlementSnapshot {
         ManagedEntitlementSnapshot(
-            tier: tier,
             status: status,
             creditsRemaining: credits,
             creditsLimit: 100,

@@ -183,7 +183,6 @@ enum ManagedStatus: String, Codable, Equatable {
 /// through the local display cache (see `EntitlementStore`); built from the
 /// wire DTO via `init(dto:)`.
 struct ManagedEntitlementSnapshot: Codable, Equatable {
-    let tier: ManagedTier
     let status: ManagedStatus
     /// COMBINED spendable balance: plan remaining + non-expired top-up packs
     /// (multi-model F4) — the same number the server's spend gate checks.
@@ -219,7 +218,6 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
     /// Builds the domain snapshot from the decoded wire shape, parsing the ISO
     /// `reset_date` into a `Date`.
     init(dto: EntitlementSnapshotDTO) {
-        self.tier = dto.tier
         self.status = dto.status
         self.creditsRemaining = dto.creditsRemaining
         self.creditsLimit = dto.creditsLimit
@@ -237,7 +235,6 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
     /// charge may have drawn on the top-up bucket, not the plan).
     func withCreditsRemaining(_ remaining: Int) -> ManagedEntitlementSnapshot {
         ManagedEntitlementSnapshot(
-            tier: tier,
             status: status,
             creditsRemaining: max(0, remaining),
             creditsLimit: creditsLimit,
@@ -253,7 +250,6 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
     /// default nil so pre-multi-model call sites (dev overrides, fixtures)
     /// compile unchanged.
     init(
-        tier: ManagedTier,
         status: ManagedStatus,
         creditsRemaining: Int,
         creditsLimit: Int,
@@ -262,7 +258,6 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
         planCreditsLimit: Int? = nil,
         topupCreditsRemaining: Int? = nil
     ) {
-        self.tier = tier
         self.status = status
         self.creditsRemaining = creditsRemaining
         self.creditsLimit = creditsLimit
@@ -279,7 +274,11 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
 /// (nested) and `/entitlement` (top-level). Decoded as-is, then lifted into
 /// the domain `ManagedEntitlementSnapshot`.
 struct EntitlementSnapshotDTO: Decodable, Equatable {
-    let tier: ManagedTier
+    // NOTE: the wire `tier` field is INTENTIONALLY NOT decoded (metered-credits
+    // Phase 6 — single managed tier). Any tier value the server sends ("managed",
+    // or a legacy "pro"/"starter" from an older deploy) is simply ignored, so an
+    // out-of-order deploy can never fail entitlement decode (deploy-ordering
+    // safety). Keys not in CodingKeys are skipped by the synthesized decoder.
     let status: ManagedStatus
     let creditsRemaining: Int
     let creditsLimit: Int
@@ -291,7 +290,7 @@ struct EntitlementSnapshotDTO: Decodable, Equatable {
     let topupCreditsRemaining: Int?
 
     enum CodingKeys: String, CodingKey {
-        case tier, status
+        case status
         case creditsRemaining = "credits_remaining"
         case creditsLimit = "credits_limit"
         case resetDate = "reset_date"
@@ -323,11 +322,11 @@ struct GenerateResponseDTO: Decodable {
     let usage: UsageDTO?
     let creditsRemaining: Int?
     /// The EXACT credits the server charged for this generation (multi-model
-    /// D2) — usually the model's fixed price, but the anti-abuse circuit
-    /// breaker can meter it higher, and an idempotent replay reports the
-    /// ORIGINAL charge (0 on the rare uncharged-race path). The "−N credits"
-    /// toast reads this, never the local price table. Optional: a pre-D2
-    /// backend omits it and the toast simply doesn't show a charge.
+    /// D2) — the server METERS the real cost of each generation, and an
+    /// idempotent replay reports the ORIGINAL charge (0 on the rare
+    /// uncharged-race path). The "−N credits" toast reads this, never a local
+    /// per-model number. Optional: a pre-D2 backend omits it and the toast
+    /// simply doesn't show a charge.
     let creditsCharged: Int?
 
     enum CodingKeys: String, CodingKey {

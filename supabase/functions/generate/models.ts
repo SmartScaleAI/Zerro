@@ -4,22 +4,30 @@
 // =============================================================================
 // Every place that needs "which models exist, who serves them, what they cost
 // in credits" reads THIS table: request validation (Phase 4) gates on
-// ALLOWED_MODELS, the handler resolves provider + creditPrice via modelById,
+// ALLOWED_MODELS, the handler resolves provider + fallbackCredits via modelById,
 // and the app's picker is fed from the same data. Do not duplicate these
 // entries elsewhere.
 //
 // This module is PURE DATA — no env, no config imports — so anything can
 // import it without dragging environment evaluation into tests.
 //
-// CALIBRATION CAVEAT (plan §2): the creditPrice values are calibration v1 —
+// THIRD MIRROR / KEEP IN SYNC: this registry is mirrored by the eval harness
+// (apps/desktop/Scripts/eval-models.mjs) and the Swift app
+// (apps/desktop/Zerro/Services/ModelRegistry.swift). CHARGE MODEL: the credit
+// charge is now METERED — every generation is billed the real measured cost,
+// `ceil(est_cost_usd / USD_PER_CREDIT)` with a floor of 1 (see cost.ts
+// `creditCostForModel`). `fallbackCredits` below is NO LONGER the charge: it is
+// only the per-model fallback estimate used when the real cost is unavailable
+// (unpriced model / missing token usage), so a pricing gap never charges 0 or
+// blocks.
+//
+// CALIBRATION CAVEAT (plan §2): the fallbackCredits values are calibration v1 —
 // real token shape × published June-2026 API rates, validated against measured
-// Gemini Flash spend and the Phase 0 eval runs. They are starting points, not
-// permanent truth. POST-LAUNCH TASK: after a few hundred multi-model
-// generations, recompute real p75 cost per model from the now-model-tagged
-// `generation_log` and retune each creditPrice below (a one-line edit +
-// redeploy; no migration). Note gpt-5.4-mini's published rates came in well
-// below the plan's original "gpt-5-mini" assumption, so its 2-credit price is
-// margin-generous and a likely first candidate for retuning.
+// Gemini Flash spend and the Phase 0 eval runs. They are starting points for the
+// fallback only, not permanent truth. POST-LAUNCH TASK: after a few hundred
+// multi-model generations, recompute real p75 cost per model from the
+// now-model-tagged `generation_log` and retune each fallbackCredits below (a
+// one-line edit + redeploy; no migration).
 //
 // `enabled` is the kill switch: setting it false drops a model from
 // ALLOWED_MODELS (new requests 400) without a schema or app change, e.g. if a
@@ -35,23 +43,28 @@ export interface ModelEntry {
   provider: ModelProvider;
   /** User-facing name in the picker. */
   displayName: string;
-  /** Fixed credits charged per generation (plan §1.2; 1 credit = $0.01). */
-  creditPrice: number;
+  /**
+   * Per-model FALLBACK credit estimate (1 credit = $0.01). NOT the charge —
+   * generations are metered on real cost (cost.ts `creditCostForModel`). This
+   * value is used ONLY when the real cost is unavailable (unpriced model /
+   * missing token usage), so a pricing gap never charges 0 or blocks.
+   */
+  fallbackCredits: number;
   /** The picker's "Recommended for Zerro" badge (exactly one model). */
   recommended?: boolean;
   /** false = dark-disabled: stays out of ALLOWED_MODELS, no deploy needed. */
   enabled: boolean;
 }
 
-// Ordered by creditPrice ascending — the picker renders cheapest-first
+// Ordered by fallbackCredits ascending — the picker renders cheapest-first
 // (plan 6A) and this order is the product's "label by cost, not quality".
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
-  { id: "gpt-5.4-mini", provider: "openai", displayName: "GPT-5.4 mini", creditPrice: 2, enabled: true },
-  { id: "gemini-3.5-flash", provider: "gemini", displayName: "Gemini 3.5 Flash", creditPrice: 4, recommended: true, enabled: true },
-  { id: "gemini-3.1-pro-preview", provider: "gemini", displayName: "Gemini 3.1 Pro", creditPrice: 5, enabled: true },
-  { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6", creditPrice: 7, enabled: true },
-  { id: "claude-opus-4-7", provider: "anthropic", displayName: "Claude Opus 4.7", creditPrice: 10, enabled: true },
-  { id: "gpt-5.5", provider: "openai", displayName: "GPT-5.5", creditPrice: 11, enabled: true },
+  { id: "gpt-5.4-mini", provider: "openai", displayName: "GPT-5.4 mini", fallbackCredits: 2, enabled: true },
+  { id: "gemini-3.5-flash", provider: "gemini", displayName: "Gemini 3.5 Flash", fallbackCredits: 4, recommended: true, enabled: true },
+  { id: "gemini-3.1-pro-preview", provider: "gemini", displayName: "Gemini 3.1 Pro", fallbackCredits: 5, enabled: true },
+  { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6", fallbackCredits: 7, enabled: true },
+  { id: "claude-opus-4-7", provider: "anthropic", displayName: "Claude Opus 4.7", fallbackCredits: 10, enabled: true },
+  { id: "gpt-5.5", provider: "openai", displayName: "GPT-5.5", fallbackCredits: 11, enabled: true },
 ];
 
 /**
@@ -78,7 +91,7 @@ export function modelById(id: string): ModelEntry | undefined {
 
 // The model used when a request omits `model` (Phase 4, pre-multi-model apps):
 // the registry's RECOMMENDED entry — NOT env CHAT_MODEL. Documented choice:
-// the env default (gpt-4o) is not a registry model and has no creditPrice, so
+// the env default (gpt-4o) is not a registry model and has no fallbackCredits, so
 // it can't be charged under variable credits; the recommended model is the
 // product default the picker shows, so an un-updated app gets exactly what a
 // fresh install would. Falls back to the cheapest enabled entry if the

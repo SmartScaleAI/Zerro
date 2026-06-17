@@ -33,7 +33,7 @@ import SwiftUI
 
 struct BillingSection: View {
     @Environment(EntitlementStore.self) private var entitlements
-    @State private var model = BillingLicenseModel()
+    @State private var model = BillingLicenseModel(expectedProduct: .managed)
 
     var body: some View {
         SettingsSection("Plan & Credits") {
@@ -107,15 +107,40 @@ final class BillingLicenseModel {
     var licenseKey: String
     var phase: Phase
 
-    @ObservationIgnored private let keychain = KeychainStore.byokLicenseKey
+    @ObservationIgnored private let keychain: KeychainSlot
+    @ObservationIgnored private let productKindSlot: KeychainSlot
 
-    init() {
+    /// Which product THIS row represents. A Managed subscription key and a BYOK
+    /// license key share the `byokLicenseKey` slot (both are LemonSqueezy keys
+    /// activated through the same path), disambiguated only by
+    /// `licenseProductKind`. The model adopts the on-file key — and renders the
+    /// licensed affordances — only when that discriminator matches this row's
+    /// product, so a managed key never leaks into the BYOK pane (and vice-versa).
+    let expectedProduct: LicenseProductKind
+
+    /// Slots default to the production Keychain statics; tests inject in-memory
+    /// doubles (mirroring `EntitlementStore`'s `productKindSlot` seam).
+    init(
+        expectedProduct: LicenseProductKind,
+        keychain: KeychainSlot = KeychainStore.byokLicenseKey,
+        productKindSlot: KeychainSlot = KeychainStore.licenseProductKind
+    ) {
+        self.expectedProduct = expectedProduct
+        self.keychain = keychain
+        self.productKindSlot = productKindSlot
+        let onFileKind = LicenseProductKind(rawValue: productKindSlot.read() ?? "")
         let stored = keychain.read() ?? ""
-        licenseKey = stored
-        // A key already in the Keychain came from a prior successful
-        // activation — render `.licensed` so the pill doesn't ask the user to
-        // re-activate on every Settings open.
-        phase = stored.isEmpty ? .unverified : .licensed
+        // A key already in the Keychain came from a prior successful activation —
+        // render `.licensed` so the pill doesn't ask the user to re-activate on
+        // every Settings open. But only adopt it if it belongs to THIS row's
+        // product; otherwise this row stays empty and unverified.
+        if !stored.isEmpty, onFileKind == expectedProduct {
+            licenseKey = stored
+            phase = .licensed
+        } else {
+            licenseKey = ""
+            phase = .unverified
+        }
     }
 
     var trimmedKey: String {
@@ -135,16 +160,22 @@ final class BillingLicenseModel {
     /// state (called on `.onChange`). Doesn't clobber an in-flight request.
     func syncToEntitlement(_ state: EntitlementState) {
         guard phase != .working else { return }
-        // Both `.byok` and `.managed` are backed by an activated license key on
-        // file, so both render `.licensed`.
-        let isLicensed: Bool = { if case .managed = state { return true }; return state == .byok }()
-        if isLicensed {
+        // The entitlement state maps 1:1 to a product — this row goes `.licensed`
+        // only when the active entitlement is THIS row's product, so a managed
+        // entitlement never marks the BYOK row licensed (and vice-versa).
+        let matchesThisRow: Bool = {
+            switch expectedProduct {
+            case .managed: if case .managed = state { return true }; return false
+            case .byok:    return state == .byok
+            }
+        }()
+        if matchesThisRow {
             phase = .licensed
             // Re-fill from the Keychain in case activation happened elsewhere.
             if trimmedKey.isEmpty, let stored = keychain.read() { licenseKey = stored }
         } else if phase == .licensed {
-            // The entitlement dropped out of `.byok` (revoked / deactivated) —
-            // reflect that the stored key is no longer active.
+            // This row's product is no longer the active entitlement (revoked /
+            // deactivated, or a preview of the other mode) — clear it.
             phase = .unverified
             licenseKey = ""
         }
@@ -250,13 +281,11 @@ private struct CurrentPlanRow: View {
             PlanPill(text: "Expired", tint: Color.vfRecordingRed)
         case .byok:
             PlanPill(text: "BYOK", tint: Color.vfSuccessGreen)
-        case .managed(let tier, _, _):
+        case .managed:
             // Past-due tints amber (a soft warning, not a block); active is green.
             let pastDue = entitlements.managedSnapshot?.isPastDue == true
             PlanPill(
-                text: pastDue
-                    ? "Managed \u{00B7} \(tier.rawValue.capitalized) \u{00B7} Past due"
-                    : "Managed \u{00B7} \(tier.rawValue.capitalized)",
+                text: pastDue ? "Managed \u{00B7} Past due" : "Managed",
                 tint: pastDue ? Color.vfWarningAmber : Color.vfSuccessGreen
             )
         }
@@ -407,11 +436,17 @@ private struct LicenseKeyRow: View {
         }
     }
 
-    /// `.byok` and `.managed` are both license-backed → the row shows the
-    /// licensed affordances (re-activate / deactivate this device).
+    /// Licensed affordances (Verified pill, Re-activate / Deactivate) belong to
+    /// the row whose product matches the active entitlement — so the managed
+    /// key's affordances never render in the BYOK pane (and vice-versa).
     private var isLicensed: Bool {
-        if case .managed = entitlements.state { return true }
-        return entitlements.state == .byok
+        switch context {
+        case .subscription:
+            if case .managed = entitlements.state { return true }
+            return false
+        case .byokLicense:
+            return entitlements.state == .byok
+        }
     }
 
     private var activateLabel: String {
@@ -512,7 +547,9 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
         Log.billing.notice("settings: checkout link not configured yet (placeholder)")
         return
     }
-    Analytics.capture("checkout_opened", ["product": product.rawValue])
+    // Tier 3 §0: tag the placement so the monetization funnel can tell the
+    // Settings checkouts apart from the paywall's (`placement: "paywall"`).
+    Analytics.capture("checkout_opened", ["product": product.rawValue, "placement": "settings"])
     NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
 }
 
@@ -532,10 +569,9 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
 ///   when that's unknown (older server / pre-update cache) the trial
 ///   variant degrades to bar-less.
 /// • Inline prompt: the SAME low-balance threshold as the generation-flow
-///   prompt (CreditDisplay.isLowBalance against the SELECTED model's price).
+///   prompt (CreditDisplay.isLowBalance — a price-agnostic balance floor).
 private struct UsageMeterRow: View {
     @Environment(EntitlementStore.self) private var entitlements
-    @Environment(PreferencesStore.self) private var preferences
 
     var body: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
@@ -589,12 +625,6 @@ private struct UsageMeterRow: View {
             }
         }
 
-        if let helper = CreditDisplay.translationLine(balance: snapshot.creditsRemaining) {
-            Text(helper)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-        }
-
         topupPrompt(balance: snapshot.creditsRemaining)
     }
 
@@ -614,12 +644,6 @@ private struct UsageMeterRow: View {
 
         if let limit = entitlements.trialCreditsLimit, limit > 0 {
             meterBar(fraction: CreditDisplay.trialFractionRemaining(remaining: credits, limit: limit))
-        }
-
-        if let helper = CreditDisplay.translationLine(balance: credits) {
-            Text(helper)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
         }
 
         // Trials can't buy top-ups (plan §1.4) — the inline prompt is the
@@ -650,10 +674,7 @@ private struct UsageMeterRow: View {
     }
 
     private func isLow(balance: Int) -> Bool {
-        guard let price = ModelRegistry.entry(id: preferences.selectedModelID)?.creditPrice else {
-            return false
-        }
-        return CreditDisplay.isLowBalance(balance: balance, selectedModelPrice: price)
+        CreditDisplay.isLowBalance(balance: balance)
     }
 
     /// 6F.4 — comfortable balance: a quiet packs line; low balance: escalate
@@ -689,7 +710,7 @@ private struct UsageMeterRow: View {
 /// get/manage links. No plan/credit/meter UI — that's the Managed pane's.
 struct BYOKLicenseSection: View {
     @Environment(EntitlementStore.self) private var entitlements
-    @State private var model = BillingLicenseModel()
+    @State private var model = BillingLicenseModel(expectedProduct: .byok)
 
     var body: some View {
         SettingsSection("BYOK License") {
@@ -762,7 +783,7 @@ private struct DevRevalidateRow: View {
 #Preview("Plan & Credits · managed") {
     BillingSection()
         .environment(EntitlementStore.preview(
-            .managed(tier: .pro, creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
+            .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
         ))
         .environment(PreferencesStore())
         .padding()

@@ -9,9 +9,12 @@
 //  Phase A of the billing system — the entitlement model that the single
 //  recording-start gate reads through `EntitlementStore.canGenerate`.
 //  This file is data only: the discrete states a user's billing standing
-//  can be in, plus the managed-subscription tier enum. No clock, no
-//  networking, no purchase logic — those land in Phases B–F and only ever
-//  WRITE these values; the gate only READS them.
+//  can be in. No clock, no networking, no purchase logic — those land in
+//  Phases B–F and only ever WRITE these values; the gate only READS them.
+//
+//  There is ONE managed tier (metered-credits Phase 6): the old starter/pro
+//  split — and the `ManagedTier` enum that modelled it — are gone. `.managed`
+//  no longer carries a tier.
 //
 //  Access level mirrors `RecordingState`: `public` even
 //  though the app is a single module, so the type composes cleanly with
@@ -20,19 +23,6 @@
 //
 
 import Foundation
-
-// MARK: - ManagedTier
-
-/// The two paid tiers of the managed (Zerro-hosted credits) subscription.
-/// Display/marketing copy and the real per-tier credit allotment are
-/// decided server-side in Phases D–E; this enum is just the stable
-/// identifier the client persists and renders against.
-public enum ManagedTier: String, Codable, Equatable, CaseIterable {
-    /// Entry managed plan — the smaller monthly credit allotment.
-    case starter
-    /// Higher managed plan — the larger monthly credit allotment.
-    case pro
-}
 
 // MARK: - EntitlementState
 
@@ -60,11 +50,10 @@ public enum EntitlementState: Equatable {
     /// activates and validates the license; Phase A only models the state.
     case byok
 
-    /// Active managed subscription on the given `tier`. `creditsRemaining`
-    /// and `resetDate` are DISPLAY ONLY — they drive UI copy (the menu-bar
-    /// credits line, a Settings readout) but are NOT the spend authority.
-    /// The real "can this generation proceed" decision is made server-side
-    /// against the proxy in Phases D–E; the client never gates on these
-    /// numbers, it only shows them.
-    case managed(tier: ManagedTier, creditsRemaining: Int, resetDate: Date)
+    /// Active managed subscription. `creditsRemaining` and `resetDate` are
+    /// DISPLAY ONLY — they drive UI copy (the menu-bar credits line, a Settings
+    /// readout) but are NOT the spend authority. The real "can this generation
+    /// proceed" decision is made server-side against the proxy in Phases D–E;
+    /// the client never gates on these numbers, it only shows them.
+    case managed(creditsRemaining: Int, resetDate: Date)
 }

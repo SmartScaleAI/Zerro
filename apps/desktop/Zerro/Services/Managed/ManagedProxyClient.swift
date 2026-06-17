@@ -127,8 +127,9 @@ final class ManagedProxyClient {
     /// still get a valid single-use key; the real path passes the recording's
     /// stable `ProcessedRecording.idempotencyKey`.
     /// `model` (Phase 6 / multi-model): the registry wire id the server
-    /// validates against ALLOWED_MODELS and prices per-model. Defaults to the
-    /// recommended model — the same model the server resolves when the field
+    /// validates against ALLOWED_MODELS and routes to the provider adapter.
+    /// Charging is metered on the real cost, not a per-model price. Defaults to
+    /// the recommended model — the same model the server resolves when the field
     /// is absent (D1), so the default is a no-op for older test fixtures.
     func generate(
         audioURL: URL,
@@ -401,8 +402,8 @@ final class ManagedProxyClient {
         // no mode, no transcript, no system prompt (§6.1). Phase 6:
         // `has_speech` is a cost hint, not prompt input — `false` tells the
         // server to skip the Whisper call (empty segments). `model`
-        // (multi-model 6B) selects the provider adapter + per-model credit
-        // price server-side — never the prompt (Appendix C #3).
+        // (multi-model 6B) selects the provider adapter server-side (charging
+        // is metered on real cost) — never the prompt (Appendix C #3).
         let payload: [String: Any] = [
             "model": model,
             "audio": audio,

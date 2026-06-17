@@ -90,20 +90,18 @@ enum BillingLinks {
     // URL once the account is approved.
     static let customerPortalURLString = "https://app.lemonsqueezy.com/my-orders"
 
-    // MARK: - Managed subscription checkouts (Phase E)
+    // MARK: - Managed subscription checkout (Phase E)
     //
-    // The hosted LemonSqueezy checkout URL for each subscription PRODUCT
-    // (Starter / Pro). LemonSqueezy's Share panel gives one checkout link per
-    // product — the customer picks monthly vs yearly ON the page — so the app
-    // links out per product, not per billing variant. (The four monthly/yearly
-    // variant IDs still exist server-side for the webhook's tier mapping; the
+    // The hosted LemonSqueezy checkout URL for the single Managed subscription
+    // product. LemonSqueezy's Share panel gives one checkout link per product —
+    // the customer picks monthly vs yearly ON the page — so the app links out
+    // per product, not per billing variant. (The monthly/yearly variant IDs
+    // still exist server-side for the webhook's billing_interval mapping; the
     // app never needs them.) Same resolve-to-nil + no-op-if-unset pattern as the
-    // BYOK checkout above. Grep `TODO: subscription checkout` to find the two
-    // strings to fill once Colin creates the products.
+    // BYOK checkout above.
 
     // Single Managed product; monthly vs yearly is chosen ON the LS page, so
-    // one checkout link covers both intervals. Starter is not sold at launch —
-    // if a Starter tier returns later, give it its own test/live pair here.
+    // one checkout link covers both intervals.
     static let proCheckoutURLString = checkout(
         test: "4ab963c6-7e81-473b-b815-ecc163584539",
         live: "889b1ee8-9e71-422f-a714-362a2ca3ff39"
@@ -139,15 +137,12 @@ enum BillingLinks {
     /// The customer-portal URL, or `nil` if still a placeholder.
     static var customerPortalURL: URL? { resolvedURL(customerPortalURLString) }
 
-    /// Resolves the subscription checkout URL for a tier, or `nil` if that
-    /// product's placeholder isn't filled in yet (the paywall softens/disables
-    /// the button rather than opening a dead link). Monthly vs yearly is chosen
-    /// on the LemonSqueezy page, not in-app.
-    static func subscriptionCheckoutURL(tier: ManagedTier) -> URL? {
-        switch tier {
-        case .starter: return proCheckoutURL  // Starter not sold at launch → Managed/Pro checkout
-        case .pro:     return proCheckoutURL
-        }
+    /// Resolves the single Managed subscription checkout URL, or `nil` if the
+    /// placeholder isn't filled in yet (the paywall softens/disables the button
+    /// rather than opening a dead link). Monthly vs yearly is chosen on the
+    /// LemonSqueezy page, not in-app.
+    static func subscriptionCheckoutURL() -> URL? {
+        proCheckoutURL
     }
 
     /// `nil` if the URL is still a placeholder. Rejects a bare `TODO` prefix AND

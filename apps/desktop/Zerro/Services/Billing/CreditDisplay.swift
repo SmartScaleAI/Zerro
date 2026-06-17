@@ -8,9 +8,9 @@
 //  re-deriving the math in each view.
 //
 //  TERMINOLOGY (§1.5): the user-facing unit is CREDITS, never a flat
-//  "generations" count — a generation's cost varies by model. "Generations"
-//  may appear only as the secondary translation helper produced here
-//  (`translationLine`), never as the headline number.
+//  "generations" count — a generation's cost varies by model and is metered on
+//  the server. The app shows NO per-model cost estimate; the only per-recording
+//  number it surfaces is the actual `credits_charged` the server returns.
 //
 //  Pure functions over plain values — no stores, no networking — so the whole
 //  surface is unit-testable without UI.
@@ -20,23 +20,21 @@ import Foundation
 
 enum CreditDisplay {
 
-    // MARK: - Per-model "~N left"
-
-    /// How many generations the balance buys on a given model (the picker
-    /// row's "~N left"). Floor division; never negative.
-    static func estimatedLeft(balance: Int, creditPrice: Int) -> Int {
-        guard creditPrice > 0 else { return 0 }
-        return max(0, balance / creditPrice)
-    }
-
     // MARK: - Low-balance threshold (6B.4 / 6F.4 — the ONE source of truth)
 
-    /// True when the balance can't cover the SELECTED model's next generation.
+    /// Nudge threshold (credits): at or below this, the menu-bar billing row
+    /// and the billing card escalate to the low-balance top-up / upgrade
+    /// prompt. A price-agnostic floor (the app no longer knows per-model cost) —
+    /// ≈ one heavy recording's worth of credits, so the user is warned before a
+    /// recording can fail mid-flight. Tunable.
+    static let LOW_BALANCE_CREDITS = 30
+
+    /// True when the spendable balance has dropped to the nudge threshold.
     /// Drives both the generation-flow top-up prompt and the billing-card
-    /// escalation — deliberately not "exactly zero": a 3-credit balance with
-    /// Opus (10) selected is already blocked.
-    static func isLowBalance(balance: Int, selectedModelPrice: Int) -> Bool {
-        balance < selectedModelPrice
+    /// escalation. Price-agnostic: charging is metered server-side, so the app
+    /// nudges on an absolute balance floor rather than a selected-model price.
+    static func isLowBalance(balance: Int) -> Bool {
+        balance <= LOW_BALANCE_CREDITS
     }
 
     // MARK: - Headline + helper strings
@@ -44,23 +42,6 @@ enum CreditDisplay {
     /// "248 credits" / "1 credit" — the §1.5 primary number.
     static func creditsHeadline(_ balance: Int) -> String {
         balance == 1 ? "1 credit" : "\(balance) credits"
-    }
-
-    /// The SECONDARY translation helper, e.g. "≈ 62 with Flash · 24 with
-    /// Opus" — explains what credits buy without becoming the headline unit.
-    /// Anchored to the recommended model and the priciest enabled one (the
-    /// legibility extremes). `nil` when the balance can't cover even one
-    /// cheapest-model generation (the low/out states carry their own copy).
-    static func translationLine(balance: Int) -> String? {
-        guard
-            let anchor = ModelRegistry.enabled.first(where: \.recommended),
-            let priciest = ModelRegistry.enabled.max(by: { $0.creditPrice < $1.creditPrice }),
-            anchor.id != priciest.id
-        else { return nil }
-        let anchorLeft = estimatedLeft(balance: balance, creditPrice: anchor.creditPrice)
-        let priciestLeft = estimatedLeft(balance: balance, creditPrice: priciest.creditPrice)
-        guard anchorLeft > 0 else { return nil }
-        return "\u{2248} \(anchorLeft) with \(anchor.shortName) \u{00B7} \(priciestLeft) with \(priciest.shortName)"
     }
 
     // MARK: - Usage meter (6F)
@@ -90,9 +71,9 @@ enum CreditDisplay {
     }
 
     /// The post-generation toast: "−4 credits · 96 left" (D2 — `charged` is
-    /// the server's exact `credits_charged`, incl. the circuit-breaker case;
-    /// never derived from the price table). A replayed/uncharged result
-    /// (charged == 0) reads "No charge · 96 left" rather than "−0 credits".
+    /// the server's exact metered `credits_charged`; never derived from any
+    /// local per-model number). A replayed/uncharged result (charged == 0)
+    /// reads "No charge · 96 left" rather than "−0 credits".
     static func chargeLine(charged: Int, remaining: Int) -> String {
         let charge = charged == 0
             ? "No charge"

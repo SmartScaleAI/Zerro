@@ -442,13 +442,15 @@ struct AreaSelectorView: View {
                             .truncationMode(.tail)
                         if item.recommended {
                             // Compact dot-star stand-in for the picker's
-                            // "Recommended" capsule — the row also carries
-                            // a price column, so the full badge won't fit.
+                            // "Recommended" capsule — kept compact to match the
+                            // toolbar dropdown's tight row height.
                             Image(systemName: "star.fill")
                                 .font(.system(size: 8))
                                 .foregroundStyle(Color.vfBrandAccent)
                         }
                         Spacer(minLength: VFSpacing.xs)
+                        // `detail` is now only the BYOK "add key" hint (no
+                        // per-model cost) — nil otherwise, leaving a clean row.
                         if let detail = item.detail {
                             Text(detail)
                                 .font(.system(size: 11))

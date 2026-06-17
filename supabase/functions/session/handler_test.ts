@@ -74,7 +74,7 @@ function seed(store: InMemoryStore, over: Partial<SessionSubRow> = {}) {
   store.sub = {
     id: "sub-1",
     ls_subscription_id: "ls_999",
-    tier: "starter",
+    tier: "managed",
     status: "active",
     credits_limit: 100,
     current_period_end: "2026-07-01T00:00:00.000Z",

@@ -40,7 +40,7 @@ function fakeDb(data: FakeData): SupabaseClient {
 function sub(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
   return {
     id: "sub-1",
-    tier: "pro",
+    tier: "managed",
     status: "active",
     credits_limit: 300,
     current_period_end: "2027-06-01T00:00:00.000Z",
