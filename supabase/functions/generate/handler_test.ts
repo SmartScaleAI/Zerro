@@ -188,6 +188,9 @@ class StubProvider implements SttClient, ChatClient {
   // server owns the prompt + transcript (no client-supplied path into it).
   lastSystem = "";
   lastContent: TimelineBlock[] = [];
+  // The content the stubbed chat returns. Overridable so the Dev Mode tests can
+  // return a `zerro_anchors` block and assert the server parses it into anchors[].
+  chatContent = "GENERATED PROMPT";
   chat(system: string, content: TimelineBlock[]) {
     this.chatCalls++;
     this.lastSystem = system;
@@ -195,7 +198,7 @@ class StubProvider implements SttClient, ChatClient {
     if (this.failChat) return Promise.reject(this.failChat);
     return Promise.resolve({
       provider: "openai",
-      content: "GENERATED PROMPT",
+      content: this.chatContent,
       inputTokens: this.chatInputTokens,
       outputTokens: this.chatOutputTokens,
       model: "gpt-4o",
@@ -1352,4 +1355,179 @@ Deno.test("an unknown mode value falls back to the normal prompt (selector, not 
   const ai = new StubProvider();
   await handleGenerate(makeReq(await mintToken(), makeBody({ mode: "pwn" })), deps(store, ai));
   assertEquals(ai.lastSystem.includes("repo-scoped coding instruction"), false);
+});
+
+// ---- Dev Mode CALL 2: enriched generation w/ pre-supplied transcript --------
+// (Phase 2 — managed/trial hover-deixis). The client already transcribed via the
+// free call 1 and resolved anchors against that transcript; call 2 re-sends the
+// transcript + the marked DEIXIS frames (NO audio) and gets the agent_prompt plus
+// the structured anchors[] back, charging exactly once.
+
+/** A Dev Mode call-2 body: NO audio (it rode in call 1), a pre-supplied
+ *  transcript, frames (incl. the marked DEIXIS reference crop), clicks. */
+function devGenerateBody(over: Record<string, unknown> = {}) {
+  return {
+    mode: "dev",
+    frames: [
+      { timestamp: 0, mime: "image/jpeg", data: btoa("frame0") },
+      // The trailing marked anchor crop — tagged like writeAnchorFrames does.
+      {
+        timestamp: 99,
+        mime: "image/jpeg",
+        data: btoa("anchor0"),
+        ocr_text: 'DEIXIS REFERENCE 0: the developer pointed here while saying "this button". Nearby on-screen text: Get started',
+      },
+    ],
+    clicks: [],
+    has_speech: true,
+    transcript: {
+      segments: [{ start: 0, end: 2, text: "make this button bigger" }],
+      duration_seconds: 12,
+    },
+    ...over,
+  };
+}
+
+Deno.test("dev call 2: pre-supplied transcript SKIPS re-STT, generates against it, charges exactly once", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), devGenerateBody(), "rec-dev-1"),
+    deps(store, openai),
+  );
+
+  assertEquals(res.status, 200);
+  // No STT on call 2 — the client supplied the transcript (no double STT charge).
+  assertEquals(openai.transcribeCalls, 0, "call 2 must NOT re-transcribe");
+  assertEquals(openai.chatCalls, 1);
+  // The dev prompt was selected (repo-scoped EYES/HANDS spec).
+  assertEquals(openai.lastSystem.includes("repo-scoped coding instruction"), true);
+  // The SUPPLIED transcript text is interleaved into the model content.
+  const contentJson = JSON.stringify(openai.lastContent);
+  assert(contentJson.includes("make this button bigger"), "supplied transcript segment present");
+  // The marked DEIXIS frame's hint rides as its on-screen text block.
+  assert(contentJson.includes("DEIXIS REFERENCE 0"), "marked anchor frame interleaved");
+  // Exactly one credit charge for the recording (call 1 charged nothing).
+  const json = await res.json();
+  assert(typeof json.credits_charged === "number" && json.credits_charged >= 1);
+  assertEquals(store.log.length, 1, "exactly one billable generation logged");
+  assertEquals(store.log[0].success, true);
+});
+
+Deno.test("dev call 2: no audio is required (the transcript replaces it)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  // devGenerateBody carries NO `audio` key at all.
+  const res = await handleGenerate(makeReq(await mintToken(), devGenerateBody()), deps(store, openai));
+  assertEquals(res.status, 200, "missing audio is fine on the dev call-2 path");
+});
+
+Deno.test("dev call 2: returns the structured anchors[] parsed from the zerro_anchors block", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  // The model returns the agent_prompt AND a trailing zerro_anchors block.
+  openai.chatContent = [
+    "Making the button bigger — prompt below.",
+    "",
+    "<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"Enlarge button\">>>",
+    "Goal: enlarge the Get started button.",
+    "<<<END_ZERRO_ARTIFACT>>>",
+    "",
+    "```zerro_anchors",
+    '[{"ref":0,"label":"Get started","type":"button","region":"hero","current_state":"14px","confidence":0.9,"alt_candidates":["Get Started"]}]',
+    "```",
+  ].join("\n");
+
+  const res = await handleGenerate(makeReq(await mintToken(), devGenerateBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  // The full prompt (incl. the anchors block) still rides as `prompt` — the
+  // client's ArtifactParser extracts the artifact, exactly as BYOK does.
+  assert(typeof json.prompt === "string" && json.prompt.includes("ZERRO_ARTIFACT"));
+  // The server ALSO returns the structured anchors verbatim for the M6 gate.
+  assert(Array.isArray(json.anchors), "anchors[] present on a dev response");
+  assertEquals(json.anchors.length, 1);
+  assertEquals(json.anchors[0].ref, 0);
+  assertEquals(json.anchors[0].label, "Get started");
+  assertEquals(json.anchors[0].type, "button");
+});
+
+Deno.test("normal generation never carries an anchors field (byte-identical normal response)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals("anchors" in json, false, "no anchors key on the normal path");
+});
+
+Deno.test("dev call 2 + a model with no zerro_anchors block → anchors:[] (defensive, never crashes)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.chatContent = "Just chat, no artifact, no anchors block.";
+  const res = await handleGenerate(makeReq(await mintToken(), devGenerateBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.anchors, []);
+});
+
+Deno.test("dev call 2: an idempotent replay re-derives anchors and charges 0 (one charge across the pair)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.chatContent = [
+    "<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"X\">>>",
+    "Goal: x.",
+    "<<<END_ZERRO_ARTIFACT>>>",
+    "```zerro_anchors",
+    '[{"ref":0,"label":"Get started","confidence":0.8}]',
+    "```",
+  ].join("\n");
+  const KEY = "rec-dev-replay";
+
+  const first = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  const firstJson = await first.json();
+  const firstCharge = firstJson.credits_charged;
+  assert(firstCharge >= 1);
+
+  // Retry with the SAME key → cached replay: no second chat, no second charge,
+  // and the anchors are re-derived from the cached prompt.
+  const retry = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  const retryJson = await retry.json();
+  assertEquals(openai.chatCalls, 1, "replay does not re-run the chat model");
+  assertEquals(retryJson.credits_charged, firstCharge, "replay reports the original charge");
+  assert(Array.isArray(retryJson.anchors) && retryJson.anchors.length === 1, "replay re-derives anchors");
+  // The grant/sub was charged exactly once across the pair.
+  assertEquals(store.log.length, 1);
+});
+
+Deno.test("dev call 2: a forged over-length transcript duration is rejected (413, mirrors the audio fuse)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(
+      await mintToken(),
+      devGenerateBody({
+        transcript: { segments: [{ start: 0, end: 1, text: "x" }], duration_seconds: 99999 },
+      }),
+    ),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 413);
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.used.get("sub-1") ?? 0, 0);
+});
+
+Deno.test("dev call 2: a malformed transcript is rejected (400, no STT, no chat, no charge)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), devGenerateBody({ transcript: { segments: "not-an-array" } })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 400);
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.used.get("sub-1") ?? 0, 0);
 });

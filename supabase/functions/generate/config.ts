@@ -93,6 +93,18 @@ export const MAX_OCR_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_OCR_TEXT_CHARS", 
 export const MAX_CLICKS = optionalEnvInt("GENERATE_MAX_CLICKS", 200);
 export const MAX_CLICK_LABEL_CHARS = optionalEnvInt("GENERATE_MAX_CLICK_LABEL_CHARS", 200);
 
+// Phase 2 (Dev Mode call 2) — caps on the CLIENT-SUPPLIED transcript (the
+// `mode:"dev"` 2-call flow, where the client transcribed via the free call 1 and
+// resends the transcript so the server skips re-STT). A real recording's
+// transcript is already bounded by the MAX_AUDIO_SECONDS audio fuse on call 1;
+// these only stop a FORGED call-2 body from bloating the prompt the server's key
+// pays for. Excess segments are DROPPED (not a reject — a real recording can't
+// hit it); each segment's text is length-capped. The credit ESTIMATE gate is the
+// real money backstop: a forged huge transcript inflates the estimate and blocks
+// ITSELF (out_of_credits) before any chat call.
+export const MAX_TRANSCRIPT_SEGMENTS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_SEGMENTS", 2000);
+export const MAX_TRANSCRIPT_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_TEXT_CHARS", 8 * 1024);
+
 // ---- Concurrency cap (=1 in flight) — backs the credit-ordering guard -------
 // Slot stale-reclaim window. MUST exceed the worst-case OpenAI round-trip so a
 // slow-but-live request is never reclaimed out from under itself; small enough

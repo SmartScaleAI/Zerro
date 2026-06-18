@@ -1928,37 +1928,52 @@ final class AppState {
             defer { self.stopThinkingRotation() }
             do {
                 // One server round-trip covers upload → STT → generation; the
-                // rotating "thinking" sayings stand in for the single stage.
+                // rotating "thinking" sayings stand in for the single stage. (A
+                // Dev Mode recording is a TWO-call flow — see
+                // `runManagedDevGeneration` — but the same rotation spans both.)
                 self.startThinkingRotation()
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
-                let managed = try await proxy.generate(
-                    audioURL: audioURL,
-                    frames: processed.frames,
-                    durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
-                    clicks: processed.clicks,
-                    // Phase 6: tell the server whether to bother with Whisper. On
-                    // false it short-circuits STT (empty segments) — no transcript
-                    // round-trip — and composes from frames/OCR/clicks alone.
-                    hasSpeech: processed.hasSpeech,
-                    // Multi-model 6B: the toolbar's per-recording pick when
-                    // the recording came through the overlay, else the user's
-                    // persisted picker selection (registry-validated in
-                    // PreferencesStore). Selects the provider adapter SERVER-side
-                    // (charging is metered on real cost); never steers the prompt.
-                    model: self.recordingModelID
-                        ?? self.preferences?.selectedModelID
-                        ?? ModelRegistry.defaultModelID,
-                    // Phase 2 (M5/M7): select the server's dev prompt for a Dev
-                    // Mode recording — same gap fix as the BYOK path (the managed
-                    // generation otherwise composed the normal prompt for dev
-                    // recordings). nil for a normal recording (byte-identical body).
-                    mode: self.generationPromptMode == .dev ? "dev" : nil,
-                    tokenProvider: tokenProvider,
-                    // M1: the recording's stable key — reused across every retry
-                    // (here and `retryFailedPrompt`) so a charged-but-dropped
-                    // response is replayed, not re-billed.
-                    idempotencyKey: processed.idempotencyKey
-                )
+                let managed: ManagedGenerationResult
+                if self.recordingIsDevMode {
+                    // Phase 2 — the managed/trial hover-deixis 2-call flow:
+                    // devTranscribe (free) → shared resolveDevAnchors → enriched
+                    // generate. Populates `devResolvedAnchors` along the way.
+                    managed = try await self.runManagedDevGeneration(
+                        processed: processed,
+                        proxy: proxy,
+                        tokenProvider: tokenProvider,
+                        audioURL: audioURL,
+                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil
+                    )
+                } else {
+                    managed = try await proxy.generate(
+                        audioURL: audioURL,
+                        frames: processed.frames,
+                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
+                        clicks: processed.clicks,
+                        // Phase 6: tell the server whether to bother with Whisper.
+                        // On false it short-circuits STT (empty segments) — no
+                        // transcript round-trip — and composes from
+                        // frames/OCR/clicks alone.
+                        hasSpeech: processed.hasSpeech,
+                        // Multi-model 6B: the toolbar's per-recording pick when
+                        // the recording came through the overlay, else the user's
+                        // persisted picker selection (registry-validated in
+                        // PreferencesStore). Selects the provider adapter
+                        // SERVER-side (charging is metered on real cost); never
+                        // steers the prompt. (Dev mode routes through
+                        // `runManagedDevGeneration` above, so this is the normal
+                        // path — no `mode`, byte-identical body.)
+                        model: self.recordingModelID
+                            ?? self.preferences?.selectedModelID
+                            ?? ModelRegistry.defaultModelID,
+                        tokenProvider: tokenProvider,
+                        // M1: the recording's stable key — reused across every
+                        // retry (here and `retryFailedPrompt`) so a
+                        // charged-but-dropped response is replayed, not re-billed.
+                        idempotencyKey: processed.idempotencyKey
+                    )
+                }
                 let result = managed.result
                 Log.promptGen.info(
                     "\(label, privacy: .public) OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
@@ -1966,6 +1981,16 @@ final class AppState {
 
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
+                // Phase 2 (Dev Mode): the model's structured anchors for the M6
+                // confirm gate. Prefer the server-parsed `anchors[]`; fall back to
+                // parsing the raw prompt's `zerro_anchors` block (older server /
+                // deploy skew) — the SAME parse BYOK runs. `devResolvedAnchors`
+                // (the client half) was set inside `runManagedDevGeneration`.
+                if self.recordingIsDevMode {
+                    self.devModelAnchors = managed.modelAnchors.isEmpty
+                        ? DevAnchorParser.parse(result.prompt)
+                        : managed.modelAnchors
+                }
                 // Multi-model 6B: the exact server spend for the result pill's
                 // "−N credits · M left" line (both fields or no toast — a
                 // pre-D2 backend omits credits_charged).
@@ -2044,6 +2069,109 @@ final class AppState {
                 }
             }
         }
+    }
+
+    /// Phase 2 — the Managed/trial Dev Mode hover-deixis 2-CALL flow (handoff
+    /// Part 3). Mirrors BYOK's `runLocalPromptGeneration` dev path, differing ONLY
+    /// in where the transcript comes from (call 1, free server STT) and where
+    /// generation runs (call 2, the `/generate` edge function). The client-side
+    /// resolution (`resolveDevAnchors`), the confirm gate, and the dispatch tail
+    /// are all SHARED. Returns the call-2 result; the caller lands it on the same
+    /// `.done`/dispatch tail the single-call managed path uses.
+    ///
+    /// 1. CALL 1 `devTranscribe` → word transcript (free; no slot/credit). Skipped
+    ///    when the recording has no speech (empty transcript → the resolver yields
+    ///    no anchors and the run degrades to click/dwell), mirroring BYOK's local
+    ///    Whisper skip.
+    /// 2. Domain-dictionary snap (Versel→Vercel) + the SHARED `resolveDevAnchors`
+    ///    → client anchors + marked `DEIXIS REFERENCE` frames. Sets
+    ///    `devResolvedAnchors` (the client half of the M6 gate).
+    /// 3. CALL 2 `generateDev` with the PRE-SUPPLIED transcript + marked frames
+    ///    (NO audio re-upload) → `agent_prompt` + structured model anchors. The
+    ///    credit is consumed exactly once here.
+    private func runManagedDevGeneration(
+        processed: ProcessedRecording,
+        proxy: ManagedProxyClient,
+        tokenProvider: ProxyTokenProviding?,
+        audioURL: URL,
+        durationSeconds: Double?
+    ) async throws -> ManagedGenerationResult {
+        // Reset the dev anchor state for this run (mirrors the BYOK dev block);
+        // `devModelAnchors` is populated by the caller from the call-2 result.
+        self.devResolvedAnchors = []
+        self.devModelAnchors = []
+
+        let model = self.recordingModelID
+            ?? self.preferences?.selectedModelID
+            ?? ModelRegistry.defaultModelID
+
+        // CALL 1 — free word-level transcription (server STT). No speech → skip
+        // the round-trip entirely and resolve on an empty transcript, exactly as
+        // BYOK skips its local Whisper pass.
+        var transcript: Transcript
+        if processed.hasSpeech {
+            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe started")
+            transcript = try await proxy.devTranscribe(
+                audioURL: audioURL,
+                durationSeconds: durationSeconds,
+                hasSpeech: true,
+                tokenProvider: tokenProvider,
+                // A distinct key from call 2: call 1 writes no idempotency entry
+                // server-side, but a separate key keeps the two calls unambiguous.
+                idempotencyKey: processed.idempotencyKey + ":dev-transcribe"
+            )
+        } else {
+            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe skipped (no speech)")
+            transcript = Transcript(segments: [], fullText: "", words: [])
+        }
+
+        // Domain-dictionary snap before resolve + generation, exactly as BYOK
+        // (§11) — improves both anchor resolution and the dev prompt. Best-effort
+        // + Dev-Mode-only (an empty/seedless dictionary is a no-op).
+        if let projectURL = self.recordingProjectURL, !transcript.fullText.isEmpty {
+            let dictionary = await Task.detached { DevDomainDictionary.seed(projectURL: projectURL) }.value
+            transcript = dictionary.corrected(transcript)
+        }
+
+        // SHARED client-side resolution (Part 1) — byte-identical to BYOK.
+        let (resolved, anchorFrames) = await Self.resolveDevAnchors(
+            words: transcript.words,
+            cursorTrack: processed.cursorTrack,
+            clicks: processed.clicks,
+            sourceVideoURL: processed.sourceVideoURL,
+            baseTimestamp: processed.duration,
+            workingDirectory: processed.workingDirectory
+        )
+        self.devResolvedAnchors = resolved
+
+        // Don't fire the BILLABLE call 2 if the recording was cancelled/superseded
+        // during call 1 or resolution. The catch in `runProxyGeneration` returns
+        // early when `state != .processing`, so a cancellation surfaces no failure
+        // card and — crucially — no charge.
+        guard self.state == .processing else { throw CancellationError() }
+
+        // CALL 2 — enriched generation. The pre-supplied transcript skips server
+        // STT (no double STT round-trip / charge); the marked DEIXIS frames + OCR
+        // ride as trailing frames; NO audio (it went up in call 1). Bill against
+        // call 1's SERVER-measured duration (the same one the normal managed path
+        // meters on), falling back to the local container duration when call 1 was
+        // skipped (no speech) or an older server omitted it.
+        Log.breadcrumb(category: .pipelineStage, message: "managed dev generation started")
+        let transcriptUpload = ManagedProxyClient.DevTranscriptUpload(
+            segments: transcript.segments.map {
+                ManagedProxyClient.DevTranscriptUpload.Segment(start: $0.start, end: $0.end, text: $0.text)
+            },
+            durationSeconds: transcript.durationSeconds ?? durationSeconds
+        )
+        return try await proxy.generateDev(
+            frames: processed.frames + anchorFrames,
+            transcript: transcriptUpload,
+            clicks: processed.clicks,
+            hasSpeech: processed.hasSpeech,
+            model: model,
+            tokenProvider: tokenProvider,
+            idempotencyKey: processed.idempotencyKey
+        )
     }
 
     /// Maps a trial `/generate` failure to the user-facing taxonomy and performs
@@ -2211,19 +2339,21 @@ final class AppState {
                 self.devModelAnchors = []
                 var anchorFrames: [ExtractedFrame] = []
                 if self.recordingIsDevMode {
-                    let candidates = DeixisResolver.resolve(
+                    // The client-side resolution is SHARED with the Managed/trial
+                    // path (`runProxyGeneration`) so the resolver/pipeline/marked-
+                    // frame logic lives in exactly one place. Only the transcript
+                    // source (local Whisper here; call 1 there) and where
+                    // generation runs differ.
+                    let (resolved, frames) = await Self.resolveDevAnchors(
                         words: transcript.words,
                         cursorTrack: processed.cursorTrack,
-                        clickTimes: processed.clicks.map(\.seconds)
-                    )
-                    let resolved = await DevAnchorPipeline.build(
-                        candidates: candidates,
-                        sourceVideoURL: processed.sourceVideoURL
+                        clicks: processed.clicks,
+                        sourceVideoURL: processed.sourceVideoURL,
+                        baseTimestamp: processed.duration,
+                        workingDirectory: processed.workingDirectory
                     )
                     self.devResolvedAnchors = resolved
-                    anchorFrames = Self.writeAnchorFrames(
-                        resolved, baseTimestamp: processed.duration, into: processed.workingDirectory
-                    )
+                    anchorFrames = frames
                 }
 
                 let timeline = Interleaver.merge(
@@ -2691,6 +2821,47 @@ final class AppState {
             "needs_confirm": devNeedsConfirm,
             "model_anchors": devModelAnchors.count,
         ])
+    }
+
+    /// Phase 2 — the SHARED client-side hover-deixis resolution, reused by BOTH
+    /// generation paths (BYOK `runLocalPromptGeneration` + Managed/trial
+    /// `runProxyGeneration`) so the resolver / pipeline / marked-frame logic lives
+    /// in exactly ONE place (no duplication). Given the WORD transcript (local
+    /// Whisper for BYOK; the free server call 1 for Managed) plus the recording's
+    /// cursor track + clicks + retained source video, it runs
+    /// `DeixisResolver.resolve` → `DevAnchorPipeline.build` and writes the cropped,
+    /// crosshair-MARKED native-res anchor frames.
+    ///
+    /// Returns the client-resolved anchors (each carrying the referring
+    /// expression, nearby OCR strings, and the M6 client confidence) and the
+    /// marked frames to ship to generation as trailing `DEIXIS REFERENCE` frames.
+    /// The ONLY per-path differences are where the transcript comes from and where
+    /// generation runs — never this.
+    ///
+    /// `nonisolated` + pure value inputs so it runs off the main actor (native
+    /// frame extraction). Empty `words` (no speech / no word timing) → no
+    /// candidates → the run degrades to click/dwell anchoring.
+    nonisolated static func resolveDevAnchors(
+        words: [WordTiming],
+        cursorTrack: [CursorSample],
+        clicks: [ResolvedClick],
+        sourceVideoURL: URL?,
+        baseTimestamp: CMTime,
+        workingDirectory: URL
+    ) async -> (resolved: [ResolvedDeixisAnchor], anchorFrames: [ExtractedFrame]) {
+        let candidates = DeixisResolver.resolve(
+            words: words,
+            cursorTrack: cursorTrack,
+            clickTimes: clicks.map(\.seconds)
+        )
+        let resolved = await DevAnchorPipeline.build(
+            candidates: candidates,
+            sourceVideoURL: sourceVideoURL
+        )
+        let anchorFrames = writeAnchorFrames(
+            resolved, baseTimestamp: baseTimestamp, into: workingDirectory
+        )
+        return (resolved, anchorFrames)
     }
 
     /// Write the cropped native-res MARKED anchor crops to the working dir as

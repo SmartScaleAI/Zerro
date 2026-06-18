@@ -114,8 +114,9 @@ struct DevDomainDictionary: Sendable {
 
     /// Correct a transcript in place: snaps near-miss tokens in `fullText`, every
     /// segment's text, AND each word timing back to the canonical term. Word
-    /// start/end are untouched (only the spelling changes). A no-op for an empty
-    /// dictionary.
+    /// start/end are untouched (only the spelling changes). The measured
+    /// `durationSeconds` is preserved (it is metadata, not text). A no-op for an
+    /// empty dictionary.
     func corrected(_ transcript: Transcript) -> Transcript {
         guard !isEmpty else { return transcript }
         return Transcript(
@@ -125,7 +126,8 @@ struct DevDomainDictionary: Sendable {
             fullText: corrected(transcript.fullText),
             words: transcript.words.map {
                 WordTiming(word: correctedToken($0.word), start: $0.start, end: $0.end)
-            }
+            },
+            durationSeconds: transcript.durationSeconds
         )
     }
 

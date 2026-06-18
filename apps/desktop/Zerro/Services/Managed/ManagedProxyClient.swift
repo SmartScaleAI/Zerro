@@ -94,6 +94,24 @@ struct ManagedGenerationResult {
     /// `credits_charged` from the server (multi-model D2) — the exact spend
     /// for the "−N credits" toast. `nil` from a pre-D2 backend.
     let creditsCharged: Int?
+    /// Phase 2 (Dev Mode call 2) — the structured per-reference anchors the
+    /// server parsed out of the model's `zerro_anchors` block (the M7 contract,
+    /// the SAME shape BYOK's local `DevAnchorParser.parse` produces). Empty on
+    /// the normal path (the server omits the `anchors` field) and on a server too
+    /// old to return it — the dev caller then falls back to parsing the prompt.
+    let modelAnchors: [DevAnchor]
+
+    init(
+        result: PromptGenerationResult,
+        creditsRemaining: Int?,
+        creditsCharged: Int?,
+        modelAnchors: [DevAnchor] = []
+    ) {
+        self.result = result
+        self.creditsRemaining = creditsRemaining
+        self.creditsCharged = creditsCharged
+        self.modelAnchors = modelAnchors
+    }
 }
 
 // MARK: - ManagedProxyClient
@@ -188,6 +206,109 @@ final class ManagedProxyClient {
             if status == 401 { throw ManagedGenerationError.authFailed }
         }
 
+        return try Self.parse(data: data, status: status)
+    }
+
+    // MARK: - Dev Mode 2-call flow (Phase 2 — managed/trial hover-deixis)
+
+    /// A flattened, Sendable transcript the dev call-2 (`generateDev`) ships in
+    /// place of the audio: the segment-level speech the server interleaves, plus
+    /// the measured duration (for the STT-cost meter + the seconds gate). Built
+    /// from the call-1 `Transcript` on the main actor, then encoded off it.
+    struct DevTranscriptUpload: Sendable {
+        struct Segment: Sendable {
+            let start: Double
+            let end: Double
+            let text: String
+        }
+        let segments: [Segment]
+        /// The recording's duration in seconds (call 1's measured length), so the
+        /// server can meter STT cost + run the true-seconds gate WITHOUT the audio.
+        let durationSeconds: Double?
+    }
+
+    /// Dev Mode CALL 1 (Phase 2 §7) — the FREE word-level transcription. POSTs
+    /// `{mode:"dev-transcribe", audio, has_speech}` and parses the returned
+    /// word-level transcript. The server charges nothing, takes no concurrency
+    /// slot, and writes no idempotency entry for this call (it is auth-gated +
+    /// rate-limited only). The client resolves deixis anchors against this exact
+    /// transcript before the billable call 2. Token handling mirrors `generate`:
+    /// one transparent refresh on 401, then `authFailed`.
+    func devTranscribe(
+        audioURL: URL,
+        durationSeconds: Double?,
+        hasSpeech: Bool = true,
+        tokenProvider: ProxyTokenProviding? = nil,
+        idempotencyKey: String = UUID().uuidString
+    ) async throws -> Transcript {
+        let provider: ProxyTokenProviding = tokenProvider ?? sessionTokens
+        // Read + base64 the audio off the main actor (multi-MB), exactly like
+        // `generate`. The same bytes are reused on the post-refresh retry.
+        let body = try await Task.detached(priority: .userInitiated) {
+            try Self.encodeTranscribeBody(
+                audioURL: audioURL,
+                durationSeconds: durationSeconds,
+                hasSpeech: hasSpeech
+            )
+        }.value
+
+        let token = try await token(from: provider)
+        var (data, status) = try await post(body: body, token: token, idempotencyKey: idempotencyKey)
+        if status == 401 {
+            Log.billing.notice("dev-transcribe 401 — refreshing token and retrying once")
+            let refreshed: String
+            do {
+                refreshed = try await provider.refreshToken()
+            } catch {
+                throw ManagedGenerationError.authFailed
+            }
+            (data, status) = try await post(body: body, token: refreshed, idempotencyKey: idempotencyKey)
+            if status == 401 { throw ManagedGenerationError.authFailed }
+        }
+        return try Self.parseTranscribe(data: data, status: status)
+    }
+
+    /// Dev Mode CALL 2 (Phase 2 §7) — the enriched, billable generation. Sends
+    /// `{mode:"dev"}` with the PRE-SUPPLIED transcript (so the server skips re-STT
+    /// — no double STT round-trip / charge), the recording frames PLUS the marked
+    /// `DEIXIS REFERENCE` anchor crops (the caller concatenates them), and the
+    /// clicks — but NO audio (it rode in call 1). Returns the `agent_prompt`
+    /// (parsed exactly like `generate`) plus the structured `modelAnchors`. Token
+    /// + idempotency handling mirror `generate` (the credit is consumed once here).
+    func generateDev(
+        frames: [ExtractedFrame],
+        transcript: DevTranscriptUpload,
+        clicks: [ResolvedClick] = [],
+        hasSpeech: Bool = true,
+        model: String = ModelRegistry.defaultModelID,
+        tokenProvider: ProxyTokenProviding? = nil,
+        idempotencyKey: String = UUID().uuidString
+    ) async throws -> ManagedGenerationResult {
+        let provider: ProxyTokenProviding = tokenProvider ?? sessionTokens
+        let uploads = frames.map { FrameUpload(url: $0.url, timestamp: CMTimeGetSeconds($0.timestamp), ocrText: $0.ocrText) }
+        let body = try await Task.detached(priority: .userInitiated) {
+            try Self.encodeDevBody(
+                frames: uploads,
+                transcript: transcript,
+                clicks: clicks,
+                hasSpeech: hasSpeech,
+                model: model
+            )
+        }.value
+
+        let token = try await token(from: provider)
+        var (data, status) = try await post(body: body, token: token, idempotencyKey: idempotencyKey)
+        if status == 401 {
+            Log.billing.notice("dev generate 401 — refreshing token and retrying once")
+            let refreshed: String
+            do {
+                refreshed = try await provider.refreshToken()
+            } catch {
+                throw ManagedGenerationError.authFailed
+            }
+            (data, status) = try await post(body: body, token: refreshed, idempotencyKey: idempotencyKey)
+            if status == 401 { throw ManagedGenerationError.authFailed }
+        }
         return try Self.parse(data: data, status: status)
     }
 
@@ -430,6 +551,102 @@ final class ManagedProxyClient {
         }
     }
 
+    /// Builds the Dev Mode CALL 1 body: `{mode:"dev_transcribe", audio, has_speech}`.
+    /// Audio ONLY — no frames, no model — the server returns a word-level
+    /// transcript (free). `nonisolated` so it runs off the main actor (the audio
+    /// read + base64 is multi-MB).
+    nonisolated static func encodeTranscribeBody(
+        audioURL: URL,
+        durationSeconds: Double?,
+        hasSpeech: Bool
+    ) throws -> Data {
+        let audioData: Data
+        do {
+            audioData = try Data(contentsOf: audioURL)
+        } catch {
+            throw ManagedGenerationError.artifactUnreadable
+        }
+
+        var audio: [String: Any] = [
+            "mime": ManagedBackend.audioMime,
+            "filename": ManagedBackend.audioFilename,
+            "data": audioData.base64EncodedString(),
+        ]
+        if let durationSeconds, durationSeconds.isFinite, durationSeconds >= 0 {
+            audio["duration_seconds"] = durationSeconds
+        }
+
+        // The server keys on this EXACT string (`dev_transcribe`, underscore) to
+        // route to the free, slot-free word-level transcription path.
+        let payload: [String: Any] = [
+            "mode": "dev_transcribe",
+            "audio": audio,
+            "has_speech": hasSpeech,
+        ]
+        do {
+            return try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            throw ManagedGenerationError.inputRejected("encode_failed")
+        }
+    }
+
+    /// Builds the Dev Mode CALL 2 body: `{mode:"dev", model, frames, clicks,
+    /// has_speech, transcript}` — the enriched generation. NO `audio` (it rode in
+    /// call 1); the `transcript` (segments + duration) makes the server skip
+    /// re-STT, and the `frames` array carries the recording frames PLUS the marked
+    /// `DEIXIS REFERENCE` anchor crops (their hint rides as each frame's
+    /// `ocr_text`). `nonisolated` so the frame reads + base64 run off the main actor.
+    nonisolated static func encodeDevBody(
+        frames: [FrameUpload],
+        transcript: DevTranscriptUpload,
+        clicks: [ResolvedClick] = [],
+        hasSpeech: Bool = true,
+        model: String = ModelRegistry.defaultModelID
+    ) throws -> Data {
+        var frameObjects: [[String: Any]] = []
+        frameObjects.reserveCapacity(frames.count)
+        for frame in frames {
+            let frameData: Data
+            do {
+                frameData = try Data(contentsOf: frame.url)
+            } catch {
+                throw ManagedGenerationError.artifactUnreadable
+            }
+            frameObjects.append([
+                "timestamp": frame.timestamp,
+                "mime": ManagedBackend.frameMime,
+                "data": frameData.base64EncodedString(),
+                "ocr_text": frame.ocrText ?? "",
+            ])
+        }
+
+        let clickObjects: [[String: Any]] = clicks.map {
+            ["timestamp": $0.seconds, "label": $0.label]
+        }
+
+        let segmentObjects: [[String: Any]] = transcript.segments.map {
+            ["start": $0.start, "end": $0.end, "text": $0.text]
+        }
+        var transcriptPayload: [String: Any] = ["segments": segmentObjects]
+        if let d = transcript.durationSeconds, d.isFinite, d >= 0 {
+            transcriptPayload["duration_seconds"] = d
+        }
+
+        let payload: [String: Any] = [
+            "model": model,
+            "mode": "dev",
+            "frames": frameObjects,
+            "clicks": clickObjects,
+            "has_speech": hasSpeech,
+            "transcript": transcriptPayload,
+        ]
+        do {
+            return try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            throw ManagedGenerationError.inputRejected("encode_failed")
+        }
+    }
+
     // MARK: - Parse
 
     /// Maps a `(data, status)` from `/generate` to a result or a typed error.
@@ -452,10 +669,21 @@ final class ManagedProxyClient {
                 outputTokens: decoded.usage?.outputTokens ?? 0,
                 model: decoded.usage?.model ?? "managed"
             )
+            // Phase 2 (Dev Mode call 2): the server returns the structured
+            // per-reference anchors it parsed from the model's `zerro_anchors`
+            // block. Absent on the normal path (no `anchors` key) → []. Parsed
+            // through the SAME lenient `DevAnchorParser` the BYOK path uses, so an
+            // unknown/malformed shape degrades to [] rather than crashing.
+            var modelAnchors: [DevAnchor] = []
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let anchorsJSON = obj["anchors"] {
+                modelAnchors = DevAnchorParser.parseJSON(anchorsJSON)
+            }
             return ManagedGenerationResult(
                 result: PromptGenerationResult(prompt: decoded.prompt, usage: usage),
                 creditsRemaining: decoded.creditsRemaining,
-                creditsCharged: decoded.creditsCharged
+                creditsCharged: decoded.creditsCharged,
+                modelAnchors: modelAnchors
             )
         case 402:
             throw ManagedGenerationError.outOfCredits
@@ -474,6 +702,36 @@ final class ManagedProxyClient {
             throw ManagedGenerationError.inputRejected(reason)
         case 500...599:
             throw ManagedGenerationError.providerUnavailable
+        default:
+            throw ManagedGenerationError.providerUnavailable
+        }
+    }
+
+    /// Maps a `(data, status)` from the Dev Mode CALL 1 (`dev_transcribe`) to a
+    /// `Transcript` or a typed error. Same status taxonomy as `parse` minus the
+    /// usage/credit fields — call 1 charges nothing. The 402 case is purely
+    /// defensive (the server never charges this path).
+    static func parseTranscribe(data: Data, status: Int) throws -> Transcript {
+        switch status {
+        case 200...299:
+            let decoded: TranscribeResponseDTO
+            do {
+                decoded = try JSONDecoder().decode(TranscribeResponseDTO.self, from: data)
+            } catch {
+                throw ManagedGenerationError.malformedResponse
+            }
+            return decoded.transcript.toTranscript()
+        case 402:
+            throw ManagedGenerationError.outOfCredits // defensive — call 1 never charges
+        case 403, 404:
+            throw ManagedGenerationError.notEntitled
+        case 401:
+            throw ManagedGenerationError.authFailed
+        case 429:
+            throw ManagedGenerationError.rateLimited
+        case 400, 413, 415:
+            let reason = String(data: data, encoding: .utf8) ?? "input_rejected"
+            throw ManagedGenerationError.inputRejected(reason)
         default:
             throw ManagedGenerationError.providerUnavailable
         }

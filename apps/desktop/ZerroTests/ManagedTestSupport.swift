@@ -115,6 +115,27 @@ enum ManagedFixtures {
         """
     }
 
+    /// A Dev Mode CALL 1 (`dev_transcribe`) success body — a word-level transcript
+    /// and nothing else (the call is free).
+    static func transcribeJSON(durationSeconds: Double = 12) -> String {
+        """
+        {"transcript":{"segments":[{"start":0,"end":2,"text":"make this bigger"}],"words":[{"word":"make","start":0,"end":0.4},{"word":"this","start":0.4,"end":0.7},{"word":"bigger","start":0.7,"end":1.1}],"durationSeconds":\(durationSeconds)}}
+        """
+    }
+
+    /// A Dev Mode CALL 2 (`mode:"dev"`) success body — the agent_prompt plus the
+    /// structured `anchors[]` the server parsed from the model's `zerro_anchors`
+    /// block (the M7 contract).
+    static func generateDevJSON(
+        prompt: String = "Goal: enlarge the button.",
+        creditsRemaining: Int = 99,
+        creditsCharged: Int = 4
+    ) -> String {
+        """
+        {"prompt":"\(prompt)","usage":{"input_tokens":1200,"output_tokens":300,"model":"gpt-4o"},"credits_remaining":\(creditsRemaining),"credits_charged":\(creditsCharged),"anchors":[{"ref":0,"label":"Get started","type":"button","region":"hero","current_state":"14px","confidence":0.9,"alt_candidates":["Get Started"]}]}
+        """
+    }
+
     /// Writes `bytes` to a unique temp file and returns its URL (for the proxy's
     /// audio/frame reads). Caller is responsible for cleanup if it cares.
     static func tempFile(_ bytes: [UInt8] = [0x00, 0x01, 0x02, 0x03]) -> URL {

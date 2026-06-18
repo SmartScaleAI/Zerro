@@ -50,6 +50,7 @@
 
 import { json } from "../_shared/http.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
+import { extractAnchors } from "./anchors.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
 import { creditCostForModel, estimatedCostUsd, estimateGenerationCredits, sttCostUsd } from "./cost.ts";
@@ -171,7 +172,7 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech, mode } = parsed.value;
+  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech, mode, suppliedTranscript } = parsed.value;
 
   // 5.5 Resolve the validated model → provider + fixed credit price (Phase 4).
   //     validateBody already gated on ALLOWED_MODELS, so a miss here is a
@@ -213,6 +214,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
             // D2: the ORIGINAL charge, replayed — the retry itself charged 0,
             // but the app's toast must reflect what this recording cost.
             credits_charged: cached.creditsCharged,
+            // Dev Mode: re-derive the structured anchors from the cached prompt
+            // (no new cache column) so a replay returns the same `anchors[]`.
+            ...devAnchorsBody(mode, cached.prompt),
           },
           200,
         );
@@ -257,18 +261,30 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     }
 
     // 9. Transcribe with the server-held key. A failure here charges NOTHING.
+    //    Phase 2 Dev Mode CALL 2: when the client supplied a transcript (it
+    //    already transcribed via the free call 1 and resolved deixis anchors
+    //    against it), SKIP re-STT entirely and generate against that exact
+    //    transcript — no double STT round-trip / charge, and the prompt lines up
+    //    with the resolved anchors. (No audio was uploaded on call 2; the
+    //    duration rode in the transcript for the STT-cost meter + seconds gate.)
     //    Phase 6 no-speech gate: when the client signalled `has_speech:false`,
     //    SKIP the Whisper call entirely — no STT round-trip, no STT cost — and
     //    compose from frames + OCR + clicks on empty segments. This is the ONLY
     //    behavioural change of the gate on the server; the credit gate, the
     //    concurrency slot, and idempotency below are untouched. The true-seconds
-    //    gate (step 10) still runs against the client-declared duration.
+    //    gate (step 10) still runs against the (client-declared / supplied) duration.
     let durationSeconds: number;
     let segments: SpeechSegment[];
-    if (!hasSpeech) {
+    if (suppliedTranscript) {
+      segments = suppliedTranscript.segments;
+      durationSeconds = suppliedTranscript.durationSeconds;
+    } else if (!hasSpeech) {
       segments = [];
       durationSeconds = declaredAudioSeconds ?? 0;
     } else {
+      // Audio is guaranteed present here: validateBody only allows a null audio
+      // when a supplied transcript exists, and that case is handled above.
+      if (!audio) return json({ error: "missing_audio" }, 400);
       try {
         const tr = await deps.stt.transcribe(audio);
         segments = tr.segments;
@@ -412,7 +428,13 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         }, IDEMPOTENCY_TTL_SECONDS);
       }
       return json(
-        { prompt: chat.content, usage: usageBody(chat), credits_remaining: 0, credits_charged: 0 },
+        {
+          prompt: chat.content,
+          usage: usageBody(chat),
+          credits_remaining: 0,
+          credits_charged: 0,
+          ...devAnchorsBody(mode, chat.content),
+        },
         200,
       );
     }
@@ -451,7 +473,13 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     //     spend (D2) — the real `ceil(est_cost_usd / USD_PER_CREDIT)`, not any
     //     fixed/fallback price, so the app must read it rather than derive it.
     return json(
-      { prompt: chat.content, usage: usageBody(chat), credits_remaining: afterConsume, credits_charged: credits },
+      {
+        prompt: chat.content,
+        usage: usageBody(chat),
+        credits_remaining: afterConsume,
+        credits_charged: credits,
+        ...devAnchorsBody(mode, chat.content),
+      },
       200,
     );
   } finally {
@@ -506,6 +534,17 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
 
 function usageBody(chat: { inputTokens: number; outputTokens: number; model: string }) {
   return { input_tokens: chat.inputTokens, output_tokens: chat.outputTokens, model: chat.model };
+}
+
+/** Phase 2 (Dev Mode CALL 2) — the structured per-reference `anchors[]` the
+ *  client's M6 confirm gate consumes, parsed out of the model's `zerro_anchors`
+ *  block (the M7 contract). Returned ONLY for `mode:"dev"`; spread into every dev
+ *  response (fresh, idempotent replay, and the uncharged-race path) so a replay
+ *  carries the same field. `{}` on the normal path → byte-identical normal body.
+ *  Derived from the returned prompt content, so the idempotency cache needs no
+ *  new column. */
+function devAnchorsBody(mode: "dev" | undefined, content: string): Record<string, unknown> {
+  return mode === "dev" ? { anchors: extractAnchors(content) } : {};
 }
 
 // =============================================================================

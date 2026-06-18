@@ -352,6 +352,47 @@ struct GenerateResponseDTO: Decodable {
     }
 }
 
+/// Dev Mode CALL 1 (`dev_transcribe`) success body: a word-level transcript and
+/// nothing else (the call is free — no usage, no credits). Shape:
+/// `{ "transcript": { "segments": [{start,end,text}], "words": [{word,start,end}],
+/// "durationSeconds": N } }`. Mapped to the app's `Transcript` so the deixis
+/// resolver + the dev call-2 payload consume it exactly like the BYOK local
+/// Whisper pass. `words` is always present on a success body (empty on the
+/// no-speech path) but decoded defensively as optional.
+struct TranscribeResponseDTO: Decodable {
+    let transcript: TranscriptDTO
+
+    struct TranscriptDTO: Decodable {
+        let segments: [SegmentDTO]
+        let words: [WordDTO]?
+        let durationSeconds: Double?
+
+        struct SegmentDTO: Decodable {
+            let start: Double
+            let end: Double
+            let text: String
+        }
+
+        struct WordDTO: Decodable {
+            let word: String
+            let start: Double
+            let end: Double
+        }
+
+        /// Map the wire DTO to the app's `Transcript`. `fullText` is the joined
+        /// segment text (the dev path uses it only for the domain-dictionary
+        /// emptiness check); `words` drive the deixis resolver; `durationSeconds`
+        /// is the server's measured length, carried so call 2 bills against it
+        /// (the same duration the normal managed path meters on).
+        func toTranscript() -> Transcript {
+            let segs = segments.map { TranscriptSegment(start: $0.start, end: $0.end, text: $0.text) }
+            let wordTimings = (words ?? []).map { WordTiming(word: $0.word, start: $0.start, end: $0.end) }
+            let fullText = segs.map(\.text).joined(separator: " ")
+            return Transcript(segments: segs, fullText: fullText, words: wordTimings, durationSeconds: durationSeconds)
+        }
+    }
+}
+
 /// `/trial-start` response body (Phase F). One shape covers both actions: a
 /// `request` returns `{ status }` ("code_sent" / "already_used"); a `verify`
 /// returns `{ token, expires_at, trial_credits_remaining, trial_credits_limit }`

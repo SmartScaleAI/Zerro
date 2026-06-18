@@ -64,10 +64,19 @@ struct Transcript: Sendable {
     /// pauses, §11) — the early-biased window absorbs the slop.
     let words: [WordTiming]
 
-    init(segments: [TranscriptSegment], fullText: String, words: [WordTiming] = []) {
+    /// Phase 2 (Dev Mode, managed 2-call flow) — the STT provider's MEASURED audio
+    /// duration in seconds, when known. Populated only on the managed Dev Mode
+    /// call 1 (`dev_transcribe`) so call 2's cost meter bills against the SAME
+    /// server-measured duration the normal managed path uses (rather than the
+    /// client's local container duration). `nil` on the BYOK local path (which
+    /// generates locally and never bills on this duration) and on a no-speech run.
+    let durationSeconds: Double?
+
+    init(segments: [TranscriptSegment], fullText: String, words: [WordTiming] = [], durationSeconds: Double? = nil) {
         self.segments = segments
         self.fullText = fullText
         self.words = words
+        self.durationSeconds = durationSeconds
     }
 }
 

@@ -282,6 +282,120 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
     }
 
+    // MARK: - Dev Mode 2-call flow (Phase 2 — managed/trial hover-deixis)
+
+    /// Call 1 (`dev_transcribe`) sends audio + has_speech ONLY (no frames, no
+    /// model) and parses the returned WORD-level transcript into a `Transcript`.
+    func testDevTranscribeSendsAudioOnlyAndParsesWordTranscript() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.transcribeJSON(durationSeconds: 12), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        let transcript = try await proxy.devTranscribe(
+            audioURL: ManagedFixtures.tempFile(),
+            durationSeconds: 12,
+            hasSpeech: true,
+            idempotencyKey: "REC-1:dev-transcribe"
+        )
+
+        // The word-level transcript flows back for the deixis resolver.
+        XCTAssertEqual(transcript.words.map(\.word), ["make", "this", "bigger"])
+        XCTAssertEqual(transcript.segments.count, 1)
+        XCTAssertEqual(transcript.segments.first?.text, "make this bigger")
+        // The server-MEASURED duration rides back so call 2 bills against it (the
+        // same duration the normal managed path meters on), not the local one.
+        XCTAssertEqual(transcript.durationSeconds, 12)
+
+        // The wire body is the dev-transcribe selector + audio + has_speech ONLY.
+        let req = gen.requests[0]
+        XCTAssertEqual(req.url, ManagedBackend.generateURL)
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1:dev-transcribe")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["mode", "audio", "has_speech"])
+        XCTAssertEqual(json["mode"] as? String, "dev_transcribe")
+        XCTAssertEqual(json["has_speech"] as? Bool, true)
+        XCTAssertNil(json["frames"], "call 1 sends no frames")
+    }
+
+    /// Call 2 (`mode:"dev"`) sends the pre-supplied transcript + frames but NO
+    /// audio (it rode in call 1), and parses the structured `anchors[]`.
+    func testGenerateDevSendsTranscriptNoAudioAndParsesAnchors() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateDevJSON(creditsRemaining: 90, creditsCharged: 5), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        let anchorFrame = ExtractedFrame(
+            url: ManagedFixtures.tempFile(),
+            timestamp: .zero,
+            index: 100_000,
+            ocrText: "DEIXIS REFERENCE 0: ... Nearby on-screen text: Get started"
+        )
+        let result = try await proxy.generateDev(
+            frames: frames() + [anchorFrame],
+            transcript: ManagedProxyClient.DevTranscriptUpload(
+                segments: [.init(start: 0, end: 2, text: "make this bigger")],
+                durationSeconds: 12
+            ),
+            clicks: [],
+            hasSpeech: true,
+            model: "claude-opus-4-7",
+            idempotencyKey: "REC-1"
+        )
+
+        // The agent_prompt + the structured model anchors parsed off the response.
+        XCTAssertEqual(result.creditsCharged, 5)
+        XCTAssertEqual(result.modelAnchors.count, 1)
+        XCTAssertEqual(result.modelAnchors.first?.label, "Get started")
+        XCTAssertEqual(result.modelAnchors.first?.kind, .button)
+        XCTAssertEqual(result.modelAnchors.first?.refIndex, 0)
+
+        // The body carries mode:"dev" + the transcript + frames — and NO audio.
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: try XCTUnwrap(gen.requests[0].httpBody)) as? [String: Any])
+        XCTAssertEqual(json["mode"] as? String, "dev")
+        XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
+        XCTAssertNil(json["audio"], "call 2 must NOT re-upload audio")
+        let transcript = try XCTUnwrap(json["transcript"] as? [String: Any])
+        let segs = try XCTUnwrap(transcript["segments"] as? [[String: Any]])
+        XCTAssertEqual(segs.first?["text"] as? String, "make this bigger")
+        XCTAssertEqual(transcript["duration_seconds"] as? Double, 12)
+        // Frames include the marked DEIXIS crop with its hint as ocr_text.
+        let frameArr = try XCTUnwrap(json["frames"] as? [[String: Any]])
+        XCTAssertEqual(frameArr.count, 2)
+        XCTAssertTrue((frameArr.last?["ocr_text"] as? String ?? "").contains("DEIXIS REFERENCE 0"))
+    }
+
+    /// A response without an `anchors` field (older server / deploy skew) parses
+    /// to empty model anchors — the AppState dev path then falls back to parsing
+    /// the prompt's `zerro_anchors` block.
+    func testGenerateDevWithoutServerAnchorsYieldsEmpty() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateJSON(prompt: "Goal: x.", creditsRemaining: 90, creditsCharged: 4), status: 200)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+
+        let result = try await proxy.generateDev(
+            frames: frames(),
+            transcript: ManagedProxyClient.DevTranscriptUpload(segments: [], durationSeconds: 8),
+            idempotencyKey: "REC-2"
+        )
+        XCTAssertEqual(result.result.prompt, "Goal: x.")
+        XCTAssertTrue(result.modelAnchors.isEmpty)
+    }
+
+    /// Call 1 maps the failure taxonomy the same way `generate` does.
+    func testDevTranscribeMapsRateLimited() async {
+        let (session, gen) = freshStubs(genStatus: 429, genBody: #"{"error":"rate_limited"}"#)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+        await assertThrows(.rateLimited) {
+            _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
+        }
+    }
+
     // MARK: - Convert (Phase 6 — the free "Write agent prompt" fallback)
 
     func testConvertPostsToConvertURLWithSuffixedIdempotencyKey() async throws {

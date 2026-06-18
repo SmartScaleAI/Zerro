@@ -103,3 +103,85 @@ one charge.
   transcript from local Whisper (BYOK) or call 1 (managed); generation local
   (BYOK) or call 2 (managed). Same resolver, same gate, same dispatch.
 - Trial rides `runProxyGeneration` too, so it gets hover-deixis for free here.
+
+---
+
+## Part 6 runbook — how to run the live E2E
+
+The 2-call dev flow is **additive** and the normal/BYOK paths are byte-identical
+(the prompt byte-mirror + `testRequestSendsAudioFramesModeOnly` still pass), so you
+can verify it **without touching production**. Prefer local-serve.
+
+### Option A (recommended) — local `supabase functions serve`
+
+1. **Configure secrets** (once). Copy the template and fill in real values:
+   ```sh
+   cp supabase/.env.example supabase/.env.local   # gitignored
+   # set: OPENAI_API_KEY (Whisper STT + chat), GEMINI_API_KEY / ANTHROPIC_API_KEY
+   #      for the model you'll test, and SESSION_JWT_SECRET = the SAME value the
+   #      deployed backend signs session tokens with (so your already-signed-in
+   #      DEBUG build authenticates against the local function).
+   ```
+2. **Start the local stack + serve the updated `generate`:**
+   ```sh
+   supabase start                                       # local DB (once)
+   supabase functions serve --env-file supabase/.env.local
+   ```
+   This serves the working-tree `generate` (with the dev call-2 enrichment) at
+   `http://127.0.0.1:54321/functions/v1`. The local DB needs your test
+   subscription/credits seeded the same way you normally run managed locally.
+3. **Point the DEBUG build at it.** In Xcode: Product ▸ Scheme ▸ Edit Scheme ▸ Run
+   ▸ Arguments ▸ Environment Variables, set
+   `ZERRO_FUNCTIONS_BASE_URL = http://127.0.0.1:54321/functions/v1`.
+   (`ManagedBackend.baseURL` persists this override across the app's own relaunches;
+   to revert, set it to empty/`production` once.) Run the app.
+4. Run the two live tests below. To swap the chat model, edit `CHAT_MODEL` in
+   `supabase/.env.local` and restart `serve` — no rebuild, prod untouched.
+
+### Option B — deploy `generate` to the managed backend
+```sh
+supabase functions deploy generate
+```
+Then run the app normally (no scheme override). Use this only when you want to
+verify against the real backend; the happy path spends real OpenAI money + a real
+credit. The normal-mode body/response are unchanged, so existing managed users are
+unaffected by the deploy.
+
+### Test 1 — MANAGED hover-deixis (the new path)
+With a managed (or trial) account that has ≥1 credit and a coding agent installed
+(e.g. Claude Code), in a git project served on `localhost`:
+1. Start a **Dev Mode** recording of the localhost page (agent + project folder set
+   in the capture toolbar).
+2. **Hover** a labeled element (do **not** click) and say *"make **this** bigger"*.
+   Stop.
+3. **Expect (pass):**
+   - Pill walks transcribe → resolve → generate (one continuous "thinking"
+     rotation). In Console the breadcrumbs read
+     `managed dev-transcribe started` → `managed dev generation started`.
+   - It resolves to the **hovered element's visible label** (not a click) and the
+     agent edits that element; the result card shows the change.
+   - **Exactly one credit** is charged (result pill's "−N credits"; cross-check
+     `generation_log` / credits in the DB — there should be **one** logged
+     generation for the recording, none for call 1).
+4. **Ambiguity check:** record again, hover **empty space / between two elements**
+   while saying "make this bigger" → expect the **`confirmAnchors`** card (showing
+   the resolved label) before the agent runs; Confirm dispatches, Cancel reverts
+   with no edit.
+
+### Test 2 — BYOK hover-deixis (same flow, local generation)
+With your own OpenAI/Gemini/Anthropic key configured (no managed subscription
+active), repeat Test 1 steps 1–3. Generation runs **locally**
+(`OpenAIPromptGenerationService`) — no `/generate` call, no credit — but the
+resolution + confirm gate + dispatch are the **same shared code**. Expect the same
+hovered-element resolution + agent edit, and the same `confirmAnchors` card on the
+ambiguous point.
+
+### What's already verified (so the live run is the only gap)
+- Server handler (real code, stubbed STT/chat): the 2-call dev path, `anchors[]`
+  return, **no re-STT on call 2**, **one charge**, idempotent replay re-derives
+  anchors, forged/over-length transcript rejected — `deno test` (137 pass) +
+  `deno check` on the deployable entrypoint.
+- Client: `devTranscribe`/`generateDev` wire shape (mode, no-audio, transcript,
+  server-measured duration round-trip), anchor parse + fallback — XCTest.
+- The live run is the only thing that exercises real mic narration → cursor/native-
+  frame/OCR/marker resolution → the real round-trip → a real credit decrement.
