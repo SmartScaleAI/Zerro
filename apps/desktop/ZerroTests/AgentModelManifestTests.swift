@@ -144,20 +144,57 @@ final class AgentModelManifestTests: XCTestCase {
 
     // MARK: - Cursor CLI parser
 
-    func testParseCursorModels() {
+    func testParseCursorModelsCuratesRealOutput() {
+        // A representative slice of the live `cursor-agent models` output
+        // (verified 2026-06-18): "<id> - <Display Name>" rows, an "Available
+        // models" header, a trailing "Tip:" line, and the effort×latency
+        // permutation explosion we collapse.
         let out = DevAgentDetection.parseCursorModels("""
-        * gpt-5-cursor   (current)
-        claude-4.5-sonnet
-        gpt-5-cursor
+        Available models
+
+        auto - Auto
+        composer-2.5 - Composer 2.5 (current)
+        composer-2.5-fast - Composer 2.5 Fast (default)
+        claude-opus-4-8-low - Opus 4.8 1M Low
+        claude-opus-4-8-high - Opus 4.8 1M
+        claude-opus-4-8-high-fast - Opus 4.8 1M Fast
+        claude-opus-4-8-thinking-high - Opus 4.8 1M Thinking
+        gpt-5.5-medium - GPT-5.5 1M
+        gpt-5.5-high - GPT-5.5 1M High
+        gemini-3.1-pro - Gemini 3.1 Pro
+
+        Tip: use --model <id> (or /model <id> in interactive mode) to switch.
         """)
-        // First-token id, de-duped, marker stripped, order preserved.
-        XCTAssertEqual(out.map(\.modelID), ["gpt-5-cursor", "claude-4.5-sonnet"])
-        XCTAssertEqual(out.first?.displayName, "gpt-5-cursor   (current)")
+        let ids = out.map(\.modelID)
+        // One canonical row per family; auto pinned first; header + Tip dropped;
+        // -fast / effort permutations collapsed.
+        XCTAssertEqual(ids, ["auto", "composer-2.5-fast", "claude-opus-4-8-high", "gpt-5.5-high", "gemini-3.1-pro"])
+        XCTAssertEqual(out.first?.modelID, "auto")
+        // Composer collapses to its account default ("(default)") representative.
+        XCTAssertEqual(out.first { $0.modelID == "composer-2.5-fast" }?.displayName, "Composer 2.5 Fast (default)")
+        // Opus collapses to the -high tier with its clean label (NOT "id - id").
+        XCTAssertEqual(out.first { $0.modelID == "claude-opus-4-8-high" }?.displayName, "Opus 4.8 1M")
+        // No header/Tip leaked in as a bogus model; no parameterized brackets.
+        XCTAssertFalse(ids.contains { $0.lowercased().hasPrefix("tip") || $0.lowercased().hasPrefix("available") })
+        XCTAssertFalse(ids.contains { $0.contains("[") })
+    }
+
+    func testParseCursorModelsDropsBracketedAndKeepsAutoFirst() {
+        // Parameterized "[context=…]" forms are dropped (canonical id is enough);
+        // `auto` is pinned first even when listed later.
+        let out = DevAgentDetection.parseCursorModels("""
+        claude-opus-4-8-high - Opus 4.8 1M
+        claude-opus-4-8[context=1m,effort=high] - Opus 4.8 1M (1M ctx)
+        auto - Auto
+        """)
+        XCTAssertEqual(out.map(\.modelID), ["auto", "claude-opus-4-8-high"])
     }
 
     func testParseCursorModelsEmpty() {
         XCTAssertTrue(DevAgentDetection.parseCursorModels("").isEmpty)
         XCTAssertTrue(DevAgentDetection.parseCursorModels("\n\n").isEmpty)
+        // A header + Tip with no real rows → empty (no bogus models).
+        XCTAssertTrue(DevAgentDetection.parseCursorModels("Available models\n\nTip: use --model <id>").isEmpty)
     }
 }
 

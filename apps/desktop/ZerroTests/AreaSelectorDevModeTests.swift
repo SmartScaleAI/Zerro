@@ -166,6 +166,185 @@ final class AreaSelectorDevModeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(projectRow.minY, modelSectionBottom)
     }
 
+    // MARK: - Auto-Detect Project toggle row (Project section)
+
+    /// The Project section is now two rows (Auto-Detect toggle + Change…), so the
+    /// menu height must reserve `header + 2 * rowHeight` for it. Pins the +1 row in
+    /// lockstep with `devSettingsMenuFrame`.
+    func testDevSettingsMenuAccountsForProjectToggleRow() {
+        let agentCount = 3, modelCount = 2
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let v = AreaSelectorView.self
+        let expected = v.menuVPad
+            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight        // Agent
+            + v.devMenuDividerBand
+            + v.menuSectionHeaderHeight + CGFloat(modelCount) * v.devMenuRowHeight          // Model (≤ cap)
+            + v.devMenuDividerBand
+            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                            // Project: toggle + Change…
+            + v.devMenuDividerBand
+            + v.devMenuGitLineHeight
+            + v.menuVPad
+        XCTAssertEqual(menu.height, expected, accuracy: 0.001)
+    }
+
+    /// The toggle row leads the Project section; the Change… row sits directly
+    /// below it; neither registers as an agent/model row; both fit in the menu.
+    func testDevSettingsAutoDetectRowSitsAboveChangeRowAndDisjoint() {
+        let agentCount = 3, modelCount = 2
+        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertEqual(project.minY, auto.maxY, accuracy: 0.001, "Change… is directly below the toggle row")
+        XCTAssertEqual(auto.height, AreaSelectorView.devMenuRowHeight, accuracy: 0.001)
+        XCTAssertEqual(auto.width, project.width, accuracy: 0.001)
+
+        let mid = CGPoint(x: auto.midX, y: auto.midY)
+        XCTAssertNil(
+            AreaSelectorView.devSettingsAgentRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "the toggle row must not register as an agent row"
+        )
+        XCTAssertNil(
+            AreaSelectorView.devSettingsModelRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "the toggle row must not register as a model row"
+        )
+
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertGreaterThanOrEqual(auto.minY, menu.minY)
+        XCTAssertLessThanOrEqual(project.maxY, menu.maxY, "both Project rows fit within the bounded menu")
+    }
+
+    /// The info-icon hover sub-rect sits inside the toggle row, immediately after
+    /// the reserved label width, vertically centered.
+    func testDevSettingsAutoDetectInfoIconWithinRowAfterLabel() {
+        let agentCount = 3, modelCount = 2
+        let row = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let icon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertTrue(row.contains(icon), "the info-icon sub-rect must sit within the toggle row")
+        XCTAssertEqual(icon.minX, row.minX + AreaSelectorView.devMenuRowHPad + AreaSelectorView.autoDetectLabelWidth + AreaSelectorView.autoDetectInfoGap, accuracy: 0.001)
+        XCTAssertEqual(icon.midY, row.midY, accuracy: 0.001)
+        XCTAssertEqual(icon.width, AreaSelectorView.autoDetectInfoIconSize, accuracy: 0.001)
+    }
+
+    /// Hovering the info icon while the dev-settings menu is open resolves the
+    /// explanation copy anchored to the icon (the multi-line variant); not hovering
+    /// resolves nothing.
+    func testAutoDetectInfoTooltipResolvesWhenHoveredInOpenMenu() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        XCTAssertTrue(state.isDevSettingsMenuOpen)
+        state.setAutoDetectInfoHovered(true)
+
+        let view = AreaSelectorView(state: state)
+        let info = view.tooltipInfo(forSelection: selection, in: bounds)
+        XCTAssertEqual(info?.text, AreaSelectorView.autoDetectInfoTooltip)
+        XCTAssertNotNil(info?.maxWidth, "the info tooltip uses the multi-line variant")
+        let expectedAnchor = AreaSelectorView.devSettingsAutoDetectInfoIconRect(
+            forSelection: selection, in: bounds,
+            agentCount: state.devAgentMenuItems.count, modelCount: state.devModelMenuItems.count
+        )
+        XCTAssertEqual(info?.anchor, expectedAnchor)
+
+        state.setAutoDetectInfoHovered(false)
+        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
+                     "no tooltip while the menu is open and the icon isn't hovered")
+    }
+
+    // MARK: - Scrollable Model section (long lists, e.g. Cursor)
+
+    private func devModels(_ n: Int) -> [AreaSelectorState.DevModelMenuItem] {
+        (0..<n).map { .init(id: "m\($0)", name: "Model \($0)") }
+    }
+
+    func testDevSettingsMenuHeightIsBoundedForLongModelList() {
+        let agentCount = 3
+        let cap = AreaSelectorView.maxVisibleModelRows
+        let atCap = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap)
+        let huge = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap + 50)
+        // Beyond the cap the Model section stops growing — the panel height is bounded.
+        XCTAssertEqual(atCap.height, huge.height, accuracy: 0.001)
+        // Which is the whole point: it fits on screen.
+        XCTAssertGreaterThanOrEqual(huge.minY, 0)
+        XCTAssertLessThanOrEqual(huge.maxY, bounds.height)
+    }
+
+    func testDevSettingsModelRowHitTestFoldsInScrollOffset() {
+        let agentCount = 3, modelCount = 20
+        let cap = AreaSelectorView.maxVisibleModelRows
+        let rowH = AreaSelectorView.devMenuRowHeight
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertEqual(viewport.height, CGFloat(cap) * rowH, accuracy: 0.001, "viewport is capped at maxVisibleModelRows")
+
+        let top = CGPoint(x: viewport.midX, y: viewport.minY + rowH / 2)
+        // The SAME screen position maps to offset+0 as the list scrolls under it.
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0), 0)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 5), 5)
+        // Last visible row at max offset → the last model (in-bounds, clamped).
+        let maxOffset = modelCount - cap
+        let last = CGPoint(x: viewport.midX, y: viewport.minY + rowH * (CGFloat(cap) - 0.5))
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: last, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: maxOffset), modelCount - 1)
+    }
+
+    func testDevSettingsModelHitTestRejectsBelowViewport() {
+        let agentCount = 3, modelCount = 20
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        // A point just below the capped viewport is Project/git territory now.
+        let below = CGPoint(x: viewport.midX, y: viewport.maxY + 1)
+        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: below, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0))
+        // And the Project row sits at/below the capped viewport, not below all 20 rows.
+        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertGreaterThanOrEqual(project.minY, viewport.maxY)
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertLessThanOrEqual(project.maxY, menu.maxY, "the project row is reachable within the bounded menu")
+    }
+
+    func testDevSettingsShortModelListBehavesAsBefore() {
+        // ≤ cap: viewport is exactly modelCount rows, offset 0, hit-test unchanged.
+        let agentCount = 3, modelCount = 3
+        let rowH = AreaSelectorView.devMenuRowHeight
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertEqual(viewport.height, CGFloat(modelCount) * rowH, accuracy: 0.001)
+        let row2 = CGPoint(x: viewport.midX, y: viewport.minY + rowH * 2.5)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: row2, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount), 2)
+        let past = CGPoint(x: viewport.midX, y: viewport.minY + rowH * CGFloat(modelCount) + 1)
+        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: past, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount))
+    }
+
+    func testDevModelScrollOffsetClampsToRange() {
+        let state = AreaSelectorState()
+        let cap = AreaSelectorView.maxVisibleModelRows
+        state.setDevModelMenuItems(devModels(cap + 5), selectedID: "m0")   // reveals m0 → offset 0
+        XCTAssertEqual(state.devModelScrollOffset, 0)
+        state.setDevModelScrollOffset(100)
+        XCTAssertEqual(state.devModelScrollOffset, 5, "offset pins to modelCount - cap")
+        state.setDevModelScrollOffset(-3)
+        XCTAssertEqual(state.devModelScrollOffset, 0)
+    }
+
+    func testDevModelScrollOffsetReclampsWhenListShrinks() {
+        let state = AreaSelectorState()
+        let cap = AreaSelectorView.maxVisibleModelRows
+        state.setDevModelMenuItems(devModels(cap + 10), selectedID: "m0")
+        state.setDevModelScrollOffset(8)
+        XCTAssertEqual(state.devModelScrollOffset, 8)
+        // The list swaps to a short one (agent change) → can't scroll → resets.
+        state.setDevModelMenuItems(devModels(2), selectedID: "m0")
+        XCTAssertEqual(state.devModelScrollOffset, 0)
+    }
+
+    func testDevModelScrollRevealsSelectionOnOpen() {
+        let state = AreaSelectorState()
+        let cap = AreaSelectorView.maxVisibleModelRows
+        let count = cap + 10
+        // A pick deep in the list is revealed when the list is set…
+        state.setDevModelMenuItems(devModels(count), selectedID: "m\(count - 1)")
+        XCTAssertEqual(state.devModelScrollOffset, count - cap)
+        // …and again whenever the menu (re)opens, even after scrolling away.
+        state.setDevModelScrollOffset(0)
+        state.toggleDevSettingsMenu()
+        XCTAssertTrue(state.isDevSettingsMenuOpen)
+        XCTAssertEqual(state.devModelScrollOffset, count - cap, "reopening reveals the selected model")
+    }
+
     // MARK: - State: explicit set-mode
 
     func testSetDevModeMapsSegmentsToModeAndClearsOnOff() {

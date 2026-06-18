@@ -511,18 +511,31 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
     /// Map one `stream-json` line to a substatus, or nil when the line carries
     /// no progress signal. Tolerant of unknown shapes (returns nil rather than
-    /// crashing).
+    /// crashing). This ONE parser serves BOTH Claude Code and Cursor — each event
+    /// branch is keyed strictly to that agent's distinct top-level `type` values,
+    /// so they never cross-react (Claude never emits `tool_call`; Cursor never
+    /// emits Anthropic-shaped `assistant.tool_use`). The terminal `result` event
+    /// is shared (both agents emit `{type:"result"}`).
     ///
-    /// Verified at M9 against the Claude Code stream-json schema (code.claude.com
-    /// docs, June 2026): without `--include-partial-messages` (we don't pass it),
-    /// the stream is line-delimited COMPLETE messages — `system`(init/…),
-    /// `assistant` (tool_use blocks), `user` (tool results), and a terminal
-    /// `result`. The `tool_use` block is the Anthropic Messages API shape
-    /// (`{type,id,name,input}`). Tool names span CLI versions: current builds use
-    /// `Edit`/`Write`/`Read`/`Glob`/`Grep`/`Bash`/`Agent` (the subagent tool;
-    /// `Task` is now the task-list family) and route directory listing through
-    /// `Bash` (the old `LS` tool is gone). We keep the legacy names too so an
-    /// older installed CLI still maps; an unknown tool degrades to "working…".
+    /// Claude Code — verified at M9 against the Claude Code stream-json schema
+    /// (code.claude.com docs, June 2026): without `--include-partial-messages`
+    /// (we don't pass it), the stream is line-delimited COMPLETE messages —
+    /// `system`(init/…), `assistant` (tool_use blocks), `user` (tool results),
+    /// and a terminal `result`. The `tool_use` block is the Anthropic Messages
+    /// API shape (`{type,id,name,input}`). Tool names span CLI versions: current
+    /// builds use `Edit`/`Write`/`Read`/`Glob`/`Grep`/`Bash`/`Agent` (the
+    /// subagent tool; `Task` is now the task-list family) and route directory
+    /// listing through `Bash` (the old `LS` tool is gone). We keep the legacy
+    /// names too so an older installed CLI still maps; unknown → "working…".
+    ///
+    /// Cursor — verified against cursor-agent 2026.06.16 (2026-06-18): the
+    /// top-level vocabulary is `system`/`user`/`assistant`/`thinking`/`tool_call`/
+    /// `result`. Tool activity rides in its OWN `tool_call` event
+    /// (`{type:"tool_call", subtype:"started"|"completed", tool_call:{ <kind>ToolCall:{args:{…}} }}`),
+    /// distinct from Claude's `assistant.tool_use`. We emit on the `started` twin
+    /// (the `completed` one would re-emit the same substatus) and map the tool
+    /// kind by name (`editToolCall`→editing, `readToolCall`→reading,
+    /// `shellToolCall`→running; unknown → "working…").
     nonisolated static func parseStreamJSONLine(_ line: String) -> DevRunSubstatus? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
@@ -531,9 +544,10 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
         switch obj["type"] as? String {
         case "result":
+            // Terminal event — shared by Claude Code and Cursor.
             return .done
         case "assistant":
-            // message.content: [{ type: "tool_use", name: "Edit", input: {...} }]
+            // Claude Code: message.content: [{ type: "tool_use", name: "Edit", input: {...} }]
             if let message = obj["message"] as? [String: Any],
                let content = message["content"] as? [[String: Any]] {
                 for item in content where item["type"] as? String == "tool_use" {
@@ -542,9 +556,39 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
                 }
             }
             return nil
+        case "tool_call":
+            // Cursor: emit once, on the `started` twin. Defensive — a missing
+            // payload or an unknown tool kind degrades to "working…", never crashes.
+            guard obj["subtype"] as? String == "started",
+                  let call = obj["tool_call"] as? [String: Any] else { return nil }
+            return cursorToolCallSubstatus(call)
         default:
             return nil
         }
+    }
+
+    /// Map a Cursor `tool_call` event's payload to a substatus. The payload has
+    /// exactly one `<kind>ToolCall` key (alongside bookkeeping like `toolCallId` /
+    /// `startedAtMs`) naming the tool; we match it by substring so an unseen kind
+    /// still routes sensibly. Edit/Write kinds carry the file at `args.path`.
+    /// Verified kinds: `editToolCall` / `readToolCall` / `shellToolCall`.
+    nonisolated private static func cursorToolCallSubstatus(_ call: [String: Any]) -> DevRunSubstatus {
+        guard let kind = call.keys.first(where: { $0.hasSuffix("ToolCall") }) else { return .working }
+        let lower = kind.lowercased()
+        if lower.contains("edit") || lower.contains("write") || lower.contains("create") {
+            let args = (call[kind] as? [String: Any])?["args"] as? [String: Any]
+            let path = (args?["path"] as? String) ?? ""
+            return .editing(file: (path as NSString).lastPathComponent)
+        }
+        if lower.contains("read") || lower.contains("search") || lower.contains("grep")
+            || lower.contains("glob") || lower.contains("list") || lower.contains("ls") {
+            return .readingFiles
+        }
+        if lower.contains("shell") || lower.contains("command") || lower.contains("terminal")
+            || lower.contains("run") || lower.contains("exec") || lower.contains("bash") {
+            return .running
+        }
+        return .working
     }
 
     /// Extract the agent's final message text from a terminal `result` event

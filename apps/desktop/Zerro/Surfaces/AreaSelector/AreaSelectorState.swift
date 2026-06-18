@@ -415,9 +415,13 @@ final class AreaSelectorState {
             // Only one toolbar dropdown at a time.
             closeModelMenu()
             closeMicMenu()
+            // Open on the selected model so a deep pick isn't hidden.
+            resetDevModelScrollToSelection()
         } else {
             highlightedDevAgentIndex = nil
             highlightedDevModelIndex = nil
+            isAutoDetectInfoHovered = false
+            localhostNotice = nil
         }
     }
 
@@ -425,6 +429,8 @@ final class AreaSelectorState {
         isDevSettingsMenuOpen = false
         highlightedDevAgentIndex = nil
         highlightedDevModelIndex = nil
+        isAutoDetectInfoHovered = false
+        localhostNotice = nil
     }
 
     func setHighlightedDevAgentIndex(_ index: Int?) {
@@ -458,6 +464,9 @@ final class AreaSelectorState {
     func setDevModelMenuItems(_ items: [DevModelMenuItem], selectedID: String?) {
         devModelMenuItems = items
         selectedDevModelID = selectedID
+        // The list just swapped (agent change) or refreshed — drop a now-stale
+        // scroll offset and reveal the selected pick.
+        resetDevModelScrollToSelection()
     }
 
     /// Update only the checkmarked pick (a Model row was selected).
@@ -469,6 +478,37 @@ final class AreaSelectorState {
         if highlightedDevModelIndex != index { highlightedDevModelIndex = index }
     }
 
+    /// Index of the TOP visible Model row — the scroll position of the capped
+    /// Model viewport (a long list, e.g. Cursor's, scrolls instead of growing the
+    /// menu off-screen). Always 0 for a short list (≤ `maxVisibleModelRows`).
+    /// Driven by the scroll-wheel via the controller's event monitor; read by the
+    /// renderer and the model-row hit-test, which must agree on it.
+    private(set) var devModelScrollOffset: Int = 0
+
+    /// Largest valid offset for the current list — pins the last page flush to the
+    /// viewport bottom. 0 when the list fits (no scrolling).
+    private var maxDevModelScrollOffset: Int {
+        max(0, devModelMenuItems.count - AreaSelectorView.maxVisibleModelRows)
+    }
+
+    /// Set the Model scroll offset, clamped to `0...maxDevModelScrollOffset`.
+    func setDevModelScrollOffset(_ offset: Int) {
+        let clamped = min(max(offset, 0), maxDevModelScrollOffset)
+        if devModelScrollOffset != clamped { devModelScrollOffset = clamped }
+    }
+
+    /// Position the viewport so the currently-selected model is visible — called
+    /// when the menu opens or the model list swaps (agent change), so a deep pick
+    /// isn't hidden on open and a stale offset from the previous list is dropped.
+    /// Clamps the selected index to the top of the viewport; falls back to 0.
+    func resetDevModelScrollToSelection() {
+        guard devModelMenuItems.count > AreaSelectorView.maxVisibleModelRows,
+              let selectedDevModelID,
+              let idx = devModelMenuItems.firstIndex(where: { $0.id == selectedDevModelID })
+        else { devModelScrollOffset = 0; return }
+        devModelScrollOffset = min(idx, maxDevModelScrollOffset)
+    }
+
     /// Called when Dev Mode is entered (Dev segment clicked, or seeded-on at
     /// present time). Auto-opens the dev-settings menu the first time this
     /// session, or any time the folder is still unset, so the user can finish
@@ -478,6 +518,7 @@ final class AreaSelectorState {
             isDevSettingsMenuOpen = true
             closeModelMenu()
             closeMicMenu()
+            resetDevModelScrollToSelection()
         }
         hasAutoOpenedDevSettings = true
     }
@@ -597,11 +638,77 @@ final class AreaSelectorState {
         projectIsGitRepo = nil
         isCheckingGitRepo = false
         if url != nil { devValidationMessage = nil }
+        // Any explicit set means the folder is the user's pick, not an auto-match
+        // — drop the hint flag (the auto path re-sets it afterward). And a folder
+        // choice dismisses any standing localhost notice.
+        projectAutoMatchedFromPort = false
+        localhostNotice = nil
     }
 
     func setSelectedAgent(id: String?, name: String) {
         selectedAgentID = id
         selectedAgentName = name
+    }
+
+    // MARK: - Localhost auto-match (Phase 3)
+
+    /// The localhost port detected from the browser this session (hit OR miss), so
+    /// a subsequent folder pick / record can LEARN the `port → folder` mapping.
+    /// nil when nothing was detected. Per-presentation (a fresh state each open).
+    private(set) var detectedLocalhostPort: Int?
+
+    /// Whether the CURRENT folder was auto-filled from a port-map hit — drives the
+    /// "matched to localhost:<port>" hint near the Project row. Cleared the moment
+    /// the user changes the folder (it's then their pick, not auto).
+    private(set) var projectAutoMatchedFromPort: Bool = false
+
+    /// Mirrors `PreferencesStore.devAutoDetectProject` for the dev-settings menu's
+    /// "Auto-Detect Project" toggle row. Seeded + persisted by the controller (like
+    /// the mic selection); drives the row's switch. Default OFF.
+    private(set) var autoDetectProjectEnabled: Bool = false
+
+    func setAutoDetectProjectEnabled(_ on: Bool) {
+        if autoDetectProjectEnabled != on { autoDetectProjectEnabled = on }
+    }
+
+    /// Hover state for the Auto-Detect row's info icon, driving the custom tooltip
+    /// (the overlay is hit-test-disabled, so `.help` never fires). Set by the
+    /// controller's mouse-move hit-test; cleared when the dev-settings menu closes.
+    private(set) var isAutoDetectInfoHovered: Bool = false
+
+    func setAutoDetectInfoHovered(_ hovered: Bool) {
+        if isAutoDetectInfoHovered != hovered { isAutoDetectInfoHovered = hovered }
+    }
+
+    /// A one-time, non-blocking `.denied` note (after the user denies the
+    /// Automation prompt): a floating capsule, not part of the menu's hit-test
+    /// geometry, cleared on the next action. The old `.primer` pre-prompt note is
+    /// gone — enabling the dev-settings "Auto-Detect Project" toggle is now the
+    /// primer (the prompt fires with obvious context, so no pre-explainer is owed).
+    enum LocalhostNotice: Equatable { case denied }
+    private(set) var localhostNotice: LocalhostNotice?
+
+    func showLocalhostNotice(_ notice: LocalhostNotice) {
+        if localhostNotice != notice { localhostNotice = notice }
+    }
+
+    func dismissLocalhostNotice() {
+        if localhostNotice != nil { localhostNotice = nil }
+    }
+
+    /// HIT — a mapped folder was found for the detected port: pre-fill it and flag
+    /// it for the hint. (Goes through `setProjectURL`, then sets the auto flag.)
+    func setAutoMatchedProject(_ url: URL, port: Int) {
+        setProjectURL(url)
+        detectedLocalhostPort = port
+        projectAutoMatchedFromPort = true
+    }
+
+    /// MISS — a localhost port was detected but isn't mapped yet: remember the
+    /// port so a later folder pick / record learns the mapping. Does NOT touch the
+    /// already-set (last-used) folder — a failed detection never clears a folder.
+    func noteDetectedLocalhostPort(_ port: Int) {
+        if detectedLocalhostPort != port { detectedLocalhostPort = port }
     }
 
     func setDevValidationMessage(_ message: String?) {

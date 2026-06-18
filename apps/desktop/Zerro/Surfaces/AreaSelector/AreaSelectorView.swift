@@ -61,6 +61,7 @@ struct AreaSelectorView: View {
                 micMenu(in: bounds)
                 devSettingsMenu(in: bounds)
                 devValidationBanner(in: bounds)
+                devLocalhostNoticeBanner(in: bounds)
                 toolbarTooltip(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
@@ -627,15 +628,53 @@ struct AreaSelectorView: View {
     static let devMenuDividerBand: CGFloat = 13
     /// The wrapped two-line git-reassurance line at the menu's foot.
     static let devMenuGitLineHeight: CGFloat = 48
+    /// The Model section caps at this many visible rows; beyond it the section
+    /// becomes a scrollable viewport. Cursor lists ~25–30 curated models, which
+    /// would otherwise push the menu off the bottom of the screen. Chosen so the
+    /// whole panel (Agent + capped Model viewport + Project + git line) fits
+    /// within a typical `visibleFrame`. The Agent section stays full height (it's
+    /// only ~3 rows — no need to scroll it).
+    static let maxVisibleModelRows = 7
+
+    // MARK: Auto-Detect Project toggle row (Project section)
+    //
+    // The Project section leads with an "Auto-Detect Project" toggle row (the
+    // opt-in that requests browser permission) above the folder/"Change…" row. Its
+    // label width is measured (+2pt slop so the SwiftUI Text never truncates) and
+    // SHARED by the renderer and the info-icon hit-test, so the info glyph lands
+    // exactly where hover is detected — the same render==hit-test discipline the
+    // rest of this menu lives by.
+    static let autoDetectRowLabel = "Auto-Detect Project"
+    /// Horizontal padding inside dev-menu rows (matches the rows' `.padding(.horizontal, 12)`).
+    static let devMenuRowHPad: CGFloat = 12
+    /// Gap between the Auto-Detect label and its info icon.
+    static let autoDetectInfoGap: CGFloat = 6
+    /// The info-icon hover/hit sub-rect size.
+    static let autoDetectInfoIconSize: CGFloat = 16
+    /// Width reserved for the Auto-Detect label (measured + 2pt), shared by the
+    /// renderer's `.frame(width:)` and the info-icon hit-test.
+    static let autoDetectLabelWidth: CGFloat =
+        ((autoDetectRowLabel as NSString)
+            .size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width).rounded(.up) + 2
+    /// Custom-tooltip copy for the Auto-Detect info icon. Shown via `tooltipInfo`/
+    /// `toolbarTooltip` (NOT `.help`, which can't fire through the hit-test-disabled
+    /// overlay).
+    static let autoDetectInfoTooltip =
+        "Auto-matches your project folder to the localhost site you’re recording, by reading your browser’s address. Turning this on asks for browser permission once."
 
     static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, fullScreen: Bool = false) -> CGRect {
         let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+        // The Model section is CAPPED at `maxVisibleModelRows` (it scrolls beyond
+        // that) so a long list (Cursor) can't push the panel off-screen. Every
+        // place that advances past the Model section must use the same capped
+        // count — see `devSettingsProjectRowFrame` / `devSettingsModelViewportRect`.
+        let visibleModelRows = min(modelCount, maxVisibleModelRows)
         let height = menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // Agent section
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent section
             + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(modelCount) * devMenuRowHeight   // Model section
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model section (capped)
             + devMenuDividerBand
-            + menuSectionHeaderHeight + devMenuRowHeight                          // Project section
+            + menuSectionHeaderHeight + 2 * devMenuRowHeight                           // Project section (Auto-Detect toggle + Change…)
             + devMenuDividerBand
             + devMenuGitLineHeight
             + menuVPad
@@ -661,32 +700,13 @@ struct AreaSelectorView: View {
         return idx
     }
 
-    /// Index of the Model row under `point`, or nil if `point` is outside the
-    /// Model section. Skips the Agent header + rows + divider + the Model header.
-    static func devSettingsModelRowIndex(
-        at point: CGPoint,
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
-    ) -> Int? {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        guard frame.contains(point) else { return nil }
-        let localY = point.y - frame.minY - menuVPad
-            - menuSectionHeaderHeight - CGFloat(agentCount) * devMenuRowHeight   // skip Agent header + rows
-            - devMenuDividerBand                                                 // skip divider
-            - menuSectionHeaderHeight                                            // skip Model header
-        guard localY >= 0 else { return nil }
-        let idx = Int(localY / devMenuRowHeight)
-        guard idx >= 0, idx < modelCount else { return nil }
-        return idx
-    }
-
-    /// Frame of the Project ("Change…") row — clicking it opens the folder
-    /// picker. nil-free: always returns the row's rect within the menu. Shifted
-    /// down by the Model section (header + `modelCount` rows + divider).
-    static func devSettingsProjectRowFrame(
+    /// The Model section's visible viewport rect — the scrollable band of (up to
+    /// `maxVisibleModelRows`) rows, below the Agent section + divider + Model
+    /// header. The single source of truth for the Model band geometry: both the
+    /// hit-test (`devSettingsModelRowIndex`) and the scroll-wheel region check use
+    /// it, so the renderer and the controller can't drift. Height is the CAPPED
+    /// row count, matching `devSettingsMenuFrame`.
+    static func devSettingsModelViewportRect(
         forSelection rect: CGRect,
         in bounds: CGSize,
         agentCount: Int,
@@ -694,13 +714,92 @@ struct AreaSelectorView: View {
         fullScreen: Bool = false
     ) -> CGRect {
         let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let top = frame.minY + menuVPad
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // skip Agent header + rows
+            + devMenuDividerBand                                                 // skip divider
+            + menuSectionHeaderHeight                                            // skip Model header
+        let visibleCount = min(modelCount, maxVisibleModelRows)
+        return CGRect(x: frame.minX, y: top, width: frame.width, height: CGFloat(visibleCount) * devMenuRowHeight)
+    }
+
+    /// Index of the Model row under `point` (an ABSOLUTE index into the model
+    /// list), or nil if `point` is outside the visible Model viewport. The
+    /// viewport shows `min(modelCount, maxVisibleModelRows)` rows starting at
+    /// `scrollOffset`; a point below the viewport is now Project/git territory →
+    /// nil. The returned index folds in the scroll offset so a scrolled-into-view
+    /// row maps to its real model. Defaults to `scrollOffset: 0` so a short list
+    /// (≤ cap) and the existing call sites behave exactly as before.
+    static func devSettingsModelRowIndex(
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        scrollOffset: Int = 0,
+        fullScreen: Bool = false
+    ) -> Int? {
+        let viewport = devSettingsModelViewportRect(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        guard viewport.contains(point) else { return nil }
+        let visibleCount = min(modelCount, maxVisibleModelRows)
+        let visibleIndex = Int((point.y - viewport.minY) / devMenuRowHeight)
+        guard visibleIndex >= 0, visibleIndex < visibleCount else { return nil }
+        let index = visibleIndex + scrollOffset
+        guard index >= 0, index < modelCount else { return nil }
+        return index
+    }
+
+    /// Frame of the Auto-Detect Project toggle row — the FIRST row of the Project
+    /// section, directly under the "Project" header (above the folder/"Change…"
+    /// row). Clicking it flips `devAutoDetectProject`. Sits below the CAPPED Model
+    /// viewport (header + `min(modelCount, maxVisibleModelRows)` rows + divider).
+    static func devSettingsAutoDetectRowFrame(
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> CGRect {
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let visibleModelRows = min(modelCount, maxVisibleModelRows)
         let y = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // Agent
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
             + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(modelCount) * devMenuRowHeight   // Model
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
             + devMenuDividerBand
-            + menuSectionHeaderHeight                                            // Project header
+            + menuSectionHeaderHeight                                                  // Project header
         return CGRect(x: frame.minX, y: y, width: frame.width, height: devMenuRowHeight)
+    }
+
+    /// The info-icon hover sub-rect inside the Auto-Detect row: immediately after
+    /// the (measured) label. The controller hit-tests this on mouse-move to drive
+    /// the custom tooltip (the glyph's `.help` can't fire through the overlay). The
+    /// x uses the SAME `autoDetectLabelWidth` the renderer reserves for the label,
+    /// so the rect and the drawn glyph stay in lockstep.
+    static func devSettingsAutoDetectInfoIconRect(
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> CGRect {
+        let row = devSettingsAutoDetectRowFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let x = row.minX + devMenuRowHPad + autoDetectLabelWidth + autoDetectInfoGap
+        let y = row.midY - autoDetectInfoIconSize / 2
+        return CGRect(x: x, y: y, width: autoDetectInfoIconSize, height: autoDetectInfoIconSize)
+    }
+
+    /// Frame of the Project ("Change…") row — clicking it opens the folder picker.
+    /// nil-free: always returns the row's rect within the menu. Sits directly below
+    /// the Auto-Detect toggle row (the Project section's first row).
+    static func devSettingsProjectRowFrame(
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> CGRect {
+        let auto = devSettingsAutoDetectRowFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        return CGRect(x: auto.minX, y: auto.maxY, width: auto.width, height: devMenuRowHeight)
     }
 
     // MARK: - CleanShot-style dropdown chrome
@@ -901,16 +1000,18 @@ struct AreaSelectorView: View {
                     devMenuDivider
 
                     // Model section (Phase 2) — the selected agent's models,
-                    // newest-first, checkmark on the current pick.
+                    // newest-first, checkmark on the current pick. Capped to a
+                    // scrollable viewport (the list can be long — Cursor).
                     menuSectionHeader("Model")
-                    ForEach(Array(models.enumerated()), id: \.element.id) { index, item in
-                        devModelRow(item, highlighted: state.highlightedDevModelIndex == index || item.id == state.selectedDevModelID)
-                    }
+                    devModelViewport(models)
 
                     devMenuDivider
 
-                    // Project section.
+                    // Project section: the Auto-Detect toggle (the opt-in that
+                    // requests browser permission) leads, then the folder / "Change…"
+                    // row beneath it.
                     menuSectionHeader("Project")
+                    devAutoDetectToggleRow
                     devProjectRow
 
                     devMenuDivider
@@ -923,6 +1024,53 @@ struct AreaSelectorView: View {
 
             menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
         }
+    }
+
+    /// The Model section as a fixed-height, clipped viewport: shows the
+    /// `min(count, maxVisibleModelRows)` rows starting at `devModelScrollOffset`,
+    /// so a long list (Cursor) scrolls instead of growing the panel off-screen.
+    /// Rows are rendered with their ABSOLUTE indices, so the hover highlight + the
+    /// controller's hit-test (`devSettingsModelRowIndex`, which folds in the same
+    /// offset) stay in lockstep. A short list (≤ cap) renders all rows at offset
+    /// 0 — identical to the pre-scroll layout.
+    @ViewBuilder
+    private func devModelViewport(_ models: [AreaSelectorState.DevModelMenuItem]) -> some View {
+        let visibleCount = min(models.count, Self.maxVisibleModelRows)
+        // Defensive re-clamp: the state keeps the offset in range, but never index
+        // the array off a stale value.
+        let offset = min(max(state.devModelScrollOffset, 0), max(0, models.count - visibleCount))
+        let window = models.enumerated().filter { offset <= $0.offset && $0.offset < offset + visibleCount }
+        let viewportHeight = CGFloat(visibleCount) * Self.devMenuRowHeight
+        VStack(spacing: 0) {
+            ForEach(window, id: \.element.id) { index, item in
+                devModelRow(item, highlighted: state.highlightedDevModelIndex == index || item.id == state.selectedDevModelID)
+            }
+        }
+        .frame(height: viewportHeight, alignment: .top)
+        .clipped()
+        // Scrollability affordance: a thin scroll indicator (only when the list
+        // exceeds the cap) whose height + position reflect the visible window, so
+        // it's discoverable that more rows exist and where you are in the list.
+        .overlay(alignment: .topTrailing) {
+            if models.count > visibleCount {
+                devModelScrollIndicator(viewportHeight: viewportHeight, count: models.count,
+                                        visibleCount: visibleCount, offset: offset)
+            }
+        }
+    }
+
+    /// A slim, non-interactive scroll thumb pinned to the Model viewport's right
+    /// edge. Height ∝ visible fraction; vertical offset ∝ scroll position.
+    private func devModelScrollIndicator(viewportHeight: CGFloat, count: Int, visibleCount: Int, offset: Int) -> some View {
+        let thumbHeight = max(28, viewportHeight * CGFloat(visibleCount) / CGFloat(count))
+        let maxOffset = CGFloat(count - visibleCount)
+        let thumbY = maxOffset > 0 ? (viewportHeight - thumbHeight) * CGFloat(offset) / maxOffset : 0
+        return Capsule()
+            .fill(Color.white.opacity(0.22))
+            .frame(width: 3, height: thumbHeight)
+            .padding(.trailing, 3)
+            .offset(y: thumbY)
+            .allowsHitTesting(false)
     }
 
     /// One Model-section row: green checkmark on the current pick, a model icon,
@@ -988,6 +1136,49 @@ struct AreaSelectorView: View {
         .background(menuRowHighlight(highlighted))
     }
 
+    /// The Auto-Detect Project toggle row: the label, an info icon (custom-tooltip
+    /// only — `.help` can't fire in this overlay), and a mini switch reflecting
+    /// `autoDetectProjectEnabled`. The whole row is one click target (the controller
+    /// hit-tests `devSettingsAutoDetectRowFrame`); the label width is pinned to
+    /// `autoDetectLabelWidth` so the info glyph lands on its hover sub-rect.
+    private var devAutoDetectToggleRow: some View {
+        let on = state.autoDetectProjectEnabled
+        return HStack(spacing: 0) {
+            Text(Self.autoDetectRowLabel)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextPrimary)
+                .frame(width: Self.autoDetectLabelWidth, alignment: .leading)
+            Image(systemName: "info.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextTertiary)
+                .frame(width: Self.autoDetectInfoIconSize, height: Self.autoDetectInfoIconSize)
+                .padding(.leading, Self.autoDetectInfoGap)
+            Spacer(minLength: 8)
+            devMiniSwitch(on: on)
+        }
+        .padding(.horizontal, Self.devMenuRowHPad)
+        .frame(height: Self.devMenuRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A compact on/off switch drawn in-tree (the menu is custom-rendered + the
+    /// controller owns clicks, so a SwiftUI `Toggle` can't be used). Green
+    /// `vfDevAccent` track when ON, neutral when OFF — matching the menu's accent
+    /// language.
+    private func devMiniSwitch(on: Bool) -> some View {
+        let trackW: CGFloat = 30, trackH: CGFloat = 17, knob: CGFloat = 13
+        return ZStack(alignment: on ? .trailing : .leading) {
+            Capsule(style: .continuous)
+                .fill(on ? Color.vfDevAccent : Color.white.opacity(0.20))
+            Circle()
+                .fill(.white)
+                .frame(width: knob, height: knob)
+                .padding(2)
+        }
+        .frame(width: trackW, height: trackH)
+        .animation(.easeInOut(duration: 0.15), value: on)
+    }
+
     private var devProjectRow: some View {
         // Amber attention when the folder is unset or not a git repo; neutral
         // once a valid repo is chosen.
@@ -1003,6 +1194,18 @@ struct AreaSelectorView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 6)
+            // Phase 3: when the folder was auto-matched from the browser's
+            // localhost port, a subtle accent badge says why (overridable via
+            // "Change…").
+            if state.projectAutoMatchedFromPort, let port = state.detectedLocalhostPort {
+                Text("localhost:\(port)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.vfDevAccent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.vfDevAccent.opacity(0.14)))
+                    .fixedSize()
+            }
             Text("Change…")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.vfAccentBlue)
@@ -1109,59 +1312,116 @@ struct AreaSelectorView: View {
     @ViewBuilder
     private func toolbarTooltip(in bounds: CGSize) -> some View {
         if let rect = state.confirmableSelectionRect,
-           !state.isModelMenuOpen, !state.isMicMenuOpen, !state.isDevSettingsMenuOpen,
            let info = tooltipInfo(forSelection: rect, in: bounds) {
-            let bubbleH: CGFloat = 24
-            let caretH: CGFloat = 5
-            let gap: CGFloat = 7
-            let total = bubbleH + caretH
-            VStack(spacing: 0) {
+            if let maxW = info.maxWidth {
+                // Multi-line variant (the Auto-Detect info icon): a wider wrapped
+                // bubble measured for height, with a downward caret pointing at the
+                // icon. Drawn over the open dev-settings menu (this is the topmost
+                // layer in the ZStack).
+                let hPad: CGFloat = 10, vPad: CGFloat = 7, caretH: CGFloat = 6, gap: CGFloat = 7
+                let textMaxW = maxW - hPad * 2
+                let nsFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+                let measured = (info.text as NSString).boundingRect(
+                    with: CGSize(width: textMaxW, height: .greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: nsFont]
+                )
+                let textW = min(ceil(measured.width), textMaxW)
+                let bubbleW = textW + hPad * 2
+                let bubbleH = ceil(measured.height) + vPad * 2
+                let cx = min(max(info.anchor.midX, bubbleW / 2 + Self.toolbarMargin),
+                             bounds.width - bubbleW / 2 - Self.toolbarMargin)
+                let bubbleCenterY = info.anchor.minY - gap - caretH - bubbleH / 2
+                let bubbleRect = CGRect(x: cx - bubbleW / 2, y: bubbleCenterY - bubbleH / 2,
+                                        width: bubbleW, height: bubbleH)
                 Text(info.text)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.vfTextPrimary)
-                    .fixedSize()
-                    .padding(.horizontal, 9)
-                    .frame(height: bubbleH)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Self.menuFill))
+                    .multilineTextAlignment(.leading)
+                    .frame(width: textW, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: bubbleW, height: bubbleH)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Self.menuFill))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
                     )
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: 0))
-                    p.addLine(to: CGPoint(x: 12, y: 0))
-                    p.addLine(to: CGPoint(x: 6, y: caretH))
-                    p.closeSubpath()
+                    .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+                    .position(x: cx, y: bubbleCenterY)
+                menuCaret(centerX: info.anchor.midX, edgeY: bubbleRect.maxY, pointingUp: false, panel: bubbleRect)
+            } else {
+                let bubbleH: CGFloat = 24
+                let caretH: CGFloat = 5
+                let gap: CGFloat = 7
+                let total = bubbleH + caretH
+                VStack(spacing: 0) {
+                    Text(info.text)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .fixedSize()
+                        .padding(.horizontal, 9)
+                        .frame(height: bubbleH)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Self.menuFill))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        )
+                    Path { p in
+                        p.move(to: CGPoint(x: 0, y: 0))
+                        p.addLine(to: CGPoint(x: 12, y: 0))
+                        p.addLine(to: CGPoint(x: 6, y: caretH))
+                        p.closeSubpath()
+                    }
+                    .fill(Self.menuFill)
+                    .frame(width: 12, height: caretH)
                 }
-                .fill(Self.menuFill)
-                .frame(width: 12, height: caretH)
+                .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+                .position(x: info.anchor.midX, y: info.anchor.minY - gap - total / 2)
             }
-            .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
-            .position(x: info.anchor.midX, y: info.anchor.minY - gap - total / 2)
         }
     }
 
-    /// Text + anchor frame for the currently-hovered control, or nil when none is
-    /// hovered (or when the hovered control — Record — carries its own label).
-    private func tooltipInfo(forSelection rect: CGRect, in bounds: CGSize) -> (text: String, anchor: CGRect)? {
+    /// Text + anchor (+ optional wrap width) for the currently-hovered control, or
+    /// nil when none is hovered (or when the hovered control — Record — carries its
+    /// own label). A non-nil `maxWidth` selects the multi-line bubble variant.
+    /// Internal (not private) so the geometry tests can exercise it.
+    func tooltipInfo(forSelection rect: CGRect, in bounds: CGSize) -> (text: String, anchor: CGRect, maxWidth: CGFloat?)? {
         let fs = state.mode == .fullScreen
         let dev = state.isDevMode
+
+        // While the dev-settings menu is open, the ONLY tooltip is the Auto-Detect
+        // info icon's — the toolbar control tooltips are suppressed (they'd collide
+        // with the open menu).
+        if state.isDevSettingsMenuOpen {
+            guard dev, state.isAutoDetectInfoHovered else { return nil }
+            let anchor = Self.devSettingsAutoDetectInfoIconRect(
+                forSelection: rect, in: bounds,
+                agentCount: state.devAgentMenuItems.count,
+                modelCount: state.devModelMenuItems.count,
+                fullScreen: fs
+            )
+            return (Self.autoDetectInfoTooltip, anchor, 240)
+        }
+
+        // Any other dropdown open → no toolbar tooltips (they'd collide with the menu).
+        if state.isModelMenuOpen || state.isMicMenuOpen { return nil }
+
         if state.isModeArtifactHovered {
-            return ("Artifact", Self.modeArtifactSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
+            return ("Artifact", Self.modeArtifactSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
         }
         if state.isModeDevHovered {
-            return ("Dev Mode", Self.modeDevSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
+            return ("Dev Mode", Self.modeDevSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
         }
         if state.isModelChipHovered {
             // The model name is shown in the button itself, so the tooltip is
             // just the control's purpose.
-            return ("Model", Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
+            return ("Model", Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
         }
         if state.isMicChipHovered {
-            return ("Microphone: \(state.selectedMicrophoneName)", Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
+            return ("Microphone: \(state.selectedMicrophoneName)", Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
         }
         if dev, state.isDevSettingsHovered {
-            return ("Agent & project", Self.devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fs))
+            return ("Agent & project", Self.devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fs), nil)
         }
         return nil
     }
@@ -1361,6 +1621,40 @@ struct AreaSelectorView: View {
             .overlay(Capsule().strokeBorder(Color.vfWarningAmber.opacity(0.5), lineWidth: 0.5))
             .fixedSize()
             .position(x: toolbar.midX, y: toolbar.minY - 18)
+        }
+    }
+
+    /// One-time, NON-BLOCKING post-denial explainer (Phase 3): a floating capsule
+    /// above the toolbar — like `devValidationBanner`, it's NOT part of the menu's
+    /// hit-test geometry. Shown only after the user denies the Automation prompt
+    /// (there's no pre-prompt primer — enabling the toggle is the primer). Yields
+    /// the slot to a record-time validation message (rarely coincident).
+    /// Self-dismissing: cleared on the next action (menu close / folder pick / Dev
+    /// off / toggle off / overlay dismiss).
+    @ViewBuilder
+    private func devLocalhostNoticeBanner(in bounds: CGSize) -> some View {
+        if case .denied = state.localhostNotice, state.devValidationMessage == nil,
+           let rect = state.confirmableSelectionRect {
+            let toolbar = Self.toolbarFrame(
+                forSelection: rect, in: bounds,
+                fullScreen: state.mode == .fullScreen, devMode: state.isDevMode
+            )
+            HStack(alignment: .top, spacing: VFSpacing.xs) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.vfDevAccent)
+                Text("To auto-match folders, allow Zerro under System Settings ▸ Privacy ▸ Automation.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 280, alignment: .leading)
+            .padding(.horizontal, VFSpacing.sm)
+            .padding(.vertical, 6)
+            .background(Color.vfPillBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.vfDevAccent.opacity(0.45), lineWidth: 0.5))
+            .position(x: toolbar.midX, y: toolbar.minY - 36)
         }
     }
 }
@@ -1602,7 +1896,31 @@ private struct PulseLoginBackdrop: View {
             )
             seedDevAgents(s)
             s.setProjectGitRepo(true)
+            s.setAutoDetectProjectEnabled(true)   // show the Auto-Detect toggle ON
             s.toggleDevSettingsMenu()
+            return s
+        }())
+    }
+    .frame(width: 1200, height: 760)
+}
+
+/// Dev Mode with Cursor selected and a LONG (~14-row) model list: the Model
+/// section caps at `maxVisibleModelRows` and scrolls, with top/bottom fades
+/// hinting more rows. Forced to a mid-scroll offset so BOTH fades show; the
+/// Agent / Project / git rows stay fixed below the capped viewport.
+#Preview("Dev Mode — long model list (scrolls)") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.setDevState(
+                isDevMode: true, agentID: "cursor", agentName: "Cursor",
+                projectURL: URL(fileURLWithPath: "/Users/you/dev/my-site", isDirectory: true)
+            )
+            seedDevAgentsLongModelList(s)
+            s.setProjectGitRepo(true)
+            s.toggleDevSettingsMenu()
+            s.setDevModelScrollOffset(4)   // mid-scroll → both fades visible
             return s
         }())
     }
@@ -1679,4 +1997,32 @@ private func seedDevAgents(_ s: AreaSelectorState) {
         .init(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6"),
         .init(id: "claude-haiku-4-5", name: "Claude Haiku 4.5"),
     ], selectedID: "claude-opus-4-8")
+}
+
+/// Cursor selected + a long, curated model list (mirrors the live `cursor-agent
+/// models` shape) so the scroll preview exercises the capped Model viewport.
+@MainActor
+private func seedDevAgentsLongModelList(_ s: AreaSelectorState) {
+    s.setDevAgentMenuItems([
+        .init(id: "cursor", name: "Cursor", installed: true),
+        .init(id: "claude-code", name: "Claude Code", installed: true),
+        .init(id: "codex", name: "Codex", installed: false),
+    ])
+    s.setSelectedAgent(id: "cursor", name: "Cursor")
+    s.setDevModelMenuItems([
+        .init(id: "auto", name: "Auto"),
+        .init(id: "composer-2.5-fast", name: "Composer 2.5 Fast"),
+        .init(id: "claude-opus-4-8-high", name: "Opus 4.8 1M"),
+        .init(id: "gpt-5.5-high", name: "GPT-5.5 1M High"),
+        .init(id: "claude-4.6-sonnet-medium", name: "Sonnet 4.6 1M"),
+        .init(id: "gpt-5.4-high", name: "GPT-5.4 1M"),
+        .init(id: "claude-opus-4-7-high", name: "Opus 4.7 1M High"),
+        .init(id: "gemini-3.1-pro", name: "Gemini 3.1 Pro"),
+        .init(id: "grok-4.3", name: "Grok 4.3 1M"),
+        .init(id: "claude-4.5-sonnet", name: "Sonnet 4.5"),
+        .init(id: "gpt-5.1", name: "GPT-5.1"),
+        .init(id: "gemini-3.5-flash", name: "Gemini 3.5 Flash"),
+        .init(id: "claude-4-sonnet", name: "Sonnet 4"),
+        .init(id: "kimi-k2.5", name: "Kimi K2.5"),
+    ], selectedID: "auto")
 }

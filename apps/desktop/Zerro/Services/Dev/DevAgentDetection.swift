@@ -109,11 +109,11 @@ final class DevAgentDetection {
     /// degrades to `[]` on anything unexpected — a missing CLI, a non-zero exit,
     /// an unparseable format — so it can never break Dev Mode.
     ///
-    /// OUTPUT FORMAT IS BEST-EFFORT / UNVERIFIED against a live cursor-agent
-    /// (not installed on the build machine): we take each non-empty line's first
-    /// whitespace token as the model id (`--model <id>`) and the cleaned line as
-    /// the label, skipping obvious header/decoration lines. Tighten once verified
-    /// against the installed CLI's real `cursor-agent models` output.
+    /// OUTPUT FORMAT VERIFIED against the live CLI (cursor-agent 2026.06.16,
+    /// 2026-06-18): an "Available models" header, then one `"<id> - <Display
+    /// Name>"` row per model, then a "Tip: use --model …" line. See
+    /// `parseCursorModels` for the parse + curation (the CLI lists ~140
+    /// effort×latency permutations; we collapse to one canonical row per model).
     nonisolated private static func probeCursorModels() -> [AgentModel] {
         guard let binary = DevAgentBinaryResolver.resolve("cursor-agent") else { return [] }
 
@@ -147,36 +147,96 @@ final class DevAgentDetection {
         return parseCursorModels(text)
     }
 
-    /// Parse `cursor-agent models` stdout into models. Defensive: one model per
-    /// non-empty line, first token = id, line = label; de-duped, order preserved
-    /// (the CLI is assumed to list newest/current first). Skips lines that look
-    /// like headers/usage. Exposed `internal` for unit testing the parser.
+    /// Parse `cursor-agent models` stdout into a SHORT, curated model list.
+    /// Exposed `internal` for unit testing.
+    ///
+    /// VERIFIED format (cursor-agent 2026.06.16, 2026-06-18): an "Available
+    /// models" header, then one `"<id> - <Display Name>"` row per model, then a
+    /// "Tip: use --model …" line. The CLI lists ~140 rows — every reasoning-effort
+    /// × latency permutation of each model (e.g. `claude-opus-4-8-low/medium/high/
+    /// xhigh/max`, each with `-fast` and `-thinking` variants) — unusable as a
+    /// menu. So we:
+    ///   • parse `<id> - <Display Name>` (id left of the first " - ", label right);
+    ///   • drop the header, the "Tip:" line, decoration (no " - "), and any
+    ///     parameterized `…[context=…]` id (the canonical id is enough);
+    ///   • COLLAPSE each model family (its effort/latency permutations) to ONE
+    ///     canonical row — preferring the account-marked "(default)"/"(current)",
+    ///     else the bare id, else the `-high` then `-medium` tier, else the first
+    ///     listed;
+    ///   • pin `auto` first (Cursor's default router → becomes the default pick).
+    /// Defensive: empty/garbage input → []; an unknown future suffix simply forms
+    /// its own family (an extra row, never a crash).
     nonisolated static func parseCursorModels(_ text: String) -> [AgentModel] {
-        var seen = Set<String>()
-        var out: [AgentModel] = []
+        // 1. Parse rows in listed order (header / Tip / decoration / bracketed dropped).
+        var rows: [(id: String, display: String)] = []
+        var seenID = Set<String>()
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            // Strip a leading selection marker ("* ", "- ", "> ") the CLI may use
-            // to flag the current model.
-            let cleaned = line.replacingOccurrences(
-                of: "^[*\\-•>]\\s+", with: "", options: .regularExpression
-            )
-            guard !cleaned.isEmpty else { continue }
-            // Skip obvious non-model lines (headers / usage / blank decoration).
-            let lower = cleaned.lowercased()
-            if lower.hasPrefix("available") || lower.hasPrefix("usage")
-                || lower.hasPrefix("models") || cleaned.hasPrefix("-") {
+            guard !line.isEmpty else { continue }
+            let lower = line.lowercased()
+            if lower.hasPrefix("available") || lower.hasPrefix("tip:") || lower.hasPrefix("usage") {
                 continue
             }
-            // First whitespace-delimited token is the model id.
-            guard let idPart = cleaned.split(whereSeparator: { $0 == " " || $0 == "\t" }).first else {
-                continue
-            }
-            let modelID = String(idPart)
-            guard seen.insert(modelID).inserted else { continue }
-            out.append(AgentModel(modelID: modelID, displayName: cleaned))
+            // Real rows are "<id> - <Display Name>"; a line without the separator
+            // is decoration we skip.
+            guard let sep = line.range(of: " - ") else { continue }
+            let id = String(line[..<sep.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let display = String(line[sep.upperBound...]).trimmingCharacters(in: .whitespaces)
+            // An id has no spaces; drop parameterized "[context=…]" forms.
+            guard !id.isEmpty, !display.isEmpty, !id.contains(" "), !id.contains("[") else { continue }
+            guard seenID.insert(id).inserted else { continue }
+            rows.append((id, display))
         }
-        return out
+        guard !rows.isEmpty else { return [] }
+
+        // 2. Group into families, preserving first-appearance order.
+        var familyOrder: [String] = []
+        var byFamily: [String: [(id: String, display: String)]] = [:]
+        for row in rows {
+            let key = cursorModelFamilyKey(row.id)
+            if byFamily[key] == nil { familyOrder.append(key) }
+            byFamily[key, default: []].append(row)
+        }
+
+        // 3. One canonical representative per family (lower score wins; ties → first listed).
+        func score(_ row: (id: String, display: String), family: String) -> Int {
+            let d = row.display.lowercased()
+            if d.contains("(default)") { return 0 }
+            if d.contains("(current)") { return 1 }
+            if row.id == family { return 2 }
+            if row.id == family + "-high" { return 3 }
+            if row.id == family + "-medium" { return 4 }
+            return 5
+        }
+        var curated: [AgentModel] = []
+        for family in familyOrder {
+            guard let members = byFamily[family], !members.isEmpty else { continue }
+            let rep = members.enumerated().min { a, b in
+                let sa = score(a.element, family: family), sb = score(b.element, family: family)
+                return sa != sb ? sa < sb : a.offset < b.offset
+            }!.element
+            curated.append(AgentModel(modelID: rep.id, displayName: rep.display))
+        }
+
+        // 4. Pin `auto` first (Cursor's default).
+        if let i = curated.firstIndex(where: { $0.modelID == "auto" }), i != 0 {
+            curated.insert(curated.remove(at: i), at: 0)
+        }
+        return curated
+    }
+
+    /// Family key for a Cursor model id: strip a trailing run of effort/latency
+    /// suffix tokens so all permutations of one model collapse together — e.g.
+    /// `claude-opus-4-8-thinking-high-fast` → `claude-opus-4-8`,
+    /// `composer-2.5-fast` → `composer-2.5`, `gpt-5.4-mini-high` → `gpt-5.4-mini`.
+    /// `auto` and unknown suffixes are left intact (their own family).
+    nonisolated private static func cursorModelFamilyKey(_ id: String) -> String {
+        let suffixes: Set<String> = ["fast", "none", "low", "medium", "high", "xhigh", "extra", "max", "thinking"]
+        var tokens = id.split(separator: "-").map(String.init)
+        while tokens.count > 1, let last = tokens.last, suffixes.contains(last) {
+            tokens.removeLast()
+        }
+        return tokens.joined(separator: "-")
     }
 
     // MARK: - Codex models (its own per-account cache)

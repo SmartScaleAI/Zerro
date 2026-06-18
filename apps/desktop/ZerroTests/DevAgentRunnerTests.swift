@@ -268,6 +268,90 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(""))
     }
 
+    func testParseStreamJSONLineCursorToolCalls() {
+        // Cursor rides tool activity in its OWN `tool_call` event (distinct from
+        // Claude's `assistant.tool_use`), emitting on the `started` twin.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"tool_call","subtype":"started","tool_call":{"editToolCall":{"args":{"path":"/private/tmp/proj/README.md"}},"toolCallId":"t","startedAtMs":"1"}}"#),
+            .editing(file: "README.md")
+        )
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"x"}},"toolCallId":"t"}}"#),
+            .readingFiles
+        )
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"echo hi"}},"toolCallId":"t"}}"#),
+            .running
+        )
+        // The `completed` twin must NOT re-emit (the `started` one already did).
+        XCTAssertNil(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"tool_call","subtype":"completed","tool_call":{"editToolCall":{"args":{"path":"/p/README.md"}}}}"#))
+        // An unknown/future tool kind degrades to "working…", never nil-crashes.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"tool_call","subtype":"started","tool_call":{"frobToolCall":{"args":{}}}}"#),
+            .working
+        )
+        // Cursor's terminal `result` event maps to `.done` like Claude's (shared).
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+                #"{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"inputTokens":1}}"#),
+            .done
+        )
+        // Cursor's other top-level events carry no progress signal.
+        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(#"{"type":"thinking","subtype":"delta","text":"…"}"#))
+        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll edit it."}]}}"#))
+        // Regression guard: the Claude Code branch is unchanged — its tool_use
+        // mapping is still covered exhaustively by testParseStreamJSONLine above.
+    }
+
+    func testParseResultSummaryCursorResultEvent() {
+        // Cursor's `result` event carries extra fields (duration_ms, usage, …) but
+        // the same `result` summary string the existing parser reads.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseResultSummaryForTesting(
+                #"{"type":"result","subtype":"success","duration_ms":8144,"is_error":false,"result":"  Appended the line.  ","usage":{"inputTokens":1}}"#),
+            "Appended the line."
+        )
+    }
+
+    func testCursorArgumentDeliveryArgv() async throws {
+        // The Cursor entry's contract, end-to-end through the runner: prompt rides
+        // as the LAST argv element (positional `.argument`), stdin is closed empty,
+        // and --force (allow-commands) + --model are threaded in order.
+        let bin = try makeScript("cursorlike", """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$PWD/argv.txt"
+        cat > "$PWD/stdin.txt"
+        echo '{"type":"result","subtype":"success","result":"ok"}'
+        exit 0
+        """)
+        let e = DevAgentEntry(
+            id: "cursorlike", displayName: "Cursor", executableName: bin.lastPathComponent,
+            promptDelivery: .argument, outputFormat: .streamJSON,
+            baseArgs: ["-p", "--output-format", "stream-json", "--trust"],
+            editsOnlyArgs: [], allowCommandsArgs: ["--force"],
+            installed: true, absolutePath: bin, modelFlagName: "--model"
+        )
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: e, permission: .allowCommands, prompt: "make this button bigger",
+            projectURL: scratch, timeouts: fastTimeouts(), model: "claude-opus-4-8-high",
+            onSubstatus: { _ in }
+        )
+        XCTAssertEqual(result, .succeeded(summary: "ok"))
+        let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(argv, ["-p", "--output-format", "stream-json", "--trust", "--force",
+                              "--model", "claude-opus-4-8-high", "make this button bigger"])
+        let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
+        XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
+    }
+
     func testParseResultSummary() {
         // A `result` event with text → the trimmed text.
         XCTAssertEqual(

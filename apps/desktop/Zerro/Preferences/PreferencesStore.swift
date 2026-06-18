@@ -46,6 +46,19 @@ final class PreferencesStore {
         /// model_id), stored as a `[String: String]` dictionary.
         static let devModelByAgent = "vf.dev.modelByAgent"
 
+        // Dev Mode (Phase 3) — port→folder zero-setup ("talk to localhost:3000
+        // and Zerro already knows the project").
+        /// `port (as String) → folder path`, the learned localhost-port→project
+        /// map. `devProjectPath` stays the GLOBAL last-used fallback.
+        static let devProjectByPort = "vf.dev.projectByPort"
+        /// Master opt-in (default OFF) for reading the browser's localhost URL to
+        /// auto-detect the project folder. Surfaced as the dev-settings menu's
+        /// "Auto-Detect Project" toggle; flipping it on is the permission primer.
+        /// Off → the reader never runs.
+        static let devAutoDetectProject = "vf.dev.autoDetectProject"
+        /// One-time: the post-denial explainer has been shown.
+        static let localhostDenialNoteShown = "vf.dev.localhostDenialNoteShown"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -59,6 +72,9 @@ final class PreferencesStore {
             devProjectPath,
             devAgentID,
             devModelByAgent,
+            devProjectByPort,
+            devAutoDetectProject,
+            localhostDenialNoteShown,
         ]
     }
 
@@ -153,6 +169,41 @@ final class PreferencesStore {
         return available.first?.modelID
     }
 
+    // MARK: - Dev Mode (Phase 3) — port→folder map + localhost auto-match
+
+    /// Learned `localhost port → project folder path` map (port as String key, as
+    /// UserDefaults stores natively). `devProjectURL` (above) stays the GLOBAL
+    /// last-used fallback; this is the per-port memory layered over it.
+    var devProjectByPort: [String: String] {
+        didSet { defaults.set(devProjectByPort, forKey: Keys.devProjectByPort) }
+    }
+
+    /// The remembered project folder for `port`, or nil if none mapped.
+    func projectURL(forPort port: Int) -> URL? {
+        guard let path = devProjectByPort[String(port)], !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// Remember `url` as the project folder for `port` (learned on a Dev record or
+    /// a manual folder pick while a localhost port was detected).
+    func setProjectURL(_ url: URL, forPort port: Int) {
+        devProjectByPort[String(port)] = url.path
+    }
+
+    /// Master opt-in (default OFF): read the browser's current localhost URL to
+    /// auto-detect the project folder. Surfaced as the dev-settings menu's
+    /// "Auto-Detect Project" toggle; flipping it on requests browser permission.
+    /// Off → the reader never runs (byte-identical to pre-Phase-3 behavior: manual
+    /// pick + global last-used).
+    var devAutoDetectProject: Bool {
+        didSet { defaults.set(devAutoDetectProject, forKey: Keys.devAutoDetectProject) }
+    }
+
+    /// One-time flag: the post-denial explainer has been shown.
+    var hasShownLocalhostDenialNote: Bool {
+        didSet { defaults.set(hasShownLocalhostDenialNote, forKey: Keys.localhostDenialNoteShown) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -180,6 +231,12 @@ final class PreferencesStore {
         self.selectedAgentID = defaults.string(forKey: Keys.devAgentID)
         self.selectedModelByAgent =
             (defaults.dictionary(forKey: Keys.devModelByAgent) as? [String: String]) ?? [:]
+        self.devProjectByPort =
+            (defaults.dictionary(forKey: Keys.devProjectByPort) as? [String: String]) ?? [:]
+        // Default OFF: `bool(forKey:)`'s false-for-missing IS the default, so the
+        // browser is never read until the user opts in via the dev-settings toggle.
+        self.devAutoDetectProject = defaults.bool(forKey: Keys.devAutoDetectProject)
+        self.hasShownLocalhostDenialNote = defaults.bool(forKey: Keys.localhostDenialNoteShown)
     }
 
     // MARK: - Reset
@@ -202,5 +259,8 @@ final class PreferencesStore {
         devProjectURL = nil
         selectedAgentID = nil
         selectedModelByAgent = [:]
+        devProjectByPort = [:]
+        devAutoDetectProject = false
+        hasShownLocalhostDenialNote = false
     }
 }

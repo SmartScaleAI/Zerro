@@ -56,10 +56,10 @@ enum AgentModelMapping {
     /// stays empty).
     static func source(forAgent agentID: String) -> AgentModelSource {
         switch agentID {
-        case DevAgentRegistry.claudeCodeID: return .manifest(provider: "anthropic")
-        case DevAgentRegistry.codexID:      return .codexCLI
-        case "cursor":                      return .cursorCLI
-        default:                            return .none
+        case DevAgentRegistry.claudeCodeID:  return .manifest(provider: "anthropic")
+        case DevAgentRegistry.codexID:       return .codexCLI
+        case DevAgentRegistry.cursorID:      return .cursorCLI
+        default:                             return .none
         }
     }
 }
