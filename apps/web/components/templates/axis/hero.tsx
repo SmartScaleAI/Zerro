@@ -167,11 +167,15 @@ const Hero = () => {
           Give your agent
           <br />
           <motion.span
-            className="bg-gradient-to-r from-foreground via-primary to-foreground bg-[length:200%_auto] bg-clip-text text-transparent"
+            className="bg-clip-text text-transparent bg-[length:200%_auto]"
+            style={{
+              backgroundImage:
+                "linear-gradient(to right, rgb(135,160,215), rgb(115,190,165), rgb(180,140,215), rgb(125,190,150), rgb(135,160,215))",
+            }}
             animate={{ backgroundPosition: ["200% center", "-200% center"] }}
             transition={{
               repeat: Number.POSITIVE_INFINITY,
-              duration: 7,
+              duration: 9,
               ease: "linear",
             }}
           >

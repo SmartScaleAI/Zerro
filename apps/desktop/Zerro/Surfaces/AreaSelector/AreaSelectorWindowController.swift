@@ -119,6 +119,10 @@ final class AreaSelectorWindowController {
             Self.modelMenuItems(entitlements: entitlements),
             selectedID: preferences.selectedModelID
         )
+        // The model button shows the model name, so its width is dynamic — keep
+        // the shared geometry width in sync with the current selection (mirrors
+        // `fullScreenBottomInset`). Read by the frame helpers on render + hit-test.
+        AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
 
         // Dev Mode (Phase 1): seed the mode switch + remembered folder WITHOUT
         // probing for the agent — detection runs a slow login-shell PATH lookup
@@ -163,7 +167,9 @@ final class AreaSelectorWindowController {
             let devSelection: DevModeSelection? = {
                 guard let s = self?.state, s.isDevMode,
                       let agentID = s.selectedAgentID, let projectURL = s.projectURL else { return nil }
-                return DevModeSelection(agentID: agentID, projectURL: projectURL)
+                // Capture the Model section's current pick (Phase 2). nil ⇒ the
+                // agent's own default (no `--model` flag).
+                return DevModeSelection(agentID: agentID, projectURL: projectURL, modelID: s.selectedDevModelID)
             }()
             self?.dismiss()
             onConfirm(rect, modelID, devSelection)
@@ -391,9 +397,15 @@ final class AreaSelectorWindowController {
                     ))
                 }
                 if state.isDevSettingsMenuOpen, let rect = selectionRect {
+                    let agentCount = state.devAgentMenuItems.count
+                    let modelCount = state.devModelMenuItems.count
                     state.setHighlightedDevAgentIndex(AreaSelectorView.devSettingsAgentRowIndex(
                         at: point, forSelection: rect, in: size,
-                        agentCount: state.devAgentMenuItems.count, fullScreen: fullScreen
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    ))
+                    state.setHighlightedDevModelIndex(AreaSelectorView.devSettingsModelRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
                     ))
                 }
             }
@@ -458,6 +470,9 @@ final class AreaSelectorWindowController {
                         let item = state.models[idx]
                         if !item.gated {
                             state.selectModel(id: item.id)
+                            // New model name → re-measure the model button so the
+                            // toolbar reflows around the new label.
+                            AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
                         } else {
                             // Gated row (BYOK, keyless provider): ignore the
                             // click but keep the menu open — mirrors the
@@ -491,15 +506,23 @@ final class AreaSelectorWindowController {
                 if state.isDevSettingsMenuOpen {
                     if let rect = selectionRect {
                         let agentCount = state.devAgentMenuItems.count
+                        let modelCount = state.devModelMenuItems.count
                         if let idx = AreaSelectorView.devSettingsAgentRowIndex(
                             at: point, forSelection: rect, in: size,
-                            agentCount: agentCount, fullScreen: fullScreen
+                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
                         ) {
                             self?.selectDevAgent(at: idx, state: state)
                             return nil
                         }
+                        if let idx = AreaSelectorView.devSettingsModelRowIndex(
+                            at: point, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        ) {
+                            self?.selectDevModel(at: idx, state: state)
+                            return nil
+                        }
                         let projectRow = AreaSelectorView.devSettingsProjectRowFrame(
-                            forSelection: rect, in: size, agentCount: agentCount, fullScreen: fullScreen
+                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
                         )
                         if projectRow.contains(point) {
                             self?.presentFolderPicker(window: window, state: state)
@@ -678,8 +701,16 @@ final class AreaSelectorWindowController {
     // hard-coded agent default with live `DevAgentRegistry` detection.
 
     /// Where the dev-settings menu's "Install" hint points when a CLI isn't found
-    /// on PATH (Phase 1: Claude Code).
+    /// on PATH, per agent (Claude Code's setup docs are the fallback).
     private static let claudeCodeInstallURL = URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!
+    private static let codexInstallURL = URL(string: "https://developers.openai.com/codex/cli/")!
+
+    private static func installURL(forAgent agentID: String) -> URL {
+        switch agentID {
+        case DevAgentRegistry.codexID: return codexInstallURL
+        default:                       return claudeCodeInstallURL
+        }
+    }
 
     /// Set the mode from a mode-switch segment click. Clicking the already-active
     /// segment is a no-op (the state guards it) — so persistence, analytics, and
@@ -720,10 +751,45 @@ final class AreaSelectorWindowController {
         if item.installed {
             state.setSelectedAgent(id: item.id, name: item.name)
             preferences?.selectedAgentID = item.id
+            // The model list is per-agent — repopulate the Model section for the
+            // newly-selected agent (its remembered pick, else newest).
+            refreshDevModelItems(forAgent: item.id, state: state)
         } else {
-            // Phase 1 ships one agent, so its install docs are the only target.
-            NSWorkspace.shared.open(Self.claudeCodeInstallURL)
+            // A not-installed agent row opens that agent's install docs.
+            NSWorkspace.shared.open(Self.installURL(forAgent: item.id))
         }
+    }
+
+    /// Act on a dev-settings menu Model row: remember the pick for the current
+    /// agent (persisted) and checkmark it. No-op without a selected agent.
+    private func selectDevModel(at index: Int, state: AreaSelectorState) {
+        guard index >= 0, index < state.devModelMenuItems.count,
+              let agentID = state.selectedAgentID else { return }
+        let item = state.devModelMenuItems[index]
+        preferences?.selectedModelByAgent[agentID] = item.id
+        state.setSelectedDevModelID(item.id)
+    }
+
+    /// Populate the Model section for `agentID`: the agent's available models
+    /// (manifest provider, or the Cursor CLI) and the resolved pick (remembered,
+    /// else newest/rank-0). Reads through `PreferencesStore.selectedModel(...)`
+    /// so a retired remembered pick falls back to newest. The list is ALWAYS
+    /// non-empty for a manifest agent (cache→bundled fallback), so offline never
+    /// empties the section.
+    private func refreshDevModelItems(forAgent agentID: String?, state: AreaSelectorState) {
+        guard let agentID else {
+            state.setDevModelMenuItems([], selectedID: nil)
+            return
+        }
+        let available = AgentModelManifestStore.shared.models(forAgent: agentID)
+        let items = available.map { AreaSelectorState.DevModelMenuItem(id: $0.modelID, name: $0.displayName) }
+        let selected = preferences?.selectedModel(forAgent: agentID, available: available)
+        // Persist the resolved default so the captured `DevModeSelection` and the
+        // checkmark agree even before the user touches the Model section.
+        if let selected, preferences?.selectedModelByAgent[agentID] == nil {
+            preferences?.selectedModelByAgent[agentID] = selected
+        }
+        state.setDevModelMenuItems(items, selectedID: selected)
     }
 
     /// Warm agent detection (background, cached) and apply the result to the
@@ -735,6 +801,15 @@ final class AreaSelectorWindowController {
         DevAgentDetection.shared.warm { [weak self, weak state] entries in
             guard let state else { return }
             self?.applyAgentDetection(entries, to: state)
+        }
+        // Phase 2: refresh the server model manifest in the background (covers a
+        // session that launched in normal mode, where ZerroApp didn't warm it).
+        // When it lands, re-seed the Model section for the current agent so
+        // freshly-fetched models appear. Fail-open — offline keeps cache/bundled.
+        Task { [weak self, weak state] in
+            await AgentModelManifestStore.shared.warm()
+            guard let self, let state else { return }
+            self.refreshDevModelItems(forAgent: state.selectedAgentID, state: state)
         }
     }
 
@@ -750,8 +825,9 @@ final class AreaSelectorWindowController {
         let claude = entries.first { $0.id == DevAgentRegistry.recommendedID }
         guard claude?.installed == true, let claude else {
             // Not installed: agent stays unset so validation blocks; keep the
-            // display name for the menu's install affordance.
+            // display name for the menu's install affordance. No agent → no models.
             state.setSelectedAgent(id: nil, name: claude?.displayName ?? "Claude Code")
+            state.setDevModelMenuItems([], selectedID: nil)
             return
         }
         let id = preferences?.selectedAgentID ?? claude.id
@@ -760,6 +836,8 @@ final class AreaSelectorWindowController {
         if preferences?.selectedAgentID == nil {
             preferences?.selectedAgentID = id
         }
+        // Seed the Model section for the resolved agent (Phase 2).
+        refreshDevModelItems(forAgent: id, state: state)
     }
 
     /// Open a directories-only `NSOpenPanel` to choose the project folder.

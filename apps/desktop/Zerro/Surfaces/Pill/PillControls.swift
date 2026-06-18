@@ -147,6 +147,69 @@ struct PillDismissButton: View {
     }
 }
 
+// MARK: - Dev-result actions (shared: collapsed pill + expanded footer)
+//
+// The Dev Mode result card's two terminal actions, rendered identically in the
+// collapsed summary pill and the expanded card footer (factored here so the two
+// forms can't drift). `compact` shrinks them to fit the collapsed capsule.
+
+/// Destructive "Undo" — reverts the working tree to the pre-run checkpoint.
+/// Quiet at rest like `PillSecondaryButton` (no fill), but RED text with a faint
+/// red hover capsule (the pill is hit-testable, so `.onHover` works). Kept
+/// separate so `PillSecondaryButton`'s neutral look is untouched elsewhere.
+struct DevUndoButton: View {
+    let action: () -> Void
+    /// Smaller font/padding for the collapsed summary pill.
+    var compact: Bool = false
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Undo")
+                .font(.system(size: compact ? 12 : 13))
+                .foregroundStyle(Color.vfDestructive)
+                .padding(.horizontal, compact ? 10 : 12)
+                .padding(.vertical, compact ? 4 : 6)
+                .frame(height: compact ? nil : PillMetrics.controlHeight)
+                .background(
+                    Capsule()
+                        .fill(Color.vfDestructive.opacity(0.12))
+                        .opacity(isHovering ? 1 : 0)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
+        .fixedSize()
+    }
+}
+
+/// Green "Accept" CTA — a filled `vfSuccessGreen` capsule mirroring the artifact
+/// card's hero copy footprint, but a one-shot action (no copy-feedback flip):
+/// keeps the agent's changes and closes the card.
+struct DevAcceptButton: View {
+    let action: () -> Void
+    /// Smaller font/padding for the collapsed summary pill.
+    var compact: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Accept")
+                .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                .fixedSize()
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, compact ? 12 : PillMetrics.primaryHPad)
+                .padding(.vertical, compact ? 5 : PillMetrics.primaryVPad)
+                .background(Color.vfSuccessGreen, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
 // MARK: - PillLeadingIconBadge
 
 /// The badged leading status icon — used by every pill state's status glyph so

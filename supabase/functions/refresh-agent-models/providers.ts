@@ -1,25 +1,22 @@
 // =============================================================================
-// refresh-agent-models — provider model-list fetchers.
+// refresh-agent-models — provider model-list fetcher (Anthropic only).
 // =============================================================================
-// Reads the LIVE model catalogs from the provider APIs using the SAME secrets
-// the `generate` proxy already holds (ANTHROPIC_API_KEY / OPENAI_API_KEY). Each
-// fetcher THROWS on any non-OK status or transport error — refresh.ts treats a
-// throw as "leave this provider's rows untouched" (never wipe on a failed
-// fetch). `fetchImpl` is injectable so tests can stub the wire responses.
+// Reads Anthropic's LIVE model catalog using the SAME ANTHROPIC_API_KEY the
+// `generate` proxy already holds. THROWS on any non-OK status or transport
+// error — refresh.ts treats a throw as "leave the rows untouched" (never wipe
+// on a failed fetch). `fetchImpl` is injectable so tests can stub the wire.
+// (OpenAI is retired — Codex sources its own per-account list client-side.)
 //
 //   Anthropic GET /v1/models   x-api-key, anthropic-version: 2023-06-01
 //                              -> { data: [{ id, display_name, created_at }], has_more, ... }
-//   OpenAI    GET /v1/models   Authorization: Bearer
-//                              -> { data: [{ id, created, owned_by }] }
 // =============================================================================
 
 import type { FetchedModel } from "./curate.ts";
 
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
-const OPENAI_BASE = "https://api.openai.com/v1";
 
-/** Network-call timeout — the list endpoints are small + fast. */
+/** Network-call timeout — the list endpoint is small + fast. */
 const FETCH_TIMEOUT_MS = 15_000;
 /** Page size for Anthropic's paginated list (its max), so one page suffices. */
 const ANTHROPIC_PAGE_LIMIT = 1000;
@@ -75,27 +72,6 @@ export async function fetchAnthropicModels(
       id: String(row.id ?? ""),
       displayName: typeof row.display_name === "string" ? row.display_name : undefined,
       createdAt: toUnixSeconds(row.created_at),
-    };
-  }).filter((m) => m.id !== "");
-}
-
-/** Fetch OpenAI's model catalog. Single un-paginated list. */
-export async function fetchOpenAIModels(
-  apiKey: string,
-  fetchImpl: FetchImpl = fetch,
-): Promise<FetchedModel[]> {
-  const body = await getJson(
-    `${OPENAI_BASE}/models`,
-    { Authorization: `Bearer ${apiKey}` },
-    fetchImpl,
-  );
-  const data = (body as { data?: unknown }).data;
-  if (!Array.isArray(data)) throw new Error("malformed_response: missing data[]");
-  return data.map((m): FetchedModel => {
-    const row = m as { id?: unknown; created?: unknown };
-    return {
-      id: String(row.id ?? ""),
-      createdAt: typeof row.created === "number" ? row.created : 0,
     };
   }).filter((m) => m.id !== "");
 }

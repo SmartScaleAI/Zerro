@@ -116,6 +116,10 @@ enum ManagedBackend {
     /// dialog works signed-out); shares this same base URL resolution so a
     /// DEBUG backend override points feedback at the local stack too.
     static var feedbackURL: URL { baseURL.appendingPathComponent("feedback") }
+    /// Dev Mode model manifest (server-fetched coding-agent models). PUBLIC GET,
+    /// no auth — the list is public model ids. Shares the base-URL resolution so
+    /// a DEBUG override reads the manifest from the local stack too.
+    static var agentModelsURL: URL { baseURL.appendingPathComponent("agent-models") }
 
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,

@@ -8,8 +8,8 @@
 // CODE (constant-time) against the `x-refresh-secret` header the cron sends —
 // the gateway gate is OFF so that header reaches our code.
 //
-// Reuses the SAME provider secrets the `generate` proxy holds (ANTHROPIC_API_KEY
-// / OPENAI_API_KEY). They are read here and never returned to the caller. The
+// Reuses the SAME ANTHROPIC_API_KEY the `generate` proxy holds (read here, never
+// returned to the caller). OpenAI is retired — Codex sources its own list. The
 // service-role DB client is the only writer to agent_models (RLS bypass).
 // =============================================================================
 
@@ -35,12 +35,10 @@ Deno.serve(async (req: Request) => {
   }
 
   const anthropicKey = requireEnv("ANTHROPIC_API_KEY");
-  const openaiKey = requireEnv("OPENAI_API_KEY");
 
   const summary = await refreshAgentModels({
     store: new SupabaseAgentModelsStore(serviceClient()),
     anthropicKey,
-    openaiKey,
   });
 
   // 200 even when a provider failed: the job is best-effort and the per-provider

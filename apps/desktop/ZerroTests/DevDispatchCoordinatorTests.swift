@@ -100,6 +100,23 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertTrue(success.diffText.contains("+.btn { color: teal; }"), "diffText should show the edit:\n\(success.diffText)")
     }
 
+    func testDispatchThreadsSelectedModelToRunner() async throws {
+        initRepo()
+        write("app.css", ".btn { color: blue; }\n")
+        git("add", "-A"); git("commit", "-m", "baseline")
+
+        let runner = FakeRunner(result: .succeeded(summary: nil))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+
+        _ = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            model: "claude-opus-4-8",
+            onPhase: { _ in }
+        )
+        // Phase 2: the selected model is forwarded to the runner verbatim.
+        XCTAssertEqual(runner.lastModel, "claude-opus-4-8")
+    }
+
     // MARK: - Failure keeps the checkpoint, no auto-revert
 
     func testAgentFailureKeepsCheckpointAndLeavesEdits() async throws {
@@ -286,7 +303,11 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
     private let sideEffect: (@Sendable (URL) -> Void)?
     private let lock = NSLock()
     private var _runCount = 0
+    private var _lastModel: String?
     var runCount: Int { lock.lock(); defer { lock.unlock() }; return _runCount }
+    /// The `model` forwarded on the most recent run (Phase 2) — lets a test
+    /// assert the dispatch threads the selected model through to the runner.
+    var lastModel: String? { lock.lock(); defer { lock.unlock() }; return _lastModel }
 
     init(result: DevRunResult, sideEffect: (@Sendable (URL) -> Void)? = nil) {
         self.result = result
@@ -299,9 +320,10 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
+        model: String?,
         onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
     ) async -> DevRunResult {
-        lock.lock(); _runCount += 1; lock.unlock()
+        lock.lock(); _runCount += 1; _lastModel = model; lock.unlock()
         sideEffect?(projectURL)
         return result
     }

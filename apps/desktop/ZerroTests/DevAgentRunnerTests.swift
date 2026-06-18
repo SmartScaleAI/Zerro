@@ -72,6 +72,35 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(result, .succeeded(summary: "Updated the login screen layout."))
     }
 
+    func testArgumentDeliveryAppendsPromptToArgvAndClosesStdin() async throws {
+        // Codex-style `.argument` delivery: the prompt rides as the LAST argv
+        // element (after the flags + --model) and stdin is closed empty.
+        let bin = try makeScript("argcap", """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$PWD/argv.txt"
+        cat > "$PWD/stdin.txt"
+        exit 0
+        """)
+        let e = DevAgentEntry(
+            id: "codexlike", displayName: "X", executableName: bin.lastPathComponent,
+            promptDelivery: .argument, outputFormat: .text,
+            baseArgs: ["exec", "--skip-git-repo-check"],
+            editsOnlyArgs: ["--sandbox", "workspace-write"], allowCommandsArgs: [],
+            installed: true, absolutePath: bin, modelFlagName: "--model"
+        )
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: e, permission: .editsOnly, prompt: "make it teal",
+            projectURL: scratch, timeouts: fastTimeouts(), model: "gpt-5.5",
+            onSubstatus: { _ in }
+        )
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(argv, ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--model", "gpt-5.5", "make it teal"])
+        let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
+        XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
+    }
+
     func testNonZeroExitCarriesStderrTail() async throws {
         let bin = try makeScript("fail", """
         #!/bin/sh

@@ -106,6 +106,12 @@ struct DevResultCard: Equatable {
     let title: String
     let summary: String
     let diffText: String
+    /// Diff stat counts for the COLLAPSED pill's "Changes applied (+a −r)" label.
+    /// The EXPANDED card uses `summary`/`diffText` instead. Defaulted so literal
+    /// `#Preview` constructions stay terse.
+    var linesAdded: Int = 0
+    var linesRemoved: Int = 0
+    var filesChanged: Int = 0
 }
 
 // MARK: - PillView
@@ -437,10 +443,10 @@ struct PillView: View {
             ProcessingPillContent(stepLabel: label, onCancel: cancellable ? onCancel : nil)
         case .devDone(let card, let expanded):
             // The Dev Mode result reuses the success card in its dev-result
-            // configuration: summary on top, the readable diff in the body well,
-            // an Undo footer, and the X (keeps changes). Expanded gets the same
+            // configuration: a "Hide changes" toggle on top (no X), the summary +
+            // readable diff, and the Undo/Accept footer. Expanded gets the same
             // 760-wide / clipped chrome as .resultExpanded; compact is the summary
-            // pill that expands to it.
+            // pill (View changes / Undo / Accept) that expands to it.
             if expanded {
                 ArtifactCardView(
                     artifact: nil,
@@ -463,8 +469,11 @@ struct PillView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             } else {
                 DevResultSummaryPill(
-                    summary: card.summary,
+                    linesAdded: card.linesAdded,
+                    linesRemoved: card.linesRemoved,
+                    filesChanged: card.filesChanged,
                     onExpand: onToggleExpand,
+                    onRevert: onDevRevert,
                     onDismiss: onDismissResult
                 )
                 // Same determinate-width treatment as `.resultCompact`: fixedSize
@@ -575,45 +584,54 @@ private struct DevResultPillContent: View {
 
 // MARK: - DevResultSummaryPill (Dev Mode result card — compact)
 //
-// The COLLAPSED form of the `.devDone` success card: green check + the one-line
-// summary, then a "View ⌄" expand toggle, a hairline divider, and the close X
-// (keeps the changes). Mirrors `.resultCompact`'s capsule chrome so the dev
-// result reads as a peer of the normal artifact result; expanding swaps in the
-// full `ArtifactCardView` dev-result card.
+// The COLLAPSED form of the `.devDone` success card: green check + a fixed
+// "Changes applied (+a −r)" label (the diff line counts — NOT the agent summary,
+// which the expanded card keeps), then — on the right — a "View changes" expand
+// toggle followed by the SAME destructive Undo + green Accept buttons the
+// expanded footer shows (shared `DevUndoButton` / `DevAcceptButton`,
+// compact-sized). No close X: Accept is the keep-and-close, Undo the revert.
+// Expanding swaps in the full `ArtifactCardView` dev-result card.
 
 private struct DevResultSummaryPill: View {
-    let summary: String
+    let linesAdded: Int
+    let linesRemoved: Int
+    let filesChanged: Int
     let onExpand: () -> Void
+    /// Undo → restore the pre-run checkpoint.
+    let onRevert: () -> Void
+    /// Accept → keep the changes and close (same close-and-keep as the expanded card).
     let onDismiss: () -> Void
 
-    /// The summary's first non-empty line — the compact pill is a single line, so
-    /// a multi-line agent summary (or one leading with markdown) collapses to its
-    /// opening sentence rather than leaking block syntax into the capsule.
-    private var summaryLine: String {
-        let line = summary
-            .split(whereSeparator: \.isNewline)
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        return (line.map(String.init) ?? summary).trimmingCharacters(in: .whitespaces)
+    /// "Changes applied (+12 −3)". For a 0/0 stat (a non-line change) it never
+    /// reads "(+0 −0)" — it falls back to the files-changed count, then to a bare
+    /// "Changes applied". Matches the expanded header's "Changes applied" wording.
+    private var label: String {
+        if linesAdded > 0 || linesRemoved > 0 {
+            return "Changes applied (+\(linesAdded) \u{2212}\(linesRemoved))"
+        }
+        if filesChanged > 0 {
+            let files = filesChanged == 1 ? "1 file" : "\(filesChanged) files"
+            return "Changes applied (\(files))"
+        }
+        return "Changes applied"
     }
 
     var body: some View {
-        HStack(spacing: VFSpacing.xxl) {
+        HStack(spacing: VFSpacing.xl) {
             HStack(spacing: VFSpacing.sm) {
                 PillLeadingIconBadge(systemImage: "checkmark", tint: .vfSuccessGreen)
-                Text(summaryLine)
+                Text(label)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.vfTextPrimary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    // Same cap as the result capsule's title so a long summary
-                    // truncates rather than growing the pill.
-                    .frame(maxWidth: 228, alignment: .leading)
+                    // The label is short + fixed now, so it hugs (no truncation cap).
+                    .fixedSize()
             }
 
-            HStack(spacing: VFSpacing.md) {
+            HStack(spacing: VFSpacing.sm) {
                 expandToggle
-                dismissDivider
-                PillDismissButton(action: onDismiss)
+                DevUndoButton(action: onRevert, compact: true)
+                DevAcceptButton(action: onDismiss, compact: true)
             }
         }
         .padding(.horizontal, VFSpacing.lg)
@@ -623,7 +641,7 @@ private struct DevResultSummaryPill: View {
     private var expandToggle: some View {
         Button(action: onExpand) {
             HStack(spacing: 4) {
-                Text("View")
+                Text("View changes")
                     .font(.system(size: 12))
                     .fixedSize()
                 Image(systemName: "chevron.down")
@@ -634,12 +652,6 @@ private struct DevResultSummaryPill: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-    }
-
-    private var dismissDivider: some View {
-        Rectangle()
-            .fill(Color.vfHairline)
-            .frame(width: 1, height: 20)
     }
 }
 
@@ -1305,7 +1317,8 @@ private struct ResultPillContent: View {
 
 #Preview("Dev result \u{00B7} Expanded") {
     // The Dev Mode success card: human summary on top, the readable diff in the
-    // body well, an Undo footer + the X (keeps changes). No Retry, no Done.
+    // body well, "Hide changes" up top (no X) + Undo/Accept footer. The expanded
+    // card keeps the agent summary — the line counts drive the COLLAPSED pill only.
     PillView(state: .devDone(
         card: DevResultCard(
             title: "Changes applied",
@@ -1330,7 +1343,8 @@ private struct ResultPillContent: View {
             +  margin-top: 8px;
             +  align-self: flex-end;
              }
-            """
+            """,
+            linesAdded: 3, linesRemoved: 2, filesChanged: 1
         ),
         expanded: true
     ))
@@ -1339,12 +1353,30 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Dev result \u{00B7} Compact") {
-    // Collapsed form — the one-line summary pill that expands to the card above.
+    // Collapsed form — the fixed "Changes applied (+a −r)" counts pill that
+    // expands to the card above. The agent summary is NOT shown here.
     PillView(state: .devDone(
         card: DevResultCard(
             title: "Changes applied",
-            summary: "Updated 2 files (+8 \u{2212}3).",
-            diffText: ""
+            summary: "Reworked the login screen layout.",
+            diffText: "",
+            linesAdded: 12, linesRemoved: 3, filesChanged: 2
+        ),
+        expanded: false
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev result \u{00B7} Compact (no line change)") {
+    // 0/0 line stat (a non-line change, e.g. a rename/mode change): the pill
+    // never reads "(+0 −0)" — it falls back to the files-changed count.
+    PillView(state: .devDone(
+        card: DevResultCard(
+            title: "Changes applied",
+            summary: "Renamed a file.",
+            diffText: "",
+            linesAdded: 0, linesRemoved: 0, filesChanged: 1
         ),
         expanded: false
     ))

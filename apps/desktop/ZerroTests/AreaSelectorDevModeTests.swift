@@ -94,8 +94,9 @@ final class AreaSelectorDevModeTests: XCTestCase {
 
     func testDevSettingsMenuCentersUnderIconAndHitTestsAgentRows() {
         let agentCount = 3
+        let modelCount = 2
         let icon = AreaSelectorView.devSettingsIconFrame(forSelection: selection, in: bounds)
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount)
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
         XCTAssertEqual(menu.midX, icon.midX, accuracy: 0.001)
         XCTAssertGreaterThan(menu.minY, icon.maxY)
         XCTAssertEqual(menu.width, AreaSelectorView.devMenuWidth)
@@ -103,30 +104,66 @@ final class AreaSelectorDevModeTests: XCTestCase {
         let rowsTop = menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
         let row0 = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.devMenuRowHeight / 2)
         XCTAssertEqual(
-            AreaSelectorView.devSettingsAgentRowIndex(at: row0, forSelection: selection, in: bounds, agentCount: agentCount),
+            AreaSelectorView.devSettingsAgentRowIndex(at: row0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
             0
         )
         let rowLast = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.devMenuRowHeight * (CGFloat(agentCount) - 0.5))
         XCTAssertEqual(
-            AreaSelectorView.devSettingsAgentRowIndex(at: rowLast, forSelection: selection, in: bounds, agentCount: agentCount),
+            AreaSelectorView.devSettingsAgentRowIndex(at: rowLast, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
             agentCount - 1
         )
     }
 
-    func testDevSettingsProjectRowIsBelowAgentSectionAndDisjoint() {
+    func testDevSettingsModelRowsAreBelowAgentSectionAndHitTestDisjoint() {
         let agentCount = 3
-        let projectRow = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount)
-        // A click in the project row is NOT an agent row.
+        let modelCount = 3
+        // The first Model row sits after the Agent header + rows + divider + the
+        // Model header.
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let modelRowsTop = menu.minY + AreaSelectorView.menuVPad
+            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
+            + AreaSelectorView.devMenuDividerBand
+            + AreaSelectorView.menuSectionHeaderHeight
+        let model0 = CGPoint(x: menu.midX, y: modelRowsTop + AreaSelectorView.devMenuRowHeight / 2)
+        XCTAssertEqual(
+            AreaSelectorView.devSettingsModelRowIndex(at: model0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            0
+        )
+        // A model row is NOT an agent row, and vice-versa (sections are disjoint).
+        XCTAssertNil(
+            AreaSelectorView.devSettingsAgentRowIndex(at: model0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "a model row must not register as an agent row"
+        )
+        let agentRow0 = CGPoint(x: menu.midX,
+            y: menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight + AreaSelectorView.devMenuRowHeight / 2)
+        XCTAssertNil(
+            AreaSelectorView.devSettingsModelRowIndex(at: agentRow0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "an agent row must not register as a model row"
+        )
+    }
+
+    func testDevSettingsProjectRowIsBelowModelSectionAndDisjoint() {
+        let agentCount = 3
+        let modelCount = 2
+        let projectRow = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        // A click in the project row is NOT an agent row nor a model row.
         let mid = CGPoint(x: projectRow.midX, y: projectRow.midY)
         XCTAssertNil(
-            AreaSelectorView.devSettingsAgentRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount),
+            AreaSelectorView.devSettingsAgentRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
             "the project row must not register as an agent row"
         )
-        // And it sits below the whole agent section.
-        let lastAgentBottom = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount).minY
+        XCTAssertNil(
+            AreaSelectorView.devSettingsModelRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "the project row must not register as a model row"
+        )
+        // And it sits below the whole agent + model section.
+        let modelSectionBottom = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount).minY
             + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
             + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
-        XCTAssertGreaterThanOrEqual(projectRow.minY, lastAgentBottom)
+            + AreaSelectorView.devMenuDividerBand
+            + AreaSelectorView.menuSectionHeaderHeight
+            + CGFloat(modelCount) * AreaSelectorView.devMenuRowHeight
+        XCTAssertGreaterThanOrEqual(projectRow.minY, modelSectionBottom)
     }
 
     // MARK: - State: explicit set-mode

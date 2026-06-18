@@ -417,16 +417,56 @@ final class AreaSelectorState {
             closeMicMenu()
         } else {
             highlightedDevAgentIndex = nil
+            highlightedDevModelIndex = nil
         }
     }
 
     func closeDevSettingsMenu() {
         isDevSettingsMenuOpen = false
         highlightedDevAgentIndex = nil
+        highlightedDevModelIndex = nil
     }
 
     func setHighlightedDevAgentIndex(_ index: Int?) {
         if highlightedDevAgentIndex != index { highlightedDevAgentIndex = index }
+    }
+
+    // MARK: - Model section (Phase 2)
+
+    /// One row in the dev-settings Model section. Mirrors `DevAgentMenuItem`.
+    struct DevModelMenuItem: Identifiable, Equatable {
+        /// The exact `--model` id (e.g. "claude-opus-4-8").
+        let id: String
+        /// The menu label (e.g. "Claude Opus 4.8").
+        let name: String
+    }
+
+    /// Model rows for the dev-settings Model section, set by the controller for
+    /// the CURRENTLY-SELECTED agent (anthropic/openai manifest, or the Cursor
+    /// CLI). Ordered newest-first; empty for an agent with no model picker.
+    private(set) var devModelMenuItems: [DevModelMenuItem] = []
+
+    /// The model_id checkmarked in the Model section — the resolved pick for the
+    /// selected agent (remembered, else newest/rank-0). nil when no models.
+    private(set) var selectedDevModelID: String?
+
+    /// Row under the cursor while the Model section is hovered; nil otherwise.
+    private(set) var highlightedDevModelIndex: Int?
+
+    /// Replace the Model section's rows + checkmarked pick. Called by the
+    /// controller whenever the selected agent changes (the list is per-agent).
+    func setDevModelMenuItems(_ items: [DevModelMenuItem], selectedID: String?) {
+        devModelMenuItems = items
+        selectedDevModelID = selectedID
+    }
+
+    /// Update only the checkmarked pick (a Model row was selected).
+    func setSelectedDevModelID(_ id: String?) {
+        if selectedDevModelID != id { selectedDevModelID = id }
+    }
+
+    func setHighlightedDevModelIndex(_ index: Int?) {
+        if highlightedDevModelIndex != index { highlightedDevModelIndex = index }
     }
 
     /// Called when Dev Mode is entered (Dev segment clicked, or seeded-on at

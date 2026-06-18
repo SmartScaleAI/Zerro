@@ -13,11 +13,39 @@ import XCTest
 
 final class DevAgentRegistryTests: XCTestCase {
 
-    func testPhase1ShipsExactlyClaudeCode() {
+    func testRegistryShipsClaudeCodeThenCodex() {
         let all = DevAgentRegistry.all()
-        XCTAssertEqual(all.count, 1, "Phase 1 ships exactly one agent")
-        XCTAssertEqual(all.first?.id, DevAgentRegistry.claudeCodeID)
+        XCTAssertEqual(all.map(\.id), [DevAgentRegistry.claudeCodeID, DevAgentRegistry.codexID])
+        // Claude Code stays the recommended default (the pre-filled pick).
         XCTAssertEqual(DevAgentRegistry.recommendedID, DevAgentRegistry.claudeCodeID)
+    }
+
+    func testCodexCLIContract() throws {
+        let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        XCTAssertEqual(entry.displayName, "Codex")
+        XCTAssertEqual(entry.executableName, "codex")
+        // Prompt rides in argv (positional), output parsed as plain text.
+        XCTAssertEqual(entry.promptDelivery, .argument)
+        XCTAssertEqual(entry.outputFormat, .text)
+        XCTAssertEqual(entry.modelFlagName, "--model")
+        XCTAssertEqual(entry.installed, entry.absolutePath != nil)
+    }
+
+    func testCodexEditsOnlyUsesWorkspaceWriteSandbox() throws {
+        let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        let args = entry.arguments(permission: .editsOnly, model: "gpt-5.5")
+        XCTAssertEqual(Array(args.prefix(2)), ["exec", "--skip-git-repo-check"])
+        assertFlag(args, "--sandbox", value: "workspace-write")
+        assertFlag(args, "--model", value: "gpt-5.5")
+        XCTAssertFalse(args.contains("--full-auto"), "must not use the deprecated --full-auto")
+        XCTAssertFalse(args.contains("danger-full-access"), "edits-only must not grant full access")
+    }
+
+    func testCodexAllowCommandsUsesDangerFullAccessSandbox() throws {
+        let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        let args = entry.arguments(permission: .allowCommands)
+        assertFlag(args, "--sandbox", value: "danger-full-access")
+        XCTAssertFalse(args.contains("workspace-write"))
     }
 
     func testClaudeCodeCLIContract() throws {

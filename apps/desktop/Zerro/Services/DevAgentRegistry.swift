@@ -83,13 +83,54 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     /// spawns this directly), or nil when not installed.
     let absolutePath: URL?
 
-    /// Full argv (excluding the prompt, which is delivered per
-    /// `promptDelivery`) for a run at `permission`.
-    func arguments(permission: DevAgentPermission) -> [String] {
+    /// The flag name used to select a model (Phase 2), or nil when the agent
+    /// has no model picker. Claude Code / Codex / Cursor all use `--model`; the
+    /// runner appends `[modelFlagName, modelID]` ONLY when a model is selected
+    /// AND this is non-nil (no flag ⇒ the agent's own default).
+    let modelFlagName: String?
+
+    /// Explicit memberwise init with `modelFlagName` defaulted to nil so the
+    /// pre-Phase-2 construction sites (tests) compile unchanged.
+    init(
+        id: String,
+        displayName: String,
+        executableName: String,
+        promptDelivery: DevAgentPromptDelivery,
+        outputFormat: DevAgentOutputFormat,
+        baseArgs: [String],
+        editsOnlyArgs: [String],
+        allowCommandsArgs: [String],
+        installed: Bool,
+        absolutePath: URL?,
+        modelFlagName: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.executableName = executableName
+        self.promptDelivery = promptDelivery
+        self.outputFormat = outputFormat
+        self.baseArgs = baseArgs
+        self.editsOnlyArgs = editsOnlyArgs
+        self.allowCommandsArgs = allowCommandsArgs
+        self.installed = installed
+        self.absolutePath = absolutePath
+        self.modelFlagName = modelFlagName
+    }
+
+    /// Full argv (excluding the prompt, which is delivered per `promptDelivery`)
+    /// for a run at `permission`, with the optional `--model <id>` appended last.
+    /// The model flag is added ONLY when `model` is non-nil AND the agent
+    /// declares a `modelFlagName` — otherwise the agent runs on its own default.
+    func arguments(permission: DevAgentPermission, model: String? = nil) -> [String] {
+        var args: [String]
         switch permission {
-        case .editsOnly:     return baseArgs + editsOnlyArgs
-        case .allowCommands: return baseArgs + allowCommandsArgs
+        case .editsOnly:     args = baseArgs + editsOnlyArgs
+        case .allowCommands: args = baseArgs + allowCommandsArgs
         }
+        if let model, !model.isEmpty, let flag = modelFlagName {
+            args += [flag, model]
+        }
+        return args
     }
 }
 
@@ -97,11 +138,12 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
 
 enum DevAgentRegistry {
 
-    /// Wire id of the Phase 1 agent.
+    /// Wire id of the original agent (Phase 1).
     static let claudeCodeID = "claude-code"
+    /// Wire id of the Codex agent (Phase 2 — `codex exec`).
+    static let codexID = "codex"
 
-    /// The agent pre-selected when none is remembered. Phase 3 turns this into
-    /// "recommended installed agent"; Phase 1 has exactly one.
+    /// The agent pre-selected when none is remembered (the recommended default).
     static let recommendedID = claudeCodeID
 
     /// All known agents with live detection applied. Detection is cached in
@@ -109,7 +151,7 @@ enum DevAgentRegistry {
     /// (the module defaults to MainActor isolation) so the BLOCKING resolve it
     /// triggers can run off the main thread — see `DevAgentDetection`.
     nonisolated static func all() -> [DevAgentEntry] {
-        [makeClaudeCode()]
+        [makeClaudeCode(), makeCodex()]
     }
 
     /// Registry lookup by wire id (with detection applied). BLOCKING on a cold
@@ -139,7 +181,48 @@ enum DevAgentRegistry {
             // builds, can self-verify). Heavier trust; off by default.
             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
             installed: path != nil,
-            absolutePath: path
+            absolutePath: path,
+            // Claude Code's `--model` accepts an alias or a full model id (e.g.
+            // `claude-opus-4-8`), exactly the strings the anthropic manifest
+            // serves. Verified against `claude --help` (June 2026).
+            modelFlagName: "--model"
+        )
+    }
+
+    // MARK: - Codex
+
+    /// Codex CLI agent (`codex exec`). Verified against `codex exec --help`
+    /// (codex-cli 0.140.0, 2026-06-18):
+    ///   • `exec` is the non-interactive subcommand; the prompt is a POSITIONAL
+    ///     argument (stdin is only appended when piped — so we pass it as an arg
+    ///     and close stdin), hence `.argument` delivery.
+    ///   • Sandbox: `-s/--sandbox` with `workspace-write` (files yes, the
+    ///     edits-only posture) vs `danger-full-access` (allow-commands). NOT the
+    ///     deprecated `--full-auto`. `exec` is already non-interactive
+    ///     (approval never), so no approval flag is needed.
+    ///   • `--skip-git-repo-check` is harmless inside a repo (the dispatch always
+    ///     runs in one — the checkpoint requires git) and avoids a repo-detection
+    ///     mismatch; `--color never` keeps the `.text` tail clean.
+    ///   • Output is parsed as `.text` (spinner + tail) — Codex's `--json` event
+    ///     schema differs from Claude's stream-json, so we don't pretend to parse
+    ///     it; the result card falls back to the diff-generated change line.
+    ///   • `-m/--model` selects the model; the ids come from Codex's OWN
+    ///     per-account list (see `DevAgentDetection.codexModels`), NOT the OpenAI
+    ///     API manifest (a ChatGPT-account Codex rejects the API codex ids).
+    nonisolated private static func makeCodex() -> DevAgentEntry {
+        let path = DevAgentBinaryResolver.resolve("codex")
+        return DevAgentEntry(
+            id: codexID,
+            displayName: "Codex",
+            executableName: "codex",
+            promptDelivery: .argument,
+            outputFormat: .text,
+            baseArgs: ["exec", "--skip-git-repo-check", "--color", "never"],
+            editsOnlyArgs: ["--sandbox", "workspace-write"],
+            allowCommandsArgs: ["--sandbox", "danger-full-access"],
+            installed: path != nil,
+            absolutePath: path,
+            modelFlagName: "--model"
         )
     }
 }

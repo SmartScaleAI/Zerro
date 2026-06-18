@@ -42,6 +42,9 @@ final class PreferencesStore {
         static let devModeEnabled = "vf.dev.modeEnabled"
         static let devProjectPath = "vf.dev.projectPath"
         static let devAgentID = "vf.dev.agentID"
+        /// Phase 2 — the remembered `--model` pick PER agent (agent wire id →
+        /// model_id), stored as a `[String: String]` dictionary.
+        static let devModelByAgent = "vf.dev.modelByAgent"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -55,6 +58,7 @@ final class PreferencesStore {
             devModeEnabled,
             devProjectPath,
             devAgentID,
+            devModelByAgent,
         ]
     }
 
@@ -125,6 +129,30 @@ final class PreferencesStore {
         }
     }
 
+    /// Phase 2 — the `--model` pick remembered PER agent (agent wire id →
+    /// model_id). The Model section writes here; the dispatch path reads the
+    /// resolved pick via `selectedModel(forAgent:available:)`. Persisted as a
+    /// plain `[String: String]` (UserDefaults stores it natively). A remembered
+    /// id that's no longer in the live list is ignored at resolution time, so a
+    /// retired model never rides forward to the CLI.
+    var selectedModelByAgent: [String: String] {
+        didSet { defaults.set(selectedModelByAgent, forKey: Keys.devModelByAgent) }
+    }
+
+    /// The resolved `--model` id for `agentID` given its currently-`available`
+    /// models (newest-first; `available.first` is rank 0 = the default). Returns
+    /// the remembered pick when it's still present in the list, otherwise the
+    /// newest (rank 0). `nil` only when the agent has no models at all — the
+    /// caller then passes no `--model` flag (agent default). This is the single
+    /// place the "default = newest, drop a retired remembered pick" rule lives.
+    func selectedModel(forAgent agentID: String, available: [AgentModel]) -> String? {
+        if let remembered = selectedModelByAgent[agentID],
+           available.contains(where: { $0.modelID == remembered }) {
+            return remembered
+        }
+        return available.first?.modelID
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -150,6 +178,8 @@ final class PreferencesStore {
             self.devProjectURL = nil
         }
         self.selectedAgentID = defaults.string(forKey: Keys.devAgentID)
+        self.selectedModelByAgent =
+            (defaults.dictionary(forKey: Keys.devModelByAgent) as? [String: String]) ?? [:]
     }
 
     // MARK: - Reset
@@ -171,5 +201,6 @@ final class PreferencesStore {
         devModeEnabled = false
         devProjectURL = nil
         selectedAgentID = nil
+        selectedModelByAgent = [:]
     }
 }

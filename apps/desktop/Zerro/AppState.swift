@@ -97,10 +97,15 @@ public enum RecordingState: Equatable {
 public struct DevModeSelection: Equatable, Sendable {
     public let agentID: String
     public let projectURL: URL
+    /// The `--model` id the agent should run with (Phase 2), or nil to use the
+    /// agent's own default. Captured from the dev-settings Model section at
+    /// record-start so a settings change mid-recording can't alter the run.
+    public let modelID: String?
 
-    public init(agentID: String, projectURL: URL) {
+    public init(agentID: String, projectURL: URL, modelID: String? = nil) {
         self.agentID = agentID
         self.projectURL = projectURL
+        self.modelID = modelID
     }
 }
 
@@ -516,6 +521,10 @@ final class AppState {
     var recordingProjectURL: URL?
     /// The agent registry id this recording dispatches to. Set iff dev mode.
     var recordingAgentID: String?
+    /// The `--model` id the agent runs with (Phase 2), captured at record-start
+    /// from the dev-settings Model section. nil ⇒ the agent's own default. Set
+    /// iff dev mode; carried into `beginDevDispatch`.
+    var recordingAgentModelID: String?
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
@@ -940,6 +949,7 @@ final class AppState {
         recordingIsDevMode = devMode != nil
         recordingProjectURL = devMode?.projectURL
         recordingAgentID = devMode?.agentID
+        recordingAgentModelID = devMode?.modelID
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
@@ -1205,6 +1215,7 @@ final class AppState {
         recordingIsDevMode = false
         recordingProjectURL = nil
         recordingAgentID = nil
+        recordingAgentModelID = nil
         devRunSubstatus = nil
         devDiffStat = nil
         devSummary = nil
@@ -2507,7 +2518,11 @@ final class AppState {
 
         // Analytics: the dispatch start (metadata only). The succeeded/failed
         // counterparts (M8) read `devDispatchStartTime` for `duration_ms`.
-        Analytics.capture("dev_dispatch_started", ["agent_id": agentID])
+        Analytics.capture("dev_dispatch_started", [
+            "agent_id": agentID,
+            // Metadata only — a public model id, never user content.
+            "agent_model": recordingAgentModelID ?? "default",
+        ])
         // M6 anchor-resolution analytics (metadata only — counts + a confidence
         // histogram, never labels/paths/content).
         captureAnchorResolutionAnalytics()
@@ -2536,6 +2551,9 @@ final class AppState {
                 // Phase 1 default — edits-only (design §11). The opt-in
                 // "allow commands" toggle is a later phase.
                 permission: .editsOnly,
+                // Phase 2 — the model captured at record-start. nil ⇒ the agent's
+                // own default; the runner appends `--model <id>` only when set.
+                model: recordingAgentModelID,
                 // Retain the checkpoint as soon as it's taken so a cancel/quit
                 // mid-run has something to revert (M7 #3), before the agent
                 // even finishes.
@@ -2715,11 +2733,11 @@ final class AppState {
             devSummary = success.summary
             devDiffText = success.diffText
             devFailure = nil
-            // Land the dev-result card EXPANDED (like the normal artifact result),
-            // showing the summary + diff immediately; the Hide chevron collapses
-            // it to the compact summary pill. Shares the result expand flag — the
+            // Land the dev-result card COLLAPSED — the compact summary pill with
+            // its View changes / Undo / Accept controls; "View changes" expands to
+            // the full card (summary + diff). Shares the result expand flag — the
             // two states never coexist.
-            isResultExpanded = true
+            isResultExpanded = false
             state = .devDone
             Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
             // M8 analytics — metadata only (counts/durations; no path/content).

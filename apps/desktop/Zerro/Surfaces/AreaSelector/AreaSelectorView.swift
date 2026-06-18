@@ -26,6 +26,7 @@
 //        midpoints) and a confirm affordance.
 //
 
+import AppKit
 import SwiftUI
 
 struct AreaSelectorView: View {
@@ -43,6 +44,11 @@ struct AreaSelectorView: View {
             let bounds = geo.size
 
             ZStack(alignment: .topLeading) {
+                // Keep the dynamic model-button width current with the selected
+                // model BEFORE any frame helper reads it this pass (the model
+                // button carries the model name). Plain static, not observed
+                // state — covers previews too, where no controller runs.
+                let _ = (Self.modelButtonWidth = Self.measuredModelButtonWidth(forName: state.selectedModelName))
                 switch state.mode {
                 case .area:
                     areaModeContent(bounds: bounds)
@@ -267,7 +273,7 @@ struct AreaSelectorView: View {
         }
         .frame(height: Self.pillHeight)
         .padding(.horizontal, VFSpacing.lg)
-        .background(.regularMaterial, in: Capsule())
+        .background(Color.vfPillBackground, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
         .fixedSize()
         .position(
@@ -311,6 +317,17 @@ struct AreaSelectorView: View {
     static let modeSegmentWidth: CGFloat = 34         // each mode-switch segment
     static let modeSwitchWidth: CGFloat = modeSegmentWidth * 2   // 68
     static let iconButtonWidth: CGFloat = 46          // icon + chevron control
+    // The MODEL control is NOT a bare icon button — it shows the selected model
+    // name between the sparkles icon and the chevron, so its width is dynamic.
+    static let modelLabelFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+    private static let modelButtonHPad: CGFloat = 9   // each side of the button
+    private static let modelLabelGap: CGFloat = 5     // icon→label and label→chevron
+    private static let modelIconWidth: CGFloat = 14   // sparkles glyph
+    private static let modelChevronWidth: CGFloat = 8 // chevron glyph
+    /// Fixed chrome around the model label (pads + icon + two gaps + chevron);
+    /// the measured label width is added to this to size the model button.
+    private static let modelButtonChromeWidth: CGFloat =
+        modelButtonHPad * 2 + modelIconWidth + modelLabelGap * 2 + modelChevronWidth
     private static let containerHPad: CGFloat = 6     // container edge → first control
     private static let dividerGap: CGFloat = 8        // breathing room each side of the divider
     private static let dividerWidth: CGFloat = 1
@@ -333,6 +350,30 @@ struct AreaSelectorView: View {
     /// if multi-display lands (deferred), move this onto the per-overlay state.
     nonisolated(unsafe) static var fullScreenBottomInset: CGFloat = 0
 
+    /// Current width of the model button (icon + selected-model name + chevron),
+    /// stashed by `AreaSelectorWindowController` whenever the model list/selection
+    /// changes. Same single-source-of-truth pattern as `fullScreenBottomInset`:
+    /// the geometry helpers are static (shared by render + hit-test), so the
+    /// controller updates this once per model change and both sides reflow in
+    /// lockstep. Defaults to a bare icon button until the model name is known.
+    nonisolated(unsafe) static var modelButtonWidth: CGFloat = iconButtonWidth
+
+    /// Compute the model button's width for `name`: fixed chrome + the measured
+    /// label width, capped so a very long name can't blow out the toolbar (it
+    /// truncates instead). Floored at a bare icon button for an empty name.
+    static func measuredModelButtonWidth(forName name: String) -> CGFloat {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return iconButtonWidth }
+        let labelW = (trimmed as NSString)
+            .size(withAttributes: [.font: modelLabelFont]).width
+        let capped = min(labelW.rounded(.up), modelLabelMaxWidth)
+        return modelButtonChromeWidth + capped
+    }
+
+    /// Hard cap on the rendered model label so an unexpectedly long name
+    /// truncates rather than growing the toolbar past the overlay.
+    private static let modelLabelMaxWidth: CGFloat = 150
+
     /// X-offsets (relative to the container's leading edge) of every control in
     /// the compact toolbar, computed once so the frame helpers and the renderer
     /// share one source of truth. Dev-settings exists only in Dev Mode; in
@@ -353,7 +394,9 @@ struct AreaSelectorView: View {
         let afterMode = modeSwitchX + modeSwitchWidth
         let dividerX = afterMode + dividerGap
         let modelX = dividerX + dividerWidth + dividerGap
-        let micX = modelX + iconButtonWidth + controlGap
+        // The model control is wider than a bare icon button (it carries the
+        // model name), so mic + everything after it shift by its dynamic width.
+        let micX = modelX + modelButtonWidth + controlGap
         let devSettingsX = micX + iconButtonWidth + controlGap
         let afterControls = devMode
             ? devSettingsX + iconButtonWidth
@@ -451,13 +494,13 @@ struct AreaSelectorView: View {
         return CGRect(x: s.minX + modeSegmentWidth, y: s.minY, width: modeSegmentWidth, height: s.height)
     }
 
-    /// Model-picker icon button: sparkles + chevron, opens the model dropdown.
-    /// Kept under the historical `modelChipFrame` name for the controller's
-    /// hit-test.
+    /// Model-picker button: sparkles + the selected model name + chevron, opens
+    /// the model dropdown. Width is dynamic (`modelButtonWidth`). Kept under the
+    /// historical `modelChipFrame` name for the controller's hit-test.
     static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
         let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let L = compactLayout(devMode: devMode)
-        return CGRect(x: t.minX + L.modelX, y: t.minY, width: iconButtonWidth, height: t.height)
+        return CGRect(x: t.minX + L.modelX, y: t.minY, width: modelButtonWidth, height: t.height)
     }
 
     /// Mic-picker icon button: mic + chevron, opens the device dropdown.
@@ -571,10 +614,11 @@ struct AreaSelectorView: View {
 
     // MARK: - Dev-settings menu geometry
     //
-    // The consolidated agent + project menu (Dev Mode only). Sections stack
-    // vertically: Agent header → agent rows → divider → Project header → project
-    // row → divider → git-reassurance line. The per-section heights are fixed so
-    // the controller can map a click to an agent row or the project ("Change…")
+    // The consolidated agent + model + project menu (Dev Mode only). Sections
+    // stack vertically: Agent header → agent rows → divider → Model header →
+    // model rows → divider → Project header → project row → divider →
+    // git-reassurance line. The per-section heights are fixed so the controller
+    // can map a click to an agent row, a model row, or the project ("Change…")
     // row by the same y-band math the renderer lays out with.
 
     static let devMenuRowHeight: CGFloat = 38
@@ -584,10 +628,12 @@ struct AreaSelectorView: View {
     /// The wrapped two-line git-reassurance line at the menu's foot.
     static let devMenuGitLineHeight: CGFloat = 48
 
-    static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, fullScreen: Bool = false) -> CGRect {
+    static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, fullScreen: Bool = false) -> CGRect {
         let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         let height = menuVPad
             + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // Agent section
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + CGFloat(modelCount) * devMenuRowHeight   // Model section
             + devMenuDividerBand
             + menuSectionHeaderHeight + devMenuRowHeight                          // Project section
             + devMenuDividerBand
@@ -603,9 +649,10 @@ struct AreaSelectorView: View {
         forSelection rect: CGRect,
         in bounds: CGSize,
         agentCount: Int,
+        modelCount: Int,
         fullScreen: Bool = false
     ) -> Int? {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, fullScreen: fullScreen)
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
         guard frame.contains(point) else { return nil }
         let localY = point.y - frame.minY - menuVPad - menuSectionHeaderHeight
         guard localY >= 0 else { return nil }
@@ -614,19 +661,45 @@ struct AreaSelectorView: View {
         return idx
     }
 
+    /// Index of the Model row under `point`, or nil if `point` is outside the
+    /// Model section. Skips the Agent header + rows + divider + the Model header.
+    static func devSettingsModelRowIndex(
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> Int? {
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        guard frame.contains(point) else { return nil }
+        let localY = point.y - frame.minY - menuVPad
+            - menuSectionHeaderHeight - CGFloat(agentCount) * devMenuRowHeight   // skip Agent header + rows
+            - devMenuDividerBand                                                 // skip divider
+            - menuSectionHeaderHeight                                            // skip Model header
+        guard localY >= 0 else { return nil }
+        let idx = Int(localY / devMenuRowHeight)
+        guard idx >= 0, idx < modelCount else { return nil }
+        return idx
+    }
+
     /// Frame of the Project ("Change…") row — clicking it opens the folder
-    /// picker. nil-free: always returns the row's rect within the menu.
+    /// picker. nil-free: always returns the row's rect within the menu. Shifted
+    /// down by the Model section (header + `modelCount` rows + divider).
     static func devSettingsProjectRowFrame(
         forSelection rect: CGRect,
         in bounds: CGSize,
         agentCount: Int,
+        modelCount: Int,
         fullScreen: Bool = false
     ) -> CGRect {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, fullScreen: fullScreen)
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
         let y = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // Agent
             + devMenuDividerBand
-            + menuSectionHeaderHeight
+            + menuSectionHeaderHeight + CGFloat(modelCount) * devMenuRowHeight   // Model
+            + devMenuDividerBand
+            + menuSectionHeaderHeight                                            // Project header
         return CGRect(x: frame.minX, y: y, width: frame.width, height: devMenuRowHeight)
     }
 
@@ -812,8 +885,9 @@ struct AreaSelectorView: View {
     private func devSettingsMenu(in bounds: CGSize) -> some View {
         if state.isDevSettingsMenuOpen, state.isDevMode, let rect = state.confirmableSelectionRect {
             let agents = state.devAgentMenuItems
+            let models = state.devModelMenuItems
             let icon = Self.devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen)
-            let frame = Self.devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agents.count, fullScreen: state.mode == .fullScreen)
+            let frame = Self.devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agents.count, modelCount: models.count, fullScreen: state.mode == .fullScreen)
             let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
 
             menuPanel(frame: frame) {
@@ -822,6 +896,15 @@ struct AreaSelectorView: View {
                     menuSectionHeader("Agent")
                     ForEach(Array(agents.enumerated()), id: \.element.id) { index, item in
                         devAgentRow(item, highlighted: state.highlightedDevAgentIndex == index || item.id == state.selectedAgentID)
+                    }
+
+                    devMenuDivider
+
+                    // Model section (Phase 2) — the selected agent's models,
+                    // newest-first, checkmark on the current pick.
+                    menuSectionHeader("Model")
+                    ForEach(Array(models.enumerated()), id: \.element.id) { index, item in
+                        devModelRow(item, highlighted: state.highlightedDevModelIndex == index || item.id == state.selectedDevModelID)
                     }
 
                     devMenuDivider
@@ -840,6 +923,32 @@ struct AreaSelectorView: View {
 
             menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
         }
+    }
+
+    /// One Model-section row: green checkmark on the current pick, a model icon,
+    /// the display name. Mirrors `devAgentRow` (CleanShot style).
+    private func devModelRow(_ item: AreaSelectorState.DevModelMenuItem, highlighted: Bool) -> some View {
+        let active = item.id == state.selectedDevModelID
+        return HStack(spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.vfDevAccent)
+                .opacity(active ? 1 : 0)
+                .frame(width: 16)
+            Image(systemName: "cpu")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextSecondary)
+            Text(item.name)
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: Self.devMenuRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(menuRowHighlight(highlighted))
     }
 
     private func devAgentRow(_ item: AreaSelectorState.DevAgentMenuItem, highlighted: Bool) -> some View {
@@ -962,10 +1071,11 @@ struct AreaSelectorView: View {
                 .frame(width: 1, height: container.height - 8)
                 .position(x: dividerLineX, y: container.midY)
 
-            // Model + mic icon buttons. Tooltips are drawn by `toolbarTooltip`
-            // (controller-driven hover) rather than `.help`, which can't fire
-            // through the overlay's hit-test-disabled SwiftUI tree.
-            iconButton(system: "sparkles", menuOpen: state.isModelMenuOpen, hovered: state.isModelChipHovered)
+            // Model button (sparkles + model name + chevron) + mic icon button.
+            // Tooltips are drawn by `toolbarTooltip` (controller-driven hover)
+            // rather than `.help`, which can't fire through the overlay's
+            // hit-test-disabled SwiftUI tree.
+            modelButton
                 .frame(width: modelFrame.width, height: modelFrame.height)
                 .position(x: modelFrame.midX, y: modelFrame.midY)
 
@@ -1043,7 +1153,9 @@ struct AreaSelectorView: View {
             return ("Dev Mode", Self.modeDevSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
         }
         if state.isModelChipHovered {
-            return ("Model: \(state.selectedModelName)", Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
+            // The model name is shown in the button itself, so the tooltip is
+            // just the control's purpose.
+            return ("Model", Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
         }
         if state.isMicChipHovered {
             return ("Microphone: \(state.selectedMicrophoneName)", Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev))
@@ -1057,17 +1169,17 @@ struct AreaSelectorView: View {
     // MARK: - Compact toolbar chrome
     //
     // One rounded container holds every control. Its background matches the
-    // instruction pill (`.regularMaterial` + `vfHairline` 0.5 strokeBorder) so
-    // the overlay chrome reads as one frosted family. Green (`vfDevAccent`)
+    // instruction pill (solid `vfPillBackground` + `vfHairline` 0.5 strokeBorder)
+    // so the overlay chrome reads as one cohesive family. Green (`vfDevAccent`)
     // appears ONLY on the active Dev segment, the dev-settings readiness dot, and
     // inside the dev-settings menu; everything else is neutral and Record red.
 
-    /// Shared frosted chrome for the toolbar container — same treatment as the
+    /// Shared opaque chrome for the toolbar container — same treatment as the
     /// instruction pill, with a soft drop shadow for legibility over arbitrary
     /// captured content.
     private var toolbarContainerChrome: some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(.regularMaterial)
+            .fill(Color.vfPillBackground)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(Color.vfHairline, lineWidth: 0.5)
@@ -1142,6 +1254,32 @@ struct AreaSelectorView: View {
         .background(iconButtonFill(active: menuOpen, hovered: hovered))
     }
 
+    /// The model picker: sparkles + the selected model NAME + chevron (the name
+    /// reads in the toolbar, so the hover tooltip just says "Model"). The button
+    /// width tracks the name via `Self.modelButtonWidth` (kept current by the
+    /// controller), so the SwiftUI label here never needs to negotiate width —
+    /// it sits in the frame the geometry already reserved.
+    private var modelButton: some View {
+        HStack(spacing: Self.modelLabelGap) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.vfTextSecondary)
+            Text(state.selectedModelName)
+                .font(Font(Self.modelLabelFont))
+                .foregroundStyle(Color.vfTextPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .fixedSize()
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.vfTextTertiary)
+                .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
+        }
+        .padding(.horizontal, Self.modelButtonHPad)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(iconButtonFill(active: state.isModelMenuOpen, hovered: state.isModelChipHovered))
+    }
+
     /// Dev-settings icon (Dev Mode only): terminal + chevron with a readiness
     /// dot at the corner — green when an agent + folder are set, amber otherwise.
     private var devSettingsIconButton: some View {
@@ -1161,9 +1299,9 @@ struct AreaSelectorView: View {
             Circle()
                 .fill(state.isDevReady ? Color.vfDevAccent : Color.vfWarningAmber)
                 .frame(width: 7, height: 7)
-                // Frosted ring (matching the container) punches a gap so the dot
-                // reads as separate from the bar on the translucent material.
-                .overlay(Circle().stroke(.regularMaterial, lineWidth: 1.5))
+                // Ring in the container color punches a gap so the dot reads as
+                // separate from the now-opaque bar.
+                .overlay(Circle().stroke(Color.vfPillBackground, lineWidth: 1.5))
                 .padding(.top, 5)
                 .padding(.trailing, 3)
         }
@@ -1219,7 +1357,7 @@ struct AreaSelectorView: View {
             }
             .padding(.horizontal, VFSpacing.sm)
             .padding(.vertical, 5)
-            .background(.regularMaterial, in: Capsule())
+            .background(Color.vfPillBackground, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.vfWarningAmber.opacity(0.5), lineWidth: 0.5))
             .fixedSize()
             .position(x: toolbar.midX, y: toolbar.minY - 18)
@@ -1526,7 +1664,9 @@ private func makeSettledPreviewState() -> AreaSelectorState {
 
 /// The detected-agent rows for the dev-settings menu previews. Claude Code is
 /// the installed (Detected) agent; Codex / Cursor are shown not-installed to
-/// match the design mockup (live, these come from `DevAgentDetection`).
+/// match the design mockup (live, these come from `DevAgentDetection`). The
+/// Model section is seeded with Claude Code's (anthropic) models — live these
+/// come from `AgentModelManifestStore`.
 @MainActor
 private func seedDevAgents(_ s: AreaSelectorState) {
     s.setDevAgentMenuItems([
@@ -1534,4 +1674,9 @@ private func seedDevAgents(_ s: AreaSelectorState) {
         .init(id: "codex", name: "Codex", installed: false),
         .init(id: "cursor", name: "Cursor", installed: false),
     ])
+    s.setDevModelMenuItems([
+        .init(id: "claude-opus-4-8", name: "Claude Opus 4.8"),
+        .init(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6"),
+        .init(id: "claude-haiku-4-5", name: "Claude Haiku 4.5"),
+    ], selectedID: "claude-opus-4-8")
 }

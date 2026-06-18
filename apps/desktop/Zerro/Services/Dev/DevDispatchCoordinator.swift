@@ -138,6 +138,10 @@ final class DevDispatchCoordinator {
         projectURL: URL,
         agent: DevAgentEntry,
         permission: DevAgentPermission,
+        // Phase 2: the selected `--model` id, or nil to run the agent's own
+        // default. Forwarded to the runner, which appends `--model <id>` only
+        // when non-nil AND the agent declares a model flag.
+        model: String? = nil,
         onCheckpoint: @escaping @MainActor (GitCheckpoint, GitCheckpointService) -> Void = { _, _ in },
         // M6 (§8): the confirmAnchors gate, run AFTER the checkpoint and BEFORE
         // the agent. Returns true to proceed, false to abort (low-confidence
@@ -197,6 +201,7 @@ final class DevDispatchCoordinator {
             permission: permission,
             prompt: prompt,
             projectURL: projectURL,
+            model: model,
             onSubstatus: { sub in
                 Task { @MainActor in onPhase(.running(sub)) }
             }

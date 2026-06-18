@@ -135,13 +135,17 @@ extension AppState {
     }
 
     /// The `.devDone` success card's render model: a fixed title, the summary
-    /// (agent text when present, else a generated change line), and the readable
-    /// diff text.
+    /// (agent text when present, else a generated change line), the readable diff
+    /// text, and the diff stat counts (the collapsed pill renders "Changes applied
+    /// (+a −r)" from these; the expanded card uses summary/diffText).
     var devResultCard: DevResultCard {
         DevResultCard(
             title: "Changes applied",
             summary: devResultSummary,
-            diffText: devDiffText ?? ""
+            diffText: devDiffText ?? "",
+            linesAdded: devDiffStat?.added ?? 0,
+            linesRemoved: devDiffStat?.removed ?? 0,
+            filesChanged: devDiffStat?.filesChanged ?? 0
         )
     }
 

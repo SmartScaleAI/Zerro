@@ -72,10 +72,10 @@ struct ArtifactCardView: View {
     /// When non-nil, the card renders in its DEV-RESULT configuration (the Dev
     /// Mode result-card handoff): green success badge + a fixed title, the
     /// agent's human-readable summary in the text region, the readable git diff
-    /// in the body well (monospace), and a single "Undo" button in the footer
-    /// (the Copy slot). The X dismiss + Hide/expand chrome are kept; all other
-    /// success-only chrome (chat text, charge line, conversion affordance, copy)
-    /// is suppressed — exactly as `failure` suppresses it. nil → the normal card.
+    /// in the body well (monospace), and a destructive "Undo" + green "Accept"
+    /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
+    /// kept; all other success-only chrome (chat text, charge line, conversion
+    /// affordance, copy) is suppressed — exactly as `failure` suppresses it. nil → the normal card.
     /// Mutually exclusive with `failure`. Defaulted so existing call sites are
     /// unchanged.
     var devResult: DevResultConfig? = nil
@@ -178,17 +178,21 @@ struct ArtifactCardView: View {
 
             HStack(spacing: VFSpacing.md) {
                 // The failure card has no compact form, so it omits the
-                // Hide/collapse chevron and its divider — only Dismiss remains.
+                // Hide/collapse chevron — only Dismiss remains.
                 if failure == nil {
                     collapseToggle
-                    dismissDivider
                 }
-                // Drop the header X when a secondary (Cancel / Discard) button is
-                // present in the footer — that button already dismisses. The
-                // success/dev cards and the secondary-less `.failureExpanded`
-                // keep the X.
-                if failure?.secondaryTitle == nil {
-                    PillDismissButton(action: onDismiss)
+                // The dev-result card drops the header X (Undo/Accept in the
+                // footer are the terminal actions). Everything else keeps the
+                // divider + X: the normal success card, and the secondary-less
+                // `.failureExpanded` (a secondary in the footer already dismisses).
+                if devResult == nil {
+                    if failure == nil {
+                        dismissDivider
+                    }
+                    if failure?.secondaryTitle == nil {
+                        PillDismissButton(action: onDismiss)
+                    }
                 }
             }
         }
@@ -217,7 +221,9 @@ struct ArtifactCardView: View {
     private var collapseToggle: some View {
         Button(action: onCollapse) {
             HStack(spacing: 4) {
-                Text("Hide")
+                // "Hide changes" on the dev-result card, symmetric with the
+                // collapsed pill's "View changes"; plain "Hide" elsewhere.
+                Text(devResult != nil ? "Hide changes" : "Hide")
                     .font(.system(size: 12))
                     .fixedSize()
                 Image(systemName: "chevron.up")
@@ -296,7 +302,10 @@ struct ArtifactCardView: View {
             if let failure {
                 failureFooter(failure)
             } else if devResult != nil {
+                // Secondary-left / primary-right, like the rest of the card
+                // chrome: destructive Undo, then the green Accept CTA rightmost.
                 undoButton
+                acceptButton
             } else if artifact != nil {
                 copyButton
             } else if conversion != .hidden {
@@ -408,12 +417,12 @@ struct ArtifactCardView: View {
         return .vfTextPrimary
     }
 
-    /// Replaces the success Copy capsule in the dev-result configuration — the
-    /// quiet `PillSecondaryButton`. Undo is a recovery affordance, not the hero
-    /// action, and there is no primary on this card.
-    private var undoButton: some View {
-        PillSecondaryButton(title: "Undo", action: onUndo)
-    }
+    /// The dev-result footer's destructive Undo + green Accept — the SAME shared
+    /// `DevUndoButton` / `DevAcceptButton` the collapsed summary pill renders, so
+    /// the two forms can't drift. Undo reverts; Accept keeps the changes and
+    /// closes (`onDismiss`, the same close-and-keep the card's chrome uses).
+    private var undoButton: some View { DevUndoButton(action: onUndo) }
+    private var acceptButton: some View { DevAcceptButton(action: onDismiss) }
 
     /// The hero Copy action. At rest it's the `.positive` primary; on tap it
     /// flips to a transient green "Copied" confirmation (same capsule footprint,
@@ -651,4 +660,37 @@ struct ChatProseText: View {
     var body: some View {
         ProseMarkdownView(markdown: text)
     }
+}
+
+// MARK: - Previews
+
+/// Focused dev-result footer: destructive "Undo" (left) + green "Accept" (right).
+/// Hover the Undo to see the faint red capsule; the full-pill variants live in
+/// PillView's "Dev result" previews.
+#Preview("Artifact card · Dev result") {
+    ArtifactCardView(
+        artifact: nil,
+        chatText: "",
+        chargeLine: nil,
+        noNarration: false,
+        stoppedBySleep: false,
+        conversion: .hidden,
+        onCopy: {},
+        onCollapse: {},
+        onDismiss: {},
+        onConvert: {},
+        devResult: ArtifactCardView.DevResultConfig(
+            title: "Changes applied",
+            summary: "Recolored the primary button and tightened the header spacing.",
+            diffText: """
+            diff --git a/App.css b/App.css
+            @@ -1,3 +1,3 @@
+            -.btn { color: blue; }
+            +.btn { color: teal; }
+            """
+        ),
+        onUndo: {}
+    )
+    .frame(width: 420)
+    .padding()
 }

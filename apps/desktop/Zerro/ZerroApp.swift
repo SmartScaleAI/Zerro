@@ -245,6 +245,10 @@ struct ZerroApp: App {
             // persisted toggle so normal-mode users never spawn the shell probe.
             if prefs.devModeEnabled {
                 DevAgentDetection.shared.warm()
+                // Phase 2: refresh the server-fetched model manifest (cache→disk)
+                // so the dev-settings Model section shows the current pinned list.
+                // Fail-open: offline keeps the cached/bundled list, never empty.
+                Task { await AgentModelManifestStore.shared.warm() }
             }
 
             // Phase C: throttled background re-validation of a cached BYOK

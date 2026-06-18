@@ -13,7 +13,8 @@
 //      registry args, with the prompt written to STDIN (no shell-quoting a long
 //      multi-line prompt). stdin is closed right after (defensive hang guard).
 //    • Parse `stream-json` events → a `DevRunSubstatus` stream the pill consumes
-//      ("reading files", "editing <file>", "running", "working…", "done").
+//      ("Exploring your codebase…", "Editing <file>…", "Running commands…",
+//      "Working on your changes…", "Done").
 //    • Two timeouts: an overall wall-clock cap (default 5 min) and an inactivity
 //      cap (no output for 60s → presumed hung). Either fires SIGTERM, then
 //      SIGKILL after a short grace → `.failed(.timeout)`.
@@ -50,11 +51,11 @@ enum DevRunSubstatus: Equatable, Sendable {
     /// Short pill label.
     var label: String {
         switch self {
-        case .readingFiles:     return "reading files"
-        case .editing(let f):   return f.isEmpty ? "editing files" : "editing \(f)"
-        case .running:          return "running"
-        case .working:          return "working…"
-        case .done:             return "done"
+        case .readingFiles:     return "Exploring your codebase…"
+        case .editing(let f):   return f.isEmpty ? "Editing files…" : "Editing \(f)…"
+        case .running:          return "Running commands…"
+        case .working:          return "Working on your changes…"
+        case .done:             return "Done"
         }
     }
 }
@@ -97,14 +98,18 @@ struct DevRunTimeouts: Sendable {
 // MARK: - Protocol
 
 protocol DevAgentRunner: AnyObject, Sendable {
-    /// Run `entry` against `projectURL` with `prompt`. `onSubstatus` is invoked
-    /// on the main queue as progress events arrive. Returns the terminal result.
+    /// Run `entry` against `projectURL` with `prompt`. `model` is the selected
+    /// `--model` id (Phase 2) appended to argv only when non-nil AND the entry
+    /// declares a `modelFlagName`; nil ⇒ the agent's own default. `onSubstatus`
+    /// is invoked on the main queue as progress events arrive. Returns the
+    /// terminal result.
     func run(
         entry: DevAgentEntry,
         permission: DevAgentPermission,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
+        model: String?,
         onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
     ) async -> DevRunResult
 
@@ -116,6 +121,7 @@ protocol DevAgentRunner: AnyObject, Sendable {
 }
 
 extension DevAgentRunner {
+    /// Convenience: default timeouts, no model (the agent's own default).
     func run(
         entry: DevAgentEntry,
         permission: DevAgentPermission,
@@ -124,7 +130,33 @@ extension DevAgentRunner {
         onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
     ) async -> DevRunResult {
         await run(entry: entry, permission: permission, prompt: prompt,
-                  projectURL: projectURL, timeouts: .default, onSubstatus: onSubstatus)
+                  projectURL: projectURL, timeouts: .default, model: nil, onSubstatus: onSubstatus)
+    }
+
+    /// Convenience: explicit timeouts, no model (the pre-Phase-2 test path).
+    func run(
+        entry: DevAgentEntry,
+        permission: DevAgentPermission,
+        prompt: String,
+        projectURL: URL,
+        timeouts: DevRunTimeouts,
+        onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
+    ) async -> DevRunResult {
+        await run(entry: entry, permission: permission, prompt: prompt,
+                  projectURL: projectURL, timeouts: timeouts, model: nil, onSubstatus: onSubstatus)
+    }
+
+    /// Convenience: default timeouts, explicit model (the dispatch path).
+    func run(
+        entry: DevAgentEntry,
+        permission: DevAgentPermission,
+        prompt: String,
+        projectURL: URL,
+        model: String?,
+        onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
+    ) async -> DevRunResult {
+        await run(entry: entry, permission: permission, prompt: prompt,
+                  projectURL: projectURL, timeouts: .default, model: model, onSubstatus: onSubstatus)
     }
 }
 
@@ -153,6 +185,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
+        model: String?,
         onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
     ) async -> DevRunResult {
         // Concurrency cap-1: reject a second dispatch (design §9).
@@ -172,10 +205,21 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
             return .failed(.spawnFailed("agent '\(entry.id)' has no resolved executable path"))
         }
 
+        // Build argv + decide prompt delivery. Claude Code reads the prompt on
+        // STDIN (`.stdin`); Codex takes it as a POSITIONAL argument (`.argument`)
+        // — appended last, after the flags — and reads stdin only when piped, so
+        // for `.argument` we write nothing and just close stdin (EOF).
+        var argv = entry.arguments(permission: permission, model: model)
+        let deliverPromptViaStdin = entry.promptDelivery == .stdin
+        if entry.promptDelivery == .argument {
+            argv.append(prompt)
+        }
+
         let execution = DevAgentProcessExecution(
             executableURL: executableURL,
-            arguments: entry.arguments(permission: permission),
+            arguments: argv,
             prompt: prompt,
+            deliverPromptViaStdin: deliverPromptViaStdin,
             projectURL: projectURL,
             outputFormat: entry.outputFormat,
             timeouts: timeouts,
@@ -225,6 +269,11 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
     nonisolated private let arguments: [String]
     nonisolated private let prompt: String
+    /// Whether to write `prompt` to the child's stdin (`.stdin` delivery). When
+    /// false (`.argument` delivery — the prompt rides in argv), stdin is closed
+    /// immediately with no data so a CLI that reads stdin only when piped (Codex)
+    /// gets EOF and uses the positional prompt.
+    nonisolated private let deliverPromptViaStdin: Bool
     nonisolated private let outputFormat: DevAgentOutputFormat
     nonisolated private let timeouts: DevRunTimeouts
     nonisolated private let queue: DispatchQueue
@@ -250,6 +299,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         executableURL: URL,
         arguments: [String],
         prompt: String,
+        deliverPromptViaStdin: Bool = true,
         projectURL: URL,
         outputFormat: DevAgentOutputFormat,
         timeouts: DevRunTimeouts,
@@ -258,6 +308,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     ) {
         self.arguments = arguments
         self.prompt = prompt
+        self.deliverPromptViaStdin = deliverPromptViaStdin
         self.outputFormat = outputFormat
         self.timeouts = timeouts
         self.queue = queue
@@ -307,11 +358,13 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
         // Deliver the prompt on stdin and close it (the defensive hang guard —
         // a CLI waiting on stdin EOF won't stall). Write off-queue so a large
-        // prompt blocking on a slow reader can't stall the run loop.
-        let promptData = Data(prompt.utf8)
+        // prompt blocking on a slow reader can't stall the run loop. For
+        // `.argument` delivery (Codex) the prompt is already in argv, so write
+        // nothing and just close stdin → the child reads EOF immediately.
+        let promptData = deliverPromptViaStdin ? Data(prompt.utf8) : Data()
         let handle = stdinPipe.fileHandleForWriting
         DispatchQueue.global(qos: .utility).async {
-            try? handle.write(contentsOf: promptData)
+            if !promptData.isEmpty { try? handle.write(contentsOf: promptData) }
             try? handle.close()
         }
 

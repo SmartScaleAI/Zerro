@@ -50,6 +50,7 @@ supabase/
     20260611120000_yearly_credit_refresh.sql # E2: refresh_yearly_credit_periods() + hourly pg_cron job
     20260618120000_agent_models.sql          # Dev Mode: agent_models manifest table (RLS deny-by-default)
     20260618120100_agent_models_cron.sql     # Dev Mode: daily pg_cron → refresh-agent-models (pg_net + Vault)
+    20260618130000_agent_models_retire_openai.sql # Dev Mode: delete openai rows (Codex sources its own list)
   functions/
     _shared/                          # env, config, crypto, ls-signature, jwt, db, types,
                                       # entitlement, http  (+ *_test.ts Deno tests)
@@ -76,10 +77,11 @@ supabase/
                                       #   convert-prompt-v1.md, enforced by prompt_test.ts),
                                       #   config.ts (+ handler_test.ts)
     refresh-agent-models/             # Dev Mode manifest WRITER (daily cron + manual w/ secret):
-                                      #   fetch live Anthropic+OpenAI model lists → curate (regex)
-                                      #   → rank newest-first → upsert → vanished→inactive sweep.
-                                      #   Never wipes on a failed fetch. providers.ts, curate.ts,
-                                      #   store.ts, refresh.ts, index.ts (+ curate/refresh tests)
+                                      #   fetch live Anthropic model list → curate (regex) → rank
+                                      #   newest-first → upsert → vanished→inactive sweep. Never
+                                      #   wipes on a failed/empty fetch. OpenAI retired (Codex
+                                      #   sources its own list). providers.ts, curate.ts, store.ts,
+                                      #   refresh.ts, index.ts (+ curate/refresh tests)
     agent-models/                     # Dev Mode manifest READER: public GET, active rows grouped
                                       #   by provider, ordered by rank, 1h Cache-Control. No auth.
                                       #   group.ts, index.ts (+ group_test.ts)
@@ -161,7 +163,7 @@ the runtime — do NOT set them yourself.**
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
 | `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
 | `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
-| `REFRESH_CRON_SECRET` | ✅ **Dev Mode manifest** | Shared secret guarding `refresh-agent-models`. The function rejects any POST whose `x-refresh-secret` header ≠ this value (constant-time). Set it as an Edge secret **and** seed the SAME value into Vault as `refresh_cron_secret` so the daily cron can read it (see "Dev Mode model manifest" below). Generate: `openssl rand -hex 32`. The `agent-models` read function needs no secret (public). `refresh-agent-models` reuses the existing `ANTHROPIC_API_KEY` + `OPENAI_API_KEY` to fetch the provider model lists. |
+| `REFRESH_CRON_SECRET` | ✅ **Dev Mode manifest** | Shared secret guarding `refresh-agent-models`. The function rejects any POST whose `x-refresh-secret` header ≠ this value (constant-time). Set it as an Edge secret **and** seed the SAME value into Vault as `refresh_cron_secret` so the daily cron can read it (see "Dev Mode model manifest" below). Generate: `openssl rand -hex 32`. The `agent-models` read function needs no secret (public). `refresh-agent-models` reuses the existing `ANTHROPIC_API_KEY` to fetch the Anthropic model list (OpenAI is retired — Codex sources its own per-account list client-side). |
 
 ---
 
@@ -338,22 +340,22 @@ table.)
   unique on `(provider, model_id)`. RLS deny-by-default; the data is public model
   ids but the **write** path is service-role-only so a user can't poison the list.
 - **`refresh-agent-models`** (writer, cron + manual) — fetches
-  `GET api.anthropic.com/v1/models` (`x-api-key` + `anthropic-version`) and
-  `GET api.openai.com/v1/models` (`Authorization: Bearer`) with the existing
-  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, **filters to coding chat models** via
-  stable regexes (the only curation surface — `refresh-agent-models/curate.ts`:
-  Anthropic `^claude-(opus|sonnet|haiku)-\d` → the live Opus/Sonnet/Haiku set;
-  OpenAI the **Codex family** `gpt-*-codex*` (the `codex → openai` agent's models)
-  minus dated snapshots — verified against the live ids 2026-06-18, where bare
-  `^gpt-5` was far too broad: 32 base/-pro/-mini/-nano/dated variants vs the 6
-  real coding models), **ranks newest-first** (rank 0 = default pick),
-  upserts, then marks any vanished model `active = false`. **A provider whose
-  fetch fails (or returns zero matches) leaves its rows untouched — never wiped.**
-  Returns `{ anthropic: n|null, openai: m|null, errors: [...] }`. Guarded by
-  `REFRESH_CRON_SECRET` (`x-refresh-secret` header, constant-time).
+  `GET api.anthropic.com/v1/models` (`x-api-key` + `anthropic-version`) with the
+  existing `ANTHROPIC_API_KEY`, **filters to coding chat models** via a stable
+  regex (the only curation surface — `refresh-agent-models/curate.ts`:
+  `^claude-(opus|sonnet|haiku)-\d` → the live Opus/Sonnet/Haiku set),
+  **ranks newest-first** (rank 0 = default pick), upserts, then marks any
+  vanished model `active = false`. **A fetch that fails (or returns zero matches)
+  leaves the rows untouched — never wiped.** Returns `{ anthropic: n|null,
+  errors: [...] }`. Guarded by `REFRESH_CRON_SECRET` (`x-refresh-secret` header,
+  constant-time). **OpenAI is retired**: a ChatGPT-account Codex uses its own
+  slugs (e.g. `gpt-5.5`) and rejects the OpenAI API codex ids, so Codex sources
+  its model list from its OWN per-account tool (`~/.codex/models_cache.json`)
+  client-side — the manifest serves Anthropic (Claude Code) only.
 - **`agent-models`** (reader, public GET, no auth) — returns active rows grouped
   by provider, ordered by rank, with `Cache-Control: public, max-age=3600`:
-  `{ providers: { anthropic: [{ model_id, display_name }], openai: [...] } }`.
+  `{ providers: { anthropic: [{ model_id, display_name }], openai: [] } }`
+  (openai is always empty post-retirement; the app ignores it).
 
 **The pg_cron + pg_net dependency.** `20260618120100_agent_models_cron.sql`
 enables `pg_cron` + `pg_net` and schedules **`refresh-agent-models`** daily
