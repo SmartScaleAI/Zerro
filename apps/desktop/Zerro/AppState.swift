@@ -86,6 +86,16 @@ public enum RecordingState: Equatable {
     /// confirm. A checkpoint has already been taken here, so a decline/cancel must
     /// discard it (the agent never ran — nothing to revert).
     case confirmAnchors
+    /// Phase 4 — the opt-in review-before-apply gate. When
+    /// `PreferencesStore.devReviewBeforeApply` is on, the dispatch pauses here
+    /// AFTER `confirmAnchors` (and after the checkpoint) and BEFORE
+    /// `devAgentDispatching`: the pill shows the exact generated prompt (+ the
+    /// target label(s) + the agent) for a look-before-apply. The agent runs ONLY
+    /// on Approve; Cancel aborts before any edit. Like `.confirmAnchors`, a
+    /// checkpoint has already been taken, so a decline/cancel/quit must discard it
+    /// (the agent never ran — nothing to revert). Off by default ⇒ this state is
+    /// never reached and the auto-apply path is byte-identical to before.
+    case reviewingPrompt
     /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted by a
     /// quit (⌘Q / kill -9) mid-edit, leaving a durable recovery marker pointing
     /// at a still-valid git checkpoint. Entered at launch by
@@ -588,6 +598,16 @@ final class AppState {
     /// EXACTLY once (guarded), so a double-tap or a racing teardown can't
     /// double-dispatch.
     @ObservationIgnored private var devConfirmContinuation: CheckedContinuation<Bool, Never>?
+    /// Phase 4 — suspends the dispatch at the review-before-apply gate until the
+    /// user resolves it (Approve → true, Cancel/teardown → false). Nil when not
+    /// waiting. Resolved EXACTLY once (guarded), so a double-tap or a racing
+    /// teardown can't double-dispatch. Mirrors `devConfirmContinuation`.
+    @ObservationIgnored private var pendingReviewContinuation: CheckedContinuation<Bool, Never>?
+    /// Phase 4 — the exact prompt body shown on the `.reviewingPrompt` card. Set
+    /// when the gate opens (captured from `artifact.body` before the gate runs);
+    /// cleared on teardown. The card reads this so it shows precisely what will be
+    /// dispatched.
+    @ObservationIgnored var devReviewPromptText: String = ""
     /// Monotonic token bumped on every `beginDevDispatch` AND every teardown. The
     /// in-flight dispatch captures its value; a stale confirm/outcome whose token
     /// no longer matches is dropped — so a late Confirm can't dispatch into a
@@ -1225,9 +1245,12 @@ final class AppState {
         // M6 teardown floor: invalidate any in-flight dispatch (a late
         // confirm/outcome is dropped by the generation token) and unblock a
         // suspended confirmAnchors gate (declining it) so the dispatch can't hang.
-        // Safe everywhere — a no-op when nothing is pending.
+        // Phase 4: likewise unblock a suspended review-before-apply gate. Safe
+        // everywhere — both are no-ops when nothing is pending.
         devDispatchGeneration += 1
         resolvePendingAnchorConfirmation(false)
+        resolvePendingReviewApproval(false)
+        devReviewPromptText = ""
         devResolvedAnchors = []
         devModelAnchors = []
         // Discard the checkpoint's on-disk untracked snapshot (a temp dir not
@@ -1387,21 +1410,20 @@ final class AppState {
             // KEEP the snapshot on disk for a future quit-recovery (tracked
             // follow-up) — the agent may have edited, so it's the only undo.
             devDispatchCoordinator.cancel()
-        case .confirmAnchors:
-            // M6: suspended at the confirm gate — the agent NEVER ran, so the tree
-            // is untouched and the checkpoint protects nothing. Terminate the
-            // (idle) coordinator and DISCARD the snapshot: it isn't persisted
+        case .confirmAnchors, .reviewingPrompt:
+            // M6 / Phase 4: suspended at a pre-agent gate — the agent NEVER ran, so
+            // the tree is untouched and the checkpoint protects nothing. Terminate
+            // the (idle) coordinator and DISCARD the snapshot: it isn't persisted
             // across launch (so it can never be reverted after quit), and without
             // this its `dev-checkpoint-*` temp dir — created OUTSIDE the `zerro-`
             // launch-sweep prefix — would leak until the OS clears tmp. (Adversarial
             // review finding.) `discardSnapshot` is best-effort + synchronous, so
-            // it's safe on the termination path.
+            // it's safe on the termination path. The review gate can be entered with
+            // a marker already written (when `confirmAnchorsAndProceed` ran first),
+            // so clearing it here is load-bearing, not just belt-and-suspenders — no
+            // marker may survive pointing at the snapshot we just discarded.
             devDispatchCoordinator.cancel()
             if let cp = devCheckpoint { devCheckpointService?.discardSnapshot(cp) }
-            // Quit-recovery (belt-and-suspenders): a marker is never written
-            // before the gate, so there shouldn't be one here — but clearing it
-            // guarantees no marker can survive pointing at the snapshot we just
-            // discarded.
             devRecoveryStore.clear()
         case .confirmingDevRecovery:
             // Quit-recovery offer open at quit: the interrupted agent already
@@ -2867,11 +2889,19 @@ final class AppState {
                     self?.devCheckpoint = checkpoint
                     self?.devCheckpointService = service
                 },
-                // M6 (§8): the confirmAnchors gate runs AFTER the checkpoint and
-                // BEFORE the agent. Returns true to dispatch, false to abort
+                // M6 (§8) + Phase 4: the gate runs AFTER the checkpoint and BEFORE
+                // the agent. Returns true to dispatch, false to abort
                 // (decline/cancel) — the agent never runs on false, so the caller
-                // discards the checkpoint (nothing to revert).
-                confirmGate: { [weak self] in await self?.awaitAnchorConfirmation(gen: gen) ?? false },
+                // discards the checkpoint (nothing to revert). Order matters:
+                // anchors FIRST (resolve any ambiguous element), THEN review
+                // (approve the final prompt — which already reflects the confirmed
+                // anchor). Either gate returning false aborts cleanly. Both are
+                // no-ops when not needed (high-confidence anchors / review off), so
+                // the auto-apply path is unchanged.
+                confirmGate: { [weak self] in
+                    guard await self?.awaitAnchorConfirmation(gen: gen) ?? false else { return false }
+                    return await self?.awaitReviewApproval(gen: gen, prompt: body) ?? false
+                },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
             // Stale guard: drop the outcome if the recording was torn down or
@@ -2971,7 +3001,9 @@ final class AppState {
     /// low-confidence; otherwise shows the confirm pill and SUSPENDS until the
     /// user resolves it (or a teardown declines it). The `gen` token drops a
     /// resume that lands after the recording was superseded/reset.
-    private func awaitAnchorConfirmation(gen: Int) async -> Bool {
+    /// (`internal` rather than `private` only so the gate-composition tests can
+    /// drive it alongside `awaitReviewApproval`.)
+    func awaitAnchorConfirmation(gen: Int) async -> Bool {
         guard devDispatchGeneration == gen else { return false }
         guard devNeedsConfirm else { return true }
         state = .confirmAnchors
@@ -3021,6 +3053,76 @@ final class AppState {
     private func resolvePendingAnchorConfirmation(_ proceed: Bool) {
         guard let cont = devConfirmContinuation else { return }
         devConfirmContinuation = nil
+        cont.resume(returning: proceed)
+    }
+
+    // MARK: - Dev Mode review-before-apply gate (Phase 4)
+
+    /// The display name of the agent THIS dev recording dispatches to, for the
+    /// review card's "Send to …?" header. Falls back to a neutral label when the
+    /// agent id is unknown (it always is set for a dev recording).
+    var devReviewAgentName: String {
+        recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName } ?? "the agent"
+    }
+
+    /// The dispatch's review-before-apply gate (Phase 4). Returns immediately when
+    /// the preference is off (byte-identical to the auto-apply path); otherwise
+    /// shows the review pill with the exact `prompt` and SUSPENDS until the user
+    /// Approves/Cancels (or a teardown resolves it). The `gen` token drops a resume
+    /// that lands after the recording was superseded/reset. Mirrors
+    /// `awaitAnchorConfirmation`. (`internal` rather than `private` only so the
+    /// gate tests can drive it directly.)
+    func awaitReviewApproval(gen: Int, prompt: String) async -> Bool {
+        guard devDispatchGeneration == gen else { return false }
+        // Off ⇒ instant pass: no `.reviewingPrompt` state, no card — the dispatch
+        // proceeds exactly as today.
+        guard preferences?.devReviewBeforeApply == true else { return true }
+        devReviewPromptText = prompt
+        state = .reviewingPrompt
+        let proceed = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            pendingReviewContinuation = cont
+        }
+        // A late resume into a superseded recording must not dispatch.
+        guard devDispatchGeneration == gen else { return false }
+        return proceed
+    }
+
+    /// Approve button — proceed with the dispatch. Resolves the gate EXACTLY once
+    /// (a double-tap finds the continuation already cleared → no-op), so the agent
+    /// can't be dispatched twice. Mirrors `confirmAnchorsAndProceed`.
+    func approveReviewAndProceed() {
+        guard state == .reviewingPrompt, let cont = pendingReviewContinuation else { return }
+        pendingReviewContinuation = nil
+        Analytics.capture("dev_review_decision", ["decision": "approve"])
+        // Quit-recovery: the gate resolved to proceed, so the agent is now cleared
+        // to edit (the checkpoint was taken before the gate). Persist the marker
+        // HERE — when ONLY the review gate ran (anchors auto-passed),
+        // `confirmAnchorsAndProceed` never fired, so this is the proceed point that
+        // must close the run-loop sliver before the `.devAgentDispatching` flip.
+        // The coordinator's later `applyDevPhase(.dispatching)` re-persists the same
+        // marker (idempotent atomic overwrite). Mirrors `confirmAnchorsAndProceed`.
+        persistDevRecoveryMarker()
+        state = .devAgentDispatching // immediate feedback; the dispatch advances it
+        cont.resume(returning: true)
+    }
+
+    /// Cancel button on the review card — abort before the agent runs. Routes
+    /// through the safe teardown (it discards the checkpoint snapshot and returns
+    /// to idle), exactly like cancelling at the confirmAnchors gate. A double-tap
+    /// is a no-op (the second finds `state != .reviewingPrompt`). Mirrors
+    /// `declineAnchors`.
+    func cancelReview() {
+        guard state == .reviewingPrompt else { return }
+        Analytics.capture("dev_review_decision", ["decision": "cancel"])
+        cancelDevDispatchSafely()
+    }
+
+    /// Resolve a pending review gate with `proceed`, if any. Used by teardown
+    /// paths (cancel/reset) so the suspended dispatch unblocks instead of hanging.
+    /// Resolves once. Mirrors `resolvePendingAnchorConfirmation`.
+    private func resolvePendingReviewApproval(_ proceed: Bool) {
+        guard let cont = pendingReviewContinuation else { return }
+        pendingReviewContinuation = nil
         cont.resume(returning: proceed)
     }
 
@@ -3206,11 +3308,11 @@ final class AppState {
     /// progress card shows a Cancel that routes to the safe terminate→revert).
     private var isDevDispatchActive: Bool {
         switch state {
-        // `.confirmAnchors` is INCLUDED (M6): the dispatch is suspended at the
-        // gate with a checkpoint already taken, so a cancel/hotkey/quit there must
-        // route through the safe teardown (discard the snapshot, unblock the
-        // gate), not drop the UI and leak the checkpoint.
-        case .devCheckpointing, .devAgentDispatching, .devAgentRunning, .confirmAnchors: return true
+        // `.confirmAnchors` (M6) and `.reviewingPrompt` (Phase 4) are INCLUDED: the
+        // dispatch is suspended at a gate with a checkpoint already taken, so a
+        // cancel/hotkey/quit there must route through the safe teardown (discard the
+        // snapshot, unblock the gate), not drop the UI and leak the checkpoint.
+        case .devCheckpointing, .devAgentDispatching, .devAgentRunning, .confirmAnchors, .reviewingPrompt: return true
         default: return false
         }
     }
@@ -3314,9 +3416,11 @@ final class AppState {
         devCancelInFlight = true
         devDispatchTask = nil
         state = .devReverting
-        // If suspended at the confirmAnchors gate (M6), decline it so the dispatch
-        // unblocks and returns (the agent never ran → the revert below is a no-op).
+        // If suspended at the confirmAnchors gate (M6) or the review gate (Phase 4),
+        // resolve it false so the dispatch unblocks and returns (the agent never
+        // ran → the revert below is a no-op).
         resolvePendingAnchorConfirmation(false)
+        resolvePendingReviewApproval(false)
         // Terminate the agent; the in-flight dispatch resolves `.cancelled`.
         devDispatchCoordinator.cancel()
         Task { @MainActor [weak self] in

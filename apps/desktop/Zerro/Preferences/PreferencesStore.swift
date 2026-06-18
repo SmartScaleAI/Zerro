@@ -59,6 +59,13 @@ final class PreferencesStore {
         /// One-time: the post-denial explainer has been shown.
         static let localhostDenialNoteShown = "vf.dev.localhostDenialNoteShown"
 
+        // Dev Mode (Phase 4) — review-before-apply.
+        /// Opt-in (default OFF): pause a Dev Mode dispatch on a review card showing
+        /// the generated prompt before any file change. Off → the auto-apply path
+        /// is byte-identical to today. A behavior preference (surfaced in App
+        /// Behavior settings), not agent/model/project-specific.
+        static let devReviewBeforeApply = "vf.dev.reviewBeforeApply"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -75,6 +82,7 @@ final class PreferencesStore {
             devProjectByPort,
             devAutoDetectProject,
             localhostDenialNoteShown,
+            devReviewBeforeApply,
         ]
     }
 
@@ -204,6 +212,16 @@ final class PreferencesStore {
         didSet { defaults.set(hasShownLocalhostDenialNote, forKey: Keys.localhostDenialNoteShown) }
     }
 
+    // MARK: - Dev Mode (Phase 4) — review-before-apply
+
+    /// Opt-in (default OFF): when on, a Dev Mode dispatch pauses to show the
+    /// generated prompt for approval before any file change (Approve dispatches,
+    /// Cancel aborts with nothing touched). Off → the auto-apply "talk → watch it
+    /// change" path is byte-identical to today. Read fresh at the dispatch gate.
+    var devReviewBeforeApply: Bool {
+        didSet { defaults.set(devReviewBeforeApply, forKey: Keys.devReviewBeforeApply) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -237,6 +255,9 @@ final class PreferencesStore {
         // browser is never read until the user opts in via the dev-settings toggle.
         self.devAutoDetectProject = defaults.bool(forKey: Keys.devAutoDetectProject)
         self.hasShownLocalhostDenialNote = defaults.bool(forKey: Keys.localhostDenialNoteShown)
+        // Default OFF: the auto-apply path stays the headline experience until the
+        // user opts into a look-before-apply via the App Behavior toggle.
+        self.devReviewBeforeApply = defaults.bool(forKey: Keys.devReviewBeforeApply)
     }
 
     // MARK: - Reset
@@ -262,5 +283,6 @@ final class PreferencesStore {
         devProjectByPort = [:]
         devAutoDetectProject = false
         hasShownLocalhostDenialNote = false
+        devReviewBeforeApply = false
     }
 }

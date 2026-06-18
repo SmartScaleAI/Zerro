@@ -89,6 +89,11 @@ enum PillState: Equatable {
     /// resolved label(s) the agent will act on (low-confidence ones flagged) so a
     /// wrong anchor is catchable before any edit, with Confirm / Cancel.
     case confirmAnchors(anchors: [ConfirmAnchorRow])
+    /// Phase 4 — the opt-in review-before-apply gate. Shows the target `agent`, the
+    /// resolved `targets` the agent will act on, and the exact `prompt` that will
+    /// be dispatched, in a scrollable monospace well, with Approve / Cancel. Lets
+    /// the user see precisely what will be sent before any file change.
+    case reviewPrompt(agent: String, targets: [ConfirmAnchorRow], prompt: String)
     /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted mid-edit
     /// and the durable checkpoint marker validated at launch. `detail` is the
     /// pre-formatted one-line body (diff stat + agent name, assembled in the
@@ -186,6 +191,12 @@ struct PillView: View {
     var onConfirmAnchors: () -> Void = {}
     var onDeclineAnchors: () -> Void = {}
 
+    /// Dev Mode (Phase 4) review-before-apply actions: Approve dispatches the
+    /// shown prompt; Cancel aborts before the agent runs (safe teardown). Default
+    /// no-ops so `#Preview` blocks can pass literal `.reviewPrompt` states.
+    var onApproveReview: () -> Void = {}
+    var onCancelReview: () -> Void = {}
+
     /// The parsed result the pill renders (Phase 5): chat text and the
     /// optional artifact card. Threaded from
     /// AppState.resultPresentation via PillWindowController so the
@@ -274,7 +285,7 @@ struct PillView: View {
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
              .error, .paidBlockResume, .devDone, .devFailed, .confirmAnchors,
-             .confirmDevRecovery:
+             .reviewPrompt, .confirmDevRecovery:
             return nil
         }
     }
@@ -288,7 +299,7 @@ struct PillView: View {
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
         case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .confirmAnchors,
-             .confirmDevRecovery:
+             .reviewPrompt, .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
         // .resultCompact); expanded is the content-driven card.
@@ -515,6 +526,14 @@ struct PillView: View {
                 onConfirm: onConfirmAnchors,
                 onCancel: onDeclineAnchors
             )
+        case .reviewPrompt(let agent, let targets, let prompt):
+            ReviewPromptPillContent(
+                agent: agent,
+                targets: targets,
+                prompt: prompt,
+                onApprove: onApproveReview,
+                onCancel: onCancelReview
+            )
         case .confirmDevRecovery(let detail):
             ConfirmDevRecoveryPillContent(
                 detail: detail,
@@ -526,9 +545,9 @@ struct PillView: View {
 
     private var cornerRadius: CGFloat {
         switch state {
-        // The failure-card family (error / paid-block / generation-failure) all
-        // share the 18pt card radius, not the 28pt capsule radius.
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume:
+        // The failure-card family (error / paid-block / generation-failure) and the
+        // review card all share the 18pt card radius, not the 28pt capsule radius.
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .reviewPrompt:
             return 18
         case .devDone(_, let expanded):            return expanded ? 18 : 28
         default:                                    return 28
@@ -723,6 +742,108 @@ private struct ConfirmAnchorsPillContent: View {
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, VFSpacing.md)
         .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
+    }
+}
+
+// MARK: - ReviewPromptPillContent (Dev Mode review-before-apply — Phase 4)
+//
+// The opt-in review card: shown after generation (and after the confirmAnchors
+// gate) when "Review prompt before applying changes" is on, so the user sees the
+// exact prompt the agent will receive before any file change. A header naming the
+// target agent, the resolved target label(s) (reusing the confirmAnchors row
+// vocabulary), the prompt in the same dark monospace well the artifact card uses
+// (scrolls/caps a long prompt), and two terminal actions: Approve (green — apply)
+// and Cancel (quiet — abort, nothing touched). v1 is show-and-approve only: no
+// in-pill editing (the dispatched body is captured before the gate runs).
+
+private struct ReviewPromptPillContent: View {
+    let agent: String
+    let targets: [ConfirmAnchorRow]
+    let prompt: String
+    let onApprove: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+            HStack(spacing: VFSpacing.sm) {
+                PillLeadingIconBadge(systemImage: "paperplane.fill", tint: .vfDevAccent)
+                Text("Send to \(agent)?")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+            }
+
+            // The resolved target label(s) the agent will act on — low-confidence
+            // ones flagged, matching the confirmAnchors card's row vocabulary.
+            if !targets.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(targets.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 6) {
+                            Image(systemName: row.isLow ? "questionmark.circle.fill" : "scope")
+                                .font(.system(size: 11))
+                                .foregroundStyle(row.isLow ? Color.vfWarningAmber : Color.vfTextSecondary)
+                            Text("Targeting: \(row.label)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(row.isLow ? Color.vfTextPrimary : Color.vfTextSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+
+            // The exact prompt body in the dark monospace well — the same deepest
+            // layer the artifact card's body uses. Scrolls/caps a long prompt.
+            promptWell
+
+            HStack(spacing: VFSpacing.sm) {
+                Spacer(minLength: 0)
+                PillSecondaryButton(title: "Cancel", action: onCancel)
+                ReviewApproveButton(action: onApprove)
+            }
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, VFSpacing.md)
+        // Content-driven width capped so a long prompt scrolls inside rather than
+        // growing the card past a readable measure.
+        .frame(width: 520)
+    }
+
+    private var promptWell: some View {
+        HeightCappedScroll(maxHeight: 240, fadesScrollEdges: true) {
+            Text(prompt.isEmpty ? "No prompt to review." : prompt)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(prompt.isEmpty ? Color.vfTextSecondary : Color.vfTextPrimary)
+                .textSelection(.enabled)
+                .padding(VFSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .fill(Color.black.opacity(0.35))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous))
+    }
+}
+
+/// Green "Approve" CTA for the review card — the Dev Mode "go" action (applies the
+/// shown prompt). Mirrors `DevAcceptButton`'s green-filled footprint with the
+/// review-specific label, so the two greens read as one vocabulary.
+private struct ReviewApproveButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Approve")
+                .font(.system(size: 13, weight: .semibold))
+                .fixedSize()
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, PillMetrics.primaryHPad)
+                .padding(.vertical, PillMetrics.primaryVPad)
+                .background(Color.vfSuccessGreen, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
     }
 }
 
@@ -1444,6 +1565,30 @@ private struct ResultPillContent: View {
             linesAdded: 0, linesRemoved: 0, filesChanged: 1
         ),
         expanded: false
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Review prompt \u{00B7} with target") {
+    PillView(state: .reviewPrompt(
+        agent: "Claude Code",
+        targets: [ConfirmAnchorRow(label: "the \u{201C}Get started\u{201D} button", isLow: false)],
+        prompt: """
+        Change the primary call-to-action button on the landing page from blue to \
+        teal, and tighten the header's vertical padding so the nav sits closer to \
+        the hero. Keep the existing font and border radius.
+        """
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Review prompt \u{00B7} no target") {
+    PillView(state: .reviewPrompt(
+        agent: "Codex",
+        targets: [],
+        prompt: "Add a dark-mode toggle to the settings page."
     ))
         .padding(40)
         .background(Color.vfPanelBackground)

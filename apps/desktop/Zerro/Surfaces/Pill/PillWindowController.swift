@@ -345,6 +345,10 @@ private struct PillHostView: View {
             // dispatch; Cancel aborts before the agent runs (safe teardown).
             onConfirmAnchors: { appState.confirmAnchorsAndProceed() },
             onDeclineAnchors: { appState.declineAnchors() },
+            // Dev Mode (Phase 4) review-before-apply gate: Approve dispatches the
+            // shown prompt; Cancel aborts before the agent runs (safe teardown).
+            onApproveReview: { appState.approveReviewAndProceed() },
+            onCancelReview: { appState.cancelReview() },
             // Phase 5: the parsed result — chat text + optional artifact
             // card.
             result: appState.resultPresentation,

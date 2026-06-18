@@ -126,6 +126,17 @@ extension AppState {
             return .confirmAnchors(anchors: devConfirmAnchorSummaries.map {
                 ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
             })
+        case .reviewingPrompt:
+            // Phase 4 — the opt-in review-before-apply gate. Show the target
+            // agent, the resolved target label(s), and the exact prompt so the
+            // user can approve precisely what will be sent before any file change.
+            return .reviewPrompt(
+                agent: devReviewAgentName,
+                targets: devConfirmAnchorSummaries.map {
+                    ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
+                },
+                prompt: devReviewPromptText
+            )
         case .devDone:
             // The expandable dev-result card: human summary on top, the readable
             // diff in the body well, Undo + X. Shares the result expand flag (the
