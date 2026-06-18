@@ -321,7 +321,8 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
         projectURL: URL,
         timeouts: DevRunTimeouts,
         model: String?,
-        onSubstatus: @escaping @Sendable (DevRunSubstatus) -> Void
+        onEvent: @escaping @Sendable (DevAgentEvent) -> Void,
+        onStall: @escaping @Sendable (Bool) -> Void
     ) async -> DevRunResult {
         lock.lock(); _runCount += 1; _lastModel = model; lock.unlock()
         sideEffect?(projectURL)

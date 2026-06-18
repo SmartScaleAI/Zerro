@@ -3287,8 +3287,6 @@ final class AppState {
         case .confirmDeclined:    return "confirm_declined"
         case .agent(let reason):
             switch reason {
-            case .timeout(.wallClock):  return "agent_timeout_wallclock"
-            case .timeout(.inactivity): return "agent_timeout_inactivity"
             case .nonZeroExit:          return "agent_nonzero_exit"
             case .spawnFailed:          return "agent_spawn_failed"
             case .busy:                 return "agent_busy"

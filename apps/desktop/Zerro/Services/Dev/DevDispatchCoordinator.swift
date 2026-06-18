@@ -68,8 +68,6 @@ enum DevDispatchFailure: Equatable, Sendable {
             return "Cancelled."
         case .agent(let reason):
             switch reason {
-            case .timeout(.wallClock):  return "The agent ran past the time limit and was stopped."
-            case .timeout(.inactivity): return "The agent went quiet and was stopped."
             case .nonZeroExit(_, let tail):
                 return tail.isEmpty ? "The agent exited with an error." : tail
             case .spawnFailed:          return "Couldn't start the coding agent."
@@ -148,6 +146,12 @@ final class DevDispatchCoordinator {
         // anchor declined / cancelled). Defaults to "proceed" so non-dev callers
         // and the no-low-confidence path are unaffected.
         confirmGate: @escaping @MainActor () async -> Bool = { true },
+        // Phase 4: the live activity feed + the (non-terminating) stall notifier.
+        // Defaulted to no-ops so the legacy single-line callers (and tests) that
+        // only consume `onPhase` are unaffected; the dev pill wires these to the
+        // feed log + the stall prompt.
+        onEvent: @escaping @MainActor (DevAgentEvent) -> Void = { _ in },
+        onStall: @escaping @MainActor (Bool) -> Void = { _ in },
         onPhase: @escaping @MainActor (DevDispatchPhase) -> Void
     ) async -> Outcome {
         cancelled = false
@@ -201,9 +205,18 @@ final class DevDispatchCoordinator {
             permission: permission,
             prompt: prompt,
             projectURL: projectURL,
+            timeouts: .default,
             model: model,
-            onSubstatus: { sub in
-                Task { @MainActor in onPhase(.running(sub)) }
+            onEvent: { event in
+                Task { @MainActor in
+                    // Rich event → the live feed; its coarse substatus → the
+                    // legacy single-line phase (kept until the feed UI lands).
+                    onEvent(event)
+                    onPhase(.running(event.substatus))
+                }
+            },
+            onStall: { isStalled in
+                Task { @MainActor in onStall(isStalled) }
             }
         )
 

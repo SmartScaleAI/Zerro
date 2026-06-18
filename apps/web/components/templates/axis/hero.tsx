@@ -195,7 +195,7 @@ const Hero = () => {
           >
             <AnimatedBorder />
             <AppleIcon className="h-4 w-4" />
-            Download for macOS
+            Download for Mac
           </DownloadButton>
           <Button
             className="gap-2 rounded-full"

@@ -2,12 +2,12 @@
 //  DevAgentRunnerTests.swift
 //  ZerroTests
 //
-//  Dev Mode (Phase 1, Milestone 4) — the agent runner's spawn / stream /
-//  timeout / kill behavior, exercised with throwaway shell-script "agents" so
-//  no real CLI is needed. Covers: clean success, non-zero exit (+ stderr tail),
-//  the inactivity timeout (and the SIGTERM→SIGKILL path), the wall-clock
-//  timeout, and the cap-1 concurrency rejection. Plus a unit pass over the
-//  stream-json substatus parser.
+//  Dev Mode (Phase 1, Milestone 4 + Phase 4) — the agent runner's spawn / stream
+//  / stall-notify behavior, exercised with throwaway shell-script "agents" so no
+//  real CLI is needed. Covers: clean success, non-zero exit (+ stderr tail), the
+//  cap-1 concurrency rejection, user cancel as the SOLE terminator, and — Phase 4
+//  — the stall watchdog that NOTIFIES without ever killing the process. Plus a
+//  unit pass over the stream-json event parser.
 //
 
 import XCTest
@@ -40,15 +40,15 @@ final class DevAgentRunnerTests: XCTestCase {
         echo '{"type":"result"}'
         exit 0
         """)
-        // Substatus is delivered fire-and-forget on the main queue, so asserting
-        // a specific substatus right after run() returns is racy — the terminal
-        // result is the contract here. The "result"→.done mapping is covered
+        // Events are delivered fire-and-forget on the main queue, so asserting a
+        // specific event right after run() returns is racy — the terminal result
+        // is the contract here. The "result"→.done mapping is covered
         // deterministically by testParseStreamJSONLine.
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
             permission: .editsOnly, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         // No `result` text in this event → summary is nil (the UI then falls back
         // to a generated change line; Part A).
@@ -67,7 +67,7 @@ final class DevAgentRunnerTests: XCTestCase {
             entry: entry(path: bin, format: .streamJSON),
             permission: .editsOnly, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         XCTAssertEqual(result, .succeeded(summary: "Updated the login screen layout."))
     }
@@ -91,7 +91,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let result = await ClaudeCodeAgentRunner().run(
             entry: e, permission: .editsOnly, prompt: "make it teal",
             projectURL: scratch, timeouts: fastTimeouts(), model: "gpt-5.5",
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         XCTAssertEqual(result, .succeeded(summary: nil))
         let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
@@ -111,43 +111,62 @@ final class DevAgentRunnerTests: XCTestCase {
             entry: entry(path: bin, format: .streamJSON),
             permission: .editsOnly, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         XCTAssertEqual(result, .failed(.nonZeroExit(code: 3, stderrTail: "kaboom")))
     }
 
-    func testInactivityTimeoutKillsHungAgent() async throws {
-        // No output, sleeps well past the inactivity cap → must be killed.
-        let bin = try makeScript("hang", """
+    // MARK: - Stall watchdog (NOTIFIES — never terminates)
+
+    func testStallNotifierFiresButNeverKillsTheProcess() async throws {
+        // Silent well past the stall threshold, then exits 0 on its OWN. The
+        // watchdog must NOTIFY (onStall(true)) but never terminate — proven by the
+        // clean `.succeeded` result and that the run lasts the full sleep, not
+        // threshold+grace.
+        let bin = try makeScript("quiet", """
         #!/bin/sh
-        sleep 30
+        sleep 3
+        echo '{"type":"result"}'
+        exit 0
         """)
+        let stalls = StallRecorder()
         let start = Date()
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
             permission: .editsOnly, prompt: "go", projectURL: scratch,
-            timeouts: DevRunTimeouts(wallClock: 30, inactivity: 1, killGrace: 1),
-            onSubstatus: { _ in }
+            timeouts: DevRunTimeouts(stall: 1, killGrace: 1), model: nil,
+            onEvent: { _ in },
+            onStall: { stalls.append($0) }
         )
-        XCTAssertEqual(result, .failed(.timeout(.inactivity)))
-        // Should resolve promptly (cap 1s + grace 1s), not after the 30s sleep.
-        XCTAssertLessThan(Date().timeIntervalSince(start), 10)
+        XCTAssertEqual(result, .succeeded(summary: nil),
+                       "the stall watchdog must not terminate the process")
+        XCTAssertTrue(stalls.values().contains(true), "onStall(true) should have fired after the silence")
+        // It ran the full ~3s sleep, NOT killed at threshold(1) + grace(1).
+        XCTAssertGreaterThan(Date().timeIntervalSince(start), 2.5)
     }
 
-    func testWallClockTimeoutFiresDespiteContinuousOutput() async throws {
-        // Streams constantly (inactivity never trips) but never exits → the
-        // wall-clock cap must terminate it.
-        let bin = try makeScript("chatty", """
+    func testStallNotifierResetsOnOutputAndClears() async throws {
+        // Output resets the silence clock; a later stall fires `true`; the next
+        // output clears it with `false`. The `{"type":"system"}` line is a
+        // non-displayed frame — it still counts as a sign of life (resets/clears).
+        let bin = try makeScript("resume", """
         #!/bin/sh
-        while true; do echo '{"type":"system"}'; sleep 0.2; done
+        echo '{"type":"system"}'
+        sleep 2
+        echo '{"type":"result"}'
+        exit 0
         """)
+        let stalls = StallRecorder()
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
             permission: .editsOnly, prompt: "go", projectURL: scratch,
-            timeouts: DevRunTimeouts(wallClock: 1, inactivity: 10, killGrace: 1),
-            onSubstatus: { _ in }
+            timeouts: DevRunTimeouts(stall: 1, killGrace: 1), model: nil,
+            onEvent: { _ in },
+            onStall: { stalls.append($0) }
         )
-        XCTAssertEqual(result, .failed(.timeout(.wallClock)))
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        // First a stall, then a resume on the next output.
+        XCTAssertEqual(stalls.values(), [true, false])
     }
 
     func testSecondConcurrentRunIsRejected() async throws {
@@ -161,14 +180,14 @@ final class DevAgentRunnerTests: XCTestCase {
 
         async let first = runner.run(
             entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
-            timeouts: DevRunTimeouts(wallClock: 30, inactivity: 10, killGrace: 1),
-            onSubstatus: { _ in }
+            timeouts: DevRunTimeouts(stall: 30, killGrace: 1),
+            onEvent: { _ in }
         )
         // Let the first run acquire the cap-1 flag.
         try await Task.sleep(nanoseconds: 250_000_000)
         let second = await runner.run(
             entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
-            timeouts: fastTimeouts(), onSubstatus: { _ in }
+            timeouts: fastTimeouts(), onEvent: { _ in }
         )
         XCTAssertEqual(second, .failed(.busy))
         let firstResult = await first
@@ -177,6 +196,7 @@ final class DevAgentRunnerTests: XCTestCase {
 
     func testCancelTerminatesRunningAgent() async throws {
         // Streams (so it's clearly alive) but never exits → only cancel ends it.
+        // Cancel is THE sole terminator now (no timeout kill exists).
         let bin = try makeScript("cancelme", """
         #!/bin/sh
         while true; do echo '{"type":"system"}'; sleep 0.2; done
@@ -187,9 +207,10 @@ final class DevAgentRunnerTests: XCTestCase {
 
         async let runResult = runner.run(
             entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
-            // Long caps so neither timeout fires — the cancel must be what ends it.
-            timeouts: DevRunTimeouts(wallClock: 60, inactivity: 60, killGrace: 1),
-            onSubstatus: { _ in }
+            // Long stall threshold so the watchdog never even notifies — the
+            // cancel must be what ends it.
+            timeouts: DevRunTimeouts(stall: 60, killGrace: 1),
+            onEvent: { _ in }
         )
         // Let the process spawn + start streaming, then cancel.
         try await Task.sleep(nanoseconds: 400_000_000)
@@ -197,7 +218,7 @@ final class DevAgentRunnerTests: XCTestCase {
 
         let result = await runResult
         XCTAssertEqual(result, .failed(.cancelled))
-        // Resolves on the SIGTERM (well under the 60s caps).
+        // Resolves on the SIGTERM (well under the 60s stall threshold).
         XCTAssertLessThan(Date().timeIntervalSince(start), 10)
     }
 
@@ -217,98 +238,116 @@ final class DevAgentRunnerTests: XCTestCase {
         )
         let result = await ClaudeCodeAgentRunner().run(
             entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         guard case .failed(.spawnFailed) = result else {
             return XCTFail("expected .spawnFailed, got \(result)")
         }
     }
 
-    // MARK: - Parser
+    // MARK: - Parser (Claude Code)
 
     func testParseStreamJSONLine() {
-        XCTAssertEqual(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(#"{"type":"result"}"#), .done)
+        // Terminal result.
+        XCTAssertEqual(parse(#"{"type":"result"}"#), DevAgentEvent(kind: .done))
+        // Edits carry the file at `file_path` (basename only).
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/proj/src/App.css"}}]}}"#),
-            .editing(file: "App.css")
-        )
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/proj/src/App.css"}}]}}"#),
+            DevAgentEvent(kind: .editing, detail: "App.css"))
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x"}}]}}"#),
-            .readingFiles
-        )
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/p/src/index.html"}}]}}"#),
+            DevAgentEvent(kind: .editing, detail: "index.html"))
+        // Read captures the file it's reading.
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#),
-            .running
-        )
-        // `Agent` is the current subagent tool name (verified at M9); maps like
-        // the old `Task`.
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/p/package.json"}}]}}"#),
+            DevAgentEvent(kind: .reading, detail: "package.json"))
+        // Grep/Glob capture the search pattern.
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{}}]}}"#),
-            .running
-        )
-        // Write carries `file_path` like Edit.
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"useState"}}]}}"#),
+            DevAgentEvent(kind: .searching, detail: "useState"))
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/p/src/index.html"}}]}}"#),
-            .editing(file: "index.html")
-        )
-        // An unknown/future tool degrades to "working…", never nil-crashes.
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Glob","input":{"pattern":"**/*.ts"}}]}}"#),
+            DevAgentEvent(kind: .searching, detail: "**/*.ts"))
+        // LS (legacy) captures the listed directory.
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"SomeFutureTool","input":{}}]}}"#),
-            .working
-        )
-        // Non-progress / garbage lines yield no substatus.
-        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(#"{"type":"system"}"#))
-        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting("not json"))
-        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(""))
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"LS","input":{"path":"/proj/src"}}]}}"#),
+            DevAgentEvent(kind: .listing, detail: "src"))
+        // Bash captures the command's first line (capped).
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm install"}}]}}"#),
+            DevAgentEvent(kind: .running, detail: "npm install"))
+        // Bash with no command → running, no detail.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#),
+            DevAgentEvent(kind: .running))
+        // `Agent` is the current subagent tool (verified at M9) → generic running.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{}}]}}"#),
+            DevAgentEvent(kind: .running))
+        // Assistant narration (no tool_use) surfaces as a message / thought so the
+        // feed shows motion even on a talk-only turn.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"text","text":"I'll edit it."}]}}"#),
+            DevAgentEvent(kind: .message, detail: "I'll edit it."))
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"…"}]}}"#),
+            DevAgentEvent(kind: .thinking))
+        // An unknown/future tool degrades to `.working`, never nil-crashes.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"SomeFutureTool","input":{}}]}}"#),
+            DevAgentEvent(kind: .working))
+        // Structural / garbage lines yield no event.
+        XCTAssertNil(parse(#"{"type":"system"}"#))
+        XCTAssertNil(parse("not json"))
+        XCTAssertNil(parse(""))
     }
+
+    // MARK: - Parser (Cursor)
 
     func testParseStreamJSONLineCursorToolCalls() {
         // Cursor rides tool activity in its OWN `tool_call` event (distinct from
-        // Claude's `assistant.tool_use`), emitting on the `started` twin.
+        // Claude's `assistant.tool_use`), emitting on the `started` twin — with
+        // the file / command captured from `args`.
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"tool_call","subtype":"started","tool_call":{"editToolCall":{"args":{"path":"/private/tmp/proj/README.md"}},"toolCallId":"t","startedAtMs":"1"}}"#),
-            .editing(file: "README.md")
-        )
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"editToolCall":{"args":{"path":"/private/tmp/proj/README.md"}},"toolCallId":"t","startedAtMs":"1"}}"#),
+            DevAgentEvent(kind: .editing, detail: "README.md"))
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"x"}},"toolCallId":"t"}}"#),
-            .readingFiles
-        )
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"/p/x.swift"}},"toolCallId":"t"}}"#),
+            DevAgentEvent(kind: .reading, detail: "x.swift"))
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"echo hi"}},"toolCallId":"t"}}"#),
-            .running
-        )
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"echo hi"}},"toolCallId":"t"}}"#),
+            DevAgentEvent(kind: .running, detail: "echo hi"))
         // The `completed` twin must NOT re-emit (the `started` one already did).
         XCTAssertNil(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"tool_call","subtype":"completed","tool_call":{"editToolCall":{"args":{"path":"/p/README.md"}}}}"#))
-        // An unknown/future tool kind degrades to "working…", never nil-crashes.
+            parse(#"{"type":"tool_call","subtype":"completed","tool_call":{"editToolCall":{"args":{"path":"/p/README.md"}}}}"#))
+        // An unknown/future tool kind degrades to `.working`, never nil-crashes.
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"tool_call","subtype":"started","tool_call":{"frobToolCall":{"args":{}}}}"#),
-            .working
-        )
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"frobToolCall":{"args":{}}}}"#),
+            DevAgentEvent(kind: .working))
         // Cursor's terminal `result` event maps to `.done` like Claude's (shared).
         XCTAssertEqual(
-            ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-                #"{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"inputTokens":1}}"#),
-            .done
-        )
-        // Cursor's other top-level events carry no progress signal.
-        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(#"{"type":"thinking","subtype":"delta","text":"…"}"#))
-        XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(
-            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll edit it."}]}}"#))
-        // Regression guard: the Claude Code branch is unchanged — its tool_use
-        // mapping is still covered exhaustively by testParseStreamJSONLine above.
+            parse(#"{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"inputTokens":1}}"#),
+            DevAgentEvent(kind: .done))
+        // Cursor's `thinking` DELTA is per-token noise — skipped (nil).
+        XCTAssertNil(parse(#"{"type":"thinking","subtype":"delta","text":"…"}"#))
+        // A complete assistant text message surfaces as narration.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll edit it."}]}}"#),
+            DevAgentEvent(kind: .message, detail: "I'll edit it."))
     }
+
+    func testEventValueEqualityIgnoresIdentityAndTimestamp() {
+        // Two events with the same payload but different id/timestamp are equal —
+        // the feed uses `id` for SwiftUI identity, not value.
+        let a = DevAgentEvent(kind: .editing, detail: "App.css")
+        let b = DevAgentEvent(kind: .editing, detail: "App.css")
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a.id, b.id)
+        XCTAssertNotEqual(a, DevAgentEvent(kind: .editing, detail: "Other.css"))
+        XCTAssertNotEqual(a, DevAgentEvent(kind: .reading, detail: "App.css"))
+    }
+
+    // MARK: - Result summary
 
     func testParseResultSummaryCursorResultEvent() {
         // Cursor's `result` event carries extra fields (duration_ms, usage, …) but
@@ -316,8 +355,7 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             ClaudeCodeAgentRunner.parseResultSummaryForTesting(
                 #"{"type":"result","subtype":"success","duration_ms":8144,"is_error":false,"result":"  Appended the line.  ","usage":{"inputTokens":1}}"#),
-            "Appended the line."
-        )
+            "Appended the line.")
     }
 
     func testCursorArgumentDeliveryArgv() async throws {
@@ -341,7 +379,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let result = await ClaudeCodeAgentRunner().run(
             entry: e, permission: .allowCommands, prompt: "make this button bigger",
             projectURL: scratch, timeouts: fastTimeouts(), model: "claude-opus-4-8-high",
-            onSubstatus: { _ in }
+            onEvent: { _ in }
         )
         XCTAssertEqual(result, .succeeded(summary: "ok"))
         let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
@@ -357,8 +395,7 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             ClaudeCodeAgentRunner.parseResultSummaryForTesting(
                 #"{"type":"result","result":"  Reworked the nav.  "}"#),
-            "Reworked the nav."
-        )
+            "Reworked the nav.")
         // A `result` event with no `result` field, or an empty one → nil.
         XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(#"{"type":"result"}"#))
         XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(#"{"type":"result","result":"   "}"#))
@@ -372,8 +409,12 @@ final class DevAgentRunnerTests: XCTestCase {
 
     // MARK: - Helpers
 
+    private func parse(_ line: String) -> DevAgentEvent? {
+        ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(line)
+    }
+
     private func fastTimeouts() -> DevRunTimeouts {
-        DevRunTimeouts(wallClock: 30, inactivity: 10, killGrace: 1)
+        DevRunTimeouts(stall: 30, killGrace: 1)
     }
 
     private func entry(path: URL, format: DevAgentOutputFormat) -> DevAgentEntry {
@@ -391,4 +432,12 @@ final class DevAgentRunnerTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
     }
+}
+
+/// Thread-safe collector for the runner's `onStall` callbacks (fired off-main).
+private final class StallRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [Bool] = []
+    func append(_ v: Bool) { lock.lock(); items.append(v); lock.unlock() }
+    func values() -> [Bool] { lock.lock(); defer { lock.unlock() }; return items }
 }

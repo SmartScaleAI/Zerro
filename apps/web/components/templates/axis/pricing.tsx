@@ -121,7 +121,7 @@ const tiers: Tier[] = [
             "We manage all token usage — no API keys",
             "Cancel anytime",
         ],
-        cta: { label: "Download for macOS", variant: "primary" },
+        cta: { label: "Download for Mac", variant: "primary" },
         highlight: true,
         placement: "pricing_managed",
     },
@@ -139,7 +139,7 @@ const tiers: Tier[] = [
             "Recordings never leave your Mac",
             "No subscription, no account",
         ],
-        cta: { label: "Download for macOS", variant: "primary" },
+        cta: { label: "Download for Mac", variant: "primary" },
         placement: "pricing_byok",
     },
 ];
