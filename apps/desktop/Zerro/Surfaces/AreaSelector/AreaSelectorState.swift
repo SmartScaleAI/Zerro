@@ -210,6 +210,7 @@ final class AreaSelectorState {
         if isMicMenuOpen {
             // Only one toolbar dropdown at a time (see toggleModelMenu).
             closeModelMenu()
+            closeDevSettingsMenu()
         } else {
             highlightedMicIndex = nil
         }
@@ -295,6 +296,7 @@ final class AreaSelectorState {
         isModelMenuOpen.toggle()
         if isModelMenuOpen {
             closeMicMenu()
+            closeDevSettingsMenu()
         } else {
             highlightedModelIndex = nil
         }
@@ -357,6 +359,89 @@ final class AreaSelectorState {
         !isDevMode || (selectedAgentID != nil && projectURL != nil)
     }
 
+    /// At-a-glance readiness for the compact dev-settings icon's status dot:
+    /// green when an agent is installed/selected AND a folder is set, amber when
+    /// either is missing. Distinct from `devRequirementsMet` only in framing —
+    /// this drives the dot; the record gate drives blocking. Meaningful only in
+    /// Dev Mode (the dot renders only then).
+    var isDevReady: Bool {
+        selectedAgentID != nil && projectURL != nil
+    }
+
+    // MARK: - Dev-settings menu (compact toolbar)
+    //
+    // The compact toolbar collapses the agent + folder chips into ONE
+    // dev-settings icon whose dropdown lists the detected agents and the
+    // project folder. Rendered in-tree like the model/mic dropdowns (the
+    // overlay sits at `.screenSaver`, above NSMenu's window level), so the
+    // controller's mouse monitor hit-tests its rows the same way.
+
+    /// One row of the dev-settings menu's Agent section — display data the
+    /// controller precomputes from `DevAgentDetection` at present time (the view
+    /// stays free of registry/PATH reads). `installed` drives the "Detected"
+    /// badge vs. the dim "Install" hint.
+    struct DevAgentMenuItem: Identifiable, Equatable {
+        /// `DevAgentEntry.id` (e.g. "claude-code").
+        let id: String
+        /// `DevAgentEntry.displayName`.
+        let name: String
+        /// Whether the CLI resolved on PATH this launch.
+        let installed: Bool
+    }
+
+    /// Agent rows for the dev-settings menu, set by the controller once detection
+    /// lands. Empty until then (Phase 1 ships one agent — Claude Code).
+    private(set) var devAgentMenuItems: [DevAgentMenuItem] = []
+
+    func setDevAgentMenuItems(_ items: [DevAgentMenuItem]) {
+        devAgentMenuItems = items
+    }
+
+    private(set) var isDevSettingsMenuOpen: Bool = false
+
+    /// Row under the cursor while the dev-settings menu is open (hover highlight).
+    /// Indexes the menu's Agent rows; nil when nothing/elsewhere is hovered.
+    private(set) var highlightedDevAgentIndex: Int?
+
+    /// One-shot guard: the dev-settings menu auto-opens on the FIRST Dev entry
+    /// this session (or whenever the folder is unset) so setup is discoverable,
+    /// then stays closed on subsequent entries. Reset per overlay presentation
+    /// (a fresh `AreaSelectorState` is built each time).
+    private var hasAutoOpenedDevSettings: Bool = false
+
+    func toggleDevSettingsMenu() {
+        isDevSettingsMenuOpen.toggle()
+        if isDevSettingsMenuOpen {
+            // Only one toolbar dropdown at a time.
+            closeModelMenu()
+            closeMicMenu()
+        } else {
+            highlightedDevAgentIndex = nil
+        }
+    }
+
+    func closeDevSettingsMenu() {
+        isDevSettingsMenuOpen = false
+        highlightedDevAgentIndex = nil
+    }
+
+    func setHighlightedDevAgentIndex(_ index: Int?) {
+        if highlightedDevAgentIndex != index { highlightedDevAgentIndex = index }
+    }
+
+    /// Called when Dev Mode is entered (Dev segment clicked, or seeded-on at
+    /// present time). Auto-opens the dev-settings menu the first time this
+    /// session, or any time the folder is still unset, so the user can finish
+    /// setup; otherwise leaves it closed.
+    func handleDevModeEntered() {
+        if !hasAutoOpenedDevSettings || projectURL == nil {
+            isDevSettingsMenuOpen = true
+            closeModelMenu()
+            closeMicMenu()
+        }
+        hasAutoOpenedDevSettings = true
+    }
+
     /// True while agent detection is in flight (the login-shell PATH probe runs
     /// off the main thread). The agent chip shows a neutral "checking" state
     /// rather than the install attention state until it resolves.
@@ -402,20 +487,35 @@ final class AreaSelectorState {
         projectIsGitRepo = isRepo
     }
 
-    private(set) var isDevToggleHovered: Bool = false
-    private(set) var isAgentChipHovered: Bool = false
-    private(set) var isFolderChipHovered: Bool = false
+    /// Hover state for the compact mode switch's two segments + the dev-settings
+    /// icon. Mirror the chip-hover pattern: the controller hit-tests the frames
+    /// on mouse-move and the view reflects these (fill highlight + tooltip).
+    private(set) var isModeArtifactHovered: Bool = false
+    private(set) var isModeDevHovered: Bool = false
+    private(set) var isDevSettingsHovered: Bool = false
 
-    func setDevToggleHovered(_ hovered: Bool) {
-        if isDevToggleHovered != hovered { isDevToggleHovered = hovered }
+    func setModeArtifactHovered(_ hovered: Bool) {
+        if isModeArtifactHovered != hovered { isModeArtifactHovered = hovered }
     }
 
-    func setAgentChipHovered(_ hovered: Bool) {
-        if isAgentChipHovered != hovered { isAgentChipHovered = hovered }
+    func setModeDevHovered(_ hovered: Bool) {
+        if isModeDevHovered != hovered { isModeDevHovered = hovered }
     }
 
-    func setFolderChipHovered(_ hovered: Bool) {
-        if isFolderChipHovered != hovered { isFolderChipHovered = hovered }
+    func setDevSettingsHovered(_ hovered: Bool) {
+        if isDevSettingsHovered != hovered { isDevSettingsHovered = hovered }
+    }
+
+    /// Clear every toolbar control-hover flag. Used when a click relocates the
+    /// toolbar (the mode switch resizes the container) and no mouse-move fires to
+    /// refresh them — the next move re-establishes hover.
+    func resetToolbarHovers() {
+        isModeArtifactHovered = false
+        isModeDevHovered = false
+        isDevSettingsHovered = false
+        isModelChipHovered = false
+        isMicChipHovered = false
+        isRecordButtonHovered = false
     }
 
     /// Seed the Dev Mode selections at present time from persisted prefs +
@@ -431,9 +531,21 @@ final class AreaSelectorState {
     /// leaves the chips as-is; toggling off clears any inline validation
     /// message (it only applies to Dev Mode).
     func toggleDevMode() {
-        isDevMode.toggle()
-        if !isDevMode { devValidationMessage = nil }
-        // Opening the mode switch shouldn't leave a toolbar dropdown open.
+        setDevMode(!isDevMode)
+    }
+
+    /// Set the mode explicitly — the compact mode switch maps each segment to a
+    /// mode (Artifact = off, Dev = on) rather than flipping, so clicking the
+    /// already-active segment is a no-op. Turning Dev off clears any inline
+    /// validation message and closes the dev-settings menu (both Dev-only);
+    /// either change closes the model/mic dropdowns.
+    func setDevMode(_ on: Bool) {
+        guard isDevMode != on else { return }
+        isDevMode = on
+        if !on {
+            devValidationMessage = nil
+            closeDevSettingsMenu()
+        }
         closeMicMenu()
         closeModelMenu()
     }

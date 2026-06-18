@@ -13,6 +13,13 @@ extension Color {
     // Text/icons sitting on top of a `vfBrandAccent` fill.
     static let vfOnBrand = Color(red: 0.07, green: 0.07, blue: 0.09)
 
+    /// Dev Mode accent — the one place the otherwise-monochrome selection +
+    /// toolbar chrome turns chromatic, to signal "this recording dispatches to
+    /// a coding agent." Fixed #34E27A. `vfOnBrand` (the near-black above) is the
+    /// text/knob color to sit ON this green for contrast. Gated entirely on
+    /// `state.isDevMode`; nothing renders green when Dev Mode is off.
+    static let vfDevAccent = Color(red: 0.204, green: 0.886, blue: 0.478) // #34E27A
+
     // Status — Apple HIG palette per the Phase 2.5 design decision
     // (#FF453A / #FF9F0A / #30D158). Values had drifted slightly before
     // Phase 11 R2; re-pinned here so the Settings destructive buttons +
