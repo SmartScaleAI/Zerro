@@ -66,3 +66,18 @@ verify_jwt = false
 # gateway JWT check is OFF so the app's anon-or-no-token request reaches our code.
 [functions.feedback]
 verify_jwt = false
+
+# refresh-agent-models — daily cron job that fetches the live Anthropic + OpenAI
+# model lists and upserts the Dev Mode manifest. The caller is pg_cron's
+# net.http_post (no Supabase JWT), and security is the shared REFRESH_CRON_SECRET
+# checked IN CODE against the x-refresh-secret header; the gateway gate is OFF so
+# that header reaches our code.
+[functions.refresh-agent-models]
+verify_jwt = false
+
+# agent-models — PUBLIC read of the Dev Mode model manifest (list of public
+# model ids, no credential/user data). The app reads it at launch with no
+# session, so the gateway JWT check is OFF; there is nothing to authenticate and
+# the read can only ever expose model ids (the write path stays service-role-only).
+[functions.agent-models]
+verify_jwt = false
