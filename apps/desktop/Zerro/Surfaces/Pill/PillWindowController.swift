@@ -332,6 +332,11 @@ private struct PillHostView: View {
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
+            // Dev Mode quit-recovery (cross-launch): Undo reverts the interrupted
+            // edits to the checkpoint; Keep retains them. Either resolution clears
+            // the durable marker (never leave it on disk once the user engages).
+            onDevRecoveryUndo: { appState.resolveDevRecovery(undo: true) },
+            onDevRecoveryKeep: { appState.resolveDevRecovery(undo: false) },
             // Dev Mode (M7) terminal-card actions: restore the tree to the
             // checkpoint, or re-dispatch the same prompt.
             onDevRevert: { appState.revertDevDispatch() },

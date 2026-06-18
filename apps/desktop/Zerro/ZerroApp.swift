@@ -235,7 +235,15 @@ struct ZerroApp: App {
             // Launch recovery still covers crash / force-quit / relaunch (where
             // the app actually exited). Both paths OFFER (ask before
             // generating); neither auto-spends a credit.
+            //
+            // Dev Mode quit-recovery runs FIRST — it restores real source files
+            // (higher stakes) than re-offering a recording. If it makes an offer,
+            // skip the recording scan this launch (the recording orphan re-offers
+            // next launch); otherwise fall through to the unchanged recording
+            // recovery.
             Task { @MainActor [weak state] in
+                let offeredDevRecovery = await state?.recoverInterruptedDevCheckpointIfAny() ?? false
+                guard !offeredDevRecovery else { return }
                 await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
             }
 
@@ -519,6 +527,15 @@ struct ZerroApp: App {
         // first" (the pill's "x" is the quick "not now").
         if case .confirmingRecovery = state.state {
             Log.hotkey.notice("recovery confirm in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
+            return
+        }
+        // Dev Mode quit-recovery: the cross-launch Undo/Keep offer is awaiting an
+        // answer. Like .confirmingRecovery, the record hotkey must not start a new
+        // recording over it (resolving it first protects the interrupted edits) —
+        // flash to signal "registered, resolve the pill".
+        if case .confirmingDevRecovery = state.state {
+            Log.hotkey.notice("dev recovery confirm in flight — flashing pill instead of starting")
             pillController?.flashBusy()
             return
         }

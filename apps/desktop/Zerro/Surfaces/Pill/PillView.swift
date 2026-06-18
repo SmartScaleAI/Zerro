@@ -89,6 +89,12 @@ enum PillState: Equatable {
     /// resolved label(s) the agent will act on (low-confidence ones flagged) so a
     /// wrong anchor is catchable before any edit, with Confirm / Cancel.
     case confirmAnchors(anchors: [ConfirmAnchorRow])
+    /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted mid-edit
+    /// and the durable checkpoint marker validated at launch. `detail` is the
+    /// pre-formatted one-line body (diff stat + agent name, assembled in the
+    /// bridge). Two outcomes: Undo (revert to the checkpoint, destructive) / Keep
+    /// (retain the agent's edits, neutral).
+    case confirmDevRecovery(detail: String)
 }
 
 /// One resolved-anchor row in the confirmAnchors card: the label the agent will
@@ -159,6 +165,13 @@ struct PillView: View {
     /// literal `.confirmRecovery` state without ceremony.
     var onRecoveryGenerate: () -> Void = {}
     var onRecoveryDiscard: () -> Void = {}
+
+    /// Dev Mode quit-recovery (cross-launch) resolutions — exactly two outcomes.
+    /// `onDevRecoveryUndo` reverts the interrupted edits to the checkpoint;
+    /// `onDevRecoveryKeep` retains them. Default no-ops so `#Preview` blocks can
+    /// pass a literal `.confirmDevRecovery` state without ceremony.
+    var onDevRecoveryUndo: () -> Void = {}
+    var onDevRecoveryKeep: () -> Void = {}
 
     /// Dev Mode (M7) terminal-card actions. `onDevRevert` restores the working
     /// tree to the pre-run checkpoint (offered on `.devDone`, and on `.devFailed`
@@ -260,7 +273,8 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the 760-wide failure card
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .error, .paidBlockResume, .devDone, .devFailed, .confirmAnchors:
+             .error, .paidBlockResume, .devDone, .devFailed, .confirmAnchors,
+             .confirmDevRecovery:
             return nil
         }
     }
@@ -273,7 +287,8 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the failure card: the title +
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .confirmAnchors:
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .confirmAnchors,
+             .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
         // .resultCompact); expanded is the content-driven card.
@@ -500,6 +515,12 @@ struct PillView: View {
                 onConfirm: onConfirmAnchors,
                 onCancel: onDeclineAnchors
             )
+        case .confirmDevRecovery(let detail):
+            ConfirmDevRecoveryPillContent(
+                detail: detail,
+                onUndo: onDevRecoveryUndo,
+                onKeep: onDevRecoveryKeep
+            )
         }
     }
 
@@ -697,6 +718,50 @@ private struct ConfirmAnchorsPillContent: View {
                 Spacer(minLength: 0)
                 PillSecondaryButton(title: "Cancel", action: onCancel)
                 PillPrimaryButton(title: "Confirm", role: .positive, action: onConfirm)
+            }
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, VFSpacing.md)
+        .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
+    }
+}
+
+// MARK: - ConfirmDevRecoveryPillContent (Dev Mode quit-recovery — cross-launch)
+//
+// Offered at launch when a prior Dev Mode dispatch was interrupted by a quit
+// (⌘Q / kill -9) mid-edit and the durable checkpoint marker validated as safe to
+// revert. Mirrors `ConfirmRecoveryPillContent`'s recovery-pill chrome but with a
+// title + diff-stat body (two lines, content-driven height) and the result-card
+// action vocabulary: Undo (destructive red `DevUndoButton`, reverts to the
+// checkpoint) and Keep (neutral `PillSecondaryButton`, retains the edits). Like
+// the other confirm pills there is no separate dismiss "x" — the two verbs are
+// the only resolutions.
+
+private struct ConfirmDevRecoveryPillContent: View {
+    /// Pre-formatted one-line body (diff stat + agent name), assembled in the bridge.
+    let detail: String
+    let onUndo: () -> Void
+    let onKeep: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.sm) {
+            HStack(spacing: VFSpacing.sm) {
+                PillLeadingIconBadge(systemImage: "arrow.uturn.backward", tint: .vfWarningAmber)
+                Text("Unreviewed Dev Mode change")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+            }
+
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: VFSpacing.sm) {
+                Spacer(minLength: 0)
+                PillSecondaryButton(title: "Keep", action: onKeep)
+                DevUndoButton(action: onUndo)
             }
         }
         .padding(.horizontal, VFSpacing.lg)

@@ -60,6 +60,11 @@ extension AppState {
             // M2 (rev 3) — the sleep-interrupted-recording recovery offer.
             return .confirmRecovery
 
+        case .confirmingDevRecovery:
+            // Quit-recovery — the cross-launch Undo/Keep offer for a Dev Mode
+            // dispatch a quit interrupted mid-edit.
+            return .confirmDevRecovery(detail: devRecoveryDetail)
+
         case .done:
             return isResultExpanded ? .resultExpanded : .resultCompact
 
@@ -132,6 +137,19 @@ extension AppState {
             return .devFailed(detail: devFailure?.userMessage ?? "Dev Mode run failed.",
                               canRevert: devCanRevert)
         }
+    }
+
+    /// The cross-launch dev-recovery pill's one-line body: the diff stat the
+    /// agent applied before the quit, plus the agent name when known. Reads
+    /// `pendingDevRecovery` (set before the state flips to `.confirmingDevRecovery`,
+    /// so it's populated whenever this is rendered); falls back to a bare prompt if
+    /// somehow absent.
+    var devRecoveryDetail: String {
+        guard let pending = pendingDevRecovery else { return "Undo the last change?" }
+        let stat = pending.diffStat
+        let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
+        let lead = pending.agentName ?? "The agent"
+        return "\(lead) changed +\(stat.added) \u{2212}\(stat.removed) in \(files). Undo it?"
     }
 
     /// The `.devDone` success card's render model: a fixed title, the summary

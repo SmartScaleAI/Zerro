@@ -46,6 +46,10 @@ final class PillCardSnapshotTests: XCTestCase {
             ("03-error-retryable", AnyView(PillView(state: .error(headline: net.headline, detail: net.userMessage, retryable: true)))),
             ("04-paidblock-upgrade", AnyView(PillView(state: .paidBlockResume(headline: trial.headline, detail: trial.userMessage, entitled: false)))),
             ("05-paidblock-generate", AnyView(PillView(state: .paidBlockResume(headline: trial.headline, detail: trial.userMessage, entitled: true)))),
+            ("06-devrecovery-named", AnyView(PillView(state: .confirmDevRecovery(
+                detail: "Claude Code changed +42 \u{2212}7 in 3 files. Undo it?")))),
+            ("07-devrecovery-anon", AnyView(PillView(state: .confirmDevRecovery(
+                detail: "The agent changed +5 \u{2212}0 in 1 file. Undo it?")))),
         ]
 
         for (name, view) in cases {

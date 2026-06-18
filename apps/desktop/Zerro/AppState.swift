@@ -86,6 +86,17 @@ public enum RecordingState: Equatable {
     /// confirm. A checkpoint has already been taken here, so a decline/cancel must
     /// discard it (the agent never ran — nothing to revert).
     case confirmAnchors
+    /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted by a
+    /// quit (⌘Q / kill -9) mid-edit, leaving a durable recovery marker pointing
+    /// at a still-valid git checkpoint. Entered at launch by
+    /// `recoverInterruptedDevCheckpointIfAny` ONLY after every safety check
+    /// passes (repo present, restore ref resolves, untracked snapshot intact,
+    /// non-empty diff); the pill offers Undo (revert via the existing
+    /// `GitCheckpointService.revert`) or Keep (retain the edits). Resolved by
+    /// `resolveDevRecovery(undo:)`. Not idle-like for sweep/recovery gates (those
+    /// must no-op while it shows, exactly like `.confirmingRecovery`), but
+    /// terminal for teardown (the agent already exited).
+    case confirmingDevRecovery
 }
 
 // MARK: - DevModeSelection
@@ -707,6 +718,20 @@ final class AppState {
     // `UserDefaults`-backed store; the default uses `.standard`.
     @ObservationIgnored var pendingPaidStore = PendingPaidGenerationStore()
 
+    // Dev Mode (quit-recovery): owner of the durable on-disk marker that records
+    // an in-flight dispatch's git checkpoint, so a quit (⌘Q / kill -9) mid-edit
+    // can be offered an Undo on the next launch. Written the instant the agent is
+    // allowed to edit (post-confirm gate), cleared at every checkpoint teardown.
+    // Owned (not weak) and `var` so tests can inject a throwaway file-backed
+    // store; the default writes Application Support/Zerro/dev-recovery.json.
+    @ObservationIgnored var devRecoveryStore = DevRecoveryStore()
+
+    /// The reconstructed-and-validated checkpoint currently being OFFERED for
+    /// cross-launch undo (state `.confirmingDevRecovery`). Set by
+    /// `recoverInterruptedDevCheckpointIfAny` once validation passes; consumed by
+    /// `resolveDevRecovery(undo:)` (Undo or Keep). Nil otherwise.
+    @ObservationIgnored var pendingDevRecovery: PendingDevRecovery?
+
     // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
     // (same lifetime + weak-ref contract as `entitlements`). The proxy
     // generation path reads `selectedModelID` fresh at request time — the same
@@ -1209,6 +1234,13 @@ final class AppState {
         // under the `zerro-` sweep prefix) so it doesn't leak when the dev
         // result is dismissed/reset without a Revert.
         if let checkpoint = devCheckpoint { devCheckpointService?.discardSnapshot(checkpoint) }
+        // Quit-recovery: this is the single point where a live checkpoint is torn
+        // down on every non-quit path (cancel, dismiss, reset, revocation, the
+        // session-finish outcomes, and revert-success via resetToIdle). Clear the
+        // durable marker in lockstep with `discardSnapshot` so it never outlives
+        // the checkpoint it points at.
+        devRecoveryStore.clear()
+        pendingDevRecovery = nil
         devCancelInFlight = false
         devAgentStarted = false
         devDispatchStartTime = nil
@@ -1366,6 +1398,18 @@ final class AppState {
             // it's safe on the termination path.
             devDispatchCoordinator.cancel()
             if let cp = devCheckpoint { devCheckpointService?.discardSnapshot(cp) }
+            // Quit-recovery (belt-and-suspenders): a marker is never written
+            // before the gate, so there shouldn't be one here — but clearing it
+            // guarantees no marker can survive pointing at the snapshot we just
+            // discarded.
+            devRecoveryStore.clear()
+        case .confirmingDevRecovery:
+            // Quit-recovery offer open at quit: the interrupted agent already
+            // exited (the marker survived a PRIOR launch's quit), so there's
+            // nothing to tear down. LEAVE the marker on disk so the offer
+            // re-presents on the next launch — quitting past the offer must not
+            // silently drop the recoverable checkpoint.
+            break
         case .idle, .done, .failed, .confirmingRecovery,
              .devDone, .devFailed, .devReverting:
             // Terminal/idle dev states: the agent has exited; nothing to tear
@@ -1622,6 +1666,138 @@ final class AppState {
             Log.breadcrumb(category: .stateMachine, message: "recovery discarded")
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: url) }
             state = .idle
+        }
+    }
+
+    // MARK: - Dev Mode quit-recovery (cross-launch undo)
+
+    /// Detect a Dev Mode dispatch that a quit (⌘Q / `kill -9`) interrupted
+    /// mid-edit and, when reverting is PROVABLY safe, offer a one-click Undo.
+    /// Called on the launch path BEFORE `recoverOrphanedRecordingIfAny` because it
+    /// restores real source files (higher stakes); returns `true` when it makes an
+    /// offer, so the caller skips the recording scan this launch (the recording
+    /// orphan re-offers next launch). The launch `WorkingDirectory.sweep()` never
+    /// touches the snapshot (it's `dev-checkpoint-*`, not `zerro-*`).
+    ///
+    /// NON-DESTRUCTIVE BY DEFAULT (the load-bearing contract): an offer is made
+    /// only when ALL of these hold — otherwise the marker is cleared and the
+    /// user's edits are KEPT (the safe failure), never a partial revert that could
+    /// delete un-restorable untracked files:
+    ///   1. the project path exists and is a git repo,
+    ///   2. the restore ref still resolves (the dangling `stash create` commit
+    ///      wasn't GC'd) — computing `diffStat` off-main doubles as this check,
+    ///   3. the untracked snapshot dir (if any) still exists — if a reboot cleared
+    ///      `$TMPDIR`, a revert's `clean -fd` would delete pre-existing untracked
+    ///      files it can't restore, so we must not offer,
+    ///   4. the diff is non-empty — the agent actually changed tracked files
+    ///      before the quit; a zero diff means nothing to undo.
+    ///
+    /// Gated on `state == .idle`, like the recording recovery: a non-idle launch
+    /// (e.g. a restored paid-block recording) no-ops and leaves the marker for the
+    /// next launch.
+    @discardableResult
+    func recoverInterruptedDevCheckpointIfAny() async -> Bool {
+        guard onboardingCompleteProvider(), state == .idle else { return false }
+        guard let marker = devRecoveryStore.load() else { return false }
+
+        // Validate 1: the project still exists on disk and is a git work tree.
+        // Rebuilding the service re-resolves git from the folder alone.
+        guard FileManager.default.fileExists(atPath: marker.projectPath),
+              let service = try? GitCheckpointService(projectURL: marker.projectURL),
+              service.isRepository() else {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        // Validate 3: a recorded untracked snapshot dir must still be present. If
+        // it's gone, a revert's `clean -fd` would delete pre-existing untracked
+        // files it can't restore — clearing + keeping the edits is the safe call.
+        if let snapshotPath = marker.untrackedSnapshotPath,
+           !FileManager.default.fileExists(atPath: snapshotPath) {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        let checkpoint = marker.checkpoint
+
+        // Validate 2 + 4 (off-main — it shells out to git): `diffStat` runs
+        // `git diff --numstat <restoreRef>`, which throws if the ref no longer
+        // resolves (GC'd stash commit). A nil result → unresolvable → clear, no
+        // offer; an empty diff → nothing to undo → clear, no offer.
+        let diff: GitDiffStat? = await Task.detached {
+            try? service.diffStat(since: checkpoint)
+        }.value
+        // Re-check liveness after the await: if the user started something during
+        // the git probe, don't preempt — leave the marker for the next offer.
+        guard state == .idle else { return false }
+        guard let diff, diff.filesChanged > 0 else {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        // All safe — offer the undo. The reconstructed checkpoint/service revert
+        // through the SAME `GitCheckpointService.revert` an in-session Undo uses.
+        pendingDevRecovery = PendingDevRecovery(
+            checkpoint: checkpoint,
+            service: service,
+            diffStat: diff,
+            agentName: marker.agentName
+        )
+        state = .confirmingDevRecovery
+        Log.dev.notice("offering interrupted dev-checkpoint recovery — files: \(diff.filesChanged, privacy: .public)")
+        Analytics.capture("dev_recovery_offered", [
+            "files_changed": diff.filesChanged,
+        ])
+        return true
+    }
+
+    /// Resolve the cross-launch recovery offer. No-op outside
+    /// `.confirmingDevRecovery`. `undo == true` restores the working tree to the
+    /// checkpoint via the existing `GitCheckpointService.revert`; `false` (Keep,
+    /// and any dismissal the UI routes here) retains the agent's edits. EITHER
+    /// outcome clears the marker + discards the snapshot — once the user has
+    /// engaged, the marker never survives on disk.
+    func resolveDevRecovery(undo: Bool) {
+        guard case .confirmingDevRecovery = state, let pending = pendingDevRecovery else { return }
+        pendingDevRecovery = nil
+        let checkpoint = pending.checkpoint
+        let service = pending.service
+
+        guard undo else {
+            // Keep — retain the edits, drop the now-unneeded snapshot + marker.
+            service.discardSnapshot(checkpoint)
+            devRecoveryStore.clear()
+            state = .idle
+            Analytics.capture("dev_recovery_kept")
+            Log.dev.notice("dev-checkpoint recovery kept — edits retained")
+            return
+        }
+
+        // Undo — restore the tree off-main (it shells out to git), then clear.
+        state = .devReverting
+        Task { @MainActor [weak self] in
+            let ok = await Task.detached {
+                do { try service.revert(checkpoint); return true } catch { return false }
+            }.value
+            guard let self else { return }
+            // The checkpoint won't get healthier on retry, so clear the marker +
+            // snapshot regardless of revert success — a stale marker re-offering a
+            // broken checkpoint every launch would be worse than keeping the edits.
+            service.discardSnapshot(checkpoint)
+            self.devRecoveryStore.clear()
+            if ok {
+                Log.dev.notice("dev-checkpoint recovery undone — working tree restored")
+                Analytics.capture("dev_recovery_undone")
+            } else {
+                // Non-blocking: there's no live checkpoint to retry against and the
+                // user's edits are still on disk (the revertFailed copy — "check
+                // your working tree" — names the recourse), so settle to idle
+                // rather than parking on a dead-end failure card. The log +
+                // analytics record the failure.
+                Log.dev.error("dev-checkpoint recovery revert failed — \(DevDispatchFailure.revertFailed.userMessage, privacy: .public)")
+                Analytics.capture("dev_recovery_undo_failed")
+            }
+            self.state = .idle
         }
     }
 
@@ -2720,12 +2896,43 @@ final class AppState {
             // Past the confirmAnchors gate — the agent is now spawning/editing, so
             // a subsequent cancel must auto-revert.
             devAgentStarted = true
+            // Quit-recovery: this is the instant the agent is first allowed to
+            // edit (the coordinator emits `.dispatching` AFTER the confirm gate
+            // resolves to proceed and the checkpoint is taken — never before), so
+            // it's the one place to persist the durable recovery marker. Writing
+            // it a hair before the first edit is harmless: a quit in that sliver
+            // → recovery reverts a zero-diff checkpoint → no-op (and Part 3's
+            // empty-diff guard clears it without offering). Critically AFTER the
+            // gate, so a `.confirmAnchors` quit never leaves a marker pointing at
+            // a discarded snapshot.
+            persistDevRecoveryMarker()
             state = .devAgentDispatching
         case .running(let substatus):
             devAgentStarted = true
             devRunSubstatus = substatus
             state = .devAgentRunning
         }
+    }
+
+    /// Persist the durable quit-recovery marker for the current dispatch. Built
+    /// from the just-taken checkpoint (`devCheckpoint` is set by the coordinator's
+    /// `onCheckpoint` before the agent runs) + the service's project URL + the
+    /// agent's display name. A no-op when the checkpoint isn't set yet (defensive
+    /// — `.dispatching` only fires after `onCheckpoint`). The marker's lifetime
+    /// mirrors `devCheckpoint`'s but survives process death; every checkpoint
+    /// teardown clears it (`resetTransientRecordingState`, retry, revert success).
+    private func persistDevRecoveryMarker() {
+        guard let checkpoint = devCheckpoint, let service = devCheckpointService else { return }
+        let marker = DevRecoveryMarker(
+            projectPath: service.projectURL.path,
+            baseSha: checkpoint.baseSha,
+            stashSha: checkpoint.stashSha,
+            untrackedSnapshotPath: checkpoint.untrackedSnapshotDir?.path,
+            untrackedRelativePaths: checkpoint.untrackedRelativePaths,
+            createdAt: Date(),
+            agentName: recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName }
+        )
+        devRecoveryStore.save(marker)
     }
 
     // MARK: - Dev Mode confirmAnchors gate (Phase 2, M6)
@@ -2783,6 +2990,17 @@ final class AppState {
         guard state == .confirmAnchors, let cont = devConfirmContinuation else { return }
         devConfirmContinuation = nil
         Analytics.capture("dev_anchor_confirm", ["decision": "proceed"])
+        // Quit-recovery: this is the confirm-path point where "the gate resolves to
+        // proceed" — the agent is now cleared to edit (the checkpoint was taken
+        // before the gate, so `devCheckpoint` is set). Persist the marker HERE,
+        // before the `.devAgentDispatching` state flip below, so that state is
+        // never quit-reachable without a marker. The coordinator's later
+        // `applyDevPhase(.dispatching)` re-persists the same marker (idempotent
+        // atomic overwrite); this just closes the run-loop sliver between the
+        // immediate-feedback state set and that resume. Without it, a clean ⌘Q in
+        // that window would keep the snapshot but leave no marker — a leaked
+        // snapshot + a missed (zero-diff) offer.
+        persistDevRecoveryMarker()
         state = .devAgentDispatching // immediate feedback; the dispatch advances it
         cont.resume(returning: true)
     }
@@ -3070,6 +3288,10 @@ final class AppState {
                 // run takes a NEW checkpoint of the restored tree, so a later
                 // Revert restores to the true pre-run state.
                 service.discardSnapshot(checkpoint)
+                // Quit-recovery: clear the marker that pointed at the now-discarded
+                // old checkpoint. The re-dispatch writes a fresh marker for the new
+                // checkpoint at its `.dispatching` phase.
+                self.devRecoveryStore.clear()
                 self.devCheckpoint = nil
                 self.devCheckpointService = nil
                 self.beginDevDispatch()
