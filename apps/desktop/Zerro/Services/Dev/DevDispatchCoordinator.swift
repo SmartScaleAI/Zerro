@@ -110,6 +110,13 @@ final class DevDispatchCoordinator {
         let checkpoint: GitCheckpoint
         let service: GitCheckpointService
         let diff: GitDiffStat
+        /// The agent's final message text (from the stream-json `result` event),
+        /// or nil when it gave none — the result card then generates a fallback
+        /// change line from `diff`. (Result-card handoff, Part A.)
+        let summary: String?
+        /// The readable unified diff shown in the result card's body well, already
+        /// capped (Part B). Empty when the diff couldn't be produced.
+        let diffText: String
     }
 
     enum Outcome {
@@ -196,9 +203,19 @@ final class DevDispatchCoordinator {
         )
 
         switch runResult {
-        case .succeeded:
-            let diff = (try? await Task.detached { try service.diffStat(since: checkpoint) }.value) ?? .zero
-            return .succeeded(Success(checkpoint: checkpoint, service: service, diff: diff))
+        case .succeeded(let summary):
+            // One off-main hop computes both the stat and the readable diff text
+            // (Part B) against the checkpoint; either degrades gracefully if git
+            // throws (.zero stat / empty text) rather than failing the success.
+            let (diff, diffText) = await Task.detached {
+                let stat = (try? service.diffStat(since: checkpoint)) ?? .zero
+                let text = (try? service.diff(since: checkpoint)) ?? ""
+                return (stat, text)
+            }.value
+            return .succeeded(Success(
+                checkpoint: checkpoint, service: service,
+                diff: diff, summary: summary, diffText: diffText
+            ))
         case .failed(let reason):
             // No auto-revert (§8) — keep the checkpoint so the user can Revert.
             // Compute the partial-edit stat (how far the agent got before

@@ -22,3 +22,17 @@ enum VFRadius {
     static let lg: CGFloat = 14    // outer panels, action buttons
     static let pill: CGFloat = 999 // capsule
 }
+
+/// Shared metrics for the pill family's controls (see `PillControls.swift`).
+/// These replace the bare numbers that were inlined across the pill content
+/// views so every primary/secondary button, dismiss "x", and status-icon
+/// badge lands on one set of values.
+enum PillMetrics {
+    static let contentHPad: CGFloat = VFSpacing.lg   // 16 — horizontal inset of pill content
+    static let contentVPad: CGFloat = 10             // vertical inset of pill content
+    static let controlHeight: CGFloat = 30           // primary + secondary button height
+    static let primaryHPad: CGFloat = 16             // filled-button horizontal padding
+    static let primaryVPad: CGFloat = 7              // filled-button vertical padding
+    static let iconBadge: CGFloat = 30               // leading status-icon badge diameter
+    static let dismissBadge: CGFloat = 26            // corner "x" badge diameter
+}

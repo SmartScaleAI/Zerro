@@ -42,11 +42,12 @@ final class PillFailureCardBridgeTests: XCTestCase {
         guard case .failureExpanded(let headline, let detail) = appState.pillState else {
             return XCTFail("retryable failure should map to .failureExpanded, got \(String(describing: appState.pillState))")
         }
-        XCTAssertEqual(headline, "Generation failed")
+        XCTAssertEqual(headline, RecordingFailureReason.networkOffline.headline,
+                       "the expanded card now shows the reason's specific headline")
         XCTAssertEqual(detail, "A server with the specified hostname could not be found.")
     }
 
-    func testRetryableFailureFallsBackToUserMessageWhenDetailNil() {
+    func testRetryableFailureFallsBackToReasonDetailWhenDetailNil() {
         let appState = AppState()
         appState.processedRecording = makeProcessedRecording()
         appState.lastFailureDetail = nil
@@ -55,8 +56,8 @@ final class PillFailureCardBridgeTests: XCTestCase {
         guard case .failureExpanded(_, let detail) = appState.pillState else {
             return XCTFail("retryable failure should map to .failureExpanded")
         }
-        XCTAssertEqual(detail, RecordingFailureReason.providerUnavailable.userMessage,
-                       "nil detail must fall back to the reason's userMessage so the body is never empty")
+        XCTAssertEqual(detail, RecordingFailureReason.providerUnavailable.detail,
+                       "nil raw detail must fall back to the reason's elaborate detail so the body is never empty")
     }
 
     func testNonRetryableFailureKeepsCompactErrorPill() {
@@ -69,10 +70,11 @@ final class PillFailureCardBridgeTests: XCTestCase {
 
         XCTAssertFalse(appState.canRetryFailure)
 
-        guard case .error(let message, let retryable) = appState.pillState else {
+        guard case .error(let headline, let detail, let retryable) = appState.pillState else {
             return XCTFail("non-retryable failure should map to .error, got \(String(describing: appState.pillState))")
         }
-        XCTAssertEqual(message, RecordingFailureReason.apiKeyMissing.userMessage)
+        XCTAssertEqual(headline, RecordingFailureReason.apiKeyMissing.headline)
+        XCTAssertEqual(detail, RecordingFailureReason.apiKeyMissing.detail)
         XCTAssertFalse(retryable)
     }
 
@@ -85,7 +87,7 @@ final class PillFailureCardBridgeTests: XCTestCase {
         appState.state = .failed(reason: .networkOffline)
 
         XCTAssertFalse(appState.canRetryFailure)
-        guard case .error(_, let retryable) = appState.pillState else {
+        guard case .error(_, _, let retryable) = appState.pillState else {
             return XCTFail("a retryable reason with no processed recording should map to .error")
         }
         XCTAssertFalse(retryable)
@@ -101,10 +103,11 @@ final class PillFailureCardBridgeTests: XCTestCase {
         appState.state = .failed(reason: .trialCreditsExhausted)
 
         XCTAssertTrue(appState.canResumePaidGeneration)
-        guard case .paidBlockResume(let message, let entitled) = appState.pillState else {
+        guard case .paidBlockResume(let headline, let detail, let entitled) = appState.pillState else {
             return XCTFail("a paid block with a held recording should map to .paidBlockResume, got \(String(describing: appState.pillState))")
         }
-        XCTAssertEqual(message, RecordingFailureReason.trialCreditsExhausted.userMessage)
+        XCTAssertEqual(headline, RecordingFailureReason.trialCreditsExhausted.headline)
+        XCTAssertEqual(detail, RecordingFailureReason.trialCreditsExhausted.detail)
         XCTAssertFalse(entitled, "no entitlement wired → label is Upgrade, not Generate")
     }
 }

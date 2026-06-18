@@ -45,7 +45,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
 
     func testNonGitFolderFailsGracefullyWithoutDispatching() async throws {
         // `repo` was never `git init`'d.
-        let runner = FakeRunner(result: .succeeded)
+        let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
 
         let outcome = await coordinator.dispatch(
@@ -71,8 +71,9 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         git("add", "-A"); git("commit", "-m", "baseline")
         backdate("app.css")
 
-        // The fake "agent" edits the tracked file after the checkpoint is taken.
-        let runner = FakeRunner(result: .succeeded) { [repo] _ in
+        // The fake "agent" edits the tracked file after the checkpoint is taken
+        // and reports a closing summary (threaded out as `success.summary`).
+        let runner = FakeRunner(result: .succeeded(summary: "Recolored the button.")) { [repo] _ in
             try? ".btn { color: teal; }\n".write(
                 to: repo!.appendingPathComponent("app.css"), atomically: true, encoding: .utf8
             )
@@ -92,6 +93,11 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(success.diff.added, 1)
         XCTAssertEqual(success.diff.removed, 1)
         XCTAssertEqual(success.service.projectURL, repo)
+        // Part A: the agent's summary rides out on the success.
+        XCTAssertEqual(success.summary, "Recolored the button.")
+        // Part B: the readable unified diff rides out too, showing the edit.
+        XCTAssertTrue(success.diffText.contains("app.css"), "diffText should name the file:\n\(success.diffText)")
+        XCTAssertTrue(success.diffText.contains("+.btn { color: teal; }"), "diffText should show the edit:\n\(success.diffText)")
     }
 
     // MARK: - Failure keeps the checkpoint, no auto-revert
@@ -138,7 +144,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         // agent runs.
         let order = PhaseRecorder()
         let sawCheckpoint = LockedFlag()
-        let coordinator = DevDispatchCoordinator(runner: FakeRunner(result: .succeeded) { _ in
+        let coordinator = DevDispatchCoordinator(runner: FakeRunner(result: .succeeded(summary: nil)) { _ in
             // Agent side effect runs during `.dispatching`; the checkpoint must
             // already have been surfaced by then.
             XCTAssertTrue(sawCheckpoint.value, "checkpoint must be surfaced before the agent runs")
@@ -156,7 +162,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         initRepo()
         write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
 
-        let runner = FakeRunner(result: .succeeded)
+        let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
         // Cancel as soon as the checkpoint is surfaced (i.e. before the agent
         // would run) — the run must be skipped, but the checkpoint must ride
@@ -181,7 +187,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         initRepo()
         write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
 
-        let runner = FakeRunner(result: .succeeded)
+        let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
         // The gate runs AFTER the checkpoint, BEFORE the agent. A declined gate
         // aborts with the checkpoint (so the caller discards it) and the agent
@@ -209,7 +215,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         initRepo()
         write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
 
-        let runner = FakeRunner(result: .succeeded)
+        let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
         let outcome = await coordinator.dispatch(
             prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
@@ -227,7 +233,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
 
         let phases = PhaseRecorder()
-        let coordinator = DevDispatchCoordinator(runner: FakeRunner(result: .succeeded))
+        let coordinator = DevDispatchCoordinator(runner: FakeRunner(result: .succeeded(summary: nil)))
         _ = await coordinator.dispatch(
             prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
             onPhase: { phases.append($0) }

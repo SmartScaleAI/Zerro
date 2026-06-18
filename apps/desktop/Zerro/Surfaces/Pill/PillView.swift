@@ -31,23 +31,25 @@ enum PillState: Equatable {
     case processing(stepLabel: String)
     case resultCompact
     case resultExpanded
-    /// `retryable` drives whether the error pill renders a Retry button
-    /// alongside Dismiss. Set by the bridge from
-    /// `AppState.canRetryFailure` — combines the failure reason's
-    /// `isRetryable` (network / rate-limit / provider) with the
-    /// per-failure-chain attempt cap. False means the only affordance is
-    /// Dismiss (the user has to fix the underlying cause: Settings, free
-    /// up disk, re-record, etc.).
-    case error(message: String, retryable: Bool)
+    /// A failed recording rendered as the shared failure card (same 760-wide
+    /// chrome as `.failureExpanded`): the reason's short `headline` in bold on
+    /// top, the `detail` sentence as wrapped prose below, and a Cancel + Retry
+    /// footer. `retryable` selects the Retry action — when true the bridge wires
+    /// it to re-run the API stage against the processed recording on disk; when
+    /// false it falls back to reopening the screen-region selector to record
+    /// again (the user fixes the underlying cause: Settings, free up disk, etc.).
+    case error(headline: String, detail: String, retryable: Bool)
     /// M5 — a PAID-blocked failure (trial credits exhausted / out of credits /
     /// inactive subscription) that still has a held recording on disk. Rendered
-    /// in the same chrome as `.confirmRecovery` but amber: a warning badge, the
-    /// paid-block copy, a plain "Discard" button, and a filled primary button
-    /// that reads "Upgrade" until the user is entitled and "Generate" after.
-    /// `entitled` carries `EntitlementStore.canGenerate` so the label flips live
-    /// (read in the bridge so Observation tracks it). Mapped from `.failed` by
-    /// the bridge when `AppState.canResumePaidGeneration` is true.
-    case paidBlockResume(message: String, entitled: Bool)
+    /// as the shared failure card (same 760-wide chrome as `.error` /
+    /// `.failureExpanded`): the reason's `headline` on top, the paid-block
+    /// `detail` below, and a Discard + primary footer. The primary's single
+    /// action refreshes entitlement then resumes-or-paywalls; its LABEL reads
+    /// "Upgrade" until the user is entitled and "Generate" after. `entitled`
+    /// carries `EntitlementStore.canGenerate` so the label flips live (read in
+    /// the bridge so Observation tracks it). Mapped from `.failed` by the bridge
+    /// when `AppState.canResumePaidGeneration` is true.
+    case paidBlockResume(headline: String, detail: String, entitled: Bool)
     /// The expanded failure card — shown for RETRYABLE generation failures
     /// (`AppState.canRetryFailure == true`). Reuses the success card's chrome
     /// in an error configuration: amber caution badge, the `headline`
@@ -72,9 +74,13 @@ enum PillState: Equatable {
     /// in-flight dispatch states (a cancel triggers the safe terminate→revert)
     /// and hides it while reverting (interrupting a revert is unsafe).
     case devProgress(label: String, cancellable: Bool)
-    /// Terminal success. `summary` is the diff stat ("2 files changed (+8 −3)").
-    /// Renders Revert + Done (M7).
-    case devDone(summary: String)
+    /// Terminal success — the expandable result card (reusing `ArtifactCardView`
+    /// in its dev-result configuration). `card` carries the title, the
+    /// human-readable summary, and the readable git diff; `expanded` drives the
+    /// compact summary pill ↔ full card morph (shares the result expand flag).
+    /// Footer is a single "Undo" (reverts to the checkpoint); the X keeps the
+    /// changes. No Retry, no Done.
+    case devDone(card: DevResultCard, expanded: Bool)
     /// Terminal failure. `detail` is the single-line reason; `canRevert` gates
     /// the Revert button (a failure before the checkpoint has nothing to undo).
     /// Renders [Revert] + Retry (M7).
@@ -90,6 +96,16 @@ enum PillState: Equatable {
 struct ConfirmAnchorRow: Equatable {
     let label: String
     let isLow: Bool
+}
+
+/// What the Dev Mode success card (`.devDone`) renders: the header `title`, the
+/// human-readable `summary` (agent text or a generated fallback, decided in the
+/// bridge), and the readable, pre-capped unified `diffText`. Assembled by
+/// `AppState.devResultCard` so `PillView` stays a pure renderer.
+struct DevResultCard: Equatable {
+    let title: String
+    let summary: String
+    let diffText: String
 }
 
 // MARK: - PillView
@@ -111,6 +127,11 @@ struct PillView: View {
     /// Default no-op so #Preview blocks can keep passing literal states
     /// without ceremony.
     var onRetryError: () -> Void = {}
+    /// The error pill's "Retry" when there's no re-runnable recording on disk
+    /// (a non-retryable failure): dismisses the pill and reopens the screen-
+    /// region selector to record again. Wired in `PillWindowController` to
+    /// `AppState.retryRecordingFromRegion`. Default no-op for #Preview blocks.
+    var onErrorRetryRegion: () -> Void = {}
     /// M5 — the `.paidBlockResume` pill's primary action. Wired in
     /// `PillWindowController` to `AppState.resumePaidGeneration`, which re-checks
     /// entitlement and either re-runs the held recording (when entitled) or opens
@@ -228,10 +249,12 @@ struct PillView: View {
     /// capsule-to-non-capsule morph and keeps its content-driven sizing.
     private var lockedCapsuleWidth: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .error, .devProgress:
+        case .recording, .wrappingUp, .processing, .devProgress:
             return Self.capsuleWidth
+        // `.error` and `.paidBlockResume` are now the 760-wide failure card
+        // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .paidBlockResume, .devDone, .devFailed, .confirmAnchors:
+             .error, .paidBlockResume, .devDone, .devFailed, .confirmAnchors:
             return nil
         }
     }
@@ -239,20 +262,21 @@ struct PillView: View {
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
         case .recording, .wrappingUp, .processing, .resultCompact, .confirmRecovery,
-             .paidBlockResume, .devProgress:
+             .devProgress:
             return Self.capsuleHeight
-        // .error keeps the locked 392 width (so it still reads as the same
-        // capsule it morphed from) but drives its own height: a long
-        // message wraps to as many lines as it needs and grows the pill
-        // down rather than truncating or overflowing the fixed frame.
-        // ErrorPillContent floors itself at capsuleHeight so short messages
-        // still render as the familiar 50pt capsule.
-        case .resultExpanded, .failureExpanded, .error, .devDone, .devFailed, .confirmAnchors:
+        // `.error` and `.paidBlockResume` are now the failure card: the title +
+        // wrapped detail prose drive the card's own height (it grows down for a
+        // long message instead of wrapping inside a fixed capsule).
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .confirmAnchors:
             return nil
+        // Compact dev-result is the locked-height summary capsule (like
+        // .resultCompact); expanded is the content-driven card.
+        case .devDone(_, let expanded):
+            return expanded ? nil : Self.capsuleHeight
         }
     }
 
-    fileprivate static let capsuleWidth: CGFloat = 392
+    fileprivate static let capsuleWidth: CGFloat = 440
     fileprivate static let capsuleHeight: CGFloat = 50
 
     @ViewBuilder
@@ -317,19 +341,69 @@ struct PillView: View {
                 onDismiss: onDismissResult,
                 onConvert: onConvert
             )
-        case .error(let message, let retryable):
-            ErrorPillContent(
-                message: message,
-                onRetry: retryable ? onRetryError : nil,
-                onDismiss: onDismissError
+        case .error(let headline, let detail, let retryable):
+            // Same failure card as `.failureExpanded`, now with a Cancel + Retry
+            // footer. The single primary action re-runs the API stage when the
+            // failure is retryable, else reopens the screen-region selector to
+            // record again (preserving the prior `onRetry ?? onRetryRegion`).
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                conversion: .hidden,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissError,
+                onConvert: {},
+                failure: ArtifactCardView.FailureConfig(
+                    headline: headline,
+                    detail: detail,
+                    secondaryTitle: "Cancel",
+                    onSecondary: onDismissError,
+                    primaryTitle: "Retry",
+                    primaryIcon: "arrow.clockwise",
+                    primaryRole: .warning
+                ),
+                onRetry: retryable ? onRetryError : onErrorRetryRegion
             )
-        case .paidBlockResume(let message, let entitled):
-            PaidBlockResumePillContent(
-                message: message,
-                entitled: entitled,
-                onPrimary: onResumePaidGeneration,
-                onDiscard: onDismissError
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        case .paidBlockResume(let headline, let detail, let entitled):
+            // Same failure card, Discard + (Upgrade/Generate) footer. The single
+            // primary action refreshes entitlement then resumes-or-paywalls; its
+            // label flips with `entitled`. Once entitled the card switches from
+            // the amber paid-block warning to a blue "you're all set" success
+            // confirmation (blue checkmark badge + blue Generate); Discard stays.
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                conversion: .hidden,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissError,
+                onConvert: {},
+                failure: ArtifactCardView.FailureConfig(
+                    headline: headline,
+                    detail: detail,
+                    secondaryTitle: "Discard",
+                    onSecondary: onDismissError,
+                    primaryTitle: entitled ? "Generate" : "Upgrade",
+                    primaryIcon: nil,
+                    primaryRole: entitled ? .reversible : .warning,
+                    badgeTint: entitled ? .vfAccentBlue : .vfWarningAmber,
+                    badgeSymbol: entitled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                ),
+                onRetry: onResumePaidGeneration
             )
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         case .failureExpanded(let headline, let detail):
             // Reuse the success card in its failure configuration, wrapped with
             // the same 760-wide / clipped chrome `.resultExpanded` uses so the
@@ -361,17 +435,44 @@ struct PillView: View {
         // the full card with Revert/Done and Revert/Retry (Milestone 7).
         case .devProgress(let label, let cancellable):
             ProcessingPillContent(stepLabel: label, onCancel: cancellable ? onCancel : nil)
-        case .devDone(let summary):
-            DevResultPillContent(
-                symbol: "checkmark.circle.fill",
-                tint: .vfSuccessGreen,
-                text: summary,
-                buttons: [
-                    .init(title: "Revert", role: .secondary, action: onDevRevert),
-                    .init(title: "Done", role: .primary, action: onDismissResult),
-                ],
-                onDismiss: nil // "Done" is the close affordance
-            )
+        case .devDone(let card, let expanded):
+            // The Dev Mode result reuses the success card in its dev-result
+            // configuration: summary on top, the readable diff in the body well,
+            // an Undo footer, and the X (keeps changes). Expanded gets the same
+            // 760-wide / clipped chrome as .resultExpanded; compact is the summary
+            // pill that expands to it.
+            if expanded {
+                ArtifactCardView(
+                    artifact: nil,
+                    chatText: "",
+                    chargeLine: nil,
+                    noNarration: false,
+                    stoppedBySleep: false,
+                    conversion: .hidden,
+                    onCopy: {},
+                    onCollapse: onToggleExpand,
+                    onDismiss: onDismissResult,
+                    onConvert: {},
+                    devResult: ArtifactCardView.DevResultConfig(
+                        title: card.title, summary: card.summary, diffText: card.diffText
+                    ),
+                    onUndo: onDevRevert
+                )
+                .frame(width: 760)
+                .fixedSize(horizontal: false, vertical: true)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            } else {
+                DevResultSummaryPill(
+                    summary: card.summary,
+                    onExpand: onToggleExpand,
+                    onDismiss: onDismissResult
+                )
+                // Same determinate-width treatment as `.resultCompact`: fixedSize
+                // makes the capsule's width its ideal (content hug; the summary is
+                // capped inside) so NSHostingView gets a determinate width instead
+                // of a negotiable range that loops update-constraints.
+                .fixedSize(horizontal: true, vertical: false)
+            }
         case .devFailed(let detail, let canRevert):
             DevResultPillContent(
                 symbol: "exclamationmark.triangle.fill",
@@ -395,22 +496,27 @@ struct PillView: View {
 
     private var cornerRadius: CGFloat {
         switch state {
-        case .resultExpanded, .failureExpanded: return 18
-        default:                                return 28
+        // The failure-card family (error / paid-block / generation-failure) all
+        // share the 18pt card radius, not the 28pt capsule radius.
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume:
+            return 18
+        case .devDone(_, let expanded):            return expanded ? 18 : 28
+        default:                                    return 28
         }
     }
 }
 
-// MARK: - DevResultPillContent (Dev Mode, Phase 1 — Milestone 7)
+// MARK: - DevResultPillContent (Dev Mode — terminal failure capsule)
 //
-// The terminal dev-dispatch card. `.devDone` shows the diff stat with
-// [Revert] [Done]; `.devFailed` shows the failure reason with [Revert] (when a
-// checkpoint exists) and [Retry], plus a dismiss "x" to keep the partial edits
-// and close. Same capsule chrome as ErrorPillContent so the dispatch tail reads
-// as a continuation of the recording flow, not a separate surface.
+// The terminal dev-dispatch FAILURE capsule. `.devFailed` shows the failure
+// reason with [Revert] (when a checkpoint exists) and [Retry], plus a dismiss
+// "x" to keep the partial edits and close. A compact amber capsule (badge +
+// reason + actions) so the dispatch tail reads as a continuation of the
+// recording flow, not a separate surface. (`.devDone` no longer uses this — it
+// renders the expandable `ArtifactCardView` dev-result card.)
 
 private struct DevResultPillContent: View {
-    /// One trailing action. `.primary` is filled (Done / Retry); `.secondary`
+    /// One trailing action. `.primary` is filled (Retry); `.secondary`
     /// is a plain text button (Revert).
     struct Button: Identifiable {
         enum Role { case primary, secondary }
@@ -430,9 +536,7 @@ private struct DevResultPillContent: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: VFSpacing.md) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
+            PillLeadingIconBadge(systemImage: symbol, tint: tint)
 
             Text(text)
                 .font(.system(size: 13))
@@ -448,14 +552,7 @@ private struct DevResultPillContent: View {
             }
 
             if let onDismiss {
-                SwiftUI.Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .contentShape(Rectangle())
-                        .padding(6)
-                }
-                .buttonStyle(.plain)
+                PillDismissButton(action: onDismiss)
             }
         }
         .padding(.horizontal, VFSpacing.lg)
@@ -463,32 +560,86 @@ private struct DevResultPillContent: View {
         .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
     }
 
+    /// `.primary` (Retry) is the filled positive button; `.secondary` (Revert)
+    /// is the quiet gray-hover text button.
     @ViewBuilder
     private func actionButton(_ button: Button) -> some View {
         switch button.role {
         case .primary:
-            SwiftUI.Button(action: button.action) {
-                Text(button.title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .padding(.horizontal, VFSpacing.sm)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.white.opacity(0.10)))
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
+            PillPrimaryButton(title: button.title, role: .positive, action: button.action)
         case .secondary:
-            SwiftUI.Button(action: button.action) {
-                Text(button.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
+            PillSecondaryButton(title: button.title, action: button.action)
         }
+    }
+}
+
+// MARK: - DevResultSummaryPill (Dev Mode result card — compact)
+//
+// The COLLAPSED form of the `.devDone` success card: green check + the one-line
+// summary, then a "View ⌄" expand toggle, a hairline divider, and the close X
+// (keeps the changes). Mirrors `.resultCompact`'s capsule chrome so the dev
+// result reads as a peer of the normal artifact result; expanding swaps in the
+// full `ArtifactCardView` dev-result card.
+
+private struct DevResultSummaryPill: View {
+    let summary: String
+    let onExpand: () -> Void
+    let onDismiss: () -> Void
+
+    /// The summary's first non-empty line — the compact pill is a single line, so
+    /// a multi-line agent summary (or one leading with markdown) collapses to its
+    /// opening sentence rather than leaking block syntax into the capsule.
+    private var summaryLine: String {
+        let line = summary
+            .split(whereSeparator: \.isNewline)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return (line.map(String.init) ?? summary).trimmingCharacters(in: .whitespaces)
+    }
+
+    var body: some View {
+        HStack(spacing: VFSpacing.xxl) {
+            HStack(spacing: VFSpacing.sm) {
+                PillLeadingIconBadge(systemImage: "checkmark", tint: .vfSuccessGreen)
+                Text(summaryLine)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    // Same cap as the result capsule's title so a long summary
+                    // truncates rather than growing the pill.
+                    .frame(maxWidth: 228, alignment: .leading)
+            }
+
+            HStack(spacing: VFSpacing.md) {
+                expandToggle
+                dismissDivider
+                PillDismissButton(action: onDismiss)
+            }
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
+    }
+
+    private var expandToggle: some View {
+        Button(action: onExpand) {
+            HStack(spacing: 4) {
+                Text("View")
+                    .font(.system(size: 12))
+                    .fixedSize()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(Color.vfTextSecondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    private var dismissDivider: some View {
+        Rectangle()
+            .fill(Color.vfHairline)
+            .frame(width: 1, height: 20)
     }
 }
 
@@ -507,9 +658,7 @@ private struct ConfirmAnchorsPillContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
             HStack(spacing: VFSpacing.sm) {
-                Image(systemName: "scope")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.vfWarningAmber)
+                PillLeadingIconBadge(systemImage: "scope", tint: .vfWarningAmber)
                 Text("Edit these?")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -534,111 +683,13 @@ private struct ConfirmAnchorsPillContent: View {
 
             HStack(spacing: VFSpacing.sm) {
                 Spacer(minLength: 0)
-                Button(action: onCancel) {
-                    Text("Cancel")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
-                Button(action: onConfirm) {
-                    Text("Confirm")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .padding(.horizontal, VFSpacing.sm)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.white.opacity(0.10)))
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
+                PillSecondaryButton(title: "Cancel", action: onCancel)
+                PillPrimaryButton(title: "Confirm", role: .positive, action: onConfirm)
             }
         }
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, VFSpacing.md)
         .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
-    }
-}
-
-// MARK: - ErrorPillContent
-//
-// Same chrome geometry as the recording/processing capsules so the
-// transition into .failed feels like a state morph, not a separate
-// surface. Amber-tinted (per the C0 brief's "amber-tinted message"
-// guidance — distinct from .vfRecordingRed so the user reads it as
-// "something went wrong, the recording is over" rather than "still
-// recording, wrap up").
-//
-// Phase 10: Retry button appears left of Dismiss when `onRetry` is
-// non-nil — wired only for transient API failures (network / rate-limit
-// / provider) that the bridge can re-run against the already-processed
-// recording. For non-retryable errors (auth, permission, disk, capture)
-// `onRetry` is nil and only the dismiss X renders.
-
-private struct ErrorPillContent: View {
-    let message: String
-    /// Non-nil only when the active failure is transient and the
-    /// per-failure-chain attempt cap hasn't been hit. The bridge passes
-    /// `PillView.onRetryError` through when `retryable == true` and `nil`
-    /// otherwise; this view doesn't track the cap itself.
-    let onRetry: (() -> Void)?
-    let onDismiss: () -> Void
-
-    var body: some View {
-        // Center-align so the amber icon and the Retry/Dismiss controls sit
-        // at the vertical midpoint of the message, however many lines it
-        // wraps to.
-        HStack(alignment: .center, spacing: VFSpacing.md) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(Color.vfWarningAmber)
-
-            // Wrap within the locked 392 width and show the full message,
-            // however many lines it takes, instead of `.fixedSize()`-ing to
-            // the message's full intrinsic width (which overflowed the
-            // chrome for the longer copy, e.g. "You've used all your free
-            // trial credits…"). `fixedSize(vertical:)` lets the text claim
-            // the height its wrapped layout needs so nothing is truncated.
-            Text(message)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextPrimary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: VFSpacing.md)
-
-            if let onRetry {
-                Button(action: onRetry) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 10, weight: .medium))
-                        Text("Retry")
-                            .font(.system(size: 12))
-                            .fixedSize()
-                    }
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
-            }
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .contentShape(Rectangle())
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, VFSpacing.lg)
-        .padding(.vertical, 10)
-        // Floor at the capsule height so a one-line error still reads as
-        // the standard 50pt pill; multi-line copy grows past it.
-        .frame(minHeight: PillView.capsuleHeight)
     }
 }
 
@@ -734,56 +785,20 @@ private struct RecordingPillContent: View {
 
             // Absorbs the width difference between `.recording` (no
             // middleLabel) and `.wrappingUp` (with middleLabel). Pushes
-            // Cancel/Stop to the trailing edge in both states.
-            Spacer(minLength: VFSpacing.md)
+            // the Cancel/Stop cluster to the trailing edge in both states.
+            Spacer(minLength: VFSpacing.sm)
 
-            cancelButton
-
-            stopButton
-        }
-        // Extra leading inset: the capsule's left cap is a 25pt-radius
-        // curve, so the standard xl pad crowds the record dot into the
-        // bend. Pad the leading edge out toward the cap radius so the dot
-        // + timer read as centered against the rounded edge rather than
-        // hugging it; the trailing edge keeps the standard xl inset.
-        .padding(.leading, VFSpacing.xxl)
-        .padding(.trailing, VFSpacing.xl)
-        .padding(.vertical, 10)
-    }
-
-    private var cancelButton: some View {
-        Button(action: onCancel) {
-            HStack(spacing: 4) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
-                Text("Cancel")
-                    .font(.system(size: 12))
-                    .fixedSize()
+            // Keep Cancel and Stop tight together as one trailing button
+            // cluster so they read as a pair rather than two stray controls.
+            HStack(spacing: VFSpacing.sm) {
+                PillSecondaryButton(title: "Cancel", action: onCancel)
+                PillPrimaryButton(title: "Stop", systemImage: "stop.fill", role: .destructive, action: onStop)
             }
-            .foregroundStyle(Color.vfTextSecondary)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .fixedSize()
-    }
-
-    private var stopButton: some View {
-        Button(action: onStop) {
-            HStack(spacing: 6) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text("Stop")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .fixedSize()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.vfRecordingRed, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
+        // Even 10pt inset on all four sides: the horizontal edge gap (left of
+        // the record dot / right of the Stop button) now matches the vertical
+        // gap above and below the Stop button, so the pill reads evenly padded.
+        .padding(10)
     }
 }
 
@@ -852,26 +867,10 @@ private struct ProcessingPillContent: View {
             // cluster, right action.
             Spacer(minLength: VFSpacing.md)
 
-            if let onCancel { cancelButton(onCancel) }
+            if let onCancel { PillSecondaryButton(title: "Cancel", action: onCancel) }
         }
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, 10)
-    }
-
-    private func cancelButton(_ onCancel: @escaping () -> Void) -> some View {
-        Button(action: onCancel) {
-            HStack(spacing: 4) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
-                Text("Cancel")
-                    .font(.system(size: 12))
-                    .fixedSize()
-            }
-            .foregroundStyle(Color.vfTextSecondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
     }
 }
 
@@ -894,7 +893,7 @@ private struct ConfirmRecoveryPillContent: View {
 
     var body: some View {
         HStack(spacing: VFSpacing.md) {
-            iconBadge
+            PillLeadingIconBadge(systemImage: "arrow.clockwise", tint: .vfAccentBlue)
 
             Text("Recording stopped \u{2014} generate a prompt from it?")
                 .font(.system(size: 13, weight: .regular))
@@ -903,115 +902,11 @@ private struct ConfirmRecoveryPillContent: View {
 
             Spacer(minLength: 40)
 
-            discardButton
-            generateButton
+            PillSecondaryButton(title: "Discard", action: onDiscard)
+            PillPrimaryButton(title: "Generate", role: .reversible, action: onGenerate)
         }
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, 10)
-    }
-
-    private var iconBadge: some View {
-        Image(systemName: "arrow.clockwise")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.vfAccentBlue)
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(Color.vfAccentBlue.opacity(0.20)))
-    }
-
-    private var discardButton: some View {
-        Button(action: onDiscard) {
-            Text("Discard")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-    }
-
-    private var generateButton: some View {
-        Button(action: onGenerate) {
-            Text("Generate")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(Color.vfAccentBlue, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-    }
-}
-
-// MARK: - PaidBlockResumePillContent
-//
-// M5 (resume after purchase). A paid-blocked failure that still has a held
-// recording on disk, styled like `ConfirmRecoveryPillContent` but AMBER (the
-// failure tint) instead of blue: a warning badge, the paid-block copy, a plain
-// "Discard" button, and a filled primary button. The primary button is a single
-// action (`resumePaidGeneration`, which refreshes entitlement then resumes-or-
-// paywalls), but its LABEL is dynamic — "Upgrade" until the user is entitled,
-// "Generate" after. `entitled` is read from `EntitlementStore.canGenerate` in
-// the bridge, so activating a license flips the label live (both stores are
-// @Observable). Discard maps to `dismissFailure()`, which for a paid block
-// discards the held recording (deletes the working dir + clears the pointer).
-
-private struct PaidBlockResumePillContent: View {
-    let message: String
-    let entitled: Bool
-    let onPrimary: () -> Void
-    let onDiscard: () -> Void
-
-    var body: some View {
-        HStack(spacing: VFSpacing.md) {
-            iconBadge
-
-            Text(message)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color.vfTextPrimary)
-                .fixedSize()
-
-            Spacer(minLength: 40)
-
-            discardButton
-            primaryButton
-        }
-        .padding(.horizontal, VFSpacing.lg)
-        .padding(.vertical, 10)
-    }
-
-    private var iconBadge: some View {
-        Image(systemName: "exclamationmark.triangle.fill")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.vfWarningAmber)
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(Color.vfWarningAmber.opacity(0.20)))
-    }
-
-    private var discardButton: some View {
-        Button(action: onDiscard) {
-            Text("Discard")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-    }
-
-    private var primaryButton: some View {
-        Button(action: onPrimary) {
-            // Single action; the label reflects entitlement — "Upgrade" opens
-            // the paywall, "Generate" resumes the held recording.
-            Text(entitled ? "Generate" : "Upgrade")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(Color.vfWarningAmber, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
     }
 }
 
@@ -1068,11 +963,6 @@ private struct ResultPillContent: View {
     /// Phase 6 — starts (or retries) the conversion.
     let onConvert: () -> Void
 
-    /// Tracks hover on the dismiss button itself (not the whole pill)
-    /// so the circular dark-gray background fills in only when the
-    /// cursor is on the X. The divider + glyph stay visible at rest.
-    @State private var isHoveringDismiss = false
-
     var body: some View {
         Group {
             if expanded {
@@ -1102,8 +992,8 @@ private struct ResultPillContent: View {
                     // The hosting view needs a DETERMINATE width: fixedSize
                     // makes the strip's width its ideal (content hug; the
                     // title is capped inside, so the whole capsule stays
-                    // within the locked 392 footprint). A negotiable
-                    // 0…392 range here (`.frame(maxWidth:)` on the chrome)
+                    // within the locked capsule footprint). A negotiable
+                    // 0…capsuleWidth range here (`.frame(maxWidth:)` on the chrome)
                     // sent NSHostingView into an update-constraints loop
                     // that AppKit aborts by crashing.
                     .fixedSize(horizontal: true, vertical: false)
@@ -1122,7 +1012,7 @@ private struct ResultPillContent: View {
     }
 
     /// What the compact capsule calls this result: the artifact's dynamic
-    /// title when one is attached (truncating inside the locked 392 width),
+    /// title when one is attached (truncating inside the locked capsule width),
     /// a neutral "Response ready" for chat-only. The expanded layout never
     /// shows a status label — the card's own check + title is the success
     /// signal there.
@@ -1142,19 +1032,19 @@ private struct ResultPillContent: View {
     private var headerStrip: some View {
         HStack(spacing: VFSpacing.xxl) {
             HStack(spacing: VFSpacing.sm) {
-                // The amber indicator carries the "heads up" signal in
-                // compact; the expanded card spells it out in its
-                // no-narration note.
-                Image(systemName: noNarration ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(noNarration ? Color.vfWarningAmber : Color.vfSuccessGreen)
+                // The amber badge carries the "heads up" signal in compact;
+                // the expanded card spells it out in its no-narration note.
+                PillLeadingIconBadge(
+                    systemImage: noNarration ? "exclamationmark.triangle.fill" : "checkmark",
+                    tint: noNarration ? .vfWarningAmber : .vfSuccessGreen
+                )
 
                 Text(compactLabel)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.vfTextPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    // Title cap = the locked 392 capsule minus the fixed
+                    // Title cap = the locked capsule width minus the fixed
                     // chrome (paddings, check, spacings, View ⌄, divider,
                     // X). Capping HERE keeps the strip's ideal width
                     // determinate under the fixedSize above — short titles
@@ -1165,7 +1055,7 @@ private struct ResultPillContent: View {
             HStack(spacing: VFSpacing.md) {
                 expandToggle
                 dismissDivider
-                dismissButton
+                PillDismissButton(action: onDismiss)
             }
         }
         .padding(.horizontal, VFSpacing.lg)
@@ -1179,34 +1069,6 @@ private struct ResultPillContent: View {
         Rectangle()
             .fill(Color.vfHairline)
             .frame(width: 1, height: 20)
-    }
-
-    /// Close X. The glyph is always visible; only the circular dark-gray
-    /// background fills in when the cursor is over the button itself, so
-    /// dismiss has a clear hover affordance without lighting up whenever
-    /// the user moves over the rest of the pill.
-    private var dismissButton: some View {
-        Button(action: onDismiss) {
-            Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .semibold))
-                // Match the Hide/View label color at rest so the X reads
-                // as a peer to the other header controls; bump to primary
-                // (white) on hover to mirror the circular background fade
-                // in and signal the button is active.
-                .foregroundStyle(isHoveringDismiss ? Color.vfTextPrimary : Color.vfTextSecondary)
-                .frame(width: 26, height: 26)
-                .background(
-                    Circle()
-                        .fill(Color(red: 0.28, green: 0.28, blue: 0.30))
-                        .opacity(isHoveringDismiss ? 1 : 0)
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHoveringDismiss = hovering
-        }
-        .animation(.easeInOut(duration: 0.15), value: isHoveringDismiss)
     }
 
     private var expandToggle: some View {
@@ -1363,19 +1225,25 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Error \u{00B7} Short") {
-    PillView(state: .error(message: "Recording was interrupted.", retryable: false))
+    // A shorter failure — the card layout (title + elaborate detail + Cancel/
+    // Retry), pulling both strings from the reason so the preview can't drift.
+    PillView(state: .error(
+        headline: RecordingFailureReason.captureInterrupted.headline,
+        detail: RecordingFailureReason.captureInterrupted.detail,
+        retryable: false
+    ))
         .padding(40)
         .background(Color.vfPanelBackground)
 }
 
 #Preview("Error \u{00B7} Long") {
-    // The longest production message — pulls the real copy from
-    // `RecordingFailureReason.trialCreditsExhausted.userMessage` (the source
-    // of truth in AppState) rather than duplicating it, so the preview can't
-    // drift if the copy changes. Exercises the full multi-line wrap at the
-    // locked 392 width with no truncation.
+    // The longest body — pulls the real copy from
+    // `RecordingFailureReason.trialCreditsExhausted` (the source of truth in
+    // AppState) rather than duplicating it, so the preview can't drift if the
+    // copy changes. Exercises the full multi-line detail wrap in the card.
     PillView(state: .error(
-        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
+        headline: RecordingFailureReason.trialCreditsExhausted.headline,
+        detail: RecordingFailureReason.trialCreditsExhausted.detail,
         retryable: false
     ))
         .padding(40)
@@ -1383,9 +1251,12 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Error \u{00B7} Retryable") {
-    // Transient API failure — exercises the Retry-button affordance.
+    // Transient API failure — exercises the Retry-button affordance (re-runs
+    // against the processed recording on disk). The detail copy says the
+    // recording is saved and to press Retry.
     PillView(state: .error(
-        message: "Couldn\u{2019}t reach OpenAI \u{2014} check your connection.",
+        headline: RecordingFailureReason.networkOffline.headline,
+        detail: RecordingFailureReason.networkOffline.detail,
         retryable: true
     ))
         .padding(40)
@@ -1393,10 +1264,11 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Paid block \u{00B7} Upgrade") {
-    // M5 — paid-blocked failure, NOT yet entitled: amber resume pill with the
-    // filled "Upgrade" button (opens the paywall). Real copy from AppState.
+    // M5 — paid-blocked failure, NOT yet entitled: the amber failure card with a
+    // Discard + filled "Upgrade" footer (opens the paywall). Real copy from AppState.
     PillView(state: .paidBlockResume(
-        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
+        headline: RecordingFailureReason.trialCreditsExhausted.headline,
+        detail: RecordingFailureReason.trialCreditsExhausted.detail,
         entitled: false
     ))
         .padding(40)
@@ -1404,10 +1276,12 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Paid block \u{00B7} Generate") {
-    // M5 — same pill once the user is entitled: the primary button flips to
-    // "Generate" and resumes the held recording on tap.
+    // M5 — once entitled, the card flips to the blue "you're all set"
+    // confirmation: blue checkmark badge + blue "Generate" that resumes the held
+    // recording. Copy mirrors the bridge's entitled branch.
     PillView(state: .paidBlockResume(
-        message: RecordingFailureReason.trialCreditsExhausted.userMessage,
+        headline: "You\u{2019}re all set",
+        detail: "Your subscription is active and the recording you set aside is ready to generate. Pick up right where you left off.",
         entitled: true
     ))
         .padding(40)
@@ -1424,6 +1298,55 @@ private struct ResultPillContent: View {
             + "This usually means you\u{2019}re offline or the service is temporarily "
             + "unreachable \u{2014} your recording is still on disk, so Retry will run it "
             + "again without re-recording."
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev result \u{00B7} Expanded") {
+    // The Dev Mode success card: human summary on top, the readable diff in the
+    // body well, an Undo footer + the X (keeps changes). No Retry, no Done.
+    PillView(state: .devDone(
+        card: DevResultCard(
+            title: "Changes applied",
+            summary: "Reworked the Pulse login screen layout: moved \u{201C}Forgot "
+                + "password?\u{201D} into the Sign In cluster and consolidated the social "
+                + "auth buttons into a single dropdown.",
+            diffText: """
+            diff --git a/src/Login.css b/src/Login.css
+            index 1a2b3c4..5d6e7f8 100644
+            --- a/src/Login.css
+            +++ b/src/Login.css
+            @@ -12,7 +12,7 @@
+             .login-form {
+               display: flex;
+            -  flex-direction: row;
+            +  flex-direction: column;
+               gap: 12px;
+             }
+            @@ -28,3 +28,8 @@
+             .forgot-link {
+            -  margin-top: 24px;
+            +  margin-top: 8px;
+            +  align-self: flex-end;
+             }
+            """
+        ),
+        expanded: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev result \u{00B7} Compact") {
+    // Collapsed form — the one-line summary pill that expands to the card above.
+    PillView(state: .devDone(
+        card: DevResultCard(
+            title: "Changes applied",
+            summary: "Updated 2 files (+8 \u{2212}3).",
+            diffText: ""
+        ),
+        expanded: false
     ))
         .padding(40)
         .background(Color.vfPanelBackground)

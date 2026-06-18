@@ -46,6 +46,11 @@ extension Color {
     // background without the saturation of full `systemBlue`.
     static let vfMenuRowHover = Color(red: 0x18 / 255.0, green: 0x68 / 255.0, blue: 0xBF / 255.0)
 
+    /// Hover fill for quiet pill controls (secondary buttons, the dismiss "x"
+    /// circle). Replaces the literal Color(red: 0.28, green: 0.28, blue: 0.30)
+    /// that was copy-pasted across the pill content views.
+    static let vfPillControlHover = Color(red: 0.28, green: 0.28, blue: 0.30)
+
     /// Locked accent for the Phase 17 mode-switch confirmation pill —
     /// the "arrow.left.arrow.right" glyph and the primary "Switch" fill.
     /// Fixed #0A84FF (macOS systemBlue) per the approved Claude Design

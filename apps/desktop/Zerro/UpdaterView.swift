@@ -81,8 +81,16 @@ final class UpdaterViewModel: ObservableObject {
             )
         })
         self.updaterDelegate = delegate
+        // `startingUpdater: true` kicks off Sparkle's automatic-check
+        // schedule (appcast network fetch + first-launch permission flow) the
+        // instant this @StateObject is built — which happens on EVERY launch,
+        // including the one Xcode performs to host a `#Preview`. In the preview
+        // agent that startup work is what stalls the launch and surfaces as
+        // "Failed to launch app in reasonable time". Under previews we still
+        // build the controller (the stored property must exist) but DON'T start
+        // it; real launches are unchanged.
         self.controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: !ZerroApp.isRunningInXcodePreview,
             updaterDelegate: delegate,
             userDriverDelegate: nil
         )

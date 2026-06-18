@@ -327,6 +327,102 @@ public enum RecordingFailureReason: Equatable {
             return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own API keys to keep going."
         }
     }
+
+    /// Short bold title for the failure card (the headline above `userMessage`,
+    /// which becomes the card's detail prose). Distinct per case — including the
+    /// two pairs `userMessage` collapses (`.providerError`/`.providerUnavailable`,
+    /// `.audioSetupFailed`/family) — so the card names the specific problem.
+    var headline: String {
+        switch self {
+        case .screenRecordingRevoked:    return "Screen Recording off"
+        case .microphoneRevoked:         return "Microphone off"
+        case .microphoneUnavailable:     return "Microphone unavailable"
+        case .audioSetupFailed:          return "Microphone problem"
+        case .microphoneDisconnected:    return "Microphone disconnected"
+        case .streamStartFailed:         return "Couldn\u{2019}t start capture"
+        case .writerStartFailed:         return "Couldn\u{2019}t start recording"
+        case .captureInterrupted:        return "Recording interrupted"
+        case .displayUnavailable:        return "Display unavailable"
+        case .displayChanged:            return "Display changed"
+        case .processingFailed:          return "Processing failed"
+        case .recordingTooShort:         return "Recording too short"
+        case .diskFull:                  return "Storage full"
+        case .apiKeyMissing:             return "API key needed"
+        case .apiAuth:                   return "API key rejected"
+        case .networkOffline:            return "Connection problem"
+        case .rateLimited:               return "Rate limited"
+        case .providerError:             return "Generation failed"
+        case .providerUnavailable:       return "Service unavailable"
+        case .responseTooLong:           return "Response too long"
+        case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .outOfCredits:              return "Out of credits"
+        case .subscriptionInactive:      return "Subscription inactive"
+        case .trialVerificationRequired: return "Verify your email"
+        case .trialCreditsExhausted:     return "Free trial used up"
+        }
+    }
+
+    /// The elaborate failure-card body: what happened, then how to fix it (1–2
+    /// calm, professional sentences). For API-stage failures the recording is
+    /// still on disk, so the copy says it's saved and to press Retry; for
+    /// capture-stage failures it says to start a new recording. `userMessage`
+    /// stays the terse one-liner for non-card surfaces; this is what the card
+    /// shows. Distinct per case (including the `.providerError` /
+    /// `.providerUnavailable` pair that `userMessage` collapses).
+    var detail: String {
+        switch self {
+        case .screenRecordingRevoked:
+            return "Zerro no longer has permission to capture your screen, so the recording couldn\u{2019}t be made. Re-enable it under System Settings \u{203A} Privacy & Security \u{203A} Screen Recording, then start a new recording."
+        case .microphoneRevoked:
+            return "Microphone access is turned off, so your narration couldn\u{2019}t be captured. Turn it back on under System Settings \u{203A} Privacy & Security \u{203A} Microphone and record again."
+        case .microphoneUnavailable:
+            return "The microphone you selected isn\u{2019}t available right now. Choose a different input in Settings or reconnect the device, then start a new recording."
+        case .audioSetupFailed:
+            return "Zerro couldn\u{2019}t start capturing audio from your microphone. Make sure no other app is using it, then try recording again."
+        case .microphoneDisconnected:
+            return "Your microphone disconnected partway through, so the recording stopped early. Reconnect it \u{2014} or pick another input in Settings \u{2014} and record again."
+        case .streamStartFailed:
+            return "Zerro couldn\u{2019}t start screen capture. This is usually temporary \u{2014} start a new recording, and if it keeps happening, restart the app."
+        case .writerStartFailed:
+            return "Zerro couldn\u{2019}t create the file to save your recording. Make sure you have free disk space, then start a new recording."
+        case .captureInterrupted:
+            return "Your recording was interrupted before it finished \u{2014} this can happen when the app quits or your Mac goes to sleep mid-capture. Start a new recording to try again."
+        case .displayUnavailable:
+            return "The display you were recording is no longer connected. Reconnect it or choose another screen, then start a new recording."
+        case .displayChanged:
+            return "Your display setup changed while recording \u{2014} a screen was added, removed, or rearranged \u{2014} so capture stopped. Start a new recording on your current setup."
+        case .processingFailed:
+            return "Zerro couldn\u{2019}t turn your recording into a prompt. Press Retry to run it again; if it keeps failing, record the screen once more."
+        case .recordingTooShort:
+            return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds \u{2014} too short to capture enough context. Record again, narrating the change you want as you go."
+        case .diskFull:
+            return "Your Mac ran out of storage while saving the recording, so it couldn\u{2019}t finish. Free up a few gigabytes, then start a new recording."
+        case .apiKeyMissing:
+            return "Generating a prompt needs an API key, and none is set. Add one under Settings \u{2014} an OpenAI key is required for transcription \u{2014} then start a new recording."
+        case .apiAuth:
+            return "Your API key was rejected. Check it under Settings \u{2014} it may be expired, revoked, or missing the right access \u{2014} then try again."
+        case .networkOffline:
+            return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
+        case .rateLimited:
+            return "The service is temporarily limiting requests. Wait a minute, then press Retry \u{2014} your recording is saved and ready to run."
+        case .providerError:
+            return "The generation service ran into an error while creating your prompt. Your recording is saved \u{2014} press Retry to run it again."
+        case .providerUnavailable:
+            return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
+        case .responseTooLong:
+            return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
+        case .artifactUnreadable:
+            return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
+        case .outOfCredits:
+            return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
+        case .subscriptionInactive:
+            return "Your subscription isn\u{2019}t active right now, so this recording can\u{2019}t be generated. Reactivate under Settings \u{203A} Billing, then try again."
+        case .trialVerificationRequired:
+            return "Verify your email to unlock your free trial generations. Check your inbox for the verification link, then start a new recording."
+        case .trialCreditsExhausted:
+            return "You\u{2019}ve used all your free trial generations. Subscribe, or add your own API keys under Settings, to keep generating prompts."
+        }
+    }
 }
 
 // MARK: - AppState
@@ -423,8 +519,16 @@ final class AppState {
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
-    /// The diff summary shown on `.devDone` ("N files changed (+x −y)").
+    /// The diff stat captured on `.devDone`, used for the generated fallback
+    /// summary line ("Updated N files (+x −y)") when the agent gave no summary.
     var devDiffStat: GitDiffStat?
+    /// The agent's human-readable summary captured on `.devDone` (Part A), or nil
+    /// when it gave none — the card then uses the generated fallback. Shown in the
+    /// dev-result card's text region + as the compact pill's summary line.
+    var devSummary: String?
+    /// The readable, pre-capped unified diff shown in the dev-result card's body
+    /// well (Part B). nil/empty renders a neutral placeholder.
+    var devDiffText: String?
     /// The failure shown on `.devFailed`.
     var devFailure: DevDispatchFailure?
     /// The pre-run checkpoint + its git service, retained across a dispatch so
@@ -631,6 +735,15 @@ final class AppState {
     /// to read the real store. Defaults to `true` so tests/previews that don't
     /// wire it aren't gated.
     @ObservationIgnored var onboardingCompleteProvider: () -> Bool = { true }
+
+    /// Re-enters the standard record flow (the same gating + area-selector
+    /// presentation the global hotkey runs). The error pill's "Retry" uses this
+    /// when there's no re-runnable recording on disk — "try again" there means
+    /// "record again", so it reopens the screen-region overlay. A closure (like
+    /// the providers above) so AppState doesn't hold the AreaSelector / stores;
+    /// wired by `ZerroApp.init` to `handleHotkey`. `nil` in tests/previews →
+    /// `retryRecordingFromRegion()` simply dismisses the failure.
+    @ObservationIgnored var requestAreaSelector: (() -> Void)? = nil
 
     /// M2 (rev 3): token for the app-lifetime `NSWorkspace.didWakeNotification`
     /// observer that triggers recovery on wake (the common lid-close case never
@@ -1094,6 +1207,8 @@ final class AppState {
         recordingAgentID = nil
         devRunSubstatus = nil
         devDiffStat = nil
+        devSummary = nil
+        devDiffText = nil
         devFailure = nil
         devCheckpoint = nil
         devCheckpointService = nil
@@ -2400,6 +2515,8 @@ final class AppState {
 
         devRunSubstatus = nil
         devDiffStat = nil
+        devSummary = nil
+        devDiffText = nil
         devFailure = nil
         devCancelInFlight = false
         devAgentStarted = false
@@ -2595,7 +2712,14 @@ final class AppState {
             devCheckpoint = success.checkpoint
             devCheckpointService = success.service
             devDiffStat = success.diff
+            devSummary = success.summary
+            devDiffText = success.diffText
             devFailure = nil
+            // Land the dev-result card EXPANDED (like the normal artifact result),
+            // showing the summary + diff immediately; the Hide chevron collapses
+            // it to the compact summary pill. Shares the result expand flag — the
+            // two states never coexist.
+            isResultExpanded = true
             state = .devDone
             Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
             // M8 analytics — metadata only (counts/durations; no path/content).
@@ -2999,6 +3123,18 @@ final class AppState {
             discardPendingPaidGeneration()
         }
         resetToIdle()
+    }
+
+    /// User-driven "Retry" from the error pill when there's nothing to re-run
+    /// on disk (a non-retryable failure, e.g. an interrupted recording). Unlike
+    /// `retryFailedPrompt()` — which re-runs the API stage against the held
+    /// recording — this starts over: it dismisses the failure pill and reopens
+    /// the screen-region selector via the wired `requestAreaSelector` hook, so
+    /// the user picks a region and records again. The hook re-runs the standard
+    /// gating (permissions/entitlement) just like the hotkey.
+    func retryRecordingFromRegion() {
+        dismissFailure()
+        requestAreaSelector?()
     }
 
     /// True when the current failure is transient AND we have a processed

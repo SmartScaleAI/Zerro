@@ -320,6 +320,9 @@ private struct PillHostView: View {
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
             onRetryError: { appState.retryFailedPrompt() },
+            // Error pill's "Retry" fallback (non-retryable failure): dismiss
+            // the pill and reopen the screen-region selector to record again.
+            onErrorRetryRegion: { appState.retryRecordingFromRegion() },
             // M5 — resume a paid-blocked recording after the user pays.
             onResumePaidGeneration: { appState.resumePaidGeneration() },
             onDismissResult: { appState.resetToIdle() },

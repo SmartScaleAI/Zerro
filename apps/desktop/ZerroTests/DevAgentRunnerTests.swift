@@ -50,7 +50,26 @@ final class DevAgentRunnerTests: XCTestCase {
             timeouts: fastTimeouts(),
             onSubstatus: { _ in }
         )
-        XCTAssertEqual(result, .succeeded)
+        // No `result` text in this event → summary is nil (the UI then falls back
+        // to a generated change line; Part A).
+        XCTAssertEqual(result, .succeeded(summary: nil))
+    }
+
+    func testSuccessCapturesResultSummary() async throws {
+        // A terminal `result` event carrying the agent's closing text → that text
+        // rides out on `.succeeded(summary:)` (Part A).
+        let bin = try makeScript("summary", """
+        #!/bin/sh
+        echo '{"type":"result","result":"Updated the login screen layout."}'
+        exit 0
+        """)
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON),
+            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(),
+            onSubstatus: { _ in }
+        )
+        XCTAssertEqual(result, .succeeded(summary: "Updated the login screen layout."))
     }
 
     func testNonZeroExitCarriesStderrTail() async throws {
@@ -124,7 +143,7 @@ final class DevAgentRunnerTests: XCTestCase {
         )
         XCTAssertEqual(second, .failed(.busy))
         let firstResult = await first
-        XCTAssertEqual(firstResult, .succeeded)
+        XCTAssertEqual(firstResult, .succeeded(summary: nil))
     }
 
     func testCancelTerminatesRunningAgent() async throws {
@@ -218,6 +237,24 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(#"{"type":"system"}"#))
         XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting("not json"))
         XCTAssertNil(ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(""))
+    }
+
+    func testParseResultSummary() {
+        // A `result` event with text → the trimmed text.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseResultSummaryForTesting(
+                #"{"type":"result","result":"  Reworked the nav.  "}"#),
+            "Reworked the nav."
+        )
+        // A `result` event with no `result` field, or an empty one → nil.
+        XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(#"{"type":"result"}"#))
+        XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(#"{"type":"result","result":"   "}"#))
+        // A non-result event never yields a summary.
+        XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#))
+        // Garbage degrades to nil, never crashes.
+        XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting("not json"))
+        XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(""))
     }
 
     // MARK: - Helpers

@@ -55,6 +55,19 @@ struct ZerroApp: App {
     /// drowned out by the dead ones in practice.
     private static var didRegisterGlobalShortcuts = false
 
+    /// True when the process is hosting a SwiftUI `#Preview`, not a real
+    /// launch. Xcode sets `XCODE_RUNNING_FOR_PREVIEWS=1` in the preview
+    /// agent's environment. The `@main` App is still instantiated to host a
+    /// preview, so its `init` runs — but the launch-time bootstrap below
+    /// (global-hotkey registration, working-dir sweeps, the wake observer,
+    /// and the network refresh Tasks) is preview-hostile: it's what makes the
+    /// canvas spin and then fail with `AppLaunchTimeoutError`. Skip it under
+    /// previews; the long-lived services are still constructed above (cheap,
+    /// synchronous Keychain reads) so any view's preview renders normally.
+    static var isRunningInXcodePreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
     init() {
         let state = AppState()
         let prefs = PreferencesStore()
@@ -118,7 +131,7 @@ struct ZerroApp: App {
         // Register the global hotkey exactly once. Captures the long-
         // lived instances weakly — @State keeps them alive for the
         // app's lifetime, so weak references stay valid.
-        if !Self.didRegisterGlobalShortcuts {
+        if !Self.didRegisterGlobalShortcuts && !Self.isRunningInXcodePreview {
             Self.didRegisterGlobalShortcuts = true
             // Phase 13 (Part B): bring up analytics + error tracking FIRST inside the
             // one-shot block so the crash reporter is live before any
@@ -190,6 +203,21 @@ struct ZerroApp: App {
             // logic + the wake observer but not the OnboardingStore).
             state.onboardingCompleteProvider = { [weak onb] in
                 onb?.hasCompletedOnboarding ?? false
+            }
+            // The error pill's "Retry" (when there's nothing to re-run on disk)
+            // reopens the screen-region overlay — route it through the same
+            // gated hotkey flow the global shortcut + menu use, so it re-checks
+            // permissions/entitlement before presenting the selector.
+            state.requestAreaSelector = { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
+                Self.handleHotkey(
+                    state: state,
+                    preferences: prefs,
+                    permissions: perms,
+                    onboarding: onb,
+                    entitlements: ent,
+                    areaSelector: selectorCtrl,
+                    pillController: pillCtrl
+                )
             }
             // M2 (rev 3): recover on WAKE too — the common lid-close case
             // survives sleep and never relaunches, so a launch-only check would

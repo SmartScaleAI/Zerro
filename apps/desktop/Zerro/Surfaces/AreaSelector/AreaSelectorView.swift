@@ -178,7 +178,7 @@ struct AreaSelectorView: View {
     // MARK: - Top instruction pill
     //
     // Sized and positioned to match the recording pill (PillView.capsuleWidth/
-    // capsuleHeight = 392 × 50, top edge 24pt below the menu bar) so that
+    // capsuleHeight = 440 × 50, top edge 24pt below the menu bar) so that
     // the area selector and the recording session feel like a continuous
     // surface across the two phases. `topInset` is the menu-bar height in
     // points, supplied by AreaSelectorWindowController — without it we'd

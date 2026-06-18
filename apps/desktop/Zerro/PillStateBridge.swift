@@ -71,8 +71,8 @@ extension AppState {
             // small pill (no Retry button) on the next pass.
             if canRetryFailure {
                 return .failureExpanded(
-                    headline: "Generation failed",
-                    detail: lastFailureDetail ?? reason.userMessage
+                    headline: reason.headline,
+                    detail: lastFailureDetail ?? reason.detail
                 )
             }
             // M5: a paid-blocked failure (trial credits exhausted / out of
@@ -83,12 +83,25 @@ extension AppState {
             // entitlement flips to `.byok`/`.managed`, the primary button's label
             // re-renders from "Upgrade" to "Generate" without any extra plumbing.
             if canResumePaidGeneration {
+                // Once the user is entitled (subscription active / credits added),
+                // the held recording is ready — flip from the amber paid-block
+                // warning to a calm blue "you're all set" confirmation (themed in
+                // PillView off `entitled`). Discard stays as the secondary.
+                let entitled = entitlements?.canGenerate == true
+                if entitled {
+                    return .paidBlockResume(
+                        headline: "You\u{2019}re all set",
+                        detail: "Your subscription is active and the recording you set aside is ready to generate. Pick up right where you left off.",
+                        entitled: true
+                    )
+                }
                 return .paidBlockResume(
-                    message: reason.userMessage,
-                    entitled: entitlements?.canGenerate == true
+                    headline: reason.headline,
+                    detail: reason.detail,
+                    entitled: false
                 )
             }
-            return .error(message: reason.userMessage, retryable: false)
+            return .error(headline: reason.headline, detail: reason.detail, retryable: false)
 
         // Dev Mode (Phase 1) — the dispatch tail. Reached only for a Dev Mode
         // recording; normal mode never produces these.
@@ -109,7 +122,10 @@ extension AppState {
                 ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
             })
         case .devDone:
-            return .devDone(summary: devDiffSummary)
+            // The expandable dev-result card: human summary on top, the readable
+            // diff in the body well, Undo + X. Shares the result expand flag (the
+            // two states never coexist); lands expanded (set in applyDevOutcome).
+            return .devDone(card: devResultCard, expanded: isResultExpanded)
         case .devFailed:
             // Offer Revert only when a checkpoint exists (failures before the
             // checkpoint — non-git folder, missing agent — have nothing to undo).
@@ -118,12 +134,28 @@ extension AppState {
         }
     }
 
-    /// The `.devDone` pill's one-line change summary ("2 files changed (+8 −3)").
-    var devDiffSummary: String {
-        guard let stat = devDiffStat else { return "Changes applied" }
-        guard stat.filesChanged > 0 else { return "No file changes" }
+    /// The `.devDone` success card's render model: a fixed title, the summary
+    /// (agent text when present, else a generated change line), and the readable
+    /// diff text.
+    var devResultCard: DevResultCard {
+        DevResultCard(
+            title: "Changes applied",
+            summary: devResultSummary,
+            diffText: devDiffText ?? ""
+        )
+    }
+
+    /// The dev-result summary shown in the card's text region (and, collapsed to
+    /// one line, in the compact pill): the agent's own summary when it gave one,
+    /// otherwise a generated fallback from the diff stat ("Updated N files (+x −y)").
+    var devResultSummary: String {
+        if let summary = devSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !summary.isEmpty {
+            return summary
+        }
+        guard let stat = devDiffStat, stat.filesChanged > 0 else { return "Changes applied." }
         let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
-        return "\(files) changed (+\(stat.added) \u{2212}\(stat.removed))"
+        return "Updated \(files) (+\(stat.added) \u{2212}\(stat.removed))."
     }
 }
 
@@ -142,9 +174,9 @@ extension PillState {
 
     private static func isResult(_ state: PillState?) -> Bool {
         switch state {
-        // `.failureExpanded` is the same big card morph as the result states,
-        // so it gets the softer result spring too.
-        case .resultCompact?, .resultExpanded?, .failureExpanded?: return true
+        // `.failureExpanded` and the dev-result card (`.devDone`) are the same big
+        // card morph as the result states, so they get the softer result spring too.
+        case .resultCompact?, .resultExpanded?, .failureExpanded?, .devDone?: return true
         default: return false
         }
     }

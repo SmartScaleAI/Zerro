@@ -69,11 +69,52 @@ struct ArtifactCardView: View {
     /// the success configuration. Defaulted for the success call site.
     var onRetry: () -> Void = {}
 
-    /// The two strings the failure card renders: the fixed headline and the
-    /// real underlying error detail.
-    struct FailureConfig: Equatable {
+    /// When non-nil, the card renders in its DEV-RESULT configuration (the Dev
+    /// Mode result-card handoff): green success badge + a fixed title, the
+    /// agent's human-readable summary in the text region, the readable git diff
+    /// in the body well (monospace), and a single "Undo" button in the footer
+    /// (the Copy slot). The X dismiss + Hide/expand chrome are kept; all other
+    /// success-only chrome (chat text, charge line, conversion affordance, copy)
+    /// is suppressed — exactly as `failure` suppresses it. nil → the normal card.
+    /// Mutually exclusive with `failure`. Defaulted so existing call sites are
+    /// unchanged.
+    var devResult: DevResultConfig? = nil
+    /// Fires the dev-result "Undo" action (wired to `AppState.revertDevDispatch`
+    /// via the pill's `onDevRevert`). Inert outside the dev-result configuration.
+    var onUndo: () -> Void = {}
+
+    /// The failure card's content + footer. The two strings (the short bold
+    /// `headline` and the wrapped `detail` prose) are shared by every error-
+    /// family pill; the optional button config lets the SAME card render
+    /// `.failureExpanded`'s lone Retry, `.error`'s Cancel + Retry pair, and
+    /// `.paidBlockResume`'s Discard + Upgrade/Generate pair. Not `Equatable`
+    /// (it carries action closures); never compared.
+    struct FailureConfig {
         let headline: String
         let detail: String
+        /// Quiet left button (Cancel / Discard). nil → no secondary (the
+        /// `.failureExpanded` card keeps its header-X-only treatment).
+        var secondaryTitle: String? = nil
+        var onSecondary: (() -> Void)? = nil
+        /// Filled right button. Defaults to the existing amber Retry; its
+        /// action is the card's `onRetry` closure.
+        var primaryTitle: String = "Retry"
+        var primaryIcon: String? = "arrow.clockwise"
+        var primaryRole: PillPrimaryButton.Role = .warning
+        /// Leading badge tint + glyph. Defaults to the amber caution every
+        /// failure card shows; the entitled `.paidBlockResume` overrides them to
+        /// a blue checkmark ("you're all set" confirmation).
+        var badgeTint: Color = .vfWarningAmber
+        var badgeSymbol: String = "exclamationmark.triangle.fill"
+    }
+
+    /// What the dev-result card renders: the fixed header `title`, the
+    /// human-readable `summary` (agent text or a generated fallback, decided
+    /// upstream), and the readable, pre-capped unified `diffText`.
+    struct DevResultConfig: Equatable {
+        let title: String
+        let summary: String
+        let diffText: String
     }
 
     /// Transient "Copied" confirmation — same pattern and timing as the
@@ -81,11 +122,6 @@ struct ArtifactCardView: View {
     /// re-tap restarts the window.
     @State private var didCopy = false
     @State private var copyResetTask: Task<Void, Never>?
-
-    /// Tracks hover on the close X itself (not the whole card) so the
-    /// circular dark-gray background fills in only when the cursor is on
-    /// it — the pre-refactor header's treatment.
-    @State private var isHoveringDismiss = false
 
     private static let copyFeedbackDuration: Duration = .seconds(1.6)
 
@@ -96,6 +132,10 @@ struct ArtifactCardView: View {
                 // Failure configuration: the underlying error as prose, no
                 // success-only chrome.
                 failureBody(failure)
+            } else if let devResult {
+                // Dev-result configuration: the human summary above the readable
+                // git diff. No other success-only chrome.
+                devResultBody(devResult)
             } else {
                 if stoppedBySleep {
                     stoppedBySleepNote
@@ -143,34 +183,33 @@ struct ArtifactCardView: View {
                     collapseToggle
                     dismissDivider
                 }
-                dismissButton
+                // Drop the header X when a secondary (Cancel / Discard) button is
+                // present in the footer — that button already dismisses. The
+                // success/dev cards and the secondary-less `.failureExpanded`
+                // keep the X.
+                if failure?.secondaryTitle == nil {
+                    PillDismissButton(action: onDismiss)
+                }
             }
         }
     }
 
-    /// The header glyph: the green check in success, the amber caution icon in
-    /// failure — same soft circular badge idiom either way.
+    /// The header glyph: the green check in success, and in failure the config's
+    /// badge (amber caution by default, blue checkmark for the entitled
+    /// "you're all set" pill) — the canonical `PillLeadingIconBadge` either way,
+    /// so every indicator reads at the same weight.
     @ViewBuilder
     private var badge: some View {
-        if failure != nil {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color.vfWarningAmber)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.vfWarningAmber.opacity(0.18)))
+        if let failure {
+            PillLeadingIconBadge(systemImage: failure.badgeSymbol, tint: failure.badgeTint)
         } else {
-            // Green check in a soft circular badge — the same badge idiom
-            // the recovery pill's moon uses, sized down.
-            Image(systemName: "checkmark")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.vfSuccessGreen)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.vfSuccessGreen.opacity(0.18)))
+            PillLeadingIconBadge(systemImage: "checkmark", tint: .vfSuccessGreen)
         }
     }
 
     private var title: String {
         if let failure { return failure.headline }
+        if let devResult { return devResult.title }
         guard let artifact else { return "Response ready" }
         return artifact.title.isEmpty ? "Untitled" : artifact.title
     }
@@ -198,29 +237,6 @@ struct ArtifactCardView: View {
         Rectangle()
             .fill(Color.vfHairline)
             .frame(width: 1, height: 20)
-    }
-
-    /// Close X. The glyph is always visible; only the circular dark-gray
-    /// background fills in when the cursor is over the button itself
-    /// (pre-refactor header treatment).
-    private var dismissButton: some View {
-        Button(action: onDismiss) {
-            Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isHoveringDismiss ? Color.vfTextPrimary : Color.vfTextSecondary)
-                .frame(width: 26, height: 26)
-                .background(
-                    Circle()
-                        .fill(Color(red: 0.28, green: 0.28, blue: 0.30))
-                        .opacity(isHoveringDismiss ? 1 : 0)
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHoveringDismiss = hovering
-        }
-        .animation(.easeInOut(duration: 0.15), value: isHoveringDismiss)
     }
 
     // MARK: Chat text
@@ -268,16 +284,19 @@ struct ArtifactCardView: View {
 
     private var footer: some View {
         HStack(spacing: VFSpacing.md) {
-            // The charge line is a success-only readout — suppressed in failure.
-            if let chargeLine, failure == nil {
+            // The charge line is a success-only readout — suppressed in the
+            // failure and dev-result configurations.
+            if let chargeLine, failure == nil, devResult == nil {
                 Text(chargeLine)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextSecondary)
                     .fixedSize()
             }
             Spacer(minLength: VFSpacing.md)
-            if failure != nil {
-                retryButton
+            if let failure {
+                failureFooter(failure)
+            } else if devResult != nil {
+                undoButton
             } else if artifact != nil {
                 copyButton
             } else if conversion != .hidden {
@@ -297,43 +316,137 @@ struct ArtifactCardView: View {
         }
     }
 
-    /// Replaces the success Copy capsule in failure mode. Styled like the
-    /// primary success button (brand-accent capsule) with a refresh icon.
-    private var retryButton: some View {
-        Button(action: onRetry) {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Retry")
-                    .font(.system(size: 13, weight: .semibold))
-                    .fixedSize()
-            }
-            .foregroundStyle(Color.vfOnBrand)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(Color.vfBrandAccent, in: Capsule())
+    /// The failure card's footer: an optional quiet secondary (Cancel / Discard)
+    /// plus the configurable filled primary (Retry / Upgrade / Generate). The
+    /// primary's action is always `onRetry` — the single primary-action closure
+    /// the call site wires per state. `.failureExpanded` passes no secondary, so
+    /// this collapses to the lone amber Retry it rendered before.
+    @ViewBuilder
+    private func failureFooter(_ failure: FailureConfig) -> some View {
+        if let secondaryTitle = failure.secondaryTitle, let onSecondary = failure.onSecondary {
+            PillSecondaryButton(title: secondaryTitle, action: onSecondary)
         }
-        .buttonStyle(.plain)
-        .fixedSize()
+        PillPrimaryButton(
+            title: failure.primaryTitle,
+            systemImage: failure.primaryIcon,
+            role: failure.primaryRole,
+            action: onRetry
+        )
     }
 
-    private var copyButton: some View {
-        Button(action: handleCopy) {
-            HStack(spacing: 5) {
-                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(didCopy ? "Copied" : (artifact?.type.buttonLabel ?? "Copy"))
-                    .font(.system(size: 13, weight: .semibold))
-                    .fixedSize()
+    // MARK: Dev-result configuration
+
+    /// The human-readable summary above the readable git diff. The summary reuses
+    /// the chat-prose voice (markdown-rendered, capped + scrollable); the diff
+    /// sits in the same dark well the artifact body uses, monospace.
+    @ViewBuilder
+    private func devResultBody(_ dev: DevResultConfig) -> some View {
+        if !dev.summary.isEmpty {
+            HeightCappedScroll(maxHeight: 160, fadesScrollEdges: true) {
+                ChatProseText(text: dev.summary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .foregroundStyle(didCopy ? Color.white : Color.vfOnBrand)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(didCopy ? Color.vfSuccessGreen : Color.vfBrandAccent, in: Capsule())
         }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .animation(.easeInOut(duration: 0.15), value: didCopy)
+        devDiffWell(dev.diffText)
+    }
+
+    /// The diff body well — the same near-black inner container the artifact body
+    /// uses, holding the unified diff in a monospace, lightly colorized voice
+    /// (added/removed/hunk lines tinted). Selectable; empty diffs read as a
+    /// neutral placeholder.
+    private func devDiffWell(_ diffText: String) -> some View {
+        HeightCappedScroll(maxHeight: 320, fadesScrollEdges: true) {
+            Group {
+                if diffText.isEmpty {
+                    Text("No tracked-file changes.")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Color.vfTextSecondary)
+                } else {
+                    Text(Self.colorizedDiff(diffText))
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(VFSpacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .fill(Color.black.opacity(0.35))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous))
+    }
+
+    /// Build an `AttributedString` that tints each diff line by its kind while
+    /// keeping the whole thing one selectable `Text` (per-line `Text` views would
+    /// break cross-line selection). Only the foreground color is set here — the
+    /// uniform monospaced font comes from the `Text`'s `.font` modifier.
+    private static func colorizedDiff(_ diff: String) -> AttributedString {
+        var out = AttributedString()
+        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false)
+        for (index, line) in lines.enumerated() {
+            var piece = AttributedString(String(line))
+            piece.foregroundColor = diffLineColor(line)
+            out += piece
+            if index < lines.count - 1 { out += AttributedString("\n") }
+        }
+        return out
+    }
+
+    /// Map a diff line to its tint. File/index headers and `---`/`+++` markers
+    /// read as secondary; hunk headers accent; added lines green, removed red;
+    /// context lines primary. Order matters: the `+++`/`---` markers are checked
+    /// before the generic `+`/`-` added/removed rules.
+    private static func diffLineColor(_ line: Substring) -> Color {
+        if line.hasPrefix("+++") || line.hasPrefix("---") { return .vfTextSecondary }
+        if line.hasPrefix("@@") { return .vfAccentBlue }
+        if line.hasPrefix("diff ") || line.hasPrefix("index ")
+            || line.hasPrefix("new file") || line.hasPrefix("deleted file")
+            || line.hasPrefix("rename ") || line.hasPrefix("similarity ") { return .vfTextSecondary }
+        if line.hasPrefix("+") { return .vfSuccessGreen }
+        if line.hasPrefix("-") { return .vfRecordingRed }
+        return .vfTextPrimary
+    }
+
+    /// Replaces the success Copy capsule in the dev-result configuration — the
+    /// quiet `PillSecondaryButton`. Undo is a recovery affordance, not the hero
+    /// action, and there is no primary on this card.
+    private var undoButton: some View {
+        PillSecondaryButton(title: "Undo", action: onUndo)
+    }
+
+    /// The hero Copy action. At rest it's the `.positive` primary; on tap it
+    /// flips to a transient green "Copied" confirmation (same capsule footprint,
+    /// still tappable so a re-tap restarts the window) before reverting.
+    @ViewBuilder
+    private var copyButton: some View {
+        if didCopy {
+            Button(action: handleCopy) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Copied")
+                        .font(.system(size: 13, weight: .semibold))
+                        .fixedSize()
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, PillMetrics.primaryHPad)
+                .padding(.vertical, PillMetrics.primaryVPad)
+                .background(Color.vfSuccessGreen, in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .animation(.easeInOut(duration: 0.15), value: didCopy)
+        } else {
+            PillPrimaryButton(
+                title: artifact?.type.buttonLabel ?? "Copy",
+                systemImage: "doc.on.doc",
+                role: .positive,
+                action: handleCopy
+            )
+            .animation(.easeInOut(duration: 0.15), value: didCopy)
+        }
     }
 
     private func handleCopy() {

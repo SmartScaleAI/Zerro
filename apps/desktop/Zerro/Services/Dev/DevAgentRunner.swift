@@ -76,7 +76,11 @@ enum DevRunFailureReason: Equatable, Sendable {
 }
 
 enum DevRunResult: Equatable, Sendable {
-    case succeeded
+    /// Clean exit. `summary` is the agent's final message text captured from the
+    /// terminal stream-json `result` event (its `result` string), or nil when the
+    /// event carried no usable text — the UI then falls back to a generated
+    /// change line (the result-card handoff, Part A).
+    case succeeded(summary: String?)
     case failed(DevRunFailureReason)
 }
 
@@ -198,6 +202,11 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     nonisolated static func parseStreamJSONLineForTesting(_ line: String) -> DevRunSubstatus? {
         DevAgentProcessExecution.parseStreamJSONLine(line)
     }
+
+    /// Testing seam for the `result`-event summary parser (Part A).
+    nonisolated static func parseResultSummaryForTesting(_ line: String) -> String? {
+        DevAgentProcessExecution.parseResultSummary(line)
+    }
 }
 
 // MARK: - One process execution
@@ -232,6 +241,10 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     nonisolated(unsafe) private var lastActivity = Date()
     nonisolated(unsafe) private var stdoutBuffer = Data()
     nonisolated(unsafe) private var stderrTail = ""
+    /// The agent's final message text, captured from the terminal stream-json
+    /// `result` event. nil until that event is seen (or if it carried no usable
+    /// text); rides out on `.succeeded(summary:)` for the result card (Part A).
+    nonisolated(unsafe) private var resultSummary: String?
 
     nonisolated init(
         executableURL: URL,
@@ -372,11 +385,22 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             let lineData = stdoutBuffer.subdata(in: stdoutBuffer.startIndex..<nl)
             stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...nl)
             guard let line = String(data: lineData, encoding: .utf8) else { continue }
-            if outputFormat == .streamJSON,
-               let status = DevAgentProcessExecution.parseStreamJSONLine(line) {
-                emit(status)
-            }
+            processStreamLine(line)
         }
+    }
+
+    /// Parse one stream-json line: emit its substatus and, when it's the terminal
+    /// `result` event, capture the agent's final message text for the success
+    /// summary (Part A). A no-op for non-streamJSON output or non-progress lines.
+    nonisolated private func processStreamLine(_ line: String) {
+        guard outputFormat == .streamJSON,
+              let status = DevAgentProcessExecution.parseStreamJSONLine(line) else { return }
+        // `.done` is produced ONLY by the `result` event, so parse its summary
+        // here rather than re-inspecting every line.
+        if status == .done, let summary = DevAgentProcessExecution.parseResultSummary(line) {
+            resultSummary = summary
+        }
+        emit(status)
     }
 
     nonisolated private func ingestStderr(_ data: Data) {
@@ -398,14 +422,13 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             finish(.failed(.timeout(killReason)))
             return
         }
-        // Flush any buffered final line.
-        if outputFormat == .streamJSON, !stdoutBuffer.isEmpty,
-           let line = String(data: stdoutBuffer, encoding: .utf8),
-           let s = DevAgentProcessExecution.parseStreamJSONLine(line) {
-            emit(s)
+        // Flush any buffered final line (the terminal `result` event commonly
+        // arrives without a trailing newline).
+        if !stdoutBuffer.isEmpty, let line = String(data: stdoutBuffer, encoding: .utf8) {
+            processStreamLine(line)
         }
         if status == 0 {
-            finish(.succeeded)
+            finish(.succeeded(summary: resultSummary))
         } else {
             finish(.failed(.nonZeroExit(
                 code: status,
@@ -469,6 +492,22 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         default:
             return nil
         }
+    }
+
+    /// Extract the agent's final message text from a terminal `result` event
+    /// (Part A). The Claude Code stream-json `result` event carries the assistant's
+    /// closing text in its `result` string on a successful run; an error subtype
+    /// omits it. Returns the trimmed text, or nil when the line isn't a result
+    /// event or carries no usable text. Defensive — unknown shapes degrade to nil.
+    nonisolated static func parseResultSummary(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              obj["type"] as? String == "result",
+              let result = obj["result"] as? String
+        else { return nil }
+        let text = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     nonisolated private static func substatus(forTool name: String?, input: [String: Any]?) -> DevRunSubstatus {
