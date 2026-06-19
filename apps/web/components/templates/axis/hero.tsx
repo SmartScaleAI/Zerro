@@ -107,7 +107,7 @@ const MorphingPill = () => {
                 transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
                 className="h-4 w-4 rounded-full border-2 border-white/20 border-t-white/80"
               />
-              <span className="text-sm font-medium">Building it…</span>
+              <span className="text-sm font-medium">Generating your response…</span>
             </div>
             <button className="flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white/90">
               <X className="h-4 w-4" />

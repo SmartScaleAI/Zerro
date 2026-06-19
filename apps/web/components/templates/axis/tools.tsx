@@ -264,7 +264,7 @@ export default function ToolFeature() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.15 }}
             transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-            className="relative mx-auto w-full max-w-7xl px-4"
+            className="relative mx-auto w-full max-w-7xl px-4 scroll-mt-24"
         >
             <div className="mb-12 lg:mb-16 flex flex-col items-center gap-3 text-center">
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">

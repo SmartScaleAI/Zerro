@@ -86,13 +86,13 @@ function CellValue({ value, emphasize }: { value: Cell; emphasize?: boolean }) {
         className={
           emphasize
             ? "mx-auto h-5 w-5 text-primary"
-            : "mx-auto h-5 w-5 text-white/55"
+            : "mx-auto h-5 w-5 text-white/80"
         }
         strokeWidth={2.2}
         aria-label="Yes"
       />
     ) : (
-      <span className="text-white/25" aria-label="No">
+      <span className="text-white/45" aria-label="No">
         &mdash;
       </span>
     )
@@ -100,7 +100,7 @@ function CellValue({ value, emphasize }: { value: Cell; emphasize?: boolean }) {
   return (
     <span
       className={
-        emphasize ? "text-sm font-medium text-white" : "text-sm text-white/55"
+        emphasize ? "text-sm font-medium text-white" : "text-sm text-white/80"
       }
     >
       {value}
@@ -178,7 +178,7 @@ const Comparison = () => {
                     className={
                       i === 0
                         ? "px-5 py-5 text-center text-sm font-semibold text-white"
-                        : "px-5 py-5 text-center text-sm font-medium text-white/50"
+                        : "px-5 py-5 text-center text-sm font-medium text-white/80"
                     }
                     scope="col"
                   >

@@ -19,6 +19,22 @@ import { useEffect, useState } from "react"
 // "#how-it-works" → "how_it_works", matching the section_viewed naming.
 const navTarget = (href: string) => href.replace(/^#/, "").replace(/-/g, "_")
 
+// Distance from the viewport top, in px, at which a section's header should
+// land — the sticky bar is ~80px tall, so this leaves a small gap below it
+// instead of the header hugging the bar's bottom edge. Kept in sync with the
+// `scroll-mt-24` (96px) on the section elements so JS-driven and native hash
+// navigation settle at the same place.
+const NAV_OFFSET = 96
+
+// Smooth-scroll to the section without letting the anchor write `#id` to the
+// URL: we preventDefault and drive the scroll ourselves, applying NAV_OFFSET.
+const scrollToSection = (href: string) => {
+  const el = document.getElementById(href.replace(/^#/, ""))
+  if (!el) return
+  const top = el.getBoundingClientRect().top + window.scrollY - NAV_OFFSET
+  window.scrollTo({ top, behavior: "smooth" })
+}
+
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [isScrolled, setIsScrolled] = useState(false)
@@ -27,6 +43,7 @@ const Navbar = () => {
   const links = [
     { name: "How it works", href: "#how-it-works" },
     { name: "Output", href: "#output" },
+    { name: "Dev Mode", href: "#dev-mode" },
     { name: "Built right", href: "#built-right" },
     { name: "Pricing", href: "#pricing" },
   ]
@@ -94,9 +111,11 @@ const Navbar = () => {
                 <Link
                   href={link.href}
                   key={link.name}
-                  onClick={() =>
+                  onClick={(e) => {
+                    e.preventDefault()
                     track("nav_link_clicked", { target: navTarget(link.href) })
-                  }
+                    scrollToSection(link.href)
+                  }}
                   className="flex flex-row items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {link.name}
@@ -110,7 +129,7 @@ const Navbar = () => {
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
-              Download for Mac
+              Download
             </DownloadButton>
           </section>
 
@@ -179,8 +198,10 @@ const Navbar = () => {
                     <Link
                       href={link.href}
                       className="flex flex-row items-center justify-between rounded-lg px-4 py-3 font-medium text-foreground transition-colors hover:bg-muted"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.preventDefault()
                         track("nav_link_clicked", { target: navTarget(link.href) })
+                        scrollToSection(link.href)
                         setIsOpen(false)
                       }}
                     >

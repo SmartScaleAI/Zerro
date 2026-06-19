@@ -5,9 +5,6 @@ import { MessageSquare, Mic, Sparkles } from "lucide-react";
 // deliberately plain prose (no client JS) and front-loads the facts. Framed for
 // anyone who uses an AI assistant, not just developers.
 
-// "Works with" — a spread of AI tools across audiences, not just coding agents.
-const tools = ["ChatGPT", "Claude", "Gemini", "Cursor", "Perplexity", "v0"];
-
 // "Use it for" — everyday, cross-audience examples.
 const uses = [
   "Hand a coding agent real context",
@@ -69,26 +66,6 @@ const WhatIsZerro = () => {
                 </span>
               </div>
             ))}
-          </div>
-
-          {/* Works with */}
-          <div className="rounded-2xl border border-white/10 bg-[#202022] p-6">
-            <p className="text-sm font-medium tracking-[0.18em] text-white/40 uppercase">
-              Works with
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {tools.map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full border border-white/[0.08] bg-black/25 px-3 py-1 text-sm text-white/85"
-                >
-                  {t}
-                </span>
-              ))}
-              <span className="rounded-full border border-white/[0.08] bg-black/25 px-3 py-1 text-sm text-white/45">
-                & anywhere you paste text
-              </span>
-            </div>
           </div>
 
           {/* Use it for */}

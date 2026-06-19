@@ -79,7 +79,7 @@ const ProcessingVisual = () => (
         className="h-3 w-3 rounded-full border-2 border-white/15 border-t-white/70"
       />
       <span className="text-sm font-medium text-white/90">
-        Building it…
+        Generating your response…
       </span>
     </div>
   </div>
@@ -132,7 +132,7 @@ const steps: Step[] = [
     icon: Cpu,
     title: "Zerro processes locally",
     description:
-      "Audio gets isolated and frames get downsampled on your machine. Then a single API call turns it into the right result — a ready-to-use artifact, or a straight answer.",
+      "Your recordings are processed securely right on your device. Advanced AI models quickly analyze your screen and voice to generate the perfect ready-to-use artifact or answer.",
     visual: <ProcessingVisual />,
   },
   {
@@ -149,7 +149,7 @@ const Feature = () => {
   return (
     <motion.section
       id="how-it-works"
-      className="relative mx-auto max-w-7xl px-4"
+      className="relative mx-auto max-w-7xl px-4 scroll-mt-24"
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, amount: 0.15 }}

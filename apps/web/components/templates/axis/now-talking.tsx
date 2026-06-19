@@ -62,8 +62,16 @@ const SpeedRow = ({
         <motion.div
           className={
             isFast
-              ? "h-full rounded-full bg-primary"
+              ? "h-full rounded-full"
               : "h-full rounded-full bg-muted-foreground/50"
+          }
+          style={
+            isFast
+              ? {
+                  backgroundImage:
+                    "linear-gradient(to right, rgb(135,160,215), rgb(115,190,165), rgb(180,140,215), rgb(125,190,150), rgb(135,160,215))",
+                }
+              : undefined
           }
           initial={{ width: 0 }}
           animate={{ width: active ? `${(value / max) * 100}%` : 0 }}

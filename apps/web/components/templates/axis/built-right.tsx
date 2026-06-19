@@ -20,7 +20,7 @@ const items: Item[] = [
         icon: Lock,
         title: "Local-first processing",
         description:
-            "Audio isolation and frame downsampling happen on your machine before anything leaves it.",
+            "Your voice and screen recordings are analyzed securely on your own device, ensuring your data never leaves your Mac without your permission.",
     },
     {
         icon: KeyRound,
@@ -52,7 +52,7 @@ const BuiltRight = () => {
     return (
         <motion.section
             id="built-right"
-            className="relative mx-auto max-w-7xl px-4"
+            className="relative mx-auto max-w-7xl px-4 scroll-mt-24"
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.15 }}

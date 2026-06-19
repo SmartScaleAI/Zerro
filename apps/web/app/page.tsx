@@ -3,6 +3,7 @@ import Navbar from "@/components/templates/axis/navbar";
 import Hero from "@/components/templates/axis/hero";
 import Feature from "@/components/templates/axis/feature";
 import ToolFeature from "@/components/templates/axis/tools";
+import DevMode from "@/components/templates/axis/dev-mode";
 import BuiltRight from "@/components/templates/axis/built-right";
 import NowTalking from "@/components/templates/axis/now-talking";
 import Pricing from "@/components/templates/axis/pricing";
@@ -84,6 +85,9 @@ const Page = () => {
         </SectionView>
         <SectionView section="output">
           <ToolFeature />
+        </SectionView>
+        <SectionView section="dev_mode">
+          <DevMode />
         </SectionView>
         <SectionView section="built_right">
           <BuiltRight />
