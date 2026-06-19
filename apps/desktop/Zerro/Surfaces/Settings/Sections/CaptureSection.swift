@@ -148,8 +148,7 @@ private struct RedactSecretsRow: View {
         ) {
             Toggle("Redact Detected Secrets", isOn: $preferences.redactSecrets)
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(Color.vfSuccessGreen)
+                .toggleStyle(VFSwitchToggleStyle())
         }
     }
 }
