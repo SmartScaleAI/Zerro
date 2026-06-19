@@ -556,14 +556,12 @@ struct AllSetStepView: View {
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: VFSpacing.sm) {
-                    OnboardingKeyCapLarge(label: "\u{2318}")
+                    OnboardingKeyCapLarge(label: "\u{2325}")
                     Text("+").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.vfTextTertiary)
-                    OnboardingKeyCapLarge(label: "\u{2303}")
-                    Text("+").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.vfTextTertiary)
-                    OnboardingKeyCapLarge(label: "R")
+                    OnboardingKeyCapLarge(label: "Space")
                 }
 
-                Text("Hit \u{2318}\u{2303}R, select a region, narrate what you want, and we\u{2019}ll do the rest.")
+                Text("Hit \u{2325}Space, select a region, narrate what you want, and we\u{2019}ll do the rest.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -709,7 +707,7 @@ struct OnboardingIconTile: View {
     }
 }
 
-/// Large keycap used for the ⌘⌃R hint on the All Set step.
+/// Large keycap used for the ⌥Space hint on the All Set step.
 struct OnboardingKeyCapLarge: View {
     let label: String
 
@@ -717,7 +715,8 @@ struct OnboardingKeyCapLarge: View {
         Text(label)
             .font(.system(size: 20, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.vfTextPrimary)
-            .frame(width: 48, height: 48)
+            .padding(.horizontal, 14)
+            .frame(minWidth: 48, minHeight: 48)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
                     .fill(Color.white.opacity(0.06))

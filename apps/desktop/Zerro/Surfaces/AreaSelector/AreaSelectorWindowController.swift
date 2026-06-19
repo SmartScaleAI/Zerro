@@ -123,6 +123,10 @@ final class AreaSelectorWindowController {
             Self.modelMenuItems(entitlements: entitlements),
             selectedID: preferences.selectedModelID
         )
+        // Trial model-lock: hand the (observable) entitlement store to the state
+        // so the chip can show the free model + lock glyph and tapping it opens
+        // the upgrade popup. nil (tests) → never locked, full picker as before.
+        state.setEntitlements(entitlements)
         // The model button shows the model name, so its width is dynamic — keep
         // the shared geometry width in sync with the current selection (mirrors
         // `fullScreenBottomInset`). Read by the frame helpers on render + hit-test.
@@ -157,20 +161,27 @@ final class AreaSelectorWindowController {
         state.onConfirm = { [weak self] rect in
             // Read the toolbar's model pick BEFORE dismiss() nils the
             // state. Fallback can only fire if confirm raced dismiss.
-            let modelID = self?.state?.selectedModelID ?? preferences.selectedModelID
+            //
+            // Two distinct ids: the RAW pick (what becomes last-used) and the
+            // EFFECTIVE id generation runs (forced to the free model while the
+            // trial model-lock is active). Persisting only the RAW pick means a
+            // locked trial user's prior preference is never overwritten — it's
+            // restored the moment they upgrade.
+            let rawModelID = self?.state?.selectedModelID ?? preferences.selectedModelID
+            let effectiveModelID = self?.state?.effectiveModelID ?? rawModelID
             // Persist as the last-used model so the next recording (and the
             // chip seed) starts here. Persisted at confirm (record-start), not
             // on every dropdown tap — only models actually used to record
             // become last-used. Tier 4 analytics parity with the removed
             // Settings / menu-bar pickers: fire `model_changed` only on a real
             // change, before the write.
-            if modelID != preferences.selectedModelID {
+            if rawModelID != preferences.selectedModelID {
                 Analytics.capture("model_changed", [
                     "from_model": preferences.selectedModelID,
-                    "to_model": modelID,
+                    "to_model": rawModelID,
                     "surface": "capture_toolbar",
                 ])
-                preferences.selectedModelID = modelID
+                preferences.selectedModelID = rawModelID
             }
             // Dev Mode: carry the agent + folder when the mode switch is on and
             // both are set (record-time validation guarantees this — Record is
@@ -183,7 +194,7 @@ final class AreaSelectorWindowController {
                 return DevModeSelection(agentID: agentID, projectURL: projectURL, modelID: s.selectedDevModelID)
             }()
             self?.dismiss()
-            onConfirm(rect, modelID, devSelection)
+            onConfirm(rect, effectiveModelID, devSelection)
         }
         state.onCancel = { [weak self] in
             self?.dismiss()
@@ -421,6 +432,12 @@ final class AreaSelectorWindowController {
                         itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
                     ))
                 }
+                if state.isUpgradePopupOpen, let rect = selectionRect {
+                    let buttonFrame = AreaSelectorView.upgradeButtonFrame(
+                        forSelection: rect, in: size, fullScreen: fullScreen, devMode: devMode
+                    )
+                    state.setUpgradeButtonHovered(buttonFrame.contains(point))
+                }
                 if state.isDevSettingsMenuOpen, let rect = selectionRect {
                     let agentCount = state.devAgentMenuItems.count
                     let modelCount = state.devModelMenuItems.count
@@ -488,10 +505,16 @@ final class AreaSelectorWindowController {
                     self?.confirmCurrentSelection(window: window, state: state)
                     return nil
                 }
-                // Model icon — open/close the model dropdown (one dropdown at a
-                // time; the state closes the others).
+                // Model icon — when the trial model-lock is active, open the
+                // upgrade popup instead of the (premium) model list. Otherwise
+                // open/close the model dropdown (one surface at a time; the state
+                // closes the others).
                 if let modelFrame, modelFrame.contains(point) {
-                    state.toggleModelMenu()
+                    if state.isModelPickerLocked {
+                        state.toggleUpgradePopup()
+                    } else {
+                        state.toggleModelMenu()
+                    }
                     return nil
                 }
                 // Mic icon — open/close the device dropdown.
@@ -524,6 +547,24 @@ final class AreaSelectorWindowController {
                         }
                     }
                     state.closeModelMenu()
+                    return nil
+                }
+                // Upgrade popup open (trial model-lock) — a click on the Upgrade
+                // button opens the voluntary-upgrade paywall; anywhere else
+                // dismisses. The click is always consumed so it never starts a
+                // new drag.
+                if state.isUpgradePopupOpen {
+                    if let rect = selectionRect {
+                        let buttonFrame = AreaSelectorView.upgradeButtonFrame(
+                            forSelection: rect, in: size, fullScreen: fullScreen, devMode: devMode
+                        )
+                        if buttonFrame.contains(point) {
+                            self?.openUpgradePaywall()
+                            state.closeUpgradePopup()
+                            return nil
+                        }
+                    }
+                    state.closeUpgradePopup()
                     return nil
                 }
                 // Mic dropdown open — a click selects the row under the cursor
@@ -639,6 +680,10 @@ final class AreaSelectorWindowController {
                 }
                 if state.isModelMenuOpen {
                     state.closeModelMenu()
+                    return nil
+                }
+                if state.isUpgradePopupOpen {
+                    state.closeUpgradePopup()
                     return nil
                 }
                 if state.isDevSettingsMenuOpen {
@@ -1146,6 +1191,24 @@ final class AreaSelectorWindowController {
                 state.setProjectGitRepo(isRepo)
             }
         }
+    }
+
+    // MARK: - Trial model-lock upgrade
+
+    /// Open the voluntary-upgrade paywall window from the trial model-lock
+    /// upgrade popup (rather than jumping straight to the LemonSqueezy checkout).
+    /// The paywall is where a trial user reviews plans and starts checkout, so
+    /// the model-lock "Upgrade" button routes through the same surface as the
+    /// menu-bar "Upgrade" row: set the `.voluntaryUpgrade` trigger (so the copy
+    /// reads "Upgrade your plan") and present the window.
+    private func openUpgradePaywall() {
+        Log.billing.notice("model-lock: opening voluntary-upgrade paywall")
+        Analytics.capture("paywall_opened", [
+            "trigger": EntitlementStore.PaywallTrigger.voluntaryUpgrade.rawValue,
+            "placement": "capture_toolbar"
+        ])
+        state?.entitlements?.paywallTrigger = .voluntaryUpgrade
+        AppDelegate.openPaywall()
     }
 
     // MARK: - Model picker rows

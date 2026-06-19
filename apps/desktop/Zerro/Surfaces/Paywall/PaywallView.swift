@@ -57,6 +57,10 @@ import SwiftUI
 struct PaywallCopy: Equatable {
     let headline: String
     let subheadline: String
+    /// The window title-bar text, shown as "Zerro \u{2014} <windowTitle>". Tracks
+    /// the context so the chrome matches the body (e.g. "Add Credits" when a
+    /// Managed user tops up, not the generic "Unlock").
+    let windowTitle: String
 
     /// Resolves the copy. `.expired` is the genuinely-gated state, so it ALWAYS
     /// gets the blocked copy even if a stale trigger survived; otherwise the
@@ -86,23 +90,27 @@ struct PaywallCopy: Equatable {
     /// Trial exhausted (the original wall). Copy unchanged from v1.
     static let blocked = PaywallCopy(
         headline: "You\u{2019}ve used your free generations",
-        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work."
+        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work.",
+        windowTitle: "Unlock"
     )
     /// Voluntary upgrade from an active trial — lead with the Managed value,
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active \u{2014} upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage."
+        subheadline: "Your free trial is still active \u{2014} upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage.",
+        windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
     static let topup = PaywallCopy(
         headline: "Add Credits",
-        subheadline: "Top up your balance to keep generating this month. Credits attach to your subscription instantly and carry over for 12 months."
+        subheadline: "Top up your balance to keep generating this month. Credits attach to your subscription instantly and carry over for 12 months.",
+        windowTitle: "Add Credits"
     )
     /// Entitled user managing their plan — de-emphasize the sell.
     static let manage = PaywallCopy(
         headline: "Manage your plan",
-        subheadline: "Switch options, activate a key, or manage your devices and billing \u{2014} everything for your plan lives here."
+        subheadline: "Switch options, activate a key, or manage your devices and billing \u{2014} everything for your plan lives here.",
+        windowTitle: "Manage Plan"
     )
 }
 
@@ -143,6 +151,10 @@ struct PaywallView: View {
         }
             .frame(width: Self.windowWidth)
             .background(Color.vfCardBackground)
+            // Title-bar text tracks the context (the static Window() label is
+            // the generic "Unlock"; this overrides it per trigger so e.g. a
+            // top-up reads "Zerro — Add Credits").
+            .navigationTitle("Zerro \u{2014} \(copy.windowTitle)")
             .onAppear {
                 // Tier 3 analytics: the gate stashes WHY the paywall opened
                 // (`manual` when there's no preflight reason, e.g. an expired

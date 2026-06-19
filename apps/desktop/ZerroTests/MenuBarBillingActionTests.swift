@@ -54,12 +54,13 @@ final class MenuBarBillingActionTests: XCTestCase {
     // MARK: - Managed: healthy / low / past-due
 
     func testManagedHealthyAddsMoreCredits() {
-        // Healthy Managed leads the label with adding credits (where a paid-up
-        // user comes to top up), but still routes through the manage portal.
+        // Healthy Managed leads with adding credits (where a paid-up user comes
+        // to top up); the trigger matches the label so the paywall opens on the
+        // "Add Credits" copy, not "Manage your plan".
         let action = resolve(managed())
         XCTAssertEqual(action.label, "Add Credits")
         XCTAssertNil(action.secondary)
-        XCTAssertEqual(action.trigger, .manage)
+        XCTAssertEqual(action.trigger, .topup)
     }
 
     func testManagedLowBalanceAddsCredits() {

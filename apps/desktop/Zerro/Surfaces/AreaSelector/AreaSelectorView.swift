@@ -58,6 +58,7 @@ struct AreaSelectorView: View {
                 instructionPill(in: bounds)
                 floatingToolbar(in: bounds)
                 modelMenu(in: bounds)
+                upgradeMenu(in: bounds)
                 micMenu(in: bounds)
                 devSettingsMenu(in: bounds)
                 devValidationBanner(in: bounds)
@@ -622,6 +623,40 @@ struct AreaSelectorView: View {
         return idx
     }
 
+    // MARK: - Upgrade popup geometry (trial model-lock)
+    //
+    // A small card anchored to the model chip exactly like the model dropdown
+    // (shared `anchoredMenuFrame` → flips above when there's no room below,
+    // clamps horizontally), drawn through `menuPanel` + `menuCaret` so it wears
+    // the same panel fill / hairline / shadow / caret. Fixed height so the
+    // Upgrade button's hit-rect (bottom-anchored, computed below) matches where
+    // the view renders it.
+
+    static let upgradeMenuWidth: CGFloat = 264
+    static let upgradeMenuHeight: CGFloat = 152
+    /// Inset inside the popup panel (matches the button's left/right inset).
+    static let upgradeMenuPad: CGFloat = 14
+    static let upgradeButtonHeight: CGFloat = 34
+
+    /// Panel frame for the upgrade popup, anchored under the model chip.
+    static func upgradeMenuFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let icon = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        return anchoredMenuFrame(under: icon, width: upgradeMenuWidth, height: upgradeMenuHeight, in: bounds)
+    }
+
+    /// The Upgrade button's hit-rect: full-width (inset `upgradeMenuPad` each
+    /// side) and pinned to the panel's bottom inset — the same place the view's
+    /// bottom-aligned button renders, so render == hit-test.
+    static func upgradeButtonFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+        let panel = upgradeMenuFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        return CGRect(
+            x: panel.minX + upgradeMenuPad,
+            y: panel.maxY - upgradeMenuPad - upgradeButtonHeight,
+            width: panel.width - upgradeMenuPad * 2,
+            height: upgradeButtonHeight
+        )
+    }
+
     // MARK: - Dev-settings menu geometry
     //
     // The consolidated agent + model + project menu (Dev Mode only). Sections
@@ -1047,6 +1082,51 @@ struct AreaSelectorView: View {
                     }
                 }
                 .padding(.vertical, Self.menuVPad)
+            }
+
+            menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
+        }
+    }
+
+    /// The trial model-lock upgrade popup: a small card (title + one line of body
+    /// + a white Upgrade button) anchored to the model chip, drawn with the same
+    /// panel chrome + caret as the model dropdown. Opening is intercepted by the
+    /// controller in place of the model list while `isModelPickerLocked`; the
+    /// button opens the voluntary-upgrade paywall (always presentable).
+    @ViewBuilder
+    private func upgradeMenu(in bounds: CGSize) -> some View {
+        if state.isUpgradePopupOpen, let rect = state.confirmableSelectionRect {
+            let icon = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
+            let frame = Self.upgradeMenuFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
+            let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
+
+            menuPanel(frame: frame) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Upgrade to unlock premium models")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Premium models are only available on paid plans.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+
+                    Text("Upgrade")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.vfOnBrand)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Self.upgradeButtonHeight)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Color.vfBrandAccent)
+                        )
+                        // Subtle press/hover feedback on the accent fill.
+                        .opacity(state.isUpgradeButtonHovered ? 0.9 : 1)
+                }
+                .padding(.horizontal, Self.upgradeMenuPad)
+                .padding(.vertical, Self.upgradeMenuPad)
             }
 
             menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
@@ -1596,8 +1676,9 @@ struct AreaSelectorView: View {
             return (Self.autoDetectInfoTooltip, anchor, 240)
         }
 
-        // Any other dropdown open → no toolbar tooltips (they'd collide with the menu).
-        if state.isModelMenuOpen || state.isMicMenuOpen { return nil }
+        // Any other dropdown / the upgrade popup open → no toolbar tooltips
+        // (they'd collide with the open surface).
+        if state.isModelMenuOpen || state.isMicMenuOpen || state.isUpgradePopupOpen { return nil }
 
         if state.isModeArtifactHovered {
             return ("Artifact", Self.modeArtifactSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
@@ -1723,14 +1804,24 @@ struct AreaSelectorView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .fixedSize()
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(Color.vfTextTertiary)
-                .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
+            // Locked (trial): a lock glyph where the dropdown chevron would be —
+            // tapping opens the upgrade popup, not the model list. Same muted
+            // tertiary treatment + ~8pt size as the chevron so the chip baseline
+            // is unchanged.
+            if state.isModelPickerLocked {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Color.vfTextTertiary)
+            } else {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Color.vfTextTertiary)
+                    .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
+            }
         }
         .padding(.horizontal, Self.modelButtonHPad)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(iconButtonFill(active: state.isModelMenuOpen, hovered: state.isModelChipHovered))
+        .background(iconButtonFill(active: state.isModelMenuOpen || state.isUpgradePopupOpen, hovered: state.isModelChipHovered))
     }
 
     /// Dev-settings icon (Dev Mode only): terminal + chevron with a readiness

@@ -32,9 +32,9 @@ import SwiftUI
 ///   • `.expired`          → "Upgrade"     (blocked) — the gated wall.
 ///   • `.managed` past-due → "Manage Plan" (manage) + "update your card" nudge.
 ///   • `.managed` low      → "Add Credits" (topup) — lead with top-up packs.
-///   • `.managed` healthy  → "Add Credits" (manage) — the portal is where
-///     a paid-up Managed user tops up; label leads with that even though the
-///     trigger is the general manage surface.
+///   • `.managed` healthy  → "Add Credits" (topup) — a paid-up Managed user
+///     comes here to top up; the trigger matches the label so the paywall
+///     opens on the "Add Credits" copy, not the "Manage your plan" copy.
 ///   • `.byok`             → "Manage Plan" (manage) — nothing to upgrade/top up.
 struct MenuBarBillingAction: Equatable {
     let label: String
@@ -65,10 +65,10 @@ struct MenuBarBillingAction: Equatable {
             if isLowBalance {
                 return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
             }
-            // Healthy Managed → the manage portal (already top tier; no plan
-            // ladder to sell), but lead the label with adding credits since
-            // that's what a paid-up user comes here for.
-            return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .manage)
+            // Healthy Managed → top-up packs (already top tier; no plan ladder
+            // to sell). The label is "Add Credits", so route through `.topup`
+            // and the paywall opens on the matching "Add Credits" copy.
+            return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
         }
     }
 }
@@ -290,7 +290,7 @@ struct MenuBarPanelView: View {
             // Phase A: entitlement state forcing, collapsed into a single
             // hover-driven submenu (same shape as Recent Prompts /
             // Microphone) to keep the debug block compact. Force "Expired"
-            // in the side panel, then the recording hotkey (⌘⌃R by
+            // in the side panel, then the recording hotkey (⌥Space by
             // default, or Start Recording) to drive the
             // paywall gate; the paywall window's own dev panel can flip
             // between states once it's open.
@@ -428,7 +428,7 @@ struct MenuBarPanelView: View {
     // based on `AppState.isRecordingActive`, and disables itself during
     // `.processing` so the user can't kick off a new session while one
     // is in flight. The hotkey hint stays put — the toggleRecording
-    // binding (⌘⌃R by default, user-rebindable) covers both halves of
+    // binding (⌥Space by default, user-rebindable) covers both halves of
     // the toggle.
 
     /// Trailing hint for the Start/Stop Recording rows, derived from the

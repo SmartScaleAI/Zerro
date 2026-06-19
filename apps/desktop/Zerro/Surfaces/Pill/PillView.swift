@@ -790,6 +790,48 @@ struct PulsingDot: View {
     }
 }
 
+// MARK: - LoadingDots
+//
+// Three-dot "typing" indicator that replaces the processing spinner. Each
+// dot runs the same opacity+scale pulse (0.3 ↔ 1.0) on a repeating
+// autoreversing loop, staggered by a per-dot phase delay so they read as
+// "···" cycling left-to-right. Mirrors PulsingDot's API (color + size +
+// self-contained .onAppear animation) — no external state, no manual Timer.
+//
+// `.fixedSize()` pins the intrinsic footprint (~16pt wide) so a long phrase,
+// the elapsed timer, or the Cancel button never get shoved inside the locked
+// processing capsule.
+
+struct LoadingDots: View {
+    var color: Color = .vfTextSecondary
+    var size: CGFloat = 5
+
+    @State private var animating = false
+
+    private let dotCount = 3
+    private let perDotDelay: Double = 0.2
+
+    var body: some View {
+        HStack(spacing: VFSpacing.xs) {
+            ForEach(0..<dotCount, id: \.self) { index in
+                Circle()
+                    .fill(color)
+                    .frame(width: size, height: size)
+                    .opacity(animating ? 1.0 : 0.3)
+                    .scaleEffect(animating ? 1.0 : 0.7)
+                    .animation(
+                        .easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(perDotDelay * Double(index)),
+                        value: animating
+                    )
+            }
+        }
+        .fixedSize()
+        .onAppear { animating = true }
+    }
+}
+
 // MARK: - RecordingPillContent
 //
 // Shared between `.recording` and `.wrappingUp`. The tint colors the
@@ -876,10 +918,10 @@ private struct RecordingPillContent: View {
 
 // MARK: - ProcessingPillContent
 //
-// Replaces timer + waveform with a centered "spinner + label" pair and
-// a separate Cancel affordance on the right. The spinner and label
-// are intentionally tight-coupled (one unit) so the label reads as
-// describing what the spinner is doing, not as a separate item.
+// Replaces timer + waveform with a centered "indicator + label" pair and
+// a separate Cancel affordance on the right. The LoadingDots indicator and
+// label are intentionally tight-coupled (one unit) so the label reads as
+// describing what the indicator is doing, not as a separate item.
 //
 // For Phase 2.5 the label is static. The cycling between the three
 // strings ("Listening to your narration…" / "Looking at your screen…"
@@ -911,9 +953,7 @@ private struct ProcessingPillContent: View {
     var body: some View {
         HStack(spacing: VFSpacing.md) {
             HStack(spacing: VFSpacing.sm) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(Color.vfTextSecondary)
+                LoadingDots()
 
                 // Truncates first so it yields space to everything else.
                 Text(phrasePart)
@@ -1203,6 +1243,17 @@ private struct ResultPillContent: View {
     PillView(state: .processing(stepLabel: "Looking at your screen\u{2026}"))
         .padding(40)
         .background(Color.vfPanelBackground)
+}
+
+// Long phrase + elapsed timer: confirms the LoadingDots indicator keeps a
+// stable footprint so the phrase truncates while the timer and Cancel stay
+// pinned inside the locked capsule.
+#Preview("Processing \u{00B7} Long") {
+    PillView(state: .processing(
+        stepLabel: "Writing your prompt and gathering all the context it needs\u{2026} \u{00B7} 0:42"
+    ))
+    .padding(40)
+    .background(Color.vfPanelBackground)
 }
 
 #Preview("Result \u{00B7} Compact") {

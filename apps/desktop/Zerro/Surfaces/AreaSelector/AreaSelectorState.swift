@@ -211,6 +211,7 @@ final class AreaSelectorState {
             // Only one toolbar dropdown at a time (see toggleModelMenu).
             closeModelMenu()
             closeDevSettingsMenu()
+            closeUpgradePopup()
         } else {
             highlightedMicIndex = nil
         }
@@ -265,9 +266,10 @@ final class AreaSelectorState {
     /// back as last-used at record-start.
     private(set) var selectedModelID: String = ""
 
-    /// Label for the toolbar chip.
+    /// Label for the toolbar chip — the EFFECTIVE model's name, so a locked
+    /// trial user always reads "Gemini 3.5 Flash" regardless of any prior pick.
     var selectedModelName: String {
-        models.first { $0.id == selectedModelID }?.name ?? selectedModelID
+        models.first { $0.id == effectiveModelID }?.name ?? effectiveModelID
     }
 
     private(set) var isModelChipHovered: Bool = false
@@ -297,6 +299,7 @@ final class AreaSelectorState {
         if isModelMenuOpen {
             closeMicMenu()
             closeDevSettingsMenu()
+            closeUpgradePopup()
         } else {
             highlightedModelIndex = nil
         }
@@ -309,6 +312,79 @@ final class AreaSelectorState {
 
     func setHighlightedModelIndex(_ index: Int?) {
         if highlightedModelIndex != index { highlightedModelIndex = index }
+    }
+
+    // MARK: - Trial model-picker lock (premium-model gating)
+    //
+    // While the user is on the `.trial` entitlement, the ONLY model they may use
+    // is the free model (Gemini 3.5 Flash) — every other model is "premium" and
+    // gated behind upgrade (Cursor's free-vs-premium pattern). The chip then
+    // shows the free model + a lock glyph, and tapping it opens the upgrade
+    // popup instead of the model list. `.byok`/`.managed` users are never locked.
+
+    /// The long-lived entitlement store, injected at present time. It's
+    /// `@Observable`, so reading `entitlements?.state` through the lock flag
+    /// below makes the chip + popup react to a plan change (trial → managed)
+    /// without a relaunch. nil in tests/previews → never locked (existing
+    /// behavior), so the picker keeps the full model list.
+    private(set) var entitlements: EntitlementStore?
+
+    func setEntitlements(_ store: EntitlementStore?) {
+        entitlements = store
+    }
+
+    /// The only model a trial user may use; matches `ModelRegistry`'s recommended
+    /// free model. Generation is forced to this id while locked.
+    static let lockedModelID = "gemini-3.5-flash"
+
+    /// True while the model picker is locked to the free model — i.e. the user is
+    /// on `.trial`. Drives the chip's lock glyph, the tap interception, and the
+    /// forced effective model below.
+    var isModelPickerLocked: Bool {
+        if case .trial = entitlements?.state { return true }
+        return false
+    }
+
+    /// The model id generation must actually use: forced to the free model while
+    /// locked, otherwise the user's persisted pick. Computed at the point of use
+    /// so the stored preference is NEVER overwritten — upgrading restores it.
+    var effectiveModelID: String {
+        isModelPickerLocked ? Self.lockedModelID : selectedModelID
+    }
+
+    // MARK: - Upgrade popup (trial model-lock)
+    //
+    // Rendered in-tree like the model/mic dropdowns (same `.screenSaver`
+    // window-level reason) and anchored to the model chip. Mutually exclusive
+    // with every toolbar dropdown.
+
+    private(set) var isUpgradePopupOpen: Bool = false
+
+    /// Hover state for the popup's Upgrade button (the overlay is hit-test-
+    /// disabled, so the controller sets this on mouse-move and the view reflects
+    /// it as a subtle brighten).
+    private(set) var isUpgradeButtonHovered: Bool = false
+
+    func setUpgradeButtonHovered(_ hovered: Bool) {
+        if isUpgradeButtonHovered != hovered { isUpgradeButtonHovered = hovered }
+    }
+
+    /// Open/close the upgrade popup. Only one toolbar surface at a time, so
+    /// opening it closes every dropdown.
+    func toggleUpgradePopup() {
+        isUpgradePopupOpen.toggle()
+        if isUpgradePopupOpen {
+            closeModelMenu()
+            closeMicMenu()
+            closeDevSettingsMenu()
+        } else {
+            isUpgradeButtonHovered = false
+        }
+    }
+
+    func closeUpgradePopup() {
+        isUpgradePopupOpen = false
+        isUpgradeButtonHovered = false
     }
 
     // MARK: - Dev Mode (Phase 1)
@@ -415,6 +491,7 @@ final class AreaSelectorState {
             // Only one toolbar dropdown at a time.
             closeModelMenu()
             closeMicMenu()
+            closeUpgradePopup()
             // Open on the selected model so a deep pick isn't hidden.
             resetDevModelScrollToSelection()
         } else {
@@ -619,6 +696,7 @@ final class AreaSelectorState {
         isModelChipHovered = false
         isMicChipHovered = false
         isRecordButtonHovered = false
+        isUpgradeButtonHovered = false
     }
 
     /// Seed the Dev Mode selections at present time from persisted prefs +

@@ -31,6 +31,10 @@ enum BillingLinks {
         case byok = "byok"
         case topupBoost = "topup_boost"
         case topupPower = "topup_power"
+        /// Same Managed subscription product as `subscriptionPro`, but tagged
+        /// distinctly so upgrades that originate from the capture toolbar's
+        /// trial model-lock popup are attributable separately in analytics.
+        case subscriptionProModelLock = "subscription_pro_model_lock"
     }
 
     /// Returns `base` decorated with the LemonSqueezy custom-data query params
