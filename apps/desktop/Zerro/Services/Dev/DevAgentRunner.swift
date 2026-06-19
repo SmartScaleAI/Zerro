@@ -330,6 +330,11 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     nonisolated static func parseResultSummaryForTesting(_ line: String) -> String? {
         DevAgentProcessExecution.parseResultSummary(line)
     }
+
+    /// Testing seam for the question-stripping pass applied to dev summaries.
+    nonisolated static func summaryDroppingQuestionsForTesting(_ text: String) -> String? {
+        DevAgentProcessExecution.summaryDroppingQuestions(text)
+    }
 }
 
 // MARK: - One process execution
@@ -742,7 +747,79 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
               let result = obj["result"] as? String
         else { return nil }
         let text = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        guard !text.isEmpty else { return nil }
+        // The dev result card is non-interactive — there's no reply box, so a
+        // "Want me to also…?" the agent tacks on is a dead end. Drop questions
+        // (trailing OR mid-paragraph) so the summary ends on a statement.
+        return summaryDroppingQuestions(text)
+    }
+
+    /// Remove question sentences from an agent's free-text summary so the
+    /// (read-only) dev result card never asks the user something it can't accept
+    /// an answer to. Operates per markdown line to preserve list/paragraph
+    /// structure: within each line, a sentence whose terminating punctuation is a
+    /// `?` is dropped — whether it's the last sentence or embedded between
+    /// declarative ones ("Did X. Should I also Y? Left it as-is." → "Did X. Left
+    /// it as-is."). A `?` mid-token (a URL query, `foo?bar`) isn't a sentence end
+    /// and is left alone. Returns the surviving declarative text, or nil when the
+    /// summary was nothing but questions (so the diff-stat fallback takes over).
+    nonisolated static func summaryDroppingQuestions(_ text: String) -> String? {
+        let cleanedLines = text
+            .components(separatedBy: "\n")
+            .map(lineDroppingQuestions)
+        // Rejoin, then collapse the blank-line runs that fully-dropped lines can
+        // leave behind, and trim the whole thing.
+        var joined = cleanedLines.joined(separator: "\n")
+        while joined.contains("\n\n\n") {
+            joined = joined.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        let result = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
+    }
+
+    /// Drop question sentences from a single line (no embedded newlines). A
+    /// sentence ends at a run of `.`/`!`/`?` (plus any trailing closing quotes or
+    /// brackets) when followed by whitespace or end-of-line; the run "is a
+    /// question" when it contains a `?`. Whitespace is collapsed and the line
+    /// trimmed after filtering.
+    nonisolated private static func lineDroppingQuestions(_ line: String) -> String {
+        if line.trimmingCharacters(in: .whitespaces).isEmpty { return line }
+        let chars = Array(line)
+        let n = chars.count
+        let terminators: Set<Character> = [".", "!", "?"]
+        let closers: Set<Character> = ["\"", "'", ")", "]", "\u{201D}", "\u{2019}"] // " ' ) ] ” ’
+        var kept = ""
+        var sentence = ""
+        var i = 0
+        while i < n {
+            let ch = chars[i]
+            if terminators.contains(ch) {
+                var k = i
+                var run = ""
+                while k < n, terminators.contains(chars[k]) { run.append(chars[k]); k += 1 }
+                while k < n, closers.contains(chars[k]) { run.append(chars[k]); k += 1 }
+                sentence += run
+                let atEnd = k >= n
+                let nextIsSpace = !atEnd && chars[k].isWhitespace
+                if atEnd || nextIsSpace {
+                    // A real sentence boundary: keep it unless it's a question.
+                    if !run.contains("?") { kept += sentence }
+                    sentence = ""
+                }
+                // else: a `.`/`?` mid-token (e.g. "west.css", "a?b") — not a
+                // boundary; the run stays in `sentence` and we read on.
+                i = k
+            } else {
+                sentence.append(ch)
+                i += 1
+            }
+        }
+        // A trailing fragment with no terminal punctuation is declarative by
+        // definition (any `?` end would have been a boundary), so keep it.
+        kept += sentence
+        let collapsed = kept.replacingOccurrences(
+            of: "[ \\t]+", with: " ", options: .regularExpression)
+        return collapsed.trimmingCharacters(in: .whitespaces)
     }
 
     /// Map one Claude Code `tool_use` block to a feed event WITH its specifics:

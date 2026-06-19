@@ -407,6 +407,59 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertNil(ClaudeCodeAgentRunner.parseResultSummaryForTesting(""))
     }
 
+    // MARK: - Question stripping (non-interactive dev result card)
+
+    func testSummaryDropsTrailingQuestion() {
+        // The screenshot case: a clean summary followed by an offer to do more.
+        // The offer is a dead end here (no reply box) — drop it, end on the fact.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.summaryDroppingQuestionsForTesting(
+                "Recolored the hero with the western palette. Want me to extend the western "
+                + "palette to those sections too, or leave it scoped to the hero?"),
+            "Recolored the hero with the western palette.")
+    }
+
+    func testSummaryDropsInlineMidParagraphQuestion() {
+        // A question embedded between two statements (the "One thing to flag:"
+        // shape) — the surrounding declarative sentences survive.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.summaryDroppingQuestionsForTesting(
+                "Updated the nav. Should I also update the footer? I left it as-is for now."),
+            "Updated the nav. I left it as-is for now.")
+    }
+
+    func testSummaryKeepsStatementsWithDotsAndUrls() {
+        // A `?`/`.` mid-token is not a sentence end — file names and query
+        // strings must not be mistaken for question boundaries.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.summaryDroppingQuestionsForTesting(
+                "Edited west.css and patched https://x.test/p?ref=hero in the header."),
+            "Edited west.css and patched https://x.test/p?ref=hero in the header.")
+    }
+
+    func testSummaryStatementOnlyUnchanged() {
+        // No questions → byte-for-byte the same text.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.summaryDroppingQuestionsForTesting("Reworked the nav."),
+            "Reworked the nav.")
+    }
+
+    func testSummaryAllQuestionsBecomesNil() {
+        // Nothing declarative survives → nil, so the diff-stat fallback shows.
+        XCTAssertNil(
+            ClaudeCodeAgentRunner.summaryDroppingQuestionsForTesting(
+                "Want me to proceed? Or should I wait?"))
+    }
+
+    func testSummaryDropsQuestionWithinResultEvent() {
+        // End-to-end through the `result`-event parser: the wired-in stripping
+        // runs on the real summary path, not just the standalone helper.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseResultSummaryForTesting(
+                #"{"type":"result","result":"Scoped the palette to the hero. Want me to do the rest?"}"#),
+            "Scoped the palette to the hero.")
+    }
+
     // MARK: - Helpers
 
     private func parse(_ line: String) -> DevAgentEvent? {
