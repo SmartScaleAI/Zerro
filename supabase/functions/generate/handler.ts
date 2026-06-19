@@ -50,11 +50,12 @@
 
 import { json } from "../_shared/http.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
+import { extractAnchors } from "./anchors.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
 import { creditCostForModel, estimatedCostUsd, estimateGenerationCredits, sttCostUsd } from "./cost.ts";
 import { modelById } from "./models.ts";
-import { validateBody } from "./limits.ts";
+import { validateBody, validateTranscribeBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
@@ -154,11 +155,24 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   if ("error" in resolved) return json({ error: resolved.error }, resolved.status);
   const account = resolved.account;
 
+  // 4.5 Dev Mode call 1 (Phase 2 §7) — a FREE word-level transcription. The
+  //     client needs the word transcript to resolve deixis anchors BEFORE the
+  //     billable generation (call 2). This path deliberately does NONE of the
+  //     billing machinery: no credit, no chat model, no concurrency SLOT, no
+  //     idempotency entry. It is still auth-gated (above) and rate-limited
+  //     (inside) because STT costs us real money — but it takes NO slot, so it
+  //     can neither block nor be blocked by the paired generation (cap-1 is
+  //     enforced by call 2). The pair therefore consumes two rate-limit tokens
+  //     and exactly one credit (on call 2).
+  if (isDevTranscribeRequest(body)) {
+    return await handleDevTranscribe(body, account, deps);
+  }
+
   // 5. Server-side input fuse — BEFORE any OpenAI call or credit work. A legit
   //    recording can never trip this; only a forged/oversized payload does.
   const parsed = validateBody(body);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech } = parsed.value;
+  const { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech, mode, suppliedTranscript } = parsed.value;
 
   // 5.5 Resolve the validated model → provider + fixed credit price (Phase 4).
   //     validateBody already gated on ALLOWED_MODELS, so a miss here is a
@@ -200,6 +214,9 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
             // D2: the ORIGINAL charge, replayed — the retry itself charged 0,
             // but the app's toast must reflect what this recording cost.
             credits_charged: cached.creditsCharged,
+            // Dev Mode: re-derive the structured anchors from the cached prompt
+            // (no new cache column) so a replay returns the same `anchors[]`.
+            ...devAnchorsBody(mode, cached.prompt),
           },
           200,
         );
@@ -244,18 +261,30 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     }
 
     // 9. Transcribe with the server-held key. A failure here charges NOTHING.
+    //    Phase 2 Dev Mode CALL 2: when the client supplied a transcript (it
+    //    already transcribed via the free call 1 and resolved deixis anchors
+    //    against it), SKIP re-STT entirely and generate against that exact
+    //    transcript — no double STT round-trip / charge, and the prompt lines up
+    //    with the resolved anchors. (No audio was uploaded on call 2; the
+    //    duration rode in the transcript for the STT-cost meter + seconds gate.)
     //    Phase 6 no-speech gate: when the client signalled `has_speech:false`,
     //    SKIP the Whisper call entirely — no STT round-trip, no STT cost — and
     //    compose from frames + OCR + clicks on empty segments. This is the ONLY
     //    behavioural change of the gate on the server; the credit gate, the
     //    concurrency slot, and idempotency below are untouched. The true-seconds
-    //    gate (step 10) still runs against the client-declared duration.
+    //    gate (step 10) still runs against the (client-declared / supplied) duration.
     let durationSeconds: number;
     let segments: SpeechSegment[];
-    if (!hasSpeech) {
+    if (suppliedTranscript) {
+      segments = suppliedTranscript.segments;
+      durationSeconds = suppliedTranscript.durationSeconds;
+    } else if (!hasSpeech) {
       segments = [];
       durationSeconds = declaredAudioSeconds ?? 0;
     } else {
+      // Audio is guaranteed present here: validateBody only allows a null audio
+      // when a supplied transcript exists, and that case is handled above.
+      if (!audio) return json({ error: "missing_audio" }, 400);
       try {
         const tr = await deps.stt.transcribe(audio);
         segments = tr.segments;
@@ -334,9 +363,11 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     }
 
     // 11. Compose the system prompt SERVER-SIDE (the server owns the whole
-    //     text; the client supplies nothing that influences it), interleave,
-    //     and call chat.
-    const systemPrompt = composedSystemPrompt();
+    //     text; the client supplies only the `mode` SELECTOR, never content),
+    //     interleave, and call chat. Phase 2: `mode:"dev"` selects the
+    //     repo-scoped dev prompt so a Dev Mode recording generates the
+    //     Goal/Changes/Scope agent spec, not the clipboard prompt.
+    const systemPrompt = composedSystemPrompt(mode);
     const userContent = buildInterleavedContent(frames, segments, clicks);
 
     let chat;
@@ -397,7 +428,13 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
         }, IDEMPOTENCY_TTL_SECONDS);
       }
       return json(
-        { prompt: chat.content, usage: usageBody(chat), credits_remaining: 0, credits_charged: 0 },
+        {
+          prompt: chat.content,
+          usage: usageBody(chat),
+          credits_remaining: 0,
+          credits_charged: 0,
+          ...devAnchorsBody(mode, chat.content),
+        },
         200,
       );
     }
@@ -436,7 +473,13 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     //     spend (D2) — the real `ceil(est_cost_usd / USD_PER_CREDIT)`, not any
     //     fixed/fallback price, so the app must read it rather than derive it.
     return json(
-      { prompt: chat.content, usage: usageBody(chat), credits_remaining: afterConsume, credits_charged: credits },
+      {
+        prompt: chat.content,
+        usage: usageBody(chat),
+        credits_remaining: afterConsume,
+        credits_charged: credits,
+        ...devAnchorsBody(mode, chat.content),
+      },
       200,
     );
   } finally {
@@ -491,6 +534,68 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
 
 function usageBody(chat: { inputTokens: number; outputTokens: number; model: string }) {
   return { input_tokens: chat.inputTokens, output_tokens: chat.outputTokens, model: chat.model };
+}
+
+/** Phase 2 (Dev Mode CALL 2) — the structured per-reference `anchors[]` the
+ *  client's M6 confirm gate consumes, parsed out of the model's `zerro_anchors`
+ *  block (the M7 contract). Returned ONLY for `mode:"dev"`; spread into every dev
+ *  response (fresh, idempotent replay, and the uncharged-race path) so a replay
+ *  carries the same field. `{}` on the normal path → byte-identical normal body.
+ *  Derived from the returned prompt content, so the idempotency cache needs no
+ *  new column. */
+function devAnchorsBody(mode: "dev" | undefined, content: string): Record<string, unknown> {
+  return mode === "dev" ? { anchors: extractAnchors(content) } : {};
+}
+
+// =============================================================================
+// Dev Mode call 1 — free word-level transcription (Phase 2 §7)
+// =============================================================================
+
+/** True when the body is a Dev Mode "dev-transcribe" request (the only place a
+ *  `mode` field is read again — the normal generation path ignores it). */
+function isDevTranscribeRequest(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    (body as Record<string, unknown>).mode === "dev_transcribe";
+}
+
+/** Handle Dev Mode call 1: transcribe audio with WORD-level timing and return
+ *  it. NO credit / chat / slot / idempotency (see the call site). Rate-limited
+ *  (STT costs money) but slot-free. `has_speech:false` → an empty transcript so
+ *  call 2 falls back to click/dwell anchoring without breaking the 2-call flow. */
+async function handleDevTranscribe(
+  body: unknown,
+  account: ResolvedAccount,
+  deps: GenerateDeps,
+): Promise<Response> {
+  const v = validateTranscribeBody(body);
+  if (!v.ok) return json({ error: v.error }, v.status);
+
+  // Rate-limit (same coarse per-identity limiter as generation) so this can't be
+  // abused as a free unlimited transcription service. NO slot acquired.
+  const withinRate = await deps.store.rateLimitOk(
+    account.key,
+    GENERATE_RATE_LIMIT_PER_SUB,
+    GENERATE_RATE_LIMIT_WINDOW_SECONDS,
+  );
+  if (!withinRate) return json({ error: "rate_limited" }, 429);
+
+  // No speech → nothing to transcribe. Return an empty transcript; the client
+  // falls back to click/dwell anchoring (build requirement #3).
+  if (!v.value.hasSpeech) {
+    return json({ transcript: { segments: [], words: [], durationSeconds: 0 } }, 200);
+  }
+
+  try {
+    const tr = await deps.stt.transcribe(v.value.audio, { words: true });
+    return json(
+      { transcript: { segments: tr.segments, words: tr.words ?? [], durationSeconds: tr.durationSeconds } },
+      200,
+    );
+  } catch (e) {
+    // A transcription failure charges nothing (nothing was charged anyway) and
+    // is NOT logged as a generation — call 1 is not a billable generation.
+    return providerErrorResponse(e);
+  }
 }
 
 /** Map a provider failure to a client response. Retryable → 503; else 502. The

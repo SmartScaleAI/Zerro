@@ -48,6 +48,9 @@ supabase/
     20260610120000_idempotency_credits_charged.sql # D2: idempotency_cache.credits_charged (exact spend
                                              #    replayed in the app's "−N credits" toast on retry)
     20260611120000_yearly_credit_refresh.sql # E2: refresh_yearly_credit_periods() + hourly pg_cron job
+    20260618120000_agent_models.sql          # Dev Mode: agent_models manifest table (RLS deny-by-default)
+    20260618120100_agent_models_cron.sql     # Dev Mode: daily pg_cron → refresh-agent-models (pg_net + Vault)
+    20260618130000_agent_models_retire_openai.sql # Dev Mode: delete openai rows (Codex sources its own list)
   functions/
     _shared/                          # env, config, crypto, ls-signature, jwt, db, types,
                                       # entitlement, http  (+ *_test.ts Deno tests)
@@ -73,6 +76,15 @@ supabase/
                                       #   prompt.ts (byte-mirror of Scripts/artifact-eval/
                                       #   convert-prompt-v1.md, enforced by prompt_test.ts),
                                       #   config.ts (+ handler_test.ts)
+    refresh-agent-models/             # Dev Mode manifest WRITER (daily cron + manual w/ secret):
+                                      #   fetch live Anthropic model list → curate (regex) → rank
+                                      #   newest-first → upsert → vanished→inactive sweep. Never
+                                      #   wipes on a failed/empty fetch. OpenAI retired (Codex
+                                      #   sources its own list). providers.ts, curate.ts, store.ts,
+                                      #   refresh.ts, index.ts (+ curate/refresh tests)
+    agent-models/                     # Dev Mode manifest READER: public GET, active rows grouped
+                                      #   by provider, ordered by rank, 1h Cache-Control. No auth.
+                                      #   group.ts, index.ts (+ group_test.ts)
   test/run-curl-tests.sh              # post-deploy verification battery
 README-backend.md                     # this file
 ```
@@ -151,6 +163,8 @@ the runtime — do NOT set them yourself.**
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
 | `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
 | `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
+| `TRIAL_DEVICE_BINDING_ENABLED` | optional | Trial device binding kill switch (default `true`). The app sends a SHA-256 hash of a hardware UUID (`device_id_hash`); a second grant from a Mac that already trialed is hard-blocked regardless of email (`verify_trial_grant` + the partial unique index on `device_id_hash`). Set `false` to disable the cap (degrade to the email-only cap) without an app release if it misfires. The raw UUID never leaves the device; the DB holds only the hash. |
+| `REFRESH_CRON_SECRET` | ✅ **Dev Mode manifest** | Shared secret guarding `refresh-agent-models`. The function rejects any POST whose `x-refresh-secret` header ≠ this value (constant-time). Set it as an Edge secret **and** seed the SAME value into Vault as `refresh_cron_secret` so the daily cron can read it (see "Dev Mode model manifest" below). Generate: `openssl rand -hex 32`. The `agent-models` read function needs no secret (public). `refresh-agent-models` reuses the existing `ANTHROPIC_API_KEY` to fetch the Anthropic model list (OpenAI is retired — Codex sources its own per-account list client-side). |
 
 ---
 
@@ -195,17 +209,20 @@ supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate            --no-verify-jwt
 supabase functions deploy trial-start         --no-verify-jwt
 supabase functions deploy convert             --no-verify-jwt
+# Dev Mode model manifest (see "Dev Mode model manifest" below):
+supabase functions deploy refresh-agent-models --no-verify-jwt
+supabase functions deploy agent-models         --no-verify-jwt
 ```
 
 **Phase F also needs a verified sender domain in Resend** (`getzerro.app`, or
 whatever `TRIAL_EMAIL_FROM` uses) so the verification email isn't rejected /
 spam-filed. Add + verify the domain in the Resend dashboard before going live.
 
-### Why `--no-verify-jwt` on all six
+### Why `--no-verify-jwt` on every function
 
 `verify_jwt` controls whether the **Supabase API gateway** demands a
-Supabase-issued JWT before the function runs. All six need it **off**, for
-different reasons:
+Supabase-issued JWT before the function runs. Every function needs it **off**,
+for different reasons:
 
 - **lemonsqueezy-webhook** — LemonSqueezy sends no Supabase JWT. Security is the
   `X-Signature` HMAC check (raw body, constant-time), done in code.
@@ -219,6 +236,13 @@ different reasons:
   mid-trial with no credential yet. Security is the per-email/per-IP rate limit +
   a hashed, TTL'd, attempt-limited code + a disposable-domain block + the
   one-grant-per-email cap, all in code.
+- **refresh-agent-models** (Dev Mode manifest) — the caller is the daily pg_cron
+  job (server-side `net.http_post`), not an app with a Supabase JWT. Security is
+  the shared `REFRESH_CRON_SECRET` checked in code against the `x-refresh-secret`
+  header; the gateway gate is off so that header reaches our code.
+- **agent-models** (Dev Mode manifest) — a **public** read of public model ids
+  (no credential, no user data). The app reads it at launch with no session, so
+  there is nothing to verify; the write path stays service-role-only via RLS.
 
 ---
 
@@ -302,6 +326,68 @@ where jobname = 'refresh-yearly-credits';
 The displayed "Resets {date}" for yearly subs is computed from the same anchor
 arithmetic (E8, `_shared/entitlement.ts`), so the app shows the next *monthly*
 refresh, not the annual renewal.
+
+---
+
+## Dev Mode model manifest (`agent_models`)
+
+Lets Dev Mode users pick the **model the coding agent runs** (`--model <id>`)
+from a list of **current, pinned models that stays fresh on its own**. A server
+job fetches the live provider model lists into Postgres; the app reads that
+manifest. (Cursor is fetched client-side from its own CLI and is NOT in this
+table.)
+
+- **`agent_models` table** — `(provider, model_id, display_name, rank, active)`,
+  unique on `(provider, model_id)`. RLS deny-by-default; the data is public model
+  ids but the **write** path is service-role-only so a user can't poison the list.
+- **`refresh-agent-models`** (writer, cron + manual) — fetches
+  `GET api.anthropic.com/v1/models` (`x-api-key` + `anthropic-version`) with the
+  existing `ANTHROPIC_API_KEY`, **filters to coding chat models** via a stable
+  regex (the only curation surface — `refresh-agent-models/curate.ts`:
+  `^claude-(opus|sonnet|haiku)-\d` → the live Opus/Sonnet/Haiku set),
+  **ranks newest-first** (rank 0 = default pick), upserts, then marks any
+  vanished model `active = false`. **A fetch that fails (or returns zero matches)
+  leaves the rows untouched — never wiped.** Returns `{ anthropic: n|null,
+  errors: [...] }`. Guarded by `REFRESH_CRON_SECRET` (`x-refresh-secret` header,
+  constant-time). **OpenAI is retired**: a ChatGPT-account Codex uses its own
+  slugs (e.g. `gpt-5.5`) and rejects the OpenAI API codex ids, so Codex sources
+  its model list from its OWN per-account tool (`~/.codex/models_cache.json`)
+  client-side — the manifest serves Anthropic (Claude Code) only.
+- **`agent-models`** (reader, public GET, no auth) — returns active rows grouped
+  by provider, ordered by rank, with `Cache-Control: public, max-age=3600`:
+  `{ providers: { anthropic: [{ model_id, display_name }], openai: [] } }`
+  (openai is always empty post-retirement; the app ignores it).
+
+**The pg_cron + pg_net dependency.** `20260618120100_agent_models_cron.sql`
+enables `pg_cron` + `pg_net` and schedules **`refresh-agent-models`** daily
+(`0 6 * * *`). The job calls `public.refresh_agent_models_cron()`, which reads
+the function URL + secret from **Vault** and POSTs the Edge Function — so no
+secret is committed to git. **One-time operator setup** (values are secrets):
+
+```sql
+select vault.create_secret('https://<project-ref>.supabase.co', 'project_url');
+select vault.create_secret('<REFRESH_CRON_SECRET value>', 'refresh_cron_secret');
+```
+
+```bash
+supabase secrets set REFRESH_CRON_SECRET="<same value as the Vault secret>"
+```
+
+Until Vault is seeded the job logs a skip notice instead of erroring. Verify the
+job + a manual run:
+
+```sql
+select jobname, schedule, active from cron.job where jobname = 'refresh-agent-models';
+-- manual (off the cron): curl -X POST \
+--   -H "x-refresh-secret: $REFRESH_CRON_SECRET" \
+--   https://<project-ref>.supabase.co/functions/v1/refresh-agent-models
+select provider, model_id, display_name, rank, active from public.agent_models order by provider, rank;
+```
+
+**Verify the filter regexes against the LIVE ids** after the first real invoke
+(provider ids drift) and tune `curate.ts` if a current coding model is missed or
+a non-chat SKU slips through. New model versions then appear automatically on the
+next daily refresh with no app release.
 
 ---
 
@@ -501,6 +587,7 @@ deno test --allow-env --allow-net --allow-read generate/    # full generate flow
 deno test --allow-env trial-start/             # request/verify flow + email helpers (stubbed sender)
 deno test --allow-env --allow-net session/     # §14.6 staleness re-check (stub LS client)
 deno test --allow-env --allow-net lemonsqueezy-webhook/  # full lifecycle + replay/forgery/stale-drop
+deno test --allow-env --allow-net --allow-read refresh-agent-models/ agent-models/  # manifest: curate/rank/upsert, vanished→inactive, fetch-failure-never-wipes, grouped read
 ```
 
 The **Phase G** additions: `session/handler_test.ts` proves the §14.6 staleness

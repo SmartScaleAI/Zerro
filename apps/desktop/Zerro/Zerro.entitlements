@@ -4,5 +4,11 @@
 <dict>
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Dev Mode (Phase 3): send Apple Events to the user's browser to read the
+	     current localhost URL and auto-match the project folder. Required under
+	     Hardened Runtime — without it the Apple Event is blocked even with a TCC
+	     grant. Gated by an opt-in setting + localhost-only + Dev-Mode-only. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>

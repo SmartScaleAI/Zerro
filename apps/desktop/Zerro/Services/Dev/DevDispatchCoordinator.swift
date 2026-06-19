@@ -44,6 +44,10 @@ enum DevDispatchFailure: Equatable, Sendable {
     /// (a git op threw, or a residual diff remained). The checkpoint is kept
     /// so the user can try Revert again. (Milestone 7.)
     case revertFailed
+    /// The user cancelled at the pre-edit confirm gate (Ask Permission review) —
+    /// the agent never ran, so the caller discards the checkpoint (nothing to
+    /// revert). Never rendered.
+    case confirmDeclined
     /// The agent process itself failed (non-zero exit, timeout, …).
     case agent(DevRunFailureReason)
 
@@ -61,15 +65,38 @@ enum DevDispatchFailure: Equatable, Sendable {
             return "No concrete change to make — I didn't catch an edit to dispatch."
         case .revertFailed:
             return "Couldn't fully restore your files — check your working tree."
+        case .confirmDeclined:
+            return "Cancelled."
         case .agent(let reason):
             switch reason {
-            case .timeout(.wallClock):  return "The agent ran past the time limit and was stopped."
-            case .timeout(.inactivity): return "The agent went quiet and was stopped."
             case .nonZeroExit(_, let tail):
                 return tail.isEmpty ? "The agent exited with an error." : tail
             case .spawnFailed:          return "Couldn't start the coding agent."
             case .busy:                 return "A Dev Mode run is already in progress."
             case .cancelled:            return "Cancelled."
+            }
+        }
+    }
+
+    /// A short, bold label for the expanded failure card's header. `userMessage`
+    /// is the full prose detail shown beneath it (wrapped + scrollable, never
+    /// truncated) — so this is just the at-a-glance category, not the message.
+    /// Mirrors the `.error` / `.failureExpanded` cards' headline-over-detail split.
+    var headline: String {
+        switch self {
+        case .notAGitRepo:      return "Dev Mode needs a git repo"
+        case .gitUnavailable:   return "Git unavailable"
+        case .checkpointFailed: return "Couldn\u{2019}t snapshot the project"
+        case .agentUnavailable: return "Coding agent unavailable"
+        case .noChangeRequested: return "Nothing to change"
+        case .revertFailed:     return "Couldn\u{2019}t restore your files"
+        case .confirmDeclined:  return "Cancelled"
+        case .agent(let reason):
+            switch reason {
+            case .nonZeroExit:  return "Couldn\u{2019}t apply changes"
+            case .spawnFailed:  return "Couldn\u{2019}t start the agent"
+            case .busy:         return "A run is already in progress"
+            case .cancelled:    return "Run stopped"
             }
         }
     }
@@ -105,6 +132,13 @@ final class DevDispatchCoordinator {
         let checkpoint: GitCheckpoint
         let service: GitCheckpointService
         let diff: GitDiffStat
+        /// The agent's final message text (from the stream-json `result` event),
+        /// or nil when it gave none — the result card then generates a fallback
+        /// change line from `diff`. (Result-card handoff, Part A.)
+        let summary: String?
+        /// The readable unified diff shown in the result card's body well, already
+        /// capped (Part B). Empty when the diff couldn't be produced.
+        let diffText: String
     }
 
     enum Outcome {
@@ -126,7 +160,22 @@ final class DevDispatchCoordinator {
         projectURL: URL,
         agent: DevAgentEntry,
         permission: DevAgentPermission,
+        // Phase 2: the selected `--model` id, or nil to run the agent's own
+        // default. Forwarded to the runner, which appends `--model <id>` only
+        // when non-nil AND the agent declares a model flag.
+        model: String? = nil,
         onCheckpoint: @escaping @MainActor (GitCheckpoint, GitCheckpointService) -> Void = { _, _ in },
+        // The pre-edit confirm gate (Ask Permission review), run AFTER the
+        // checkpoint and BEFORE the agent. Returns true to proceed, false to abort
+        // (cancelled). Defaults to "proceed" so non-dev callers and the Auto
+        // Approve path are unaffected.
+        confirmGate: @escaping @MainActor () async -> Bool = { true },
+        // Phase 4: the live activity feed + the (non-terminating) stall notifier.
+        // Defaulted to no-ops so the legacy single-line callers (and tests) that
+        // only consume `onPhase` are unaffected; the dev pill wires these to the
+        // feed log + the stall prompt.
+        onEvent: @escaping @MainActor (DevAgentEvent) -> Void = { _ in },
+        onStall: @escaping @MainActor (Bool) -> Void = { _ in },
         onPhase: @escaping @MainActor (DevDispatchPhase) -> Void
     ) async -> Outcome {
         cancelled = false
@@ -162,6 +211,17 @@ final class DevDispatchCoordinator {
             return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
         }
 
+        // The pre-edit confirm gate: checkpoint taken, agent NOT yet run. A
+        // cancelled gate aborts here; the checkpoint rides back so the caller
+        // discards it (the tree is untouched — nothing to revert).
+        let proceed = await confirmGate()
+        if !proceed {
+            return .failed(.confirmDeclined, checkpoint: checkpoint, service: service, diff: nil)
+        }
+        if cancelled {
+            return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
+        }
+
         // Dispatch the agent — it edits the working tree directly.
         onPhase(.dispatching)
         let runResult = await runner.run(
@@ -169,15 +229,35 @@ final class DevDispatchCoordinator {
             permission: permission,
             prompt: prompt,
             projectURL: projectURL,
-            onSubstatus: { sub in
-                Task { @MainActor in onPhase(.running(sub)) }
+            timeouts: .default,
+            model: model,
+            onEvent: { event in
+                Task { @MainActor in
+                    // Rich event → the live feed; its coarse substatus → the
+                    // legacy single-line phase (kept until the feed UI lands).
+                    onEvent(event)
+                    onPhase(.running(event.substatus))
+                }
+            },
+            onStall: { isStalled in
+                Task { @MainActor in onStall(isStalled) }
             }
         )
 
         switch runResult {
-        case .succeeded:
-            let diff = (try? await Task.detached { try service.diffStat(since: checkpoint) }.value) ?? .zero
-            return .succeeded(Success(checkpoint: checkpoint, service: service, diff: diff))
+        case .succeeded(let summary):
+            // One off-main hop computes both the stat and the readable diff text
+            // (Part B) against the checkpoint; either degrades gracefully if git
+            // throws (.zero stat / empty text) rather than failing the success.
+            let (diff, diffText) = await Task.detached {
+                let stat = (try? service.diffStat(since: checkpoint)) ?? .zero
+                let text = (try? service.diff(since: checkpoint)) ?? ""
+                return (stat, text)
+            }.value
+            return .succeeded(Success(
+                checkpoint: checkpoint, service: service,
+                diff: diff, summary: summary, diffText: diffText
+            ))
         case .failed(let reason):
             // No auto-revert (§8) — keep the checkpoint so the user can Revert.
             // Compute the partial-edit stat (how far the agent got before

@@ -25,9 +25,23 @@ protocol TranscriptionService: Sendable {
     /// punctuation / capitalization — typically better than what naive
     /// segment concatenation would produce).
     ///
+    /// `wordTimestamps` (Phase 2, Dev Mode deixis §7): when true, also request
+    /// WORD-level timing (`Transcript.words`) for the deixis resolver's
+    /// `[phrase−800ms, phrase+200ms]` windowing. Defaults false so a NORMAL
+    /// recording's request is byte-identical to before — word timing is captured
+    /// only for a Dev Mode recording, which needs it.
+    ///
     /// Throws `TranscriptionError` for the known failure modes. Step 5
     /// of Phase 9 maps these onto the amber failure pill.
-    func transcribe(audioFileURL: URL) async throws -> Transcript
+    func transcribe(audioFileURL: URL, wordTimestamps: Bool) async throws -> Transcript
+}
+
+extension TranscriptionService {
+    /// Back-compat overload — the normal (non-Dev) path never asks for word
+    /// timing, so every existing call site stays unchanged.
+    func transcribe(audioFileURL: URL) async throws -> Transcript {
+        try await transcribe(audioFileURL: audioFileURL, wordTimestamps: false)
+    }
 }
 
 // MARK: - Transcript
@@ -42,6 +56,38 @@ struct Transcript: Sendable {
     /// for display — Whisper applies sentence-level punctuation +
     /// capitalization across segment boundaries.
     let fullText: String
+
+    /// Phase 2 (Dev Mode deixis §7) — WORD-level timings, present only when the
+    /// transcription was requested with `wordTimestamps: true` (a Dev Mode
+    /// recording). Empty otherwise. The resolver scans these to window the cursor
+    /// around each referring expression. Approximate (~0.1–0.2s, worse near
+    /// pauses, §11) — the early-biased window absorbs the slop.
+    let words: [WordTiming]
+
+    /// Phase 2 (Dev Mode, managed 2-call flow) — the STT provider's MEASURED audio
+    /// duration in seconds, when known. Populated only on the managed Dev Mode
+    /// call 1 (`dev_transcribe`) so call 2's cost meter bills against the SAME
+    /// server-measured duration the normal managed path uses (rather than the
+    /// client's local container duration). `nil` on the BYOK local path (which
+    /// generates locally and never bills on this duration) and on a no-speech run.
+    let durationSeconds: Double?
+
+    init(segments: [TranscriptSegment], fullText: String, words: [WordTiming] = [], durationSeconds: Double? = nil) {
+        self.segments = segments
+        self.fullText = fullText
+        self.words = words
+        self.durationSeconds = durationSeconds
+    }
+}
+
+// MARK: - WordTiming
+
+/// Phase 2 (Dev Mode deixis §7) — one word with its start/end in
+/// seconds-from-audio-start (the same clock the cursor track + frames rebase to).
+struct WordTiming: Sendable, Equatable, Codable {
+    let word: String
+    let start: TimeInterval
+    let end: TimeInterval
 }
 
 // MARK: - TranscriptSegment

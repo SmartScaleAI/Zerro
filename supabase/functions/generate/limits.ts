@@ -22,6 +22,7 @@
 // =============================================================================
 
 import type { ClickInput, FrameInput } from "./interleave.ts";
+import type { SpeechSegment } from "./providers/types.ts";
 import { ALLOWED_MODELS, DEFAULT_MODEL_ID } from "./models.ts";
 import {
   ALLOWED_AUDIO_MIME,
@@ -32,6 +33,8 @@ import {
   MAX_CLICKS,
   MAX_FRAMES,
   MAX_OCR_TEXT_CHARS,
+  MAX_TRANSCRIPT_SEGMENTS,
+  MAX_TRANSCRIPT_TEXT_CHARS,
 } from "./config.ts";
 
 export interface ParsedRequest {
@@ -40,7 +43,11 @@ export interface ParsedRequest {
    *  it never influences the (server-owned) system prompt; since the typed-
    *  artifact refactor NO client field does. */
   model: string;
-  audio: { bytes: Uint8Array; mime: string; filename: string };
+  /** The recording audio, or `null` on the Dev Mode CALL 2 (`mode:"dev"` with a
+   *  pre-supplied transcript): the audio already rode in the free call 1, so it
+   *  is NOT re-uploaded and the handler uses `suppliedTranscript` instead of STT.
+   *  Always present on every normal / non-dev path. */
+  audio: { bytes: Uint8Array; mime: string; filename: string } | null;
   frames: FrameInput[];
   /** Phase 4 — resolved clicks (already redacted client-side; count + label
    *  length capped here). Empty array when none were sent. */
@@ -53,6 +60,22 @@ export interface ParsedRequest {
    *  forged body never silently suppresses transcription. A cost hint only —
    *  it never influences the (server-owned) system prompt. */
   hasSpeech: boolean;
+
+  /** Phase 2 (Dev Mode) — `"dev"` selects the repo-scoped dev system prompt
+   *  (Goal/Changes/Scope); undefined → the normal v2 prompt. This is a SELECTOR
+   *  among server-owned prompts ONLY — the client never supplies prompt content
+   *  (Appendix C #3). Any value other than `"dev"` resolves to normal. */
+  mode: "dev" | undefined;
+
+  /** Phase 2 (Dev Mode CALL 2) — the client-supplied transcript: the client
+   *  already transcribed via the free call 1 (`dev_transcribe`) and resolved
+   *  deixis anchors against THIS exact transcript, so the server SKIPS re-STT and
+   *  generates against it (no double STT round-trip / charge, and the prompt
+   *  lines up with the resolved anchors). `null` on every normal path (the server
+   *  transcribes). Only honored for `mode:"dev"`. `durationSeconds` is the
+   *  recording length (for the STT-cost meter + the true-seconds gate, since no
+   *  audio is uploaded on call 2). */
+  suppliedTranscript: { segments: SpeechSegment[]; durationSeconds: number } | null;
 }
 
 export type ValidationResult =
@@ -69,6 +92,57 @@ function decodeBase64(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// =============================================================================
+// Dev Mode "dev-transcribe" (Phase 2, call 1) — a FREE word-level transcription
+// (§7). The request carries AUDIO ONLY (no frames, no model, no clicks): the
+// client needs the word transcript to resolve anchors before the billable
+// generation (call 2). Validated separately + minimally so a transcribe-only
+// body isn't rejected for "missing_frames", and so the audio fuse (mime, size,
+// duration) still applies. `validateBody` is deliberately left untouched.
+// =============================================================================
+
+export interface TranscribeRequest {
+  audio: { bytes: Uint8Array; mime: string; filename: string };
+  hasSpeech: boolean;
+}
+
+export type TranscribeValidationResult =
+  | { ok: true; value: TranscribeRequest }
+  | { ok: false; status: number; error: string };
+
+export function validateTranscribeBody(body: unknown): TranscribeValidationResult {
+  if (typeof body !== "object" || body === null) return { ok: false, status: 400, error: "invalid_body" };
+  const b = body as Record<string, unknown>;
+
+  // audio (same fuse as validateBody — mime allow-list, base64, size cap).
+  const audio = b.audio as Record<string, unknown> | undefined;
+  if (!audio || typeof audio !== "object") return { ok: false, status: 400, error: "missing_audio" };
+  const audioMime = String(audio.mime ?? "");
+  if (!ALLOWED_AUDIO_MIME.includes(audioMime)) return { ok: false, status: 415, error: "unsupported_audio_mime" };
+  const audioData = audio.data;
+  if (typeof audioData !== "string" || audioData.length === 0) return { ok: false, status: 400, error: "missing_audio_data" };
+
+  let audioBytes: Uint8Array;
+  try {
+    audioBytes = decodeBase64(audioData);
+  } catch {
+    return { ok: false, status: 400, error: "invalid_audio_encoding" };
+  }
+  if (audioBytes.byteLength === 0) return { ok: false, status: 400, error: "empty_audio" };
+  if (audioBytes.byteLength > MAX_AUDIO_BYTES) return { ok: false, status: 413, error: "audio_too_large" };
+
+  if (audio.duration_seconds !== undefined && audio.duration_seconds !== null) {
+    const d = Number(audio.duration_seconds);
+    if (!Number.isFinite(d) || d < 0) return { ok: false, status: 400, error: "invalid_audio_duration" };
+    if (d > MAX_AUDIO_SECONDS) return { ok: false, status: 413, error: "audio_too_long" };
+  }
+
+  const filename = typeof audio.filename === "string" && audio.filename ? audio.filename : "recording.m4a";
+  const hasSpeech = b.has_speech !== false;
+
+  return { ok: true, value: { audio: { bytes: audioBytes, mime: audioMime, filename }, hasSpeech } };
 }
 
 /**
@@ -96,35 +170,59 @@ export function validateBody(body: unknown): ValidationResult {
     model = b.model;
   }
 
-  // audio.
-  const audio = b.audio as Record<string, unknown> | undefined;
-  if (!audio || typeof audio !== "object") return reject(400, "missing_audio");
-  const audioMime = String(audio.mime ?? "");
-  if (!ALLOWED_AUDIO_MIME.includes(audioMime)) return reject(415, "unsupported_audio_mime");
-  const audioData = audio.data;
-  if (typeof audioData !== "string" || audioData.length === 0) return reject(400, "missing_audio_data");
+  // Phase 2 — Dev Mode prompt selector (server-owned prompts only). Only the
+  // exact string "dev" selects the dev prompt; anything else → normal. Parsed
+  // up here because it gates the audio-optionality + the supplied transcript.
+  const mode: "dev" | undefined = b.mode === "dev" ? "dev" : undefined;
 
-  let audioBytes: Uint8Array;
-  try {
-    audioBytes = decodeBase64(audioData);
-  } catch {
-    return reject(400, "invalid_audio_encoding");
+  // Phase 2 (Dev Mode CALL 2) — the client-supplied transcript. ONLY honored for
+  // mode:"dev"; present → the server skips re-STT and the audio becomes optional
+  // (it rode in the free call 1, not re-uploaded). A malformed transcript is a
+  // hard reject (a real call-2 body always carries a well-formed one).
+  let suppliedTranscript: { segments: SpeechSegment[]; durationSeconds: number } | null = null;
+  if (mode === "dev" && b.transcript !== undefined && b.transcript !== null) {
+    const parsed = parseSuppliedTranscript(b.transcript);
+    if (!parsed.ok) return reject(parsed.status, parsed.error);
+    suppliedTranscript = parsed.value;
   }
-  if (audioBytes.byteLength === 0) return reject(400, "empty_audio");
-  if (audioBytes.byteLength > MAX_AUDIO_BYTES) return reject(413, "audio_too_large");
 
-  // Optional declared duration: a cheap honest-client pre-gate. A forged tiny-
-  // bitrate long file slips past here but is bounded by MAX_AUDIO_BYTES, and the
-  // TRUE seconds gate is re-applied post-transcription before the chat call.
+  // audio — OPTIONAL only on the Dev Mode call 2 (a pre-supplied transcript means
+  // the audio already rode in the free call 1; it is NOT re-uploaded). Every
+  // other path REQUIRES it (a normal body with no audio is still `missing_audio`).
+  let audio: { bytes: Uint8Array; mime: string; filename: string } | null = null;
   let declaredAudioSeconds: number | null = null;
-  if (audio.duration_seconds !== undefined && audio.duration_seconds !== null) {
-    const d = Number(audio.duration_seconds);
-    if (!Number.isFinite(d) || d < 0) return reject(400, "invalid_audio_duration");
-    if (d > MAX_AUDIO_SECONDS) return reject(413, "audio_too_long");
-    declaredAudioSeconds = d;
-  }
+  const rawAudio = b.audio as Record<string, unknown> | undefined;
+  if (rawAudio && typeof rawAudio === "object") {
+    const audioMime = String(rawAudio.mime ?? "");
+    if (!ALLOWED_AUDIO_MIME.includes(audioMime)) return reject(415, "unsupported_audio_mime");
+    const audioData = rawAudio.data;
+    if (typeof audioData !== "string" || audioData.length === 0) return reject(400, "missing_audio_data");
 
-  const filename = typeof audio.filename === "string" && audio.filename ? audio.filename : "recording.m4a";
+    let audioBytes: Uint8Array;
+    try {
+      audioBytes = decodeBase64(audioData);
+    } catch {
+      return reject(400, "invalid_audio_encoding");
+    }
+    if (audioBytes.byteLength === 0) return reject(400, "empty_audio");
+    if (audioBytes.byteLength > MAX_AUDIO_BYTES) return reject(413, "audio_too_large");
+
+    // Optional declared duration: a cheap honest-client pre-gate. A forged tiny-
+    // bitrate long file slips past here but is bounded by MAX_AUDIO_BYTES, and the
+    // TRUE seconds gate is re-applied post-transcription before the chat call.
+    if (rawAudio.duration_seconds !== undefined && rawAudio.duration_seconds !== null) {
+      const d = Number(rawAudio.duration_seconds);
+      if (!Number.isFinite(d) || d < 0) return reject(400, "invalid_audio_duration");
+      if (d > MAX_AUDIO_SECONDS) return reject(413, "audio_too_long");
+      declaredAudioSeconds = d;
+    }
+
+    const filename = typeof rawAudio.filename === "string" && rawAudio.filename ? rawAudio.filename : "recording.m4a";
+    audio = { bytes: audioBytes, mime: audioMime, filename };
+  } else if (!suppliedTranscript) {
+    // No audio AND no dev transcript → a normal request missing its audio.
+    return reject(400, "missing_audio");
+  }
 
   // frames.
   const rawFrames = b.frames;
@@ -181,11 +279,60 @@ export function validateBody(body: unknown): ValidationResult {
 
   // Phase 6 — no-speech hint. Skip Whisper ONLY on an explicit `false`; every
   // other value (true / absent / non-boolean from an older or forged body)
-  // defaults to transcribing, the safe direction.
+  // defaults to transcribing, the safe direction. (On the dev call 2 a supplied
+  // transcript takes priority over this — see the handler's step 9.)
   const hasSpeech = b.has_speech !== false;
 
   return {
     ok: true,
-    value: { model, audio: { bytes: audioBytes, mime: audioMime, filename }, frames, clicks, declaredAudioSeconds, hasSpeech },
+    value: { model, audio, frames, clicks, declaredAudioSeconds, hasSpeech, mode, suppliedTranscript },
   };
+}
+
+/** Parse + defensively cap a client-supplied Dev Mode transcript (call 2). A
+ *  non-object / non-array-segments body is a hard reject; individual malformed
+ *  segments are DROPPED (a real transcript can't carry them), the segment count
+ *  is capped, and each segment's text is length-capped — the same trust-and-cap
+ *  posture the click + ocr_text fuses use. `duration_seconds` (the recording
+ *  length, since no audio is uploaded) defaults to 0 when absent. */
+type SuppliedTranscriptResult =
+  | { ok: true; value: { segments: SpeechSegment[]; durationSeconds: number } }
+  | { ok: false; status: number; error: string };
+
+function parseSuppliedTranscript(raw: unknown): SuppliedTranscriptResult {
+  if (typeof raw !== "object" || raw === null) return { ok: false, status: 400, error: "invalid_transcript" };
+  const t = raw as Record<string, unknown>;
+
+  const rawSegments = t.segments;
+  if (!Array.isArray(rawSegments)) return { ok: false, status: 400, error: "invalid_transcript_segments" };
+  const segments: SpeechSegment[] = [];
+  for (const rawSeg of rawSegments) {
+    if (segments.length >= MAX_TRANSCRIPT_SEGMENTS) break; // defensive cap; drop excess
+    if (typeof rawSeg !== "object" || rawSeg === null) continue;
+    const s = rawSeg as Record<string, unknown>;
+    const start = Number(s.start);
+    const end = Number(s.end);
+    if (!Number.isFinite(start) || start < 0) continue;
+    if (!Number.isFinite(end) || end < 0) continue;
+    const text = typeof s.text === "string" ? s.text : "";
+    if (text.length === 0) continue;
+    segments.push({
+      start,
+      end,
+      text: text.length > MAX_TRANSCRIPT_TEXT_CHARS ? text.slice(0, MAX_TRANSCRIPT_TEXT_CHARS) : text,
+    });
+  }
+
+  let durationSeconds = 0;
+  if (t.duration_seconds !== undefined && t.duration_seconds !== null) {
+    const d = Number(t.duration_seconds);
+    if (!Number.isFinite(d) || d < 0) return { ok: false, status: 400, error: "invalid_transcript_duration" };
+    // Mirror the audio fuse's true-seconds cap (no audio rides on call 2, so this
+    // is the only place the duration is bounded) — a forged over-length duration
+    // can't slip through to inflate the logged STT cost on a later gate.
+    if (d > MAX_AUDIO_SECONDS) return { ok: false, status: 413, error: "audio_too_long" };
+    durationSeconds = d;
+  }
+
+  return { ok: true, value: { segments, durationSeconds } };
 }

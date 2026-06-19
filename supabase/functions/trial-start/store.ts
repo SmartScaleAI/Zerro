@@ -25,6 +25,16 @@ export interface TrialCodeRow {
   attempts: number;
 }
 
+/**
+ * The outcome of a device-aware grant verification. Either a normal grant
+ * (create-once / never-reset) or the "device already used under a DIFFERENT
+ * email" hard block — distinct from a normally exhausted grant so the handler
+ * can return the dedicated `device_trial_used` status.
+ */
+export type VerifyGrantResult =
+  | { deviceBlocked: false; grantId: string; creditsRemaining: number }
+  | { deviceBlocked: true };
+
 export interface TrialStore {
   /** The grant for a normalized email, or null if none has ever been created. */
   loadGrantByEmail(email: string): Promise<TrialGrantRow | null>;
@@ -37,10 +47,19 @@ export interface TrialStore {
   /** Delete a pending code (consumed or expired). */
   deleteCode(email: string): Promise<void>;
   /**
-   * Create-once / never-reset the grant for `email` and return its id + credits
-   * remaining (verify_trial_grant). The single grant writer.
+   * Create-once / never-reset the grant for `email`, bound to `deviceIdHash`,
+   * and return its id + credits remaining (verify_trial_grant). The single grant
+   * writer. A non-null `deviceIdHash` already used under a DIFFERENT email yields
+   * `{ deviceBlocked: true }` — nothing is created.
    */
-  verifyGrant(email: string, limit: number): Promise<{ grantId: string; creditsRemaining: number }>;
+  verifyGrant(email: string, limit: number, deviceIdHash: string | null): Promise<VerifyGrantResult>;
+  /**
+   * TRUE if a grant already exists for `deviceIdHash` under an email OTHER than
+   * `email`. A cheap read used to hard-block the `request` step before any code
+   * is generated/emailed. (A grant under the SAME email is a legitimate
+   * reinstall/resume, not a block.)
+   */
+  deviceAlreadyGranted(deviceIdHash: string, email: string): Promise<boolean>;
   /** TRUE if within the limit for the current window (fail-open on infra error). */
   rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
 }
@@ -121,10 +140,11 @@ export class SupabaseTrialStore implements TrialStore {
     }
   }
 
-  async verifyGrant(email: string, limit: number): Promise<{ grantId: string; creditsRemaining: number }> {
+  async verifyGrant(email: string, limit: number, deviceIdHash: string | null): Promise<VerifyGrantResult> {
     const { data, error } = await this.db.rpc("verify_trial_grant", {
       p_email: email,
       p_limit: limit,
+      p_device_id_hash: deviceIdHash,
     });
     if (error) {
       console.error(JSON.stringify({ fn: "trial-start", op: "verifyGrant", error: error.message }));
@@ -133,7 +153,30 @@ export class SupabaseTrialStore implements TrialStore {
     // The function RETURNS TABLE → supabase-js yields an array of one row.
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new Error("verify_trial_grant returned no row");
-    return { grantId: String(row.grant_id), creditsRemaining: Number(row.credits_remaining) };
+    // grant_id NULL is the "device already used under a different email" sentinel.
+    if (row.grant_id === null || row.grant_id === undefined) {
+      return { deviceBlocked: true };
+    }
+    return {
+      deviceBlocked: false,
+      grantId: String(row.grant_id),
+      creditsRemaining: Number(row.credits_remaining),
+    };
+  }
+
+  async deviceAlreadyGranted(deviceIdHash: string, email: string): Promise<boolean> {
+    const { data, error } = await this.db
+      .from("trial_grants")
+      .select("id")
+      .eq("device_id_hash", deviceIdHash)
+      .neq("email_normalized", email)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error(JSON.stringify({ fn: "trial-start", op: "deviceCheck", error: error.message }));
+      throw error;
+    }
+    return data !== null;
   }
 
   async rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean> {

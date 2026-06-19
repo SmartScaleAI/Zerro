@@ -153,6 +153,45 @@ final class GitCheckpointTests: XCTestCase {
         XCTAssertEqual(stat.removed, 1)
     }
 
+    // MARK: - Unified diff
+
+    func testDiffReturnsReadableUnifiedDiff() throws {
+        try initRepo()
+        write("a.txt", "line1\nline2\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        // Nothing changed yet → empty diff.
+        XCTAssertEqual(try service.diff(since: checkpoint), "")
+
+        write("a.txt", "line1\nCHANGED\n")
+        let diff = try service.diff(since: checkpoint)
+        // The unified diff names the file and shows the +/- hunk lines.
+        XCTAssertTrue(diff.contains("a.txt"), "diff should name the changed file:\n\(diff)")
+        XCTAssertTrue(diff.contains("-line2"), "diff should show the removed line:\n\(diff)")
+        XCTAssertTrue(diff.contains("+CHANGED"), "diff should show the added line:\n\(diff)")
+        XCTAssertTrue(diff.contains("@@"), "diff should include a hunk header:\n\(diff)")
+    }
+
+    func testCappedDiffTruncatesByLineCount() {
+        // 50 lines, capped to 10 → 10 kept + 1 truncation note, naming the
+        // remaining count.
+        let raw = (1...50).map { "line\($0)" }.joined(separator: "\n")
+        let capped = GitCheckpointService.cappedDiff(raw, maxLines: 10, maxBytes: 1_000_000)
+        let lines = capped.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, 11, "10 kept lines + 1 truncation note")
+        XCTAssertEqual(String(lines[9]), "line10")
+        // line11…line50 are dropped → 40 remaining.
+        XCTAssertTrue(capped.contains("truncated, 40 more lines"), "note names the dropped count:\n\(capped)")
+    }
+
+    func testCappedDiffLeavesSmallDiffIntact() {
+        let raw = "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new"
+        XCTAssertEqual(GitCheckpointService.cappedDiff(raw, maxLines: 400, maxBytes: 24_000), raw)
+    }
+
     // MARK: - Git helpers
 
     private func initRepo() throws {

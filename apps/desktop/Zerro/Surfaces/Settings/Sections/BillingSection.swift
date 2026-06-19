@@ -666,7 +666,7 @@ private struct UsageMeterRow: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.vfPillBackground)
                 Capsule()
-                    .fill(Color.vfBrandAccent)
+                    .fill(Color.vfDevAccent)
                     .frame(width: max(0, geo.size.width * fraction))
             }
         }

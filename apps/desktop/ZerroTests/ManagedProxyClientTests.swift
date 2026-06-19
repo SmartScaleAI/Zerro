@@ -13,8 +13,6 @@
 //    • The request sends audio + frames + clicks (+ model/has_speech) ONLY —
 //      never a transcript, a system prompt, or anything that steers the
 //      server-owned prompt — and a Bearer token, never the license key.
-//    • convert (Phase 6): text-only body to /convert, suffixed idempotency
-//      key, same refresh-once + error taxonomy.
 //
 
 import CoreMedia
@@ -282,80 +280,117 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
     }
 
-    // MARK: - Convert (Phase 6 — the free "Write agent prompt" fallback)
+    // MARK: - Dev Mode 2-call flow (Phase 2 — managed/trial hover-deixis)
 
-    func testConvertPostsToConvertURLWithSuffixedIdempotencyKey() async throws {
+    /// Call 1 (`dev_transcribe`) sends audio + has_speech ONLY (no frames, no
+    /// model) and parses the returned WORD-level transcript into a `Transcript`.
+    func testDevTranscribeSendsAudioOnlyAndParsesWordTranscript() async throws {
         let session = StubManagedTransport()
         session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
         let gen = StubManagedTransport()
-        gen.enqueue(#"{"prompt":"<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>"}"#, status: 200)
+        gen.enqueue(ManagedFixtures.transcribeJSON(durationSeconds: 12), status: 200)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
 
-        let raw = try await proxy.convert(
-            sourceText: "The error is a stale lockfile.",
-            context: "## Attached Context\n**Clicks:** clicked \"Install\"",
-            model: "gemini-3.5-flash",
-            idempotencyKey: "REC-1:convert"
+        let transcript = try await proxy.devTranscribe(
+            audioURL: ManagedFixtures.tempFile(),
+            durationSeconds: 12,
+            hasSpeech: true,
+            idempotencyKey: "REC-1:dev-transcribe"
         )
 
-        XCTAssertTrue(raw.contains("<<<ZERRO_ARTIFACT"))
-        let request = try XCTUnwrap(gen.requests.first)
-        XCTAssertEqual(request.url, ManagedBackend.convertURL)
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1:convert")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer T1")
+        // The word-level transcript flows back for the deixis resolver.
+        XCTAssertEqual(transcript.words.map(\.word), ["make", "this", "bigger"])
+        XCTAssertEqual(transcript.segments.count, 1)
+        XCTAssertEqual(transcript.segments.first?.text, "make this bigger")
+        // The server-MEASURED duration rides back so call 2 bills against it (the
+        // same duration the normal managed path meters on), not the local one.
+        XCTAssertEqual(transcript.durationSeconds, 12)
 
-        let body = try XCTUnwrap(request.httpBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(
-            Set(json.keys),
-            ["source_text", "context", "model"],
-            "the convert body carries text fields ONLY — no audio, no frames, no transcript"
-        )
-        XCTAssertEqual(json["source_text"] as? String, "The error is a stale lockfile.")
-        XCTAssertEqual(json["model"] as? String, "gemini-3.5-flash")
+        // The wire body is the dev-transcribe selector + audio + has_speech ONLY.
+        let req = gen.requests[0]
+        XCTAssertEqual(req.url, ManagedBackend.generateURL)
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1:dev-transcribe")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["mode", "audio", "has_speech"])
+        XCTAssertEqual(json["mode"] as? String, "dev_transcribe")
+        XCTAssertEqual(json["has_speech"] as? Bool, true)
+        XCTAssertNil(json["frames"], "call 1 sends no frames")
     }
 
-    func testConvertOmitsNilContextAndRefreshesOnceOn401() async throws {
+    /// Call 2 (`mode:"dev"`) sends the pre-supplied transcript + frames but NO
+    /// audio (it rode in call 1), and parses the structured `anchors[]`.
+    func testGenerateDevSendsTranscriptNoAudioAndParsesAnchors() async throws {
         let session = StubManagedTransport()
         session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
-        session.enqueue(ManagedFixtures.sessionJSON(token: "T2"), status: 200)
         let gen = StubManagedTransport()
-        gen.enqueue(#"{"error":"invalid_token"}"#, status: 401)
-        gen.enqueue(#"{"prompt":"converted"}"#, status: 200)
+        gen.enqueue(ManagedFixtures.generateDevJSON(creditsRemaining: 90, creditsCharged: 5), status: 200)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
 
-        let raw = try await proxy.convert(sourceText: "src", context: nil, idempotencyKey: "K:convert")
-        XCTAssertEqual(raw, "converted")
-        XCTAssertEqual(gen.callCount, 2, "exactly one refresh+retry")
-        XCTAssertEqual(gen.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer T2")
-        XCTAssertEqual(gen.requests[1].value(forHTTPHeaderField: "Idempotency-Key"), "K:convert")
+        let anchorFrame = ExtractedFrame(
+            url: ManagedFixtures.tempFile(),
+            timestamp: .zero,
+            index: 100_000,
+            ocrText: "DEIXIS REFERENCE 0: ... Nearby on-screen text: Get started"
+        )
+        let result = try await proxy.generateDev(
+            frames: frames() + [anchorFrame],
+            transcript: ManagedProxyClient.DevTranscriptUpload(
+                segments: [.init(start: 0, end: 2, text: "make this bigger")],
+                durationSeconds: 12
+            ),
+            clicks: [],
+            hasSpeech: true,
+            model: "claude-opus-4-7",
+            idempotencyKey: "REC-1"
+        )
 
-        let body = try XCTUnwrap(gen.requests[0].httpBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertNil(json["context"], "nil context is omitted from the wire, not sent as null/empty")
+        // The agent_prompt + the structured model anchors parsed off the response.
+        XCTAssertEqual(result.creditsCharged, 5)
+        XCTAssertEqual(result.modelAnchors.count, 1)
+        XCTAssertEqual(result.modelAnchors.first?.label, "Get started")
+        XCTAssertEqual(result.modelAnchors.first?.kind, .button)
+        XCTAssertEqual(result.modelAnchors.first?.refIndex, 0)
+
+        // The body carries mode:"dev" + the transcript + frames — and NO audio.
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: try XCTUnwrap(gen.requests[0].httpBody)) as? [String: Any])
+        XCTAssertEqual(json["mode"] as? String, "dev")
+        XCTAssertEqual(json["model"] as? String, "claude-opus-4-7")
+        XCTAssertNil(json["audio"], "call 2 must NOT re-upload audio")
+        let transcript = try XCTUnwrap(json["transcript"] as? [String: Any])
+        let segs = try XCTUnwrap(transcript["segments"] as? [[String: Any]])
+        XCTAssertEqual(segs.first?["text"] as? String, "make this bigger")
+        XCTAssertEqual(transcript["duration_seconds"] as? Double, 12)
+        // Frames include the marked DEIXIS crop with its hint as ocr_text.
+        let frameArr = try XCTUnwrap(json["frames"] as? [[String: Any]])
+        XCTAssertEqual(frameArr.count, 2)
+        XCTAssertTrue((frameArr.last?["ocr_text"] as? String ?? "").contains("DEIXIS REFERENCE 0"))
     }
 
-    func testConvertErrorMapping() async {
-        // (status, expected) — same taxonomy as generate's parse.
-        let cases: [(Int, String, ManagedGenerationError)] = [
-            (429, #"{"error":"rate_limited"}"#, .rateLimited),
-            (503, #"{"error":"provider_unavailable"}"#, .providerUnavailable),
-            (403, #"{"error":"not_entitled"}"#, .notEntitled),
-        ]
-        for (status, body, expected) in cases {
-            let (session, gen) = freshStubs(genStatus: status, genBody: body)
-            let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-            await assertThrows(expected) {
-                _ = try await proxy.convert(sourceText: "src", context: nil)
-            }
-        }
-    }
-
-    func testConvertEmptyPromptIsMalformed() async {
-        let (session, gen) = freshStubs(genStatus: 200, genBody: #"{"prompt":""}"#)
+    /// A response without an `anchors` field (older server / deploy skew) parses
+    /// to empty model anchors — the AppState dev path then falls back to parsing
+    /// the prompt's `zerro_anchors` block.
+    func testGenerateDevWithoutServerAnchorsYieldsEmpty() async throws {
+        let session = StubManagedTransport()
+        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
+        let gen = StubManagedTransport()
+        gen.enqueue(ManagedFixtures.generateJSON(prompt: "Goal: x.", creditsRemaining: 90, creditsCharged: 4), status: 200)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-        await assertThrows(.malformedResponse) {
-            _ = try await proxy.convert(sourceText: "src", context: nil)
+
+        let result = try await proxy.generateDev(
+            frames: frames(),
+            transcript: ManagedProxyClient.DevTranscriptUpload(segments: [], durationSeconds: 8),
+            idempotencyKey: "REC-2"
+        )
+        XCTAssertEqual(result.result.prompt, "Goal: x.")
+        XCTAssertTrue(result.modelAnchors.isEmpty)
+    }
+
+    /// Call 1 maps the failure taxonomy the same way `generate` does.
+    func testDevTranscribeMapsRateLimited() async {
+        let (session, gen) = freshStubs(genStatus: 429, genBody: #"{"error":"rate_limited"}"#)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+        await assertThrows(.rateLimited) {
+            _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
         }
     }
 

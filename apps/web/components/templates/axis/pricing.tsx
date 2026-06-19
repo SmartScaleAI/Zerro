@@ -31,7 +31,7 @@ const HIGHLIGHT_STYLE = {
         "lg:p-7 ring-1 ring-[#28a082]/40 " +
         // a tinted ring + outer colored glow reads cleanly and is cheap (a true
         // gradient border would need a masked padding-box/border-box layer).
-        "shadow-[0_0_0_1px_rgba(40,160,130,0.25),0_40px_100px_-20px_rgba(40,160,130,0.30)]",
+        "shadow-[0_0_0_1px_rgba(40,160,130,0.34),0_46px_120px_-14px_rgba(40,160,130,0.46)]",
     title: "text-foreground",
     // "Most popular" badge — solid white (the limited-offer ribbon now carries
     // the blue→teal→purple gradient instead).
@@ -121,7 +121,7 @@ const tiers: Tier[] = [
             "We manage all token usage — no API keys",
             "Cancel anytime",
         ],
-        cta: { label: "Download for macOS", variant: "primary" },
+        cta: { label: "Download for Mac", variant: "primary" },
         highlight: true,
         placement: "pricing_managed",
     },
@@ -139,7 +139,7 @@ const tiers: Tier[] = [
             "Recordings never leave your Mac",
             "No subscription, no account",
         ],
-        cta: { label: "Download for macOS", variant: "primary" },
+        cta: { label: "Download for Mac", variant: "primary" },
         placement: "pricing_byok",
     },
 ];

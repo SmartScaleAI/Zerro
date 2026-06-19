@@ -173,6 +173,45 @@ struct GitCheckpointService: Sendable {
         return GitDiffStat(filesChanged: files, added: added, removed: removed)
     }
 
+    // MARK: Unified diff
+
+    /// The readable unified diff between the checkpoint and the current working
+    /// tree (`git diff <restoreRef>`) — the per-file hunks shown in the Dev Mode
+    /// result card's body well. CAPPED at `maxLines` / `maxBytes` with a trailing
+    /// truncation note so a huge change can't bloat the pill. Run off-main (like
+    /// `diffStat`): a big diff can be slow to compute and read.
+    ///
+    /// `--no-color` is explicit (a user's `color.diff = always` would otherwise
+    /// leak ANSI escapes into the text); context defaults to git's standard 3
+    /// lines (no `-U` flag is passed — add one here if non-default context is ever
+    /// wanted). Like `diffStat`, this covers tracked-file edits — agent-created
+    /// untracked files aren't part of `git diff` (Phase 1 scope).
+    nonisolated func diff(since checkpoint: GitCheckpoint, maxLines: Int = 400, maxBytes: Int = 24_000) throws -> String {
+        let raw = try run(["diff", "--no-color", checkpoint.restoreRef]).stdout
+        return Self.cappedDiff(raw, maxLines: maxLines, maxBytes: maxBytes)
+    }
+
+    /// Trim a unified diff to at most `maxLines` lines and `maxBytes` bytes,
+    /// appending a "… (truncated, N more lines)" note when anything was dropped.
+    /// Pure + internal so the truncation contract is unit-testable.
+    nonisolated static func cappedDiff(_ diff: String, maxLines: Int = 400, maxBytes: Int = 24_000) -> String {
+        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false)
+        var kept: [Substring] = []
+        var bytes = 0
+        for (index, line) in lines.enumerated() {
+            let lineBytes = line.utf8.count + 1 // + newline
+            if kept.count >= maxLines || bytes + lineBytes > maxBytes {
+                let remaining = lines.count - index
+                let noun = remaining == 1 ? "line" : "lines"
+                kept.append(Substring("\u{2026} (truncated, \(remaining) more \(noun))"))
+                break
+            }
+            kept.append(line)
+            bytes += lineBytes
+        }
+        return kept.joined(separator: "\n")
+    }
+
     // MARK: - Untracked snapshot helpers
 
     nonisolated private func snapshotUntracked() throws -> (dir: URL?, relPaths: [String]) {

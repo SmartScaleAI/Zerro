@@ -62,12 +62,11 @@ enum TimelineItem: Sendable {
     /// cursor (resolved from the nearest frame's OCR); unlabeled clicks are
     /// dropped by the resolver, so `label` is always meaningful.
     case click(timestamp: TimeInterval, label: String)
-    /// Phase 6 (typed-artifact refactor) — verbatim text with NO timestamp
-    /// tag and no quoting, rendered exactly as-is. CLIENT-ONLY, used solely
-    /// by the conversion fallback (`PromptGenerationService.convert`) so the
-    /// BYOK conversion sends the same plain user text the Managed `convert`
-    /// function does. Never produced by the Interleaver; the recording
-    /// timeline format above is unchanged.
+    /// Verbatim text with NO timestamp tag and no quoting, rendered exactly
+    /// as-is. CLIENT-ONLY and never produced by the Interleaver; the recording
+    /// timeline format above is unchanged. Added for the BYOK "Write agent
+    /// prompt" conversion path, which has since been removed — currently
+    /// unconstructed, retained as a neutral plain-text timeline item.
     case rawText(String)
 
     /// The sort key for chronological merge. Speech uses its start

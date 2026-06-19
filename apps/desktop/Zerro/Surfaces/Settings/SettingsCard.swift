@@ -289,6 +289,75 @@ struct SettingsDestructiveButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Switch toggle style
+//
+// Drop-in replacement for the native `.toggleStyle(.switch)` (an AppKit
+// NSSwitch) on the Settings toggles. The native switch intermittently drew
+// its green track but NOT its white knob when the Settings window first
+// appeared mid-animation, before it was key/main — "green background, no
+// knob, resolves on interaction." Root cause is native-layer draw timing:
+// the knob layer lagged a frame. Drawing the knob as a SwiftUI `Circle`
+// removes that timing entirely — the shape is part of the SwiftUI layout,
+// so it renders deterministically on first paint, every open. It also
+// unifies the toggle look with the app's green-on / neutral-off / white-
+// knob design family. Lives here so every Settings section shares one
+// switch chrome (same "single home" rationale as the button styles above).
+
+struct VFSwitchToggleStyle: ToggleStyle {
+    // The Settings rows render their own visible label + description and
+    // call `.labelsHidden()` on the Toggle, so honor that here the way the
+    // native style does — otherwise the Toggle's own label would draw a
+    // second time next to the switch.
+    @Environment(\.labelsVisibility) private var labelsVisibility
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: VFSpacing.md) {
+            if labelsVisibility != .hidden {
+                configuration.label
+                Spacer(minLength: 0)
+            }
+            VFSwitch(isOn: configuration.isOn)
+                .contentShape(Capsule())
+                .onTapGesture { configuration.isOn.toggle() }
+        }
+        // We've left the native control, so re-expose a switch to
+        // assistive tech: VoiceOver announces it as a toggle with its
+        // on/off value and the same label the row provides.
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+        }
+    }
+}
+
+/// The switch visual: a Capsule track + a SwiftUI `Circle` knob. The knob
+/// is a plain shape (not a native layer), so it always renders. Dimensions
+/// match the native NSSwitch footprint (38×22) so swapping the style in
+/// doesn't shift the surrounding row layout.
+private struct VFSwitch: View {
+    let isOn: Bool
+
+    private let trackWidth: CGFloat = 38
+    private let trackHeight: CGFloat = 22
+    private let knobInset: CGFloat = 2
+
+    private var knobDiameter: CGFloat { trackHeight - knobInset * 2 }
+    /// Distance the knob center travels from track center to either edge.
+    private var knobOffset: CGFloat { (trackWidth - trackHeight) / 2 }
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(isOn ? Color.vfSuccessGreen : Color.white.opacity(0.18))
+            .frame(width: trackWidth, height: trackHeight)
+            .overlay(
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: knobDiameter, height: knobDiameter)
+                    .offset(x: isOn ? knobOffset : -knobOffset)
+            )
+            .animation(.easeInOut(duration: 0.18), value: isOn)
+    }
+}
+
 // MARK: - Verification pill
 //
 // Small green/red/neutral pill on the right of the API key field showing

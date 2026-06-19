@@ -60,6 +60,11 @@ extension AppState {
             // M2 (rev 3) — the sleep-interrupted-recording recovery offer.
             return .confirmRecovery
 
+        case .confirmingDevRecovery:
+            // Quit-recovery — the cross-launch Undo/Keep offer for a Dev Mode
+            // dispatch a quit interrupted mid-edit.
+            return .confirmDevRecovery(detail: devRecoveryDetail)
+
         case .done:
             return isResultExpanded ? .resultExpanded : .resultCompact
 
@@ -71,8 +76,8 @@ extension AppState {
             // small pill (no Retry button) on the next pass.
             if canRetryFailure {
                 return .failureExpanded(
-                    headline: "Generation failed",
-                    detail: lastFailureDetail ?? reason.userMessage
+                    headline: reason.headline,
+                    detail: lastFailureDetail ?? reason.detail
                 )
             }
             // M5: a paid-blocked failure (trial credits exhausted / out of
@@ -83,12 +88,25 @@ extension AppState {
             // entitlement flips to `.byok`/`.managed`, the primary button's label
             // re-renders from "Upgrade" to "Generate" without any extra plumbing.
             if canResumePaidGeneration {
+                // Once the user is entitled (subscription active / credits added),
+                // the held recording is ready — flip from the amber paid-block
+                // warning to a calm blue "you're all set" confirmation (themed in
+                // PillView off `entitled`). Discard stays as the secondary.
+                let entitled = entitlements?.canGenerate == true
+                if entitled {
+                    return .paidBlockResume(
+                        headline: "You\u{2019}re all set",
+                        detail: "Your subscription is active and the recording you set aside is ready to generate. Pick up right where you left off.",
+                        entitled: true
+                    )
+                }
                 return .paidBlockResume(
-                    message: reason.userMessage,
-                    entitled: entitlements?.canGenerate == true
+                    headline: reason.headline,
+                    detail: reason.detail,
+                    entitled: false
                 )
             }
-            return .error(message: reason.userMessage, retryable: false)
+            return .error(headline: reason.headline, detail: reason.detail, retryable: false)
 
         // Dev Mode (Phase 1) — the dispatch tail. Reached only for a Dev Mode
         // recording; normal mode never produces these.
@@ -102,22 +120,80 @@ extension AppState {
             // Restoring the tree — not cancellable (interrupting a revert is the
             // dangerous case we're guarding against).
             return .devProgress(label: "Reverting\u{2026}", cancellable: false)
+        case .reviewingPrompt:
+            // Ask Permission — the SOLE pre-edit gate. Show the target agent, the
+            // resolved target label(s), and the exact prompt so the user can
+            // approve precisely what will be sent before any file change.
+            return .reviewPrompt(
+                agent: devReviewAgentName,
+                targets: devConfirmAnchorSummaries.map {
+                    ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
+                },
+                prompt: devReviewPromptText
+            )
         case .devDone:
-            return .devDone(summary: devDiffSummary)
+            // The expandable dev-result card: human summary on top, the readable
+            // diff in the body well, Undo + X. Shares the result expand flag (the
+            // two states never coexist); lands expanded (set in applyDevOutcome).
+            return .devDone(card: devResultCard, expanded: isResultExpanded)
         case .devFailed:
-            // Offer Revert only when a checkpoint exists (failures before the
-            // checkpoint — non-git folder, missing agent — have nothing to undo).
-            return .devFailed(detail: devFailure?.userMessage ?? "Dev Mode run failed.",
+            // The expanded failure card: a short headline over the FULL agent
+            // error / reason (wrapped + scrollable, never truncated). Offer Revert
+            // only when a checkpoint exists (failures before the checkpoint —
+            // non-git folder, missing agent — have nothing to undo).
+            return .devFailed(headline: devFailure?.headline ?? "Dev Mode run failed",
+                              detail: devFailure?.userMessage ?? "Dev Mode run failed.",
                               canRevert: devCanRevert)
         }
     }
 
-    /// The `.devDone` pill's one-line change summary ("2 files changed (+8 −3)").
-    var devDiffSummary: String {
-        guard let stat = devDiffStat else { return "Changes applied" }
-        guard stat.filesChanged > 0 else { return "No file changes" }
+    /// The cross-launch dev-recovery pill's one-line body: the diff stat the
+    /// agent applied before the quit, plus the agent name when known. Reads
+    /// `pendingDevRecovery` (set before the state flips to `.confirmingDevRecovery`,
+    /// so it's populated whenever this is rendered); falls back to a bare prompt if
+    /// somehow absent.
+    var devRecoveryDetail: String {
+        guard let pending = pendingDevRecovery else { return "Undo the last change?" }
+        let stat = pending.diffStat
         let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
-        return "\(files) changed (+\(stat.added) \u{2212}\(stat.removed))"
+        let lead = pending.agentName ?? "The agent"
+        return "\(lead) changed +\(stat.added) \u{2212}\(stat.removed) in \(files). Undo it?"
+    }
+
+    /// The `.devDone` success card's render model: a fixed title, the summary
+    /// (agent text when present, else a generated change line), the readable diff
+    /// text, the diff stat counts (the collapsed pill renders "Changes applied
+    /// (+a −r)" from these; the expanded card uses summary/diffText), and — for a
+    /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
+    /// its prompt-generation step just like artifact mode, so the same readout
+    /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
+    /// artifact path uses (see PillWindowController) so the two read identically.
+    /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.
+    var devResultCard: DevResultCard {
+        DevResultCard(
+            title: "Changes applied",
+            summary: devResultSummary,
+            diffText: devDiffText ?? "",
+            linesAdded: devDiffStat?.added ?? 0,
+            linesRemoved: devDiffStat?.removed ?? 0,
+            filesChanged: devDiffStat?.filesChanged ?? 0,
+            chargeLine: lastGenerationCharge.map {
+                CreditDisplay.chargeLine(charged: $0.charged, remaining: $0.remaining)
+            }
+        )
+    }
+
+    /// The dev-result summary shown in the card's text region (and, collapsed to
+    /// one line, in the compact pill): the agent's own summary when it gave one,
+    /// otherwise a generated fallback from the diff stat ("Updated N files (+x −y)").
+    var devResultSummary: String {
+        if let summary = devSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !summary.isEmpty {
+            return summary
+        }
+        guard let stat = devDiffStat, stat.filesChanged > 0 else { return "Changes applied." }
+        let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
+        return "Updated \(files) (+\(stat.added) \u{2212}\(stat.removed))."
     }
 }
 
@@ -136,9 +212,9 @@ extension PillState {
 
     private static func isResult(_ state: PillState?) -> Bool {
         switch state {
-        // `.failureExpanded` is the same big card morph as the result states,
-        // so it gets the softer result spring too.
-        case .resultCompact?, .resultExpanded?, .failureExpanded?: return true
+        // `.failureExpanded` and the dev-result card (`.devDone`) are the same big
+        // card morph as the result states, so they get the softer result spring too.
+        case .resultCompact?, .resultExpanded?, .failureExpanded?, .devDone?: return true
         default: return false
         }
     }

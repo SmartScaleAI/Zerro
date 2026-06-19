@@ -78,7 +78,7 @@ const FinalCTA = () => {
                         >
                             <AnimatedBorder />
                             <AppleIcon className="h-4 w-4" />
-                            Download for macOS
+                            Download for Mac
                         </DownloadButton>
                         <p className="text-sm text-muted-foreground">
                             v1.0 · Apple Silicon · Signed &amp; notarized

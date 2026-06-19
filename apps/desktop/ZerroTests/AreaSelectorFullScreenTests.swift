@@ -78,13 +78,25 @@ final class AreaSelectorFullScreenTests: XCTestCase {
     // MARK: - Bottom-center toolbar geometry
 
     func testFullScreenToolbarIsPinnedBottomCenter() {
+        // No Dock (inset 0) → floats `fullScreenDockGap` above the bottom edge.
         let frame = AreaSelectorView.fullScreenToolbarFrame(in: overlay)
 
         // Horizontally centered.
         XCTAssertEqual(frame.midX, overlay.width / 2, accuracy: 0.001)
-        // Floating above the bottom edge by the standard margin.
-        XCTAssertEqual(frame.maxY, overlay.height - 8, accuracy: 0.001)
+        XCTAssertEqual(frame.maxY, overlay.height - AreaSelectorView.fullScreenDockGap, accuracy: 0.001)
         XCTAssertEqual(frame.height, AreaSelectorView.toolbarHeight, accuracy: 0.001)
+    }
+
+    func testFullScreenToolbarFloatsAboveTheDock() {
+        let dock: CGFloat = 70
+        let frame = AreaSelectorView.fullScreenToolbarFrame(in: overlay, bottomInset: dock)
+        // Bottom edge sits `fullScreenDockGap` above the Dock's top, still centered.
+        XCTAssertEqual(frame.midX, overlay.width / 2, accuracy: 0.001)
+        XCTAssertEqual(frame.maxY, overlay.height - dock - AreaSelectorView.fullScreenDockGap, accuracy: 0.001)
+        // The bigger inset raises it relative to the hidden-Dock case.
+        let hidden = AreaSelectorView.fullScreenToolbarFrame(in: overlay, bottomInset: 0)
+        XCTAssertLessThan(frame.maxY, hidden.maxY)
+        XCTAssertLessThan(hidden.maxY, overlay.height, "never flush against the very bottom edge")
     }
 
     func testFullScreenFlagRoutesToBottomCenterFrame() {
@@ -99,19 +111,24 @@ final class AreaSelectorFullScreenTests: XCTestCase {
 
     func testFullScreenSegmentsAreDisjointAndCentered() {
         let full = CGRect(origin: .zero, size: overlay)
+        let modeSwitch = AreaSelectorView.devToggleFrame(forSelection: full, in: overlay, fullScreen: true)
         let model = AreaSelectorView.modelChipFrame(forSelection: full, in: overlay, fullScreen: true)
         let mic = AreaSelectorView.micChipFrame(forSelection: full, in: overlay, fullScreen: true)
         let record = AreaSelectorView.recordButtonFrame(forSelection: full, in: overlay, fullScreen: true)
         let toolbar = AreaSelectorView.fullScreenToolbarFrame(in: overlay)
 
-        // Order model → mic → record, gap-separated, all inside the toolbar.
+        // Compact order: mode switch → model → mic → record, gap-separated, all
+        // inside the toolbar. The mode switch is leftmost (inset by the same
+        // margin Record is inset from the trailing edge).
         let gap = mic.minX - model.maxX
         XCTAssertGreaterThan(gap, 0)
-        XCTAssertEqual(model.minX, toolbar.minX, accuracy: 0.001)
-        XCTAssertEqual(record.maxX, toolbar.maxX, accuracy: 0.001)
-        for frame in [model, mic, record] {
+        XCTAssertLessThan(modeSwitch.maxX, model.minX, "mode switch leads the cluster")
+        let leadingInset = modeSwitch.minX - toolbar.minX
+        XCTAssertEqual(record.maxX, toolbar.maxX - leadingInset, accuracy: 0.001, "symmetric insets")
+        for frame in [modeSwitch, model, mic, record] {
             XCTAssertTrue(toolbar.contains(frame))
         }
+        XCTAssertFalse(modeSwitch.intersects(model))
         XCTAssertFalse(model.intersects(mic))
         XCTAssertFalse(mic.intersects(record))
     }

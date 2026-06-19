@@ -42,6 +42,34 @@ final class PreferencesStore {
         static let devModeEnabled = "vf.dev.modeEnabled"
         static let devProjectPath = "vf.dev.projectPath"
         static let devAgentID = "vf.dev.agentID"
+        /// Phase 2 — the remembered `--model` pick PER agent (agent wire id →
+        /// model_id), stored as a `[String: String]` dictionary.
+        static let devModelByAgent = "vf.dev.modelByAgent"
+
+        // Dev Mode (Phase 3) — port→folder zero-setup ("talk to localhost:3000
+        // and Zerro already knows the project").
+        /// `port (as String) → folder path`, the learned localhost-port→project
+        /// map. `devProjectPath` stays the GLOBAL last-used fallback.
+        static let devProjectByPort = "vf.dev.projectByPort"
+        /// Master opt-in (default OFF) for reading the browser's localhost URL to
+        /// auto-detect the project folder. Surfaced as the dev-settings menu's
+        /// "Auto-Detect Project" toggle; flipping it on is the permission primer.
+        /// Off → the reader never runs.
+        static let devAutoDetectProject = "vf.dev.autoDetectProject"
+        /// One-time: the post-denial explainer has been shown.
+        static let localhostDenialNoteShown = "vf.dev.localhostDenialNoteShown"
+
+        // Dev Mode — permissions (pre-edit checkpoint).
+        /// How a Dev Mode dispatch handles the pre-edit checkpoint: `.askPermission`
+        /// pauses on a review card showing the generated prompt before any file
+        /// change; `.autoApprove` (default) dispatches immediately. The SOLE
+        /// pre-edit gate. Persisted as `DevPermissionMode.rawValue`. Surfaced in the
+        /// dev-settings menu, not agent/model/project-specific.
+        static let devPermissionMode = "vf.dev.permissionMode"
+        /// Legacy (Phase 4 v1) review-before-apply Bool, folded into
+        /// `devPermissionMode` (true → `.askPermission`). Read only by the one-time
+        /// migration in `init`; no longer written.
+        static let legacyDevReviewBeforeApply = "vf.dev.reviewBeforeApply"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -55,6 +83,12 @@ final class PreferencesStore {
             devModeEnabled,
             devProjectPath,
             devAgentID,
+            devModelByAgent,
+            devProjectByPort,
+            devAutoDetectProject,
+            localhostDenialNoteShown,
+            devPermissionMode,
+            legacyDevReviewBeforeApply,
         ]
     }
 
@@ -125,6 +159,76 @@ final class PreferencesStore {
         }
     }
 
+    /// Phase 2 — the `--model` pick remembered PER agent (agent wire id →
+    /// model_id). The Model section writes here; the dispatch path reads the
+    /// resolved pick via `selectedModel(forAgent:available:)`. Persisted as a
+    /// plain `[String: String]` (UserDefaults stores it natively). A remembered
+    /// id that's no longer in the live list is ignored at resolution time, so a
+    /// retired model never rides forward to the CLI.
+    var selectedModelByAgent: [String: String] {
+        didSet { defaults.set(selectedModelByAgent, forKey: Keys.devModelByAgent) }
+    }
+
+    /// The resolved `--model` id for `agentID` given its currently-`available`
+    /// models (newest-first; `available.first` is rank 0 = the default). Returns
+    /// the remembered pick when it's still present in the list, otherwise the
+    /// newest (rank 0). `nil` only when the agent has no models at all — the
+    /// caller then passes no `--model` flag (agent default). This is the single
+    /// place the "default = newest, drop a retired remembered pick" rule lives.
+    func selectedModel(forAgent agentID: String, available: [AgentModel]) -> String? {
+        if let remembered = selectedModelByAgent[agentID],
+           available.contains(where: { $0.modelID == remembered }) {
+            return remembered
+        }
+        return available.first?.modelID
+    }
+
+    // MARK: - Dev Mode (Phase 3) — port→folder map + localhost auto-match
+
+    /// Learned `localhost port → project folder path` map (port as String key, as
+    /// UserDefaults stores natively). `devProjectURL` (above) stays the GLOBAL
+    /// last-used fallback; this is the per-port memory layered over it.
+    var devProjectByPort: [String: String] {
+        didSet { defaults.set(devProjectByPort, forKey: Keys.devProjectByPort) }
+    }
+
+    /// The remembered project folder for `port`, or nil if none mapped.
+    func projectURL(forPort port: Int) -> URL? {
+        guard let path = devProjectByPort[String(port)], !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// Remember `url` as the project folder for `port` (learned on a Dev record or
+    /// a manual folder pick while a localhost port was detected).
+    func setProjectURL(_ url: URL, forPort port: Int) {
+        devProjectByPort[String(port)] = url.path
+    }
+
+    /// Master opt-in (default OFF): read the browser's current localhost URL to
+    /// auto-detect the project folder. Surfaced as the dev-settings menu's
+    /// "Auto-Detect Project" toggle; flipping it on requests browser permission.
+    /// Off → the reader never runs (byte-identical to pre-Phase-3 behavior: manual
+    /// pick + global last-used).
+    var devAutoDetectProject: Bool {
+        didSet { defaults.set(devAutoDetectProject, forKey: Keys.devAutoDetectProject) }
+    }
+
+    /// One-time flag: the post-denial explainer has been shown.
+    var hasShownLocalhostDenialNote: Bool {
+        didSet { defaults.set(hasShownLocalhostDenialNote, forKey: Keys.localhostDenialNoteShown) }
+    }
+
+    // MARK: - Dev Mode — permissions
+
+    /// How a Dev Mode dispatch handles the pre-edit checkpoint. `.askPermission`
+    /// pauses to show the generated prompt for approval before any file change
+    /// (Approve dispatches, Cancel aborts with nothing touched); `.autoApprove`
+    /// (default) keeps the auto-apply "talk → watch it change" path byte-identical
+    /// to today. Read fresh at the dispatch gate. The SOLE pre-edit checkpoint.
+    var devPermissionMode: DevPermissionMode {
+        didSet { defaults.set(devPermissionMode.rawValue, forKey: Keys.devPermissionMode) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -150,6 +254,26 @@ final class PreferencesStore {
             self.devProjectURL = nil
         }
         self.selectedAgentID = defaults.string(forKey: Keys.devAgentID)
+        self.selectedModelByAgent =
+            (defaults.dictionary(forKey: Keys.devModelByAgent) as? [String: String]) ?? [:]
+        self.devProjectByPort =
+            (defaults.dictionary(forKey: Keys.devProjectByPort) as? [String: String]) ?? [:]
+        // Default OFF: `bool(forKey:)`'s false-for-missing IS the default, so the
+        // browser is never read until the user opts in via the dev-settings toggle.
+        self.devAutoDetectProject = defaults.bool(forKey: Keys.devAutoDetectProject)
+        self.hasShownLocalhostDenialNote = defaults.bool(forKey: Keys.localhostDenialNoteShown)
+        // Default `.autoApprove`: the auto-apply path stays the headline experience
+        // until the user opts into Ask Permission in the dev-settings menu. Migrate
+        // the old `devReviewBeforeApply` Bool once if present (true → .askPermission).
+        if let raw = defaults.string(forKey: Keys.devPermissionMode),
+           let mode = DevPermissionMode(rawValue: raw) {
+            self.devPermissionMode = mode
+        } else if defaults.object(forKey: Keys.legacyDevReviewBeforeApply) != nil {
+            self.devPermissionMode = defaults.bool(forKey: Keys.legacyDevReviewBeforeApply)
+                ? .askPermission : .autoApprove
+        } else {
+            self.devPermissionMode = .autoApprove
+        }
     }
 
     // MARK: - Reset
@@ -171,5 +295,22 @@ final class PreferencesStore {
         devModeEnabled = false
         devProjectURL = nil
         selectedAgentID = nil
+        selectedModelByAgent = [:]
+        devProjectByPort = [:]
+        devAutoDetectProject = false
+        hasShownLocalhostDenialNote = false
+        devPermissionMode = .autoApprove
     }
+}
+
+/// How Dev Mode handles the pre-edit checkpoint — the SOLE pre-edit gate (the
+/// low-confidence anchor-confirm gate was removed; under `.autoApprove` a wrong
+/// target is caught only by Undo). Persisted as `rawValue`. `allCases` order is
+/// the dev-settings menu's row order.
+enum DevPermissionMode: String, CaseIterable {
+    /// Show the generated prompt on a review card before dispatch; the user reads
+    /// exactly what will be sent and approves (or cancels) it.
+    case askPermission
+    /// Dispatch immediately, no pre-edit pill. Today's default — Undo is the net.
+    case autoApprove
 }

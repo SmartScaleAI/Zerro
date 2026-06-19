@@ -286,18 +286,6 @@ private struct PillHostView: View {
     /// processing reads as registered-but-busy instead of silently dropped.
     @State private var flashScale: CGFloat = 1.0
 
-    /// Phase 6 — AppState's conversion lifecycle, mapped to the pill's
-    /// render-only affordance enum. `.hidden` whenever the feature doesn't
-    /// apply (a card is present, no result, not in .done).
-    private var conversionAffordance: ConversionAffordance {
-        guard appState.canConvertToAgentPrompt else { return .hidden }
-        switch appState.conversionStatus {
-        case .idle: return .available
-        case .running: return .running
-        case .failed: return .failed
-        }
-    }
-
     var body: some View {
         PillView(
             state: viewModel.pillState,
@@ -320,6 +308,9 @@ private struct PillHostView: View {
             onToggleExpand: { appState.toggleResultExpanded() },
             onDismissError: { appState.dismissFailure() },
             onRetryError: { appState.retryFailedPrompt() },
+            // Error pill's "Retry" fallback (non-retryable failure): dismiss
+            // the pill and reopen the screen-region selector to record again.
+            onErrorRetryRegion: { appState.retryRecordingFromRegion() },
             // M5 — resume a paid-blocked recording after the user pays.
             onResumePaidGeneration: { appState.resumePaidGeneration() },
             onDismissResult: { appState.resetToIdle() },
@@ -329,17 +320,22 @@ private struct PillHostView: View {
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
+            // Dev Mode quit-recovery (cross-launch): Undo reverts the interrupted
+            // edits to the checkpoint; Keep retains them. Either resolution clears
+            // the durable marker (never leave it on disk once the user engages).
+            onDevRecoveryUndo: { appState.resolveDevRecovery(undo: true) },
+            onDevRecoveryKeep: { appState.resolveDevRecovery(undo: false) },
             // Dev Mode (M7) terminal-card actions: restore the tree to the
             // checkpoint, or re-dispatch the same prompt.
             onDevRevert: { appState.revertDevDispatch() },
             onDevRetry: { appState.retryDevDispatch() },
+            // Dev Mode Ask Permission review gate: Approve dispatches the
+            // shown prompt; Cancel aborts before the agent runs (safe teardown).
+            onApproveReview: { appState.approveReviewAndProceed() },
+            onCancelReview: { appState.cancelReview() },
             // Phase 5: the parsed result — chat text + optional artifact
             // card.
             result: appState.resultPresentation,
-            // Phase 6: the "Write agent prompt" ghost button on artifact-less
-            // results, mapped from AppState's conversion lifecycle.
-            conversion: conversionAffordance,
-            onConvert: { appState.convertToAgentPrompt() },
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
             // Multi-model 6B: the "−N credits · M left" toast, formatted once

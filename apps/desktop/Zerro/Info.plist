@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Dev Mode (Phase 3): the per-target TCC prompt string shown the first time
+	     Zerro reads the browser's localhost address to auto-match the project
+	     folder. Required alongside the apple-events entitlement. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Zerro reads your browser’s current localhost address to auto-match your Dev Mode project folder. Only localhost addresses are read, and only while you’re in Dev Mode.</string>
 	<!-- Production PostHog key. Only Release builds transmit; DEBUG builds
 	     disable analytics entirely (see Analytics.start). -->
 	<key>POSTHOG_API_KEY</key>

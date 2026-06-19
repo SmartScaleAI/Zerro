@@ -210,6 +210,7 @@ final class AreaSelectorState {
         if isMicMenuOpen {
             // Only one toolbar dropdown at a time (see toggleModelMenu).
             closeModelMenu()
+            closeDevSettingsMenu()
         } else {
             highlightedMicIndex = nil
         }
@@ -295,6 +296,7 @@ final class AreaSelectorState {
         isModelMenuOpen.toggle()
         if isModelMenuOpen {
             closeMicMenu()
+            closeDevSettingsMenu()
         } else {
             highlightedModelIndex = nil
         }
@@ -357,6 +359,192 @@ final class AreaSelectorState {
         !isDevMode || (selectedAgentID != nil && projectURL != nil)
     }
 
+    /// At-a-glance readiness for the compact dev-settings icon's status dot:
+    /// green when an agent is installed/selected AND a folder is set, amber when
+    /// either is missing. Distinct from `devRequirementsMet` only in framing —
+    /// this drives the dot; the record gate drives blocking. Meaningful only in
+    /// Dev Mode (the dot renders only then).
+    var isDevReady: Bool {
+        selectedAgentID != nil && projectURL != nil
+    }
+
+    // MARK: - Dev-settings menu (compact toolbar)
+    //
+    // The compact toolbar collapses the agent + folder chips into ONE
+    // dev-settings icon whose dropdown lists the detected agents and the
+    // project folder. Rendered in-tree like the model/mic dropdowns (the
+    // overlay sits at `.screenSaver`, above NSMenu's window level), so the
+    // controller's mouse monitor hit-tests its rows the same way.
+
+    /// One row of the dev-settings menu's Agent section — display data the
+    /// controller precomputes from `DevAgentDetection` at present time (the view
+    /// stays free of registry/PATH reads). `installed` drives the "Detected"
+    /// badge vs. the dim "Install" hint.
+    struct DevAgentMenuItem: Identifiable, Equatable {
+        /// `DevAgentEntry.id` (e.g. "claude-code").
+        let id: String
+        /// `DevAgentEntry.displayName`.
+        let name: String
+        /// Whether the CLI resolved on PATH this launch.
+        let installed: Bool
+    }
+
+    /// Agent rows for the dev-settings menu, set by the controller once detection
+    /// lands. Empty until then (Phase 1 ships one agent — Claude Code).
+    private(set) var devAgentMenuItems: [DevAgentMenuItem] = []
+
+    func setDevAgentMenuItems(_ items: [DevAgentMenuItem]) {
+        devAgentMenuItems = items
+    }
+
+    private(set) var isDevSettingsMenuOpen: Bool = false
+
+    /// Row under the cursor while the dev-settings menu is open (hover highlight).
+    /// Indexes the menu's Agent rows; nil when nothing/elsewhere is hovered.
+    private(set) var highlightedDevAgentIndex: Int?
+
+    /// One-shot guard: the dev-settings menu auto-opens on the FIRST Dev entry
+    /// this session (or whenever the folder is unset) so setup is discoverable,
+    /// then stays closed on subsequent entries. Reset per overlay presentation
+    /// (a fresh `AreaSelectorState` is built each time).
+    private var hasAutoOpenedDevSettings: Bool = false
+
+    func toggleDevSettingsMenu() {
+        isDevSettingsMenuOpen.toggle()
+        if isDevSettingsMenuOpen {
+            // Only one toolbar dropdown at a time.
+            closeModelMenu()
+            closeMicMenu()
+            // Open on the selected model so a deep pick isn't hidden.
+            resetDevModelScrollToSelection()
+        } else {
+            highlightedDevAgentIndex = nil
+            highlightedDevModelIndex = nil
+            highlightedDevPermissionIndex = nil
+            isAutoDetectInfoHovered = false
+            isPermissionInfoHovered = false
+            localhostNotice = nil
+        }
+    }
+
+    func closeDevSettingsMenu() {
+        isDevSettingsMenuOpen = false
+        highlightedDevAgentIndex = nil
+        highlightedDevModelIndex = nil
+        highlightedDevPermissionIndex = nil
+        isAutoDetectInfoHovered = false
+        isPermissionInfoHovered = false
+        localhostNotice = nil
+    }
+
+    func setHighlightedDevAgentIndex(_ index: Int?) {
+        if highlightedDevAgentIndex != index { highlightedDevAgentIndex = index }
+    }
+
+    // MARK: - Permissions section
+
+    /// The checkmarked permission mode in the Permissions section — mirrors
+    /// `PreferencesStore.devPermissionMode`. Seeded from prefs when the overlay is
+    /// built; updated when a Permissions row is selected.
+    private(set) var devPermissionMode: DevPermissionMode = .autoApprove
+
+    func setDevPermissionMode(_ mode: DevPermissionMode) {
+        if devPermissionMode != mode { devPermissionMode = mode }
+    }
+
+    /// Row under the cursor while the Permissions section is hovered; nil otherwise.
+    private(set) var highlightedDevPermissionIndex: Int?
+
+    func setHighlightedDevPermissionIndex(_ index: Int?) {
+        if highlightedDevPermissionIndex != index { highlightedDevPermissionIndex = index }
+    }
+
+    // MARK: - Model section (Phase 2)
+
+    /// One row in the dev-settings Model section. Mirrors `DevAgentMenuItem`.
+    struct DevModelMenuItem: Identifiable, Equatable {
+        /// The exact `--model` id (e.g. "claude-opus-4-8").
+        let id: String
+        /// The menu label (e.g. "Claude Opus 4.8").
+        let name: String
+    }
+
+    /// Model rows for the dev-settings Model section, set by the controller for
+    /// the CURRENTLY-SELECTED agent (anthropic/openai manifest, or the Cursor
+    /// CLI). Ordered newest-first; empty for an agent with no model picker.
+    private(set) var devModelMenuItems: [DevModelMenuItem] = []
+
+    /// The model_id checkmarked in the Model section — the resolved pick for the
+    /// selected agent (remembered, else newest/rank-0). nil when no models.
+    private(set) var selectedDevModelID: String?
+
+    /// Row under the cursor while the Model section is hovered; nil otherwise.
+    private(set) var highlightedDevModelIndex: Int?
+
+    /// Replace the Model section's rows + checkmarked pick. Called by the
+    /// controller whenever the selected agent changes (the list is per-agent).
+    func setDevModelMenuItems(_ items: [DevModelMenuItem], selectedID: String?) {
+        devModelMenuItems = items
+        selectedDevModelID = selectedID
+        // The list just swapped (agent change) or refreshed — drop a now-stale
+        // scroll offset and reveal the selected pick.
+        resetDevModelScrollToSelection()
+    }
+
+    /// Update only the checkmarked pick (a Model row was selected).
+    func setSelectedDevModelID(_ id: String?) {
+        if selectedDevModelID != id { selectedDevModelID = id }
+    }
+
+    func setHighlightedDevModelIndex(_ index: Int?) {
+        if highlightedDevModelIndex != index { highlightedDevModelIndex = index }
+    }
+
+    /// Index of the TOP visible Model row — the scroll position of the capped
+    /// Model viewport (a long list, e.g. Cursor's, scrolls instead of growing the
+    /// menu off-screen). Always 0 for a short list (≤ `maxVisibleModelRows`).
+    /// Driven by the scroll-wheel via the controller's event monitor; read by the
+    /// renderer and the model-row hit-test, which must agree on it.
+    private(set) var devModelScrollOffset: Int = 0
+
+    /// Largest valid offset for the current list — pins the last page flush to the
+    /// viewport bottom. 0 when the list fits (no scrolling).
+    private var maxDevModelScrollOffset: Int {
+        max(0, devModelMenuItems.count - AreaSelectorView.maxVisibleModelRows)
+    }
+
+    /// Set the Model scroll offset, clamped to `0...maxDevModelScrollOffset`.
+    func setDevModelScrollOffset(_ offset: Int) {
+        let clamped = min(max(offset, 0), maxDevModelScrollOffset)
+        if devModelScrollOffset != clamped { devModelScrollOffset = clamped }
+    }
+
+    /// Position the viewport so the currently-selected model is visible — called
+    /// when the menu opens or the model list swaps (agent change), so a deep pick
+    /// isn't hidden on open and a stale offset from the previous list is dropped.
+    /// Clamps the selected index to the top of the viewport; falls back to 0.
+    func resetDevModelScrollToSelection() {
+        guard devModelMenuItems.count > AreaSelectorView.maxVisibleModelRows,
+              let selectedDevModelID,
+              let idx = devModelMenuItems.firstIndex(where: { $0.id == selectedDevModelID })
+        else { devModelScrollOffset = 0; return }
+        devModelScrollOffset = min(idx, maxDevModelScrollOffset)
+    }
+
+    /// Called when Dev Mode is entered (Dev segment clicked, or seeded-on at
+    /// present time). Auto-opens the dev-settings menu the first time this
+    /// session, or any time the folder is still unset, so the user can finish
+    /// setup; otherwise leaves it closed.
+    func handleDevModeEntered() {
+        if !hasAutoOpenedDevSettings || projectURL == nil {
+            isDevSettingsMenuOpen = true
+            closeModelMenu()
+            closeMicMenu()
+            resetDevModelScrollToSelection()
+        }
+        hasAutoOpenedDevSettings = true
+    }
+
     /// True while agent detection is in flight (the login-shell PATH probe runs
     /// off the main thread). The agent chip shows a neutral "checking" state
     /// rather than the install attention state until it resolves.
@@ -402,20 +590,35 @@ final class AreaSelectorState {
         projectIsGitRepo = isRepo
     }
 
-    private(set) var isDevToggleHovered: Bool = false
-    private(set) var isAgentChipHovered: Bool = false
-    private(set) var isFolderChipHovered: Bool = false
+    /// Hover state for the compact mode switch's two segments + the dev-settings
+    /// icon. Mirror the chip-hover pattern: the controller hit-tests the frames
+    /// on mouse-move and the view reflects these (fill highlight + tooltip).
+    private(set) var isModeArtifactHovered: Bool = false
+    private(set) var isModeDevHovered: Bool = false
+    private(set) var isDevSettingsHovered: Bool = false
 
-    func setDevToggleHovered(_ hovered: Bool) {
-        if isDevToggleHovered != hovered { isDevToggleHovered = hovered }
+    func setModeArtifactHovered(_ hovered: Bool) {
+        if isModeArtifactHovered != hovered { isModeArtifactHovered = hovered }
     }
 
-    func setAgentChipHovered(_ hovered: Bool) {
-        if isAgentChipHovered != hovered { isAgentChipHovered = hovered }
+    func setModeDevHovered(_ hovered: Bool) {
+        if isModeDevHovered != hovered { isModeDevHovered = hovered }
     }
 
-    func setFolderChipHovered(_ hovered: Bool) {
-        if isFolderChipHovered != hovered { isFolderChipHovered = hovered }
+    func setDevSettingsHovered(_ hovered: Bool) {
+        if isDevSettingsHovered != hovered { isDevSettingsHovered = hovered }
+    }
+
+    /// Clear every toolbar control-hover flag. Used when a click relocates the
+    /// toolbar (the mode switch resizes the container) and no mouse-move fires to
+    /// refresh them — the next move re-establishes hover.
+    func resetToolbarHovers() {
+        isModeArtifactHovered = false
+        isModeDevHovered = false
+        isDevSettingsHovered = false
+        isModelChipHovered = false
+        isMicChipHovered = false
+        isRecordButtonHovered = false
     }
 
     /// Seed the Dev Mode selections at present time from persisted prefs +
@@ -431,9 +634,21 @@ final class AreaSelectorState {
     /// leaves the chips as-is; toggling off clears any inline validation
     /// message (it only applies to Dev Mode).
     func toggleDevMode() {
-        isDevMode.toggle()
-        if !isDevMode { devValidationMessage = nil }
-        // Opening the mode switch shouldn't leave a toolbar dropdown open.
+        setDevMode(!isDevMode)
+    }
+
+    /// Set the mode explicitly — the compact mode switch maps each segment to a
+    /// mode (Artifact = off, Dev = on) rather than flipping, so clicking the
+    /// already-active segment is a no-op. Turning Dev off clears any inline
+    /// validation message and closes the dev-settings menu (both Dev-only);
+    /// either change closes the model/mic dropdowns.
+    func setDevMode(_ on: Bool) {
+        guard isDevMode != on else { return }
+        isDevMode = on
+        if !on {
+            devValidationMessage = nil
+            closeDevSettingsMenu()
+        }
         closeMicMenu()
         closeModelMenu()
     }
@@ -445,11 +660,86 @@ final class AreaSelectorState {
         projectIsGitRepo = nil
         isCheckingGitRepo = false
         if url != nil { devValidationMessage = nil }
+        // Any explicit set means the folder is the user's pick, not an auto-match
+        // — drop the hint flag (the auto path re-sets it afterward). And a folder
+        // choice dismisses any standing localhost notice.
+        projectAutoMatchedFromPort = false
+        localhostNotice = nil
     }
 
     func setSelectedAgent(id: String?, name: String) {
         selectedAgentID = id
         selectedAgentName = name
+    }
+
+    // MARK: - Localhost auto-match (Phase 3)
+
+    /// The localhost port detected from the browser this session (hit OR miss), so
+    /// a subsequent folder pick / record can LEARN the `port → folder` mapping.
+    /// nil when nothing was detected. Per-presentation (a fresh state each open).
+    private(set) var detectedLocalhostPort: Int?
+
+    /// Whether the CURRENT folder was auto-filled from a port-map hit — drives the
+    /// "matched to localhost:<port>" hint near the Project row. Cleared the moment
+    /// the user changes the folder (it's then their pick, not auto).
+    private(set) var projectAutoMatchedFromPort: Bool = false
+
+    /// Mirrors `PreferencesStore.devAutoDetectProject` for the dev-settings menu's
+    /// "Auto-Detect Project" toggle row. Seeded + persisted by the controller (like
+    /// the mic selection); drives the row's switch. Default OFF.
+    private(set) var autoDetectProjectEnabled: Bool = false
+
+    func setAutoDetectProjectEnabled(_ on: Bool) {
+        if autoDetectProjectEnabled != on { autoDetectProjectEnabled = on }
+    }
+
+    /// Hover state for the Auto-Detect row's info icon, driving the custom tooltip
+    /// (the overlay is hit-test-disabled, so `.help` never fires). Set by the
+    /// controller's mouse-move hit-test; cleared when the dev-settings menu closes.
+    private(set) var isAutoDetectInfoHovered: Bool = false
+
+    func setAutoDetectInfoHovered(_ hovered: Bool) {
+        if isAutoDetectInfoHovered != hovered { isAutoDetectInfoHovered = hovered }
+    }
+
+    /// Hover state for the Permissions header's info icon, driving its custom
+    /// tooltip (the overlay is hit-test-disabled, so `.help` never fires). Set by
+    /// the controller's mouse-move hit-test; cleared when the menu closes.
+    private(set) var isPermissionInfoHovered: Bool = false
+
+    func setPermissionInfoHovered(_ hovered: Bool) {
+        if isPermissionInfoHovered != hovered { isPermissionInfoHovered = hovered }
+    }
+
+    /// A one-time, non-blocking `.denied` note (after the user denies the
+    /// Automation prompt): a floating capsule, not part of the menu's hit-test
+    /// geometry, cleared on the next action. The old `.primer` pre-prompt note is
+    /// gone — enabling the dev-settings "Auto-Detect Project" toggle is now the
+    /// primer (the prompt fires with obvious context, so no pre-explainer is owed).
+    enum LocalhostNotice: Equatable { case denied }
+    private(set) var localhostNotice: LocalhostNotice?
+
+    func showLocalhostNotice(_ notice: LocalhostNotice) {
+        if localhostNotice != notice { localhostNotice = notice }
+    }
+
+    func dismissLocalhostNotice() {
+        if localhostNotice != nil { localhostNotice = nil }
+    }
+
+    /// HIT — a mapped folder was found for the detected port: pre-fill it and flag
+    /// it for the hint. (Goes through `setProjectURL`, then sets the auto flag.)
+    func setAutoMatchedProject(_ url: URL, port: Int) {
+        setProjectURL(url)
+        detectedLocalhostPort = port
+        projectAutoMatchedFromPort = true
+    }
+
+    /// MISS — a localhost port was detected but isn't mapped yet: remember the
+    /// port so a later folder pick / record learns the mapping. Does NOT touch the
+    /// already-set (last-used) folder — a failed detection never clears a folder.
+    func noteDetectedLocalhostPort(_ port: Int) {
+        if detectedLocalhostPort != port { detectedLocalhostPort = port }
     }
 
     func setDevValidationMessage(_ message: String?) {

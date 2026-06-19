@@ -110,7 +110,7 @@ const Navbar = () => {
             >
               <AnimatedBorder />
               <AppleIcon className="h-4 w-4" />
-              Download for macOS
+              Download for Mac
             </DownloadButton>
           </section>
 

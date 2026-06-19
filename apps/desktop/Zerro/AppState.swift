@@ -79,6 +79,27 @@ public enum RecordingState: Equatable {
     /// an active dispatch, which terminates the agent then auto-reverts. Brief;
     /// resolves to `.idle` on success or back to `.devFailed` if revert failed.
     case devReverting
+    /// The Ask Permission pre-edit gate — the SOLE pre-edit checkpoint. When
+    /// `PreferencesStore.devPermissionMode` is `.askPermission`, the dispatch
+    /// pauses here AFTER `devCheckpointing` and BEFORE `devAgentDispatching`: the
+    /// pill shows the exact generated prompt (+ the resolved target label(s) + the
+    /// agent) for a look-before-apply. The agent runs ONLY on Approve; Cancel
+    /// aborts before any edit. A checkpoint has already been taken here, so a
+    /// decline/cancel/quit must discard it (the agent never ran — nothing to
+    /// revert). Under `.autoApprove` this state is never reached and the auto-apply
+    /// path is byte-identical to before (a wrong target is caught only by Undo).
+    case reviewingPrompt
+    /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted by a
+    /// quit (⌘Q / kill -9) mid-edit, leaving a durable recovery marker pointing
+    /// at a still-valid git checkpoint. Entered at launch by
+    /// `recoverInterruptedDevCheckpointIfAny` ONLY after every safety check
+    /// passes (repo present, restore ref resolves, untracked snapshot intact,
+    /// non-empty diff); the pill offers Undo (revert via the existing
+    /// `GitCheckpointService.revert`) or Keep (retain the edits). Resolved by
+    /// `resolveDevRecovery(undo:)`. Not idle-like for sweep/recovery gates (those
+    /// must no-op while it shows, exactly like `.confirmingRecovery`), but
+    /// terminal for teardown (the agent already exited).
+    case confirmingDevRecovery
 }
 
 // MARK: - DevModeSelection
@@ -90,10 +111,15 @@ public enum RecordingState: Equatable {
 public struct DevModeSelection: Equatable, Sendable {
     public let agentID: String
     public let projectURL: URL
+    /// The `--model` id the agent should run with (Phase 2), or nil to use the
+    /// agent's own default. Captured from the dev-settings Model section at
+    /// record-start so a settings change mid-recording can't alter the run.
+    public let modelID: String?
 
-    public init(agentID: String, projectURL: URL) {
+    public init(agentID: String, projectURL: URL, modelID: String? = nil) {
         self.agentID = agentID
         self.projectURL = projectURL
+        self.modelID = modelID
     }
 }
 
@@ -320,6 +346,102 @@ public enum RecordingFailureReason: Equatable {
             return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own API keys to keep going."
         }
     }
+
+    /// Short bold title for the failure card (the headline above `userMessage`,
+    /// which becomes the card's detail prose). Distinct per case — including the
+    /// two pairs `userMessage` collapses (`.providerError`/`.providerUnavailable`,
+    /// `.audioSetupFailed`/family) — so the card names the specific problem.
+    var headline: String {
+        switch self {
+        case .screenRecordingRevoked:    return "Screen Recording off"
+        case .microphoneRevoked:         return "Microphone off"
+        case .microphoneUnavailable:     return "Microphone unavailable"
+        case .audioSetupFailed:          return "Microphone problem"
+        case .microphoneDisconnected:    return "Microphone disconnected"
+        case .streamStartFailed:         return "Couldn\u{2019}t start capture"
+        case .writerStartFailed:         return "Couldn\u{2019}t start recording"
+        case .captureInterrupted:        return "Recording interrupted"
+        case .displayUnavailable:        return "Display unavailable"
+        case .displayChanged:            return "Display changed"
+        case .processingFailed:          return "Processing failed"
+        case .recordingTooShort:         return "Recording too short"
+        case .diskFull:                  return "Storage full"
+        case .apiKeyMissing:             return "API key needed"
+        case .apiAuth:                   return "API key rejected"
+        case .networkOffline:            return "Connection problem"
+        case .rateLimited:               return "Rate limited"
+        case .providerError:             return "Generation failed"
+        case .providerUnavailable:       return "Service unavailable"
+        case .responseTooLong:           return "Response too long"
+        case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .outOfCredits:              return "Out of credits"
+        case .subscriptionInactive:      return "Subscription inactive"
+        case .trialVerificationRequired: return "Verify your email"
+        case .trialCreditsExhausted:     return "Free trial used up"
+        }
+    }
+
+    /// The elaborate failure-card body: what happened, then how to fix it (1–2
+    /// calm, professional sentences). For API-stage failures the recording is
+    /// still on disk, so the copy says it's saved and to press Retry; for
+    /// capture-stage failures it says to start a new recording. `userMessage`
+    /// stays the terse one-liner for non-card surfaces; this is what the card
+    /// shows. Distinct per case (including the `.providerError` /
+    /// `.providerUnavailable` pair that `userMessage` collapses).
+    var detail: String {
+        switch self {
+        case .screenRecordingRevoked:
+            return "Zerro no longer has permission to capture your screen, so the recording couldn\u{2019}t be made. Re-enable it under System Settings \u{203A} Privacy & Security \u{203A} Screen Recording, then start a new recording."
+        case .microphoneRevoked:
+            return "Microphone access is turned off, so your narration couldn\u{2019}t be captured. Turn it back on under System Settings \u{203A} Privacy & Security \u{203A} Microphone and record again."
+        case .microphoneUnavailable:
+            return "The microphone you selected isn\u{2019}t available right now. Choose a different input in Settings or reconnect the device, then start a new recording."
+        case .audioSetupFailed:
+            return "Zerro couldn\u{2019}t start capturing audio from your microphone. Make sure no other app is using it, then try recording again."
+        case .microphoneDisconnected:
+            return "Your microphone disconnected partway through, so the recording stopped early. Reconnect it \u{2014} or pick another input in Settings \u{2014} and record again."
+        case .streamStartFailed:
+            return "Zerro couldn\u{2019}t start screen capture. This is usually temporary \u{2014} start a new recording, and if it keeps happening, restart the app."
+        case .writerStartFailed:
+            return "Zerro couldn\u{2019}t create the file to save your recording. Make sure you have free disk space, then start a new recording."
+        case .captureInterrupted:
+            return "Your recording was interrupted before it finished \u{2014} this can happen when the app quits or your Mac goes to sleep mid-capture. Start a new recording to try again."
+        case .displayUnavailable:
+            return "The display you were recording is no longer connected. Reconnect it or choose another screen, then start a new recording."
+        case .displayChanged:
+            return "Your display setup changed while recording \u{2014} a screen was added, removed, or rearranged \u{2014} so capture stopped. Start a new recording on your current setup."
+        case .processingFailed:
+            return "Zerro couldn\u{2019}t turn your recording into a prompt. Press Retry to run it again; if it keeps failing, record the screen once more."
+        case .recordingTooShort:
+            return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds \u{2014} too short to capture enough context. Record again, narrating the change you want as you go."
+        case .diskFull:
+            return "Your Mac ran out of storage while saving the recording, so it couldn\u{2019}t finish. Free up a few gigabytes, then start a new recording."
+        case .apiKeyMissing:
+            return "Generating a prompt needs an API key, and none is set. Add one under Settings \u{2014} an OpenAI key is required for transcription \u{2014} then start a new recording."
+        case .apiAuth:
+            return "Your API key was rejected. Check it under Settings \u{2014} it may be expired, revoked, or missing the right access \u{2014} then try again."
+        case .networkOffline:
+            return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
+        case .rateLimited:
+            return "The service is temporarily limiting requests. Wait a minute, then press Retry \u{2014} your recording is saved and ready to run."
+        case .providerError:
+            return "The generation service ran into an error while creating your prompt. Your recording is saved \u{2014} press Retry to run it again."
+        case .providerUnavailable:
+            return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
+        case .responseTooLong:
+            return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
+        case .artifactUnreadable:
+            return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
+        case .outOfCredits:
+            return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
+        case .subscriptionInactive:
+            return "Your subscription isn\u{2019}t active right now, so this recording can\u{2019}t be generated. Reactivate under Settings \u{203A} Billing, then try again."
+        case .trialVerificationRequired:
+            return "Verify your email to unlock your free trial generations. Check your inbox for the verification link, then start a new recording."
+        case .trialCreditsExhausted:
+            return "You\u{2019}ve used all your free trial generations. Subscribe, or add your own API keys under Settings, to keep generating prompts."
+        }
+    }
 }
 
 // MARK: - AppState
@@ -413,11 +535,23 @@ final class AppState {
     var recordingProjectURL: URL?
     /// The agent registry id this recording dispatches to. Set iff dev mode.
     var recordingAgentID: String?
+    /// The `--model` id the agent runs with (Phase 2), captured at record-start
+    /// from the dev-settings Model section. nil ⇒ the agent's own default. Set
+    /// iff dev mode; carried into `beginDevDispatch`.
+    var recordingAgentModelID: String?
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
-    /// The diff summary shown on `.devDone` ("N files changed (+x −y)").
+    /// The diff stat captured on `.devDone`, used for the generated fallback
+    /// summary line ("Updated N files (+x −y)") when the agent gave no summary.
     var devDiffStat: GitDiffStat?
+    /// The agent's human-readable summary captured on `.devDone` (Part A), or nil
+    /// when it gave none — the card then uses the generated fallback. Shown in the
+    /// dev-result card's text region + as the compact pill's summary line.
+    var devSummary: String?
+    /// The readable, pre-capped unified diff shown in the dev-result card's body
+    /// well (Part B). nil/empty renders a neutral placeholder.
+    var devDiffText: String?
     /// The failure shown on `.devFailed`.
     var devFailure: DevDispatchFailure?
     /// The pre-run checkpoint + its git service, retained across a dispatch so
@@ -433,6 +567,45 @@ final class AppState {
     /// When the current dispatch started (set in `beginDevDispatch`), for the
     /// M8 `duration_ms` analytics metric. Cleared on teardown.
     @ObservationIgnored private var devDispatchStartTime: Date?
+    /// True once the AGENT actually started (past the Ask Permission review gate,
+    /// into dispatching/running) — so a safe-cancel knows whether the tree could
+    /// have been edited. A cancel BEFORE this (e.g. at the review gate) skips the
+    /// revert entirely: the agent never touched the tree, so reverting would
+    /// needlessly remove + re-copy the user's untracked files (and risk a restore
+    /// failure).
+    @ObservationIgnored private var devAgentStarted = false
+
+    // MARK: Dev Mode (Phase 2, M5/M6) — resolved deixis anchors
+
+    /// The client-resolved anchors for THIS dev recording (M4 deixis + M5 OCR/
+    /// marker/client-confidence). Builds the prompt and the review card's target
+    /// label list. Empty for a normal recording or a managed dev recording (no
+    /// client resolver without the 2-call). Rendered by the bridge → not
+    /// observation-ignored is unnecessary; the pill reads a derived summary.
+    @ObservationIgnored var devResolvedAnchors: [ResolvedDeixisAnchor] = []
+    /// The model's structured anchors parsed from the generation response (M5).
+    /// Empty when the model returned none — the confidence calc then falls back to
+    /// the CLIENT confidence alone (never `min`-ing against a missing model value).
+    @ObservationIgnored var devModelAnchors: [DevAnchor] = []
+    /// Suspends the dispatch at the Ask Permission review gate until the user
+    /// resolves it (Approve → true, Cancel/teardown → false). Nil when not
+    /// waiting. Resolved EXACTLY once (guarded), so a double-tap or a racing
+    /// teardown can't double-dispatch.
+    @ObservationIgnored private var pendingReviewContinuation: CheckedContinuation<Bool, Never>?
+    /// Phase 4 — the exact prompt body shown on the `.reviewingPrompt` card. Set
+    /// when the gate opens (captured from `artifact.body` before the gate runs);
+    /// cleared on teardown. The card reads this so it shows precisely what will be
+    /// dispatched.
+    @ObservationIgnored var devReviewPromptText: String = ""
+    /// Monotonic token bumped on every `beginDevDispatch` AND every teardown. The
+    /// in-flight dispatch captures its value; a stale confirm/outcome whose token
+    /// no longer matches is dropped — so a late Confirm can't dispatch into a
+    /// torn-down (or superseded) recording.
+    @ObservationIgnored private var devDispatchGeneration = 0
+
+    /// Combined confidence below this is "low" → flagged amber on the review
+    /// card's target row (the one the user most needs to check before approving).
+    static let devLowConfidenceThreshold = 0.45
 
     /// One shared coordinator (and its single runner) so the cap-1 dispatch
     /// guard spans the app, not one call.
@@ -484,9 +657,10 @@ final class AppState {
     /// shown, built ONCE from the processed recording when the result is
     /// accepted (the recording's frames/clicks never change after that).
     /// Internal-only (revision 2026-06-12: the card's context drawer was
-    /// removed): never rendered and never part of any copy payload — it
-    /// survives solely as the convert request's model input. Reset wherever
-    /// `parsedResponse` is.
+    /// removed): never rendered and never part of any copy payload. It fed the
+    /// app-side "Write agent prompt" convert request, which has since been
+    /// removed — the field is still assembled but currently has no reader.
+    /// Reset wherever `parsedResponse` is.
     var attachedContextBlock: String?
 
     /// True when the result was generated from the screen alone because
@@ -555,6 +729,20 @@ final class AppState {
     // `UserDefaults`-backed store; the default uses `.standard`.
     @ObservationIgnored var pendingPaidStore = PendingPaidGenerationStore()
 
+    // Dev Mode (quit-recovery): owner of the durable on-disk marker that records
+    // an in-flight dispatch's git checkpoint, so a quit (⌘Q / kill -9) mid-edit
+    // can be offered an Undo on the next launch. Written the instant the agent is
+    // allowed to edit (post-confirm gate), cleared at every checkpoint teardown.
+    // Owned (not weak) and `var` so tests can inject a throwaway file-backed
+    // store; the default writes Application Support/Zerro/dev-recovery.json.
+    @ObservationIgnored var devRecoveryStore = DevRecoveryStore()
+
+    /// The reconstructed-and-validated checkpoint currently being OFFERED for
+    /// cross-launch undo (state `.confirmingDevRecovery`). Set by
+    /// `recoverInterruptedDevCheckpointIfAny` once validation passes; consumed by
+    /// `resolveDevRecovery(undo:)` (Undo or Keep). Nil otherwise.
+    @ObservationIgnored var pendingDevRecovery: PendingDevRecovery?
+
     // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
     // (same lifetime + weak-ref contract as `entitlements`). The proxy
     // generation path reads `selectedModelID` fresh at request time — the same
@@ -592,6 +780,15 @@ final class AppState {
     /// to read the real store. Defaults to `true` so tests/previews that don't
     /// wire it aren't gated.
     @ObservationIgnored var onboardingCompleteProvider: () -> Bool = { true }
+
+    /// Re-enters the standard record flow (the same gating + area-selector
+    /// presentation the global hotkey runs). The error pill's "Retry" uses this
+    /// when there's no re-runnable recording on disk — "try again" there means
+    /// "record again", so it reopens the screen-region overlay. A closure (like
+    /// the providers above) so AppState doesn't hold the AreaSelector / stores;
+    /// wired by `ZerroApp.init` to `handleHotkey`. `nil` in tests/previews →
+    /// `retryRecordingFromRegion()` simply dismisses the failure.
+    @ObservationIgnored var requestAreaSelector: (() -> Void)? = nil
 
     /// M2 (rev 3): token for the app-lifetime `NSWorkspace.didWakeNotification`
     /// observer that triggers recovery on wake (the common lid-close case never
@@ -788,14 +985,12 @@ final class AppState {
         recordingIsDevMode = devMode != nil
         recordingProjectURL = devMode?.projectURL
         recordingAgentID = devMode?.agentID
+        recordingAgentModelID = devMode?.modelID
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
         parsedResponse = nil
         attachedContextBlock = nil
-        conversionTask?.cancel()
-        conversionTask = nil
-        conversionStatus = .idle
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -821,7 +1016,12 @@ final class AppState {
                 // mutate @Observable state on every emit. MainActor-
                 // hopped on the session side.
                 self?.handleAudioLevel(level)
-            }
+            },
+            // Phase 2 (Dev Mode deixis): capture the continuous cursor track ONLY
+            // for a Dev Mode recording. `recordingIsDevMode` is already set above
+            // from the `devMode` selection; a normal recording captures none and
+            // stays byte-identical.
+            capturesCursorTrack: recordingIsDevMode
         )
         recordingSession = session
 
@@ -1009,9 +1209,6 @@ final class AppState {
         generatedPrompt = nil
         parsedResponse = nil
         attachedContextBlock = nil
-        conversionTask?.cancel()
-        conversionTask = nil
-        conversionStatus = .idle
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -1030,17 +1227,37 @@ final class AppState {
         devDispatchTask?.cancel()
         devDispatchTask = nil
         devDispatchCoordinator.cancel()
+        // Teardown floor: invalidate any in-flight dispatch (a late outcome is
+        // dropped by the generation token) and unblock a suspended Ask Permission
+        // review gate (declining it) so the dispatch can't hang. Safe everywhere —
+        // a no-op when nothing is pending.
+        devDispatchGeneration += 1
+        resolvePendingReviewApproval(false)
+        devReviewPromptText = ""
+        devResolvedAnchors = []
+        devModelAnchors = []
         // Discard the checkpoint's on-disk untracked snapshot (a temp dir not
         // under the `zerro-` sweep prefix) so it doesn't leak when the dev
         // result is dismissed/reset without a Revert.
         if let checkpoint = devCheckpoint { devCheckpointService?.discardSnapshot(checkpoint) }
+        // Quit-recovery: this is the single point where a live checkpoint is torn
+        // down on every non-quit path (cancel, dismiss, reset, revocation, the
+        // session-finish outcomes, and revert-success via resetToIdle). Clear the
+        // durable marker in lockstep with `discardSnapshot` so it never outlives
+        // the checkpoint it points at.
+        devRecoveryStore.clear()
+        pendingDevRecovery = nil
         devCancelInFlight = false
+        devAgentStarted = false
         devDispatchStartTime = nil
         recordingIsDevMode = false
         recordingProjectURL = nil
         recordingAgentID = nil
+        recordingAgentModelID = nil
         devRunSubstatus = nil
         devDiffStat = nil
+        devSummary = nil
+        devDiffText = nil
         devFailure = nil
         devCheckpoint = nil
         devCheckpointService = nil
@@ -1173,7 +1390,31 @@ final class AppState {
             // termination, but the git checkpoint (a `stash create` commit +
             // saved untracked snapshot) persists, and terminating the agent
             // bounds the edits rather than leaving an orphaned process writing.
+            // KEEP the snapshot on disk for a future quit-recovery (tracked
+            // follow-up) — the agent may have edited, so it's the only undo.
             devDispatchCoordinator.cancel()
+        case .reviewingPrompt:
+            // Ask Permission: suspended at the pre-agent review gate — the agent
+            // NEVER ran, so the tree is untouched and the checkpoint protects
+            // nothing. Terminate the (idle) coordinator and DISCARD the snapshot:
+            // it isn't persisted across launch (so it can never be reverted after
+            // quit), and without this its `dev-checkpoint-*` temp dir — created
+            // OUTSIDE the `zerro-` launch-sweep prefix — would leak until the OS
+            // clears tmp. (Adversarial review finding.) `discardSnapshot` is
+            // best-effort + synchronous, so it's safe on the termination path.
+            // `approveReviewAndProceed` persists a marker before the dispatch flip,
+            // so clearing it here is load-bearing — no marker may survive pointing
+            // at the snapshot we just discarded.
+            devDispatchCoordinator.cancel()
+            if let cp = devCheckpoint { devCheckpointService?.discardSnapshot(cp) }
+            devRecoveryStore.clear()
+        case .confirmingDevRecovery:
+            // Quit-recovery offer open at quit: the interrupted agent already
+            // exited (the marker survived a PRIOR launch's quit), so there's
+            // nothing to tear down. LEAVE the marker on disk so the offer
+            // re-presents on the next launch — quitting past the offer must not
+            // silently drop the recoverable checkpoint.
+            break
         case .idle, .done, .failed, .confirmingRecovery,
              .devDone, .devFailed, .devReverting:
             // Terminal/idle dev states: the agent has exited; nothing to tear
@@ -1245,7 +1486,7 @@ final class AppState {
         }
         permissions?.stopMonitoring()
         switch outcome {
-        case .finished(let url, let clicks):
+        case .finished(let url, let clicks, let cursor):
             // Tier 1 analytics: the recording loop's terminal event. Read the
             // pre-transition state for `end_reason` — the auto-stop path set
             // `.autoStopped` before finalizing; a manual stop leaves
@@ -1266,7 +1507,7 @@ final class AppState {
             // existing placeholder result. The working-dir path is
             // logged so the isolated audio can be played + verified.
             state = .processing
-            runProcessing(sourceURL: url, clicks: clicks)
+            runProcessing(sourceURL: url, clicks: clicks, cursor: cursor)
         case .interrupted:
             // M2 (rev 2): the recording was abandoned for sleep WITHOUT
             // finalizing, leaving a recoverable fragmented `.mov` on disk
@@ -1433,6 +1674,138 @@ final class AppState {
         }
     }
 
+    // MARK: - Dev Mode quit-recovery (cross-launch undo)
+
+    /// Detect a Dev Mode dispatch that a quit (⌘Q / `kill -9`) interrupted
+    /// mid-edit and, when reverting is PROVABLY safe, offer a one-click Undo.
+    /// Called on the launch path BEFORE `recoverOrphanedRecordingIfAny` because it
+    /// restores real source files (higher stakes); returns `true` when it makes an
+    /// offer, so the caller skips the recording scan this launch (the recording
+    /// orphan re-offers next launch). The launch `WorkingDirectory.sweep()` never
+    /// touches the snapshot (it's `dev-checkpoint-*`, not `zerro-*`).
+    ///
+    /// NON-DESTRUCTIVE BY DEFAULT (the load-bearing contract): an offer is made
+    /// only when ALL of these hold — otherwise the marker is cleared and the
+    /// user's edits are KEPT (the safe failure), never a partial revert that could
+    /// delete un-restorable untracked files:
+    ///   1. the project path exists and is a git repo,
+    ///   2. the restore ref still resolves (the dangling `stash create` commit
+    ///      wasn't GC'd) — computing `diffStat` off-main doubles as this check,
+    ///   3. the untracked snapshot dir (if any) still exists — if a reboot cleared
+    ///      `$TMPDIR`, a revert's `clean -fd` would delete pre-existing untracked
+    ///      files it can't restore, so we must not offer,
+    ///   4. the diff is non-empty — the agent actually changed tracked files
+    ///      before the quit; a zero diff means nothing to undo.
+    ///
+    /// Gated on `state == .idle`, like the recording recovery: a non-idle launch
+    /// (e.g. a restored paid-block recording) no-ops and leaves the marker for the
+    /// next launch.
+    @discardableResult
+    func recoverInterruptedDevCheckpointIfAny() async -> Bool {
+        guard onboardingCompleteProvider(), state == .idle else { return false }
+        guard let marker = devRecoveryStore.load() else { return false }
+
+        // Validate 1: the project still exists on disk and is a git work tree.
+        // Rebuilding the service re-resolves git from the folder alone.
+        guard FileManager.default.fileExists(atPath: marker.projectPath),
+              let service = try? GitCheckpointService(projectURL: marker.projectURL),
+              service.isRepository() else {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        // Validate 3: a recorded untracked snapshot dir must still be present. If
+        // it's gone, a revert's `clean -fd` would delete pre-existing untracked
+        // files it can't restore — clearing + keeping the edits is the safe call.
+        if let snapshotPath = marker.untrackedSnapshotPath,
+           !FileManager.default.fileExists(atPath: snapshotPath) {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        let checkpoint = marker.checkpoint
+
+        // Validate 2 + 4 (off-main — it shells out to git): `diffStat` runs
+        // `git diff --numstat <restoreRef>`, which throws if the ref no longer
+        // resolves (GC'd stash commit). A nil result → unresolvable → clear, no
+        // offer; an empty diff → nothing to undo → clear, no offer.
+        let diff: GitDiffStat? = await Task.detached {
+            try? service.diffStat(since: checkpoint)
+        }.value
+        // Re-check liveness after the await: if the user started something during
+        // the git probe, don't preempt — leave the marker for the next offer.
+        guard state == .idle else { return false }
+        guard let diff, diff.filesChanged > 0 else {
+            devRecoveryStore.clear()
+            return false
+        }
+
+        // All safe — offer the undo. The reconstructed checkpoint/service revert
+        // through the SAME `GitCheckpointService.revert` an in-session Undo uses.
+        pendingDevRecovery = PendingDevRecovery(
+            checkpoint: checkpoint,
+            service: service,
+            diffStat: diff,
+            agentName: marker.agentName
+        )
+        state = .confirmingDevRecovery
+        Log.dev.notice("offering interrupted dev-checkpoint recovery — files: \(diff.filesChanged, privacy: .public)")
+        Analytics.capture("dev_recovery_offered", [
+            "files_changed": diff.filesChanged,
+        ])
+        return true
+    }
+
+    /// Resolve the cross-launch recovery offer. No-op outside
+    /// `.confirmingDevRecovery`. `undo == true` restores the working tree to the
+    /// checkpoint via the existing `GitCheckpointService.revert`; `false` (Keep,
+    /// and any dismissal the UI routes here) retains the agent's edits. EITHER
+    /// outcome clears the marker + discards the snapshot — once the user has
+    /// engaged, the marker never survives on disk.
+    func resolveDevRecovery(undo: Bool) {
+        guard case .confirmingDevRecovery = state, let pending = pendingDevRecovery else { return }
+        pendingDevRecovery = nil
+        let checkpoint = pending.checkpoint
+        let service = pending.service
+
+        guard undo else {
+            // Keep — retain the edits, drop the now-unneeded snapshot + marker.
+            service.discardSnapshot(checkpoint)
+            devRecoveryStore.clear()
+            state = .idle
+            Analytics.capture("dev_recovery_kept")
+            Log.dev.notice("dev-checkpoint recovery kept — edits retained")
+            return
+        }
+
+        // Undo — restore the tree off-main (it shells out to git), then clear.
+        state = .devReverting
+        Task { @MainActor [weak self] in
+            let ok = await Task.detached {
+                do { try service.revert(checkpoint); return true } catch { return false }
+            }.value
+            guard let self else { return }
+            // The checkpoint won't get healthier on retry, so clear the marker +
+            // snapshot regardless of revert success — a stale marker re-offering a
+            // broken checkpoint every launch would be worse than keeping the edits.
+            service.discardSnapshot(checkpoint)
+            self.devRecoveryStore.clear()
+            if ok {
+                Log.dev.notice("dev-checkpoint recovery undone — working tree restored")
+                Analytics.capture("dev_recovery_undone")
+            } else {
+                // Non-blocking: there's no live checkpoint to retry against and the
+                // user's edits are still on disk (the revertFailed copy — "check
+                // your working tree" — names the recourse), so settle to idle
+                // rather than parking on a dead-end failure card. The log +
+                // analytics record the failure.
+                Log.dev.error("dev-checkpoint recovery revert failed — \(DevDispatchFailure.revertFailed.userMessage, privacy: .public)")
+                Analytics.capture("dev_recovery_undo_failed")
+            }
+            self.state = .idle
+        }
+    }
+
     // MARK: - Processing pipeline (Phase 8 → Phase 9)
 
     /// Runs the local processing pipeline against the finished
@@ -1449,7 +1822,7 @@ final class AppState {
     /// defense, the `state == .processing` guards after each await mean
     /// a cancel that resets to .idle wins — we never stomp a newer state
     /// with a late-arriving pipeline result, even if the abort raced.
-    private func runProcessing(sourceURL: URL, clicks: [RecordedClick] = []) {
+    private func runProcessing(sourceURL: URL, clicks: [RecordedClick] = [], cursor: [CursorSample] = []) {
         // Reset the placeholder explicitly — handleSessionFinish set
         // state = .processing before this Task starts running, so for
         // ~ms before the pipeline fires its first onStage the pill
@@ -1465,6 +1838,11 @@ final class AppState {
                 let result = try await ProcessingPipeline().process(
                     sourceURL: sourceURL,
                     clicks: clicks,
+                    cursor: cursor,
+                    // Phase 2 (Dev Mode deixis, M3): retain the source video for
+                    // native-res anchor frames. The pipeline moves it into the
+                    // working dir, so the source deletion below becomes a no-op.
+                    retainSourceForDev: self.recordingIsDevMode,
                     redactSecrets: self.recordingRedactSecrets,
                     onStage: { [weak self] stage in
                         self?.setProcessingLabel(stage.userMessage)
@@ -1731,32 +2109,52 @@ final class AppState {
             defer { self.stopThinkingRotation() }
             do {
                 // One server round-trip covers upload → STT → generation; the
-                // rotating "thinking" sayings stand in for the single stage.
+                // rotating "thinking" sayings stand in for the single stage. (A
+                // Dev Mode recording is a TWO-call flow — see
+                // `runManagedDevGeneration` — but the same rotation spans both.)
                 self.startThinkingRotation()
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
-                let managed = try await proxy.generate(
-                    audioURL: audioURL,
-                    frames: processed.frames,
-                    durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
-                    clicks: processed.clicks,
-                    // Phase 6: tell the server whether to bother with Whisper. On
-                    // false it short-circuits STT (empty segments) — no transcript
-                    // round-trip — and composes from frames/OCR/clicks alone.
-                    hasSpeech: processed.hasSpeech,
-                    // Multi-model 6B: the toolbar's per-recording pick when
-                    // the recording came through the overlay, else the user's
-                    // persisted picker selection (registry-validated in
-                    // PreferencesStore). Selects the provider adapter SERVER-side
-                    // (charging is metered on real cost); never steers the prompt.
-                    model: self.recordingModelID
-                        ?? self.preferences?.selectedModelID
-                        ?? ModelRegistry.defaultModelID,
-                    tokenProvider: tokenProvider,
-                    // M1: the recording's stable key — reused across every retry
-                    // (here and `retryFailedPrompt`) so a charged-but-dropped
-                    // response is replayed, not re-billed.
-                    idempotencyKey: processed.idempotencyKey
-                )
+                let managed: ManagedGenerationResult
+                if self.recordingIsDevMode {
+                    // Phase 2 — the managed/trial hover-deixis 2-call flow:
+                    // devTranscribe (free) → shared resolveDevAnchors → enriched
+                    // generate. Populates `devResolvedAnchors` along the way.
+                    managed = try await self.runManagedDevGeneration(
+                        processed: processed,
+                        proxy: proxy,
+                        tokenProvider: tokenProvider,
+                        audioURL: audioURL,
+                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil
+                    )
+                } else {
+                    managed = try await proxy.generate(
+                        audioURL: audioURL,
+                        frames: processed.frames,
+                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
+                        clicks: processed.clicks,
+                        // Phase 6: tell the server whether to bother with Whisper.
+                        // On false it short-circuits STT (empty segments) — no
+                        // transcript round-trip — and composes from
+                        // frames/OCR/clicks alone.
+                        hasSpeech: processed.hasSpeech,
+                        // Multi-model 6B: the toolbar's per-recording pick when
+                        // the recording came through the overlay, else the user's
+                        // persisted picker selection (registry-validated in
+                        // PreferencesStore). Selects the provider adapter
+                        // SERVER-side (charging is metered on real cost); never
+                        // steers the prompt. (Dev mode routes through
+                        // `runManagedDevGeneration` above, so this is the normal
+                        // path — no `mode`, byte-identical body.)
+                        model: self.recordingModelID
+                            ?? self.preferences?.selectedModelID
+                            ?? ModelRegistry.defaultModelID,
+                        tokenProvider: tokenProvider,
+                        // M1: the recording's stable key — reused across every
+                        // retry (here and `retryFailedPrompt`) so a
+                        // charged-but-dropped response is replayed, not re-billed.
+                        idempotencyKey: processed.idempotencyKey
+                    )
+                }
                 let result = managed.result
                 Log.promptGen.info(
                     "\(label, privacy: .public) OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
@@ -1764,6 +2162,16 @@ final class AppState {
 
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
+                // Phase 2 (Dev Mode): the model's structured anchors for the M6
+                // confirm gate. Prefer the server-parsed `anchors[]`; fall back to
+                // parsing the raw prompt's `zerro_anchors` block (older server /
+                // deploy skew) — the SAME parse BYOK runs. `devResolvedAnchors`
+                // (the client half) was set inside `runManagedDevGeneration`.
+                if self.recordingIsDevMode {
+                    self.devModelAnchors = managed.modelAnchors.isEmpty
+                        ? DevAnchorParser.parse(result.prompt)
+                        : managed.modelAnchors
+                }
                 // Multi-model 6B: the exact server spend for the result pill's
                 // "−N credits · M left" line (both fields or no toast — a
                 // pre-D2 backend omits credits_charged).
@@ -1842,6 +2250,109 @@ final class AppState {
                 }
             }
         }
+    }
+
+    /// Phase 2 — the Managed/trial Dev Mode hover-deixis 2-CALL flow (handoff
+    /// Part 3). Mirrors BYOK's `runLocalPromptGeneration` dev path, differing ONLY
+    /// in where the transcript comes from (call 1, free server STT) and where
+    /// generation runs (call 2, the `/generate` edge function). The client-side
+    /// resolution (`resolveDevAnchors`), the confirm gate, and the dispatch tail
+    /// are all SHARED. Returns the call-2 result; the caller lands it on the same
+    /// `.done`/dispatch tail the single-call managed path uses.
+    ///
+    /// 1. CALL 1 `devTranscribe` → word transcript (free; no slot/credit). Skipped
+    ///    when the recording has no speech (empty transcript → the resolver yields
+    ///    no anchors and the run degrades to click/dwell), mirroring BYOK's local
+    ///    Whisper skip.
+    /// 2. Domain-dictionary snap (Versel→Vercel) + the SHARED `resolveDevAnchors`
+    ///    → client anchors + marked `DEIXIS REFERENCE` frames. Sets
+    ///    `devResolvedAnchors` (the client half of the M6 gate).
+    /// 3. CALL 2 `generateDev` with the PRE-SUPPLIED transcript + marked frames
+    ///    (NO audio re-upload) → `agent_prompt` + structured model anchors. The
+    ///    credit is consumed exactly once here.
+    private func runManagedDevGeneration(
+        processed: ProcessedRecording,
+        proxy: ManagedProxyClient,
+        tokenProvider: ProxyTokenProviding?,
+        audioURL: URL,
+        durationSeconds: Double?
+    ) async throws -> ManagedGenerationResult {
+        // Reset the dev anchor state for this run (mirrors the BYOK dev block);
+        // `devModelAnchors` is populated by the caller from the call-2 result.
+        self.devResolvedAnchors = []
+        self.devModelAnchors = []
+
+        let model = self.recordingModelID
+            ?? self.preferences?.selectedModelID
+            ?? ModelRegistry.defaultModelID
+
+        // CALL 1 — free word-level transcription (server STT). No speech → skip
+        // the round-trip entirely and resolve on an empty transcript, exactly as
+        // BYOK skips its local Whisper pass.
+        var transcript: Transcript
+        if processed.hasSpeech {
+            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe started")
+            transcript = try await proxy.devTranscribe(
+                audioURL: audioURL,
+                durationSeconds: durationSeconds,
+                hasSpeech: true,
+                tokenProvider: tokenProvider,
+                // A distinct key from call 2: call 1 writes no idempotency entry
+                // server-side, but a separate key keeps the two calls unambiguous.
+                idempotencyKey: processed.idempotencyKey + ":dev-transcribe"
+            )
+        } else {
+            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe skipped (no speech)")
+            transcript = Transcript(segments: [], fullText: "", words: [])
+        }
+
+        // Domain-dictionary snap before resolve + generation, exactly as BYOK
+        // (§11) — improves both anchor resolution and the dev prompt. Best-effort
+        // + Dev-Mode-only (an empty/seedless dictionary is a no-op).
+        if let projectURL = self.recordingProjectURL, !transcript.fullText.isEmpty {
+            let dictionary = await Task.detached { DevDomainDictionary.seed(projectURL: projectURL) }.value
+            transcript = dictionary.corrected(transcript)
+        }
+
+        // SHARED client-side resolution (Part 1) — byte-identical to BYOK.
+        let (resolved, anchorFrames) = await Self.resolveDevAnchors(
+            words: transcript.words,
+            cursorTrack: processed.cursorTrack,
+            clicks: processed.clicks,
+            sourceVideoURL: processed.sourceVideoURL,
+            baseTimestamp: processed.duration,
+            workingDirectory: processed.workingDirectory
+        )
+        self.devResolvedAnchors = resolved
+
+        // Don't fire the BILLABLE call 2 if the recording was cancelled/superseded
+        // during call 1 or resolution. The catch in `runProxyGeneration` returns
+        // early when `state != .processing`, so a cancellation surfaces no failure
+        // card and — crucially — no charge.
+        guard self.state == .processing else { throw CancellationError() }
+
+        // CALL 2 — enriched generation. The pre-supplied transcript skips server
+        // STT (no double STT round-trip / charge); the marked DEIXIS frames + OCR
+        // ride as trailing frames; NO audio (it went up in call 1). Bill against
+        // call 1's SERVER-measured duration (the same one the normal managed path
+        // meters on), falling back to the local container duration when call 1 was
+        // skipped (no speech) or an older server omitted it.
+        Log.breadcrumb(category: .pipelineStage, message: "managed dev generation started")
+        let transcriptUpload = ManagedProxyClient.DevTranscriptUpload(
+            segments: transcript.segments.map {
+                ManagedProxyClient.DevTranscriptUpload.Segment(start: $0.start, end: $0.end, text: $0.text)
+            },
+            durationSeconds: transcript.durationSeconds ?? durationSeconds
+        )
+        return try await proxy.generateDev(
+            frames: processed.frames + anchorFrames,
+            transcript: transcriptUpload,
+            clicks: processed.clicks,
+            hasSpeech: processed.hasSpeech,
+            model: model,
+            tokenProvider: tokenProvider,
+            idempotencyKey: processed.idempotencyKey
+        )
     }
 
     /// Maps a trial `/generate` failure to the user-facing taxonomy and performs
@@ -1957,7 +2468,7 @@ final class AppState {
                 // empty transcript. The timeline is then frames + OCR + clicks
                 // only; the prompt's empty-narration rule covers the output
                 // (one brief chat line, no artifact).
-                let transcript: Transcript
+                var transcript: Transcript
                 if processed.hasSpeech {
                     // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
                     // failure can be triaged by the breadcrumb sequence
@@ -1965,7 +2476,11 @@ final class AppState {
                     Log.breadcrumb(category: .pipelineStage, message: "transcription started")
                     let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
                     transcript = try await OpenAITranscriptionService().transcribe(
-                        audioFileURL: audioURL
+                        audioFileURL: audioURL,
+                        // Phase 2 (Dev Mode deixis): request word-level timing only
+                        // for a Dev Mode recording (the resolver needs it); a normal
+                        // recording's request stays byte-identical.
+                        wordTimestamps: self.recordingIsDevMode
                     )
                     // Counts are .public — segment count and char count
                     // are metrics, not content. The transcript TEXT itself
@@ -1983,8 +2498,47 @@ final class AppState {
                     return
                 }
 
+                // Phase 2 (Dev Mode deixis §11): snap mangled library/component
+                // names ("Versel"→"Vercel") back to the project's canonical
+                // spellings before they reach the resolver + the dev prompt.
+                // Dev-Mode-only + best-effort (an empty/seedless dictionary is a
+                // no-op); a normal recording's transcript is untouched.
+                if self.recordingIsDevMode, let projectURL = self.recordingProjectURL,
+                   !transcript.fullText.isEmpty {
+                    let dictionary = await Task.detached { DevDomainDictionary.seed(projectURL: projectURL) }.value
+                    transcript = dictionary.corrected(transcript)
+                }
+
+                // Phase 2 (M4/M5): resolve deixis anchors (hover-dwell + click)
+                // and build the per-reference element-ID input — CROPPED
+                // native-res MARKED frames + OCR + the client confidence. Off-main
+                // (frame extraction). Empty when not Dev Mode / no words / no
+                // source video → the dev path degrades to click anchoring. The
+                // marked crops ride to the model as trailing frames (uniform
+                // across providers; no per-provider request change).
+                self.devResolvedAnchors = []
+                self.devModelAnchors = []
+                var anchorFrames: [ExtractedFrame] = []
+                if self.recordingIsDevMode {
+                    // The client-side resolution is SHARED with the Managed/trial
+                    // path (`runProxyGeneration`) so the resolver/pipeline/marked-
+                    // frame logic lives in exactly one place. Only the transcript
+                    // source (local Whisper here; call 1 there) and where
+                    // generation runs differ.
+                    let (resolved, frames) = await Self.resolveDevAnchors(
+                        words: transcript.words,
+                        cursorTrack: processed.cursorTrack,
+                        clicks: processed.clicks,
+                        sourceVideoURL: processed.sourceVideoURL,
+                        baseTimestamp: processed.duration,
+                        workingDirectory: processed.workingDirectory
+                    )
+                    self.devResolvedAnchors = resolved
+                    anchorFrames = frames
+                }
+
                 let timeline = Interleaver.merge(
-                    frames: processed.frames,
+                    frames: processed.frames + anchorFrames,
                     transcript: transcript,
                     clicks: processed.clicks
                 )
@@ -2061,7 +2615,13 @@ final class AppState {
                 }
                 let result = try await BYOKRouting.service(for: entry).generatePrompt(
                     timeline: timeline,
-                    systemPrompt: PromptGenerationSystemPrompt.composed()
+                    // Phase 2 (M5/M7): a Dev Mode recording MUST generate with the
+                    // dev prompt (Goal/Changes/Scope, anchored to visible labels) —
+                    // not the normal clipboard prompt. This selection seam fixes a
+                    // Phase-1 gap (the call site hard-coded `composed()` = normal,
+                    // so dev recordings silently used the wrong prompt) and is
+                    // guarded by `DevPromptSelectionTests`.
+                    systemPrompt: PromptGenerationSystemPrompt.composed(mode: self.generationPromptMode)
                 )
                 // Model name (.public — a registry id we control) and token
                 // counts (.public — metrics, not content). result.prompt.count
@@ -2077,6 +2637,14 @@ final class AppState {
 
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
+                // Phase 2 (M5): the model returns its structured anchors in a
+                // `zerro_anchors` block alongside the agent_prompt artifact — parse
+                // them DEFENSIVELY (unknown shapes → []). They sharpen the confirm
+                // gate's labels + confidence; absent → the gate uses the client
+                // signal alone.
+                if self.recordingIsDevMode {
+                    self.devModelAnchors = DevAnchorParser.parse(result.prompt)
+                }
                 self.resultHadNoNarration = Self.isNarrationEmpty(transcript)
                 self.finishGenerationOrDispatch()
                 Analytics.capture("generation_succeeded", [
@@ -2132,9 +2700,8 @@ final class AppState {
         generatedPrompt = rawPrompt
         parsedResponse = parsed
         // Tier 4 analytics: the activation signal — a usable result was produced.
-        // Fired here (the shared generation `.done` tail), so it counts once per
-        // generation and NOT on the "Write agent prompt" conversion re-parse,
-        // which lands in `acceptConversionResult`. Metadata only.
+        // Fired here, in the shared generation `.done` tail, so it counts once
+        // per generation. Metadata only.
         Analytics.capture("artifact_produced", [
             "artifact_type": parsed.artifact?.type.rawValue ?? "chat",
             "was_chat_only": parsed.artifact == nil,
@@ -2195,7 +2762,7 @@ final class AppState {
 
     /// The Copy button's payload per the §2 per-type table (revised
     /// 2026-06-12): the artifact body alone for EVERY type — the Attached
-    /// Context is internal-only (convert model input) and is never copied. A chat-only
+    /// Context is internal-only and is never copied. A chat-only
     /// response copies the chat text. Falls back to the raw output when
     /// parsing produced no structure.
     var resultCopyPayload: String? {
@@ -2204,6 +2771,15 @@ final class AppState {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
         return artifact.body
+    }
+
+    /// The system-prompt mode for the CURRENT recording's generation: `.dev` for
+    /// a Dev Mode recording (the repo-scoped Goal/Changes/Scope spec), `.normal`
+    /// otherwise (the clipboard prompt). The single seam both generation paths
+    /// read so a Dev recording can never silently fall back to the normal prompt
+    /// (Phase-1 gap). Guarded by `DevPromptSelectionTests`.
+    var generationPromptMode: PromptMode {
+        recordingIsDevMode ? .dev : .normal
     }
 
     // MARK: - Dev Mode dispatch (Phase 1, Milestone 6)
@@ -2252,13 +2828,27 @@ final class AppState {
 
         // Analytics: the dispatch start (metadata only). The succeeded/failed
         // counterparts (M8) read `devDispatchStartTime` for `duration_ms`.
-        Analytics.capture("dev_dispatch_started", ["agent_id": agentID])
+        Analytics.capture("dev_dispatch_started", [
+            "agent_id": agentID,
+            // Metadata only — a public model id, never user content.
+            "agent_model": recordingAgentModelID ?? "default",
+        ])
+        // M6 anchor-resolution analytics (metadata only — counts + a confidence
+        // histogram, never labels/paths/content).
+        captureAnchorResolutionAnalytics()
         devDispatchStartTime = Date()
 
         devRunSubstatus = nil
         devDiffStat = nil
+        devSummary = nil
+        devDiffText = nil
         devFailure = nil
         devCancelInFlight = false
+        devAgentStarted = false
+        // New dispatch → new generation token; any prior in-flight confirm/outcome
+        // is now stale and will be dropped.
+        devDispatchGeneration += 1
+        let gen = devDispatchGeneration
         state = .devCheckpointing
 
         let body = artifact.body
@@ -2271,6 +2861,9 @@ final class AppState {
                 // Phase 1 default — edits-only (design §11). The opt-in
                 // "allow commands" toggle is a later phase.
                 permission: .editsOnly,
+                // Phase 2 — the model captured at record-start. nil ⇒ the agent's
+                // own default; the runner appends `--model <id>` only when set.
+                model: recordingAgentModelID,
                 // Retain the checkpoint as soon as it's taken so a cancel/quit
                 // mid-run has something to revert (M7 #3), before the agent
                 // even finishes.
@@ -2278,11 +2871,20 @@ final class AppState {
                     self?.devCheckpoint = checkpoint
                     self?.devCheckpointService = service
                 },
+                // Ask Permission: the gate runs AFTER the checkpoint and BEFORE the
+                // agent. Returns true to dispatch, false to abort (cancel) — the
+                // agent never runs on false, so the caller discards the checkpoint
+                // (nothing to revert). A no-op under `.autoApprove`, so the
+                // auto-apply path is unchanged.
+                confirmGate: { [weak self] in
+                    await self?.awaitReviewApproval(gen: gen, prompt: body) ?? false
+                },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
-            // Ignore a stale completion if the user moved on (new recording /
-            // reset cleared the dev state).
-            guard self.recordingIsDevMode else { return }
+            // Stale guard: drop the outcome if the recording was torn down or
+            // superseded while in flight (the safe-cancel path owns its own
+            // teardown; a bumped generation means a new/reset recording).
+            guard self.recordingIsDevMode, self.devDispatchGeneration == gen else { return }
             self.applyDevOutcome(outcome)
         }
     }
@@ -2298,11 +2900,229 @@ final class AppState {
         case .checkpointing:
             state = .devCheckpointing
         case .dispatching:
+            // Past the review gate — the agent is now spawning/editing, so a
+            // subsequent cancel must auto-revert.
+            devAgentStarted = true
+            // Quit-recovery: this is the instant the agent is first allowed to
+            // edit (the coordinator emits `.dispatching` AFTER the confirm gate
+            // resolves to proceed and the checkpoint is taken — never before), so
+            // it's the one place to persist the durable recovery marker. Writing
+            // it a hair before the first edit is harmless: a quit in that sliver
+            // → recovery reverts a zero-diff checkpoint → no-op (and Part 3's
+            // empty-diff guard clears it without offering). Critically AFTER the
+            // gate, so a `.reviewingPrompt` quit never leaves a marker pointing at
+            // a discarded snapshot.
+            persistDevRecoveryMarker()
             state = .devAgentDispatching
         case .running(let substatus):
+            devAgentStarted = true
             devRunSubstatus = substatus
             state = .devAgentRunning
         }
+    }
+
+    /// Persist the durable quit-recovery marker for the current dispatch. Built
+    /// from the just-taken checkpoint (`devCheckpoint` is set by the coordinator's
+    /// `onCheckpoint` before the agent runs) + the service's project URL + the
+    /// agent's display name. A no-op when the checkpoint isn't set yet (defensive
+    /// — `.dispatching` only fires after `onCheckpoint`). The marker's lifetime
+    /// mirrors `devCheckpoint`'s but survives process death; every checkpoint
+    /// teardown clears it (`resetTransientRecordingState`, retry, revert success).
+    private func persistDevRecoveryMarker() {
+        guard let checkpoint = devCheckpoint, let service = devCheckpointService else { return }
+        let marker = DevRecoveryMarker(
+            projectPath: service.projectURL.path,
+            baseSha: checkpoint.baseSha,
+            stashSha: checkpoint.stashSha,
+            untrackedSnapshotPath: checkpoint.untrackedSnapshotDir?.path,
+            untrackedRelativePaths: checkpoint.untrackedRelativePaths,
+            createdAt: Date(),
+            agentName: recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName }
+        )
+        devRecoveryStore.save(marker)
+    }
+
+    // MARK: - Dev Mode anchor resolution → review-card targets
+
+    /// Combined per-reference confidence (§7): the client dwell/OCR signal, MIN'd
+    /// with the model's agreement WHEN the model returned an anchor for it —
+    /// otherwise the client signal alone (never `min`-ing against a missing
+    /// model value). Model anchors pair by echoed `ref`, falling back to position.
+    /// Feeds the review card's low-confidence flag and the resolution analytics.
+    private func combinedConfidence(_ r: ResolvedDeixisAnchor) -> Double {
+        let client = r.clientConfidence
+        let model = devModelAnchors.first { $0.refIndex == r.refIndex }
+            ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
+        guard let model else { return client }
+        return Swift.min(client, model.modelConfidence)
+    }
+
+    /// The resolved label per reference for the review card's "Targeting: …" rows:
+    /// the model's verbatim label, else the nearest OCR string, else the spoken
+    /// phrase. Paired with whether it's a low-confidence one (flagged amber so the
+    /// user knows which target to scrutinize before approving).
+    var devConfirmAnchorSummaries: [(label: String, isLow: Bool)] {
+        devResolvedAnchors.map { r in
+            let model = devModelAnchors.first { $0.refIndex == r.refIndex }
+                ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
+            let label = model?.label ?? r.ocrStrings.first ?? r.candidate.phrase
+            return (label, combinedConfidence(r) < Self.devLowConfidenceThreshold)
+        }
+    }
+
+    // MARK: - Dev Mode Ask Permission review gate
+
+    /// The display name of the agent THIS dev recording dispatches to, for the
+    /// review card's "Send to …?" header. Falls back to a neutral label when the
+    /// agent id is unknown (it always is set for a dev recording).
+    var devReviewAgentName: String {
+        recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName } ?? "the agent"
+    }
+
+    /// The dispatch's Ask Permission review gate — the SOLE pre-edit checkpoint.
+    /// Returns immediately under `.autoApprove` (byte-identical to the auto-apply
+    /// path); under `.askPermission` it shows the review pill with the exact
+    /// `prompt` and SUSPENDS until the user Approves/Cancels (or a teardown
+    /// resolves it). The `gen` token drops a resume that lands after the recording
+    /// was superseded/reset. (`internal` rather than `private` only so the gate
+    /// tests can drive it directly.)
+    func awaitReviewApproval(gen: Int, prompt: String) async -> Bool {
+        guard devDispatchGeneration == gen else { return false }
+        // Auto Approve ⇒ instant pass: no `.reviewingPrompt` state, no card — the
+        // dispatch proceeds exactly as today.
+        guard preferences?.devPermissionMode == .askPermission else { return true }
+        devReviewPromptText = prompt
+        state = .reviewingPrompt
+        let proceed = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            pendingReviewContinuation = cont
+        }
+        // A late resume into a superseded recording must not dispatch.
+        guard devDispatchGeneration == gen else { return false }
+        return proceed
+    }
+
+    /// Approve button — proceed with the dispatch. Resolves the gate EXACTLY once
+    /// (a double-tap finds the continuation already cleared → no-op), so the agent
+    /// can't be dispatched twice.
+    func approveReviewAndProceed() {
+        guard state == .reviewingPrompt, let cont = pendingReviewContinuation else { return }
+        pendingReviewContinuation = nil
+        Analytics.capture("dev_review_decision", ["decision": "approve"])
+        // Quit-recovery: the gate resolved to proceed, so the agent is now cleared
+        // to edit (the checkpoint was taken before the gate). Persist the marker
+        // HERE — this is the proceed point that must close the run-loop sliver
+        // before the `.devAgentDispatching` flip below, so that state is never
+        // quit-reachable without a marker. The coordinator's later
+        // `applyDevPhase(.dispatching)` re-persists the same marker (idempotent
+        // atomic overwrite).
+        persistDevRecoveryMarker()
+        state = .devAgentDispatching // immediate feedback; the dispatch advances it
+        cont.resume(returning: true)
+    }
+
+    /// Cancel button on the review card — abort before the agent runs. Routes
+    /// through the safe teardown (it discards the checkpoint snapshot and returns
+    /// to idle), exactly like cancelling any active dispatch. A double-tap is a
+    /// no-op (the second finds `state != .reviewingPrompt`).
+    func cancelReview() {
+        guard state == .reviewingPrompt else { return }
+        Analytics.capture("dev_review_decision", ["decision": "cancel"])
+        cancelDevDispatchSafely()
+    }
+
+    /// Resolve a pending review gate with `proceed`, if any. Used by teardown
+    /// paths (cancel/reset) so the suspended dispatch unblocks instead of hanging.
+    /// Resolves once.
+    private func resolvePendingReviewApproval(_ proceed: Bool) {
+        guard let cont = pendingReviewContinuation else { return }
+        pendingReviewContinuation = nil
+        cont.resume(returning: proceed)
+    }
+
+    /// Anchor-resolution analytics — count + confidence histogram + whether any
+    /// target is low-confidence. Metadata only (§14.5): counts/buckets/booleans,
+    /// never labels/content.
+    private func captureAnchorResolutionAnalytics() {
+        guard recordingIsDevMode, !devResolvedAnchors.isEmpty else { return }
+        var high = 0, medium = 0, low = 0
+        for r in devResolvedAnchors {
+            let c = combinedConfidence(r)
+            if c >= 0.7 { high += 1 } else if c >= Self.devLowConfidenceThreshold { medium += 1 } else { low += 1 }
+        }
+        Analytics.capture("dev_anchor_resolution", [
+            "count": devResolvedAnchors.count,
+            "high": high, "medium": medium, "low": low,
+            "has_low_confidence": low > 0,
+            "model_anchors": devModelAnchors.count,
+        ])
+    }
+
+    /// Phase 2 — the SHARED client-side hover-deixis resolution, reused by BOTH
+    /// generation paths (BYOK `runLocalPromptGeneration` + Managed/trial
+    /// `runProxyGeneration`) so the resolver / pipeline / marked-frame logic lives
+    /// in exactly ONE place (no duplication). Given the WORD transcript (local
+    /// Whisper for BYOK; the free server call 1 for Managed) plus the recording's
+    /// cursor track + clicks + retained source video, it runs
+    /// `DeixisResolver.resolve` → `DevAnchorPipeline.build` and writes the cropped,
+    /// crosshair-MARKED native-res anchor frames.
+    ///
+    /// Returns the client-resolved anchors (each carrying the referring
+    /// expression, nearby OCR strings, and the M6 client confidence) and the
+    /// marked frames to ship to generation as trailing `DEIXIS REFERENCE` frames.
+    /// The ONLY per-path differences are where the transcript comes from and where
+    /// generation runs — never this.
+    ///
+    /// `nonisolated` + pure value inputs so it runs off the main actor (native
+    /// frame extraction). Empty `words` (no speech / no word timing) → no
+    /// candidates → the run degrades to click/dwell anchoring.
+    nonisolated static func resolveDevAnchors(
+        words: [WordTiming],
+        cursorTrack: [CursorSample],
+        clicks: [ResolvedClick],
+        sourceVideoURL: URL?,
+        baseTimestamp: CMTime,
+        workingDirectory: URL
+    ) async -> (resolved: [ResolvedDeixisAnchor], anchorFrames: [ExtractedFrame]) {
+        let candidates = DeixisResolver.resolve(
+            words: words,
+            cursorTrack: cursorTrack,
+            clickTimes: clicks.map(\.seconds)
+        )
+        let resolved = await DevAnchorPipeline.build(
+            candidates: candidates,
+            sourceVideoURL: sourceVideoURL
+        )
+        let anchorFrames = writeAnchorFrames(
+            resolved, baseTimestamp: baseTimestamp, into: workingDirectory
+        )
+        return (resolved, anchorFrames)
+    }
+
+    /// Write the cropped native-res MARKED anchor crops to the working dir as
+    /// trailing frames (timestamps after the recording, so they sort last), each
+    /// tagged with a `DEIXIS REFERENCE` hint the dev prompt keys on. Skips an
+    /// anchor with no marked frame. The frames ride to the model through the
+    /// normal timeline → no per-provider request change.
+    nonisolated static func writeAnchorFrames(
+        _ anchors: [ResolvedDeixisAnchor], baseTimestamp: CMTime, into dir: URL
+    ) -> [ExtractedFrame] {
+        let base = CMTimeGetSeconds(baseTimestamp)
+        let baseSeconds = base.isFinite ? base : 0
+        var frames: [ExtractedFrame] = []
+        for a in anchors {
+            guard let b64 = a.markedJPEGBase64, let data = Data(base64Encoded: b64) else { continue }
+            let url = dir.appendingPathComponent("anchor-\(a.refIndex).jpg")
+            guard (try? data.write(to: url, options: .atomic)) != nil else { continue }
+            let nearby = a.ocrStrings.prefix(8).joined(separator: ", ")
+            let hint = "DEIXIS REFERENCE \(a.refIndex): the developer pointed here while saying \"\(a.candidate.phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+            frames.append(ExtractedFrame(
+                url: url,
+                timestamp: CMTime(seconds: baseSeconds + 1 + Double(a.refIndex), preferredTimescale: 600),
+                index: 100_000 + a.refIndex,
+                ocrText: hint
+            ))
+        }
+        return frames
     }
 
     private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
@@ -2315,7 +3135,14 @@ final class AppState {
             devCheckpoint = success.checkpoint
             devCheckpointService = success.service
             devDiffStat = success.diff
+            devSummary = success.summary
+            devDiffText = success.diffText
             devFailure = nil
+            // Land the dev-result card COLLAPSED — the compact summary pill with
+            // its View changes / Undo / Accept controls; "View changes" expands to
+            // the full card (summary + diff). Shares the result expand flag — the
+            // two states never coexist.
+            isResultExpanded = false
             state = .devDone
             Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
             // M8 analytics — metadata only (counts/durations; no path/content).
@@ -2324,6 +3151,17 @@ final class AppState {
                 "files_changed": success.diff.filesChanged,
             ])
         case .failed(let failure, let checkpoint, let service, let diff):
+            // Defensive: a cancelled Ask Permission review gate means the agent
+            // never ran (the tree is untouched). The cancel path
+            // (cancelDevDispatchSafely) normally owns teardown and suppresses this
+            // via `devCancelInFlight`, so this is belt-and-suspenders — discard the
+            // checkpoint, go idle, never show a failure card.
+            if failure == .confirmDeclined {
+                devCheckpoint = checkpoint
+                devCheckpointService = service
+                resetToIdle()
+                return
+            }
             // No auto-revert (§8): keep the checkpoint (when one was taken) so
             // Milestone 7's Revert can restore the partial edits.
             devCheckpoint = checkpoint
@@ -2360,10 +3198,9 @@ final class AppState {
         case .agentUnavailable:   return "agent_unavailable"
         case .noChangeRequested:  return "no_change_requested"
         case .revertFailed:       return "revert_failed"
+        case .confirmDeclined:    return "confirm_declined"
         case .agent(let reason):
             switch reason {
-            case .timeout(.wallClock):  return "agent_timeout_wallclock"
-            case .timeout(.inactivity): return "agent_timeout_inactivity"
             case .nonZeroExit:          return "agent_nonzero_exit"
             case .spawnFailed:          return "agent_spawn_failed"
             case .busy:                 return "agent_busy"
@@ -2383,7 +3220,11 @@ final class AppState {
     /// progress card shows a Cancel that routes to the safe terminate→revert).
     private var isDevDispatchActive: Bool {
         switch state {
-        case .devCheckpointing, .devAgentDispatching, .devAgentRunning: return true
+        // `.reviewingPrompt` (Ask Permission) is INCLUDED: the dispatch is
+        // suspended at a gate with a checkpoint already taken, so a
+        // cancel/hotkey/quit there must route through the safe teardown (discard the
+        // snapshot, unblock the gate), not drop the UI and leak the checkpoint.
+        case .devCheckpointing, .devAgentDispatching, .devAgentRunning, .reviewingPrompt: return true
         default: return false
         }
     }
@@ -2461,6 +3302,10 @@ final class AppState {
                 // run takes a NEW checkpoint of the restored tree, so a later
                 // Revert restores to the true pre-run state.
                 service.discardSnapshot(checkpoint)
+                // Quit-recovery: clear the marker that pointed at the now-discarded
+                // old checkpoint. The re-dispatch writes a fresh marker for the new
+                // checkpoint at its `.dispatching` phase.
+                self.devRecoveryStore.clear()
                 self.devCheckpoint = nil
                 self.devCheckpointService = nil
                 self.beginDevDispatch()
@@ -2483,6 +3328,10 @@ final class AppState {
         devCancelInFlight = true
         devDispatchTask = nil
         state = .devReverting
+        // If suspended at the Ask Permission review gate, resolve it false so the
+        // dispatch unblocks and returns (the agent never ran → the revert below is
+        // a no-op).
+        resolvePendingReviewApproval(false)
         // Terminate the agent; the in-flight dispatch resolves `.cancelled`.
         devDispatchCoordinator.cancel()
         Task { @MainActor [weak self] in
@@ -2497,187 +3346,21 @@ final class AppState {
             // stale continuation must NOT also revert/reset — let the newer path
             // win cleanly rather than have two paths drive state.
             guard let self, self.devCancelInFlight else { return }
-            if let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
+            // Revert ONLY if the agent actually started (could have edited). A
+            // cancel at the Ask Permission review gate (agent never ran) skips
+            // the revert: the tree is already the pre-run state, so reverting
+            // would needlessly remove + re-copy the user's untracked files (and
+            // risk a restore failure). The snapshot is still discarded below.
+            if self.devAgentStarted, let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
                 let restored = await self.performRevert(checkpoint, service: service)
                 Log.dev.notice("Dev dispatch cancelled — auto-revert restored: \(restored, privacy: .public)")
+            } else {
+                Log.dev.notice("Dev dispatch cancelled before the agent ran — no revert needed")
             }
             self.devCancelInFlight = false
             self.resetTransientRecordingState() // discards the snapshot + clears dev state
             self.state = .idle
         }
-    }
-
-    // MARK: - Conversion fallback (Phase 6 — "Write agent prompt")
-
-    /// The ghost button's lifecycle. `.idle` with `canConvertToAgentPrompt`
-    /// true renders the button; `.running` the inline spinner; `.failed` the
-    /// unobtrusive "Couldn't write the prompt — try again" note (the button
-    /// stays — it IS the retry affordance). Reset wherever `parsedResponse` is.
-    enum ConversionStatus: Equatable {
-        case idle, running, failed
-    }
-
-    var conversionStatus: ConversionStatus = .idle
-
-    @ObservationIgnored private var conversionTask: Task<Void, Never>?
-
-    /// The ghost "✎ Write agent prompt" button renders ONLY on artifact-less
-    /// results: the model judged the response a question/diagnosis (or the
-    /// fail-safe degraded a malformed response to chat text — there is still
-    /// chat text worth converting). A result that already has a card never
-    /// shows it.
-    ///
-    /// The one artifact-less case that must NOT show it is the empty case —
-    /// the recording held no request at all. Generation signals that with the
-    /// `<<<ZERRO_NO_REQUEST>>>` sentinel, which the parser turns into
-    /// `requestPresent == false`; converting there has nothing to convert and
-    /// would hallucinate a task from on-screen context. `!= false` (not
-    /// `== true`) keeps the button for every other path, since `requestPresent`
-    /// defaults true.
-    var canConvertToAgentPrompt: Bool {
-        state == .done && parsedResponse != nil && parsedResponse?.artifact == nil
-            && parsedResponse?.requestPresent != false
-    }
-
-    /// Converts the current artifact-less response into an `agent_prompt`
-    /// artifact via the free `convert` endpoint (Managed/trial) or a direct
-    /// provider call with the same conversion prompt (BYOK). On success the
-    /// converted artifact joins the EXISTING ParsedResponse (the chat text is
-    /// never replaced) and updates the existing history entry. On any failure
-    /// the result is left exactly as it was, with an inline retry state.
-    func convertToAgentPrompt() {
-        guard canConvertToAgentPrompt, conversionStatus != .running else { return }
-        guard let parsed = parsedResponse else { return }
-        let source = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
-        guard !source.isEmpty else { return }
-        let context = attachedContextBlock
-        let model = recordingModelID
-            ?? preferences?.selectedModelID
-            ?? ModelRegistry.defaultModelID
-        // Plan Phase 6 step 4: the recording's stable key + ":convert". The
-        // server has no dedup cache today; the suffix keeps the key disjoint
-        // from the generation's if one is ever added.
-        let idemKey = (processedRecording?.idempotencyKey ?? UUID().uuidString) + ":convert"
-
-        conversionStatus = .running
-        Log.artifacts.info("conversion started")
-
-        conversionTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let raw = try await self.performConversion(
-                    source: source,
-                    context: context,
-                    model: model,
-                    idempotencyKey: idemKey
-                )
-                // The user may have dismissed the result (or started a new
-                // recording, which cancels this task) while we waited.
-                guard self.state == .done, self.conversionStatus == .running else { return }
-                self.acceptConversionResult(raw: raw)
-            } catch is CancellationError {
-                // A reset path cancelled us — state was already cleaned up.
-            } catch {
-                Log.artifacts.warning("conversion failed: \(error.localizedDescription, privacy: .private)")
-                guard self.state == .done, self.conversionStatus == .running else { return }
-                self.conversionStatus = .failed
-            }
-        }
-    }
-
-    /// Routes the conversion the same way generation routes (Managed proxy /
-    /// trial proxy / BYOK), falling back to BYOK when the proxy isn't wired —
-    /// the same fail-safe posture as `runPromptGeneration`.
-    private func performConversion(
-        source: String,
-        context: String?,
-        model: String,
-        idempotencyKey: String
-    ) async throws -> String {
-        let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
-        switch route {
-        case .managedProxy:
-            if let proxy = managedProxyClient {
-                return try await proxy.convert(
-                    sourceText: source,
-                    context: context,
-                    model: model,
-                    tokenProvider: nil,
-                    idempotencyKey: idempotencyKey
-                )
-            }
-        case .trialProxy:
-            if let proxy = managedProxyClient, let trial = trialCredits {
-                return try await proxy.convert(
-                    sourceText: source,
-                    context: context,
-                    model: model,
-                    tokenProvider: trial,
-                    idempotencyKey: idempotencyKey
-                )
-            }
-        case .trialNeedsEmail, .local:
-            break
-        }
-        // BYOK (or proxy-unwired fallback): same model routing as generation;
-        // the user text is composed exactly like the server composes it
-        // (source, blank line, context block).
-        guard let entry = BYOKRouting.effectiveEntry(
-            selectedModelID: model,
-            availableProviders: ProviderKeys.availableProviders()
-        ) else {
-            throw PromptGenerationError.missingAPIKey
-        }
-        let userText = context.map { "\(source)\n\n\($0)" } ?? source
-        let result = try await BYOKRouting.service(for: entry).convert(
-            userText: userText,
-            systemPrompt: ConversionSystemPrompt.composed()
-        )
-        return result.prompt
-    }
-
-    /// The conversion's `.done` tail: parse, accept ONLY a well-formed
-    /// `agent_prompt` artifact, and graft it onto the existing response. A
-    /// malformed or off-contract result (chat-only, wrong type) flips the
-    /// inline retry state and leaves the response untouched — the existing
-    /// chat text is never destroyed or replaced.
-    private func acceptConversionResult(raw: String) {
-        let converted = ArtifactParser.parse(raw)
-        guard let artifact = converted.artifact, artifact.type == .agentPrompt else {
-            Log.artifacts.warning(
-                "conversion returned no agent_prompt (got: \(converted.artifact?.rawType ?? "none", privacy: .public)) — inline retry offered"
-            )
-            conversionStatus = .failed
-            return
-        }
-        if converted.wasRecovered {
-            let rules = converted.warnings
-                .filter { $0.hasPrefix("recovered") }
-                .joined(separator: "; ")
-            Log.artifacts.warning("conversion recovery tier fired: \(rules, privacy: .public)")
-        }
-
-        let original = parsedResponse
-        parsedResponse = ParsedResponse(
-            chatText: original?.chatText ?? "",
-            artifact: artifact,
-            isValid: true,
-            wasRecovered: converted.wasRecovered,
-            warnings: converted.warnings
-        )
-        conversionStatus = .idle
-        // The conversion updates the EXISTING history entry — never a second
-        // row (plan Phase 6; keyed on the original raw prompt the entry was
-        // added with).
-        if let originalPrompt = generatedPrompt {
-            recentPromptStore?.attachConvertedArtifact(
-                originalPrompt: originalPrompt,
-                type: artifact.type.rawValue,
-                body: artifact.body,
-                title: artifact.title
-            )
-        }
-        Log.artifacts.info("conversion attached an agent_prompt artifact")
     }
 
     /// User-driven dismissal of the failure pill. Same as cancel —
@@ -2693,6 +3376,18 @@ final class AppState {
             discardPendingPaidGeneration()
         }
         resetToIdle()
+    }
+
+    /// User-driven "Retry" from the error pill when there's nothing to re-run
+    /// on disk (a non-retryable failure, e.g. an interrupted recording). Unlike
+    /// `retryFailedPrompt()` — which re-runs the API stage against the held
+    /// recording — this starts over: it dismisses the failure pill and reopens
+    /// the screen-region selector via the wired `requestAreaSelector` hook, so
+    /// the user picks a region and records again. The hook re-runs the standard
+    /// gating (permissions/entitlement) just like the hotkey.
+    func retryRecordingFromRegion() {
+        dismissFailure()
+        requestAreaSelector?()
     }
 
     /// True when the current failure is transient AND we have a processed

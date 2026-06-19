@@ -197,6 +197,7 @@ enum PromptGenerationSystemPrompt {
     - A timestamped transcript of the developer speaking while recording.
     - Some frames are followed by an `on-screen text:` line — text extracted from that frame by on-device OCR. Prefer it for exact strings (labels, filenames, values, code, URLs); it may be partial or imperfect, and any secrets are shown as [REDACTED]. The frames remain the source of truth for layout and anything OCR didn't capture.
     - Lines like `clicked "X"` mark where the developer clicked; the label is the on-screen element under the cursor (from OCR). Use them to resolve deictic references ("this button", "here") to a concrete on-screen element, and to follow the sequence of actions.
+    - Some trailing frames are tagged `DEIXIS REFERENCE N:` in their on-screen text. These are CROPPED, crosshair-MARKED close-ups of the exact element the developer was pointing at while saying a phrase ("this", "the header"): the magenta crosshair marks the spot, and the nearby on-screen text is OCR from around it. Use them to resolve that pointing reference to a concrete labeled element. They are reference close-ups, NOT timeline frames — ignore their timestamps for ordering.
 
     The transcript is raw speech: filler, false starts, self-corrections, informal phrasing. Treat it as intent, not literal text; when the developer corrects themselves, follow the corrected version. The frames are the source of truth for what exists on screen; the speech is the source of truth for what they want changed. Resolve vague references to what the frames clearly show — do not invent specifics that are neither shown nor stated.
 
@@ -234,6 +235,16 @@ enum PromptGenerationSystemPrompt {
     - Both delimiter lines stand alone at the start of their own lines. The opening line begins with exactly `<<<` and ends with exactly `>>>` (three chevrons each side); immediately after the title's closing quote, type exactly `>>>` — the line always ends `">>>`. A malformed delimiter discards the artifact, so verify the opening line before writing the body.
     - `type` is always `agent_prompt` in Dev Mode. `title` is a one-line label, 80 characters or fewer, specific to the change.
     - Emit at most ONE artifact block; fold every change into its numbered `Changes:` list. Always close with `<<<END_ZERRO_ARTIFACT>>>` alone on its own line; never wrap the block or the response in a markdown code fence.
+
+    DEIXIS ANCHORS — when (and only when) you were given `DEIXIS REFERENCE` frames, AFTER the artifact emit one fenced block reporting the element you resolved for each, so the app can confirm low-confidence ones with the developer before editing:
+
+    ```zerro_anchors
+    [{"ref": 0, "label": "<verbatim visible text, or null>", "type": "button|link|text|image|icon|input|container", "region": "header|nav|hero|sidebar|main|footer", "current_state": "<short, e.g. blue bg 14px>", "confidence": 0.0-1.0, "alt_candidates": ["..."]}]
+    ```
+
+    - One object per `DEIXIS REFERENCE`, in order, echoing its `ref` number. `label` is the exact on-screen text of the element under the crosshair (prefer the OCR strings); null for a bare icon/image with no text. Anchor the matching `Changes:` item to that same label.
+    - `confidence` is YOUR agreement that you identified the right element from the marker + OCR + narration: high when the crosshair clearly sits on one labeled element; low when it's ambiguous, between elements, or the OCR and marker disagree.
+    - This block is metadata for the app, NOT part of the agent_prompt — keep it entirely OUTSIDE the `<<<ZERRO_ARTIFACT … END_ZERRO_ARTIFACT>>>` fence. Omit it entirely when there were no `DEIXIS REFERENCE` frames.
 
     EXAMPLE — narration condensed; your real input is the interleaved timeline.
 

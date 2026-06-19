@@ -74,6 +74,10 @@ enum TrialStartError: Error, Equatable {
     case sendFailed
     /// This email already used its trial (verified + credits exhausted).
     case alreadyUsed
+    /// This Mac already used its trial under a DIFFERENT email (device binding).
+    /// Distinct from `alreadyUsed` (which is about the email): a NEW email won't
+    /// help — the physical machine is burned. Route the user to upgrade.
+    case deviceTrialUsed
     /// The entered code didn't match.
     case invalidCode
     /// The code expired before it was entered — request a fresh one.
@@ -98,6 +102,7 @@ enum TrialStartError: Error, Equatable {
         case .rateLimited:     return "Too many attempts \u{2014} please wait a bit and try again."
         case .sendFailed:      return "Couldn\u{2019}t send the code \u{2014} please try again."
         case .alreadyUsed:     return "This email has already used its free trial."
+        case .deviceTrialUsed: return "This Mac has already used its free trial. Upgrade to keep going."
         case .invalidCode:     return "That code isn\u{2019}t right \u{2014} check it and try again."
         case .codeExpired:     return "That code expired \u{2014} send a new one."
         case .tooManyAttempts: return "Too many incorrect codes \u{2014} send a new one."
@@ -209,6 +214,9 @@ final class TrialCreditsManager: ProxyTokenProviding {
         if let error = dto.error {
             throw Self.mapError(error, status: nil)
         }
+        if dto.status == "device_trial_used" {
+            throw TrialStartError.deviceTrialUsed
+        }
         if dto.status == "already_used" {
             throw TrialStartError.alreadyUsed
         }
@@ -223,6 +231,9 @@ final class TrialCreditsManager: ProxyTokenProviding {
         let dto = try await postTrialStart(["action": "verify", "email": email, "code": code])
         if let error = dto.error {
             throw Self.mapError(error, status: nil)
+        }
+        if dto.status == "device_trial_used" {
+            throw TrialStartError.deviceTrialUsed
         }
         if dto.status == "already_used" {
             throw TrialStartError.alreadyUsed
@@ -392,8 +403,18 @@ final class TrialCreditsManager: ProxyTokenProviding {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        // Trial device binding: attach the hashed hardware id so the backend can
+        // cap one grant per physical Mac. Sent on every action (request/verify
+        // carry the cap; resume forwards it for telemetry only). Omitted when the
+        // hardware UUID is unreadable (rare) so the backend degrades to the
+        // email-only cap rather than the trial failing.
+        var body = payload
+        if let deviceIdHash = DeviceIdentity.hashedDeviceID() {
+            body["device_id_hash"] = deviceIdHash
+        }
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {
             throw TrialStartError.malformedRequest
         }

@@ -3,7 +3,7 @@ import { sha256Hex } from "../_shared/crypto.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
 import { handleTrialStart, type TrialStartDeps } from "./handler.ts";
 import { EmailSendError, type EmailSender } from "./resend.ts";
-import type { TrialCodeRow, TrialGrantRow, TrialStore } from "./store.ts";
+import type { TrialCodeRow, TrialGrantRow, TrialStore, VerifyGrantResult } from "./store.ts";
 
 const SECRET = "test_session_jwt_secret";
 const NOW = 1_000_000; // epoch seconds
@@ -14,6 +14,7 @@ interface Grant {
   verified: boolean;
   limit: number;
   used: number;
+  deviceIdHash?: string | null;
 }
 interface Code {
   codeHash: string;
@@ -59,16 +60,35 @@ class InMemoryTrialStore implements TrialStore {
     this.codes.delete(email);
     return Promise.resolve();
   }
-  verifyGrant(email: string, limit: number): Promise<{ grantId: string; creditsRemaining: number }> {
+  verifyGrant(email: string, limit: number, deviceIdHash: string | null): Promise<VerifyGrantResult> {
+    // Device already burned by a DIFFERENT email → hard block (mirrors
+    // verify_trial_grant's pre-check + the partial unique index race backstop).
+    if (deviceIdHash && this.deviceUsedByOther(deviceIdHash, email)) {
+      return Promise.resolve({ deviceBlocked: true });
+    }
     // Create-once / never-reset (mirrors verify_trial_grant).
     let g = this.grants.get(email);
     if (!g) {
-      g = { id: `grant-${this.nextId++}`, verified: true, limit, used: 0 };
+      g = { id: `grant-${this.nextId++}`, verified: true, limit, used: 0, deviceIdHash };
       this.grants.set(email, g);
     } else {
       g.verified = true; // backfill, never reset credits
+      if (g.deviceIdHash == null && deviceIdHash) g.deviceIdHash = deviceIdHash; // coalesce
     }
-    return Promise.resolve({ grantId: g.id, creditsRemaining: Math.max(0, g.limit - g.used) });
+    return Promise.resolve({
+      deviceBlocked: false,
+      grantId: g.id,
+      creditsRemaining: Math.max(0, g.limit - g.used),
+    });
+  }
+  deviceAlreadyGranted(deviceIdHash: string, email: string): Promise<boolean> {
+    return Promise.resolve(this.deviceUsedByOther(deviceIdHash, email));
+  }
+  private deviceUsedByOther(deviceIdHash: string, email: string): boolean {
+    for (const [addr, g] of this.grants) {
+      if (g.deviceIdHash === deviceIdHash && addr !== email) return true;
+    }
+    return false;
   }
   rateLimitOk(): Promise<boolean> {
     return Promise.resolve(this.rateOk);
@@ -341,4 +361,95 @@ Deno.test("rejects invalid email + bad action", async () => {
   const email = new StubEmailSender();
   assertEquals((await handleTrialStart(req({ action: "request", email: "nope" }), deps(store, email))).status, 400);
   assertEquals((await handleTrialStart(req({ action: "bogus", email: "a@b.com" }), deps(store, email))).status, 400);
+});
+
+// ---- trial device binding ---------------------------------------------------
+// `device_id_hash` is a SHA-256 hex digest; the handler only honors a well-formed
+// 64-char lowercase-hex value (else it degrades to the email-only cap).
+const DEV_A = "a".repeat(64);
+const DEV_B = "b".repeat(64);
+
+Deno.test("device: new device + new email → grant created and stamped", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  await handleTrialStart(req({ action: "request", email: "a@b.com", device_id_hash: DEV_A }), deps(store, email));
+  assertEquals(email.sent.length, 1);
+  const code = email.sent.at(-1)!.code;
+  const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code, device_id_hash: DEV_A }), deps(store, email));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals(store.grants.get("a@b.com")!.deviceIdHash, DEV_A); // bound to the device
+});
+
+Deno.test("device: known device + new email → device_trial_used at request (no email sent)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  // This Mac already trialed under a different email.
+  store.grants.set("first@b.com", { id: "g1", verified: true, limit: 40, used: 0, deviceIdHash: DEV_A });
+  const res = await handleTrialStart(req({ action: "request", email: "second@b.com", device_id_hash: DEV_A }), deps(store, email));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).status, "device_trial_used");
+  assertEquals(email.sent.length, 0); // blocked BEFORE any code is emailed
+});
+
+Deno.test("device: known device + new email → device_trial_used at verify (race backstop)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  store.grants.set("first@b.com", { id: "g1", verified: true, limit: 40, used: 0, deviceIdHash: DEV_A });
+  // Request WITHOUT a device hash so the early block doesn't fire — simulates the
+  // verify-time race the partial unique index guards against.
+  const code = await sendAndGetCode(store, email, "second@b.com");
+  const res = await handleTrialStart(req({ action: "verify", email: "second@b.com", code, device_id_hash: DEV_A }), deps(store, email));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).status, "device_trial_used");
+  assertEquals(store.grants.has("second@b.com"), false); // nothing created
+});
+
+Deno.test("device: same device + SAME email → reinstall re-verify resumes, never blocked", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  await handleTrialStart(req({ action: "request", email: "a@b.com", device_id_hash: DEV_A }), deps(store, email));
+  const code1 = email.sent.at(-1)!.code;
+  await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code1, device_id_hash: DEV_A }), deps(store, email));
+  store.grants.get("a@b.com")!.used = 5; // 35 remaining
+
+  // Reinstall on the SAME Mac with the SAME email → not a "different email", so
+  // never blocked; re-verify resumes the persisted balance.
+  const r1 = await handleTrialStart(req({ action: "request", email: "a@b.com", device_id_hash: DEV_A }), deps(store, email));
+  assertEquals((await r1.json()).status, "code_sent");
+  const code2 = email.sent.at(-1)!.code;
+  const r2 = await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code2, device_id_hash: DEV_A }), deps(store, email));
+  assertEquals((await r2.json()).trial_credits_remaining, 35); // resumed, not reset to 40
+  assertEquals(store.grants.size, 1);
+});
+
+Deno.test("device: a DIFFERENT device + new email → granted (only the same Mac is capped)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  store.grants.set("first@b.com", { id: "g1", verified: true, limit: 40, used: 0, deviceIdHash: DEV_A });
+  const code = await sendAndGetCode(store, email, "second@b.com"); // request not blocked
+  const res = await handleTrialStart(req({ action: "verify", email: "second@b.com", code, device_id_hash: DEV_B }), deps(store, email));
+  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals(store.grants.get("second@b.com")!.deviceIdHash, DEV_B);
+});
+
+Deno.test("device: missing device hash → email-only cap unchanged (two emails both grant)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  const c1 = await sendAndGetCode(store, email, "a@b.com");
+  await handleTrialStart(req({ action: "verify", email: "a@b.com", code: c1 }), deps(store, email));
+  const c2 = await sendAndGetCode(store, email, "c@d.com");
+  const res = await handleTrialStart(req({ action: "verify", email: "c@d.com", code: c2 }), deps(store, email));
+  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals(store.grants.size, 2); // no device hash → no device cap
+});
+
+Deno.test("device: malformed device hash is ignored (degrades to the email-only cap)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  store.grants.set("first@b.com", { id: "g1", verified: true, limit: 40, used: 0, deviceIdHash: DEV_A });
+  // A non-hex / wrong-length value is not a plausible digest → ignored, so the
+  // request proceeds on the email-only cap rather than mis-keying the device cap.
+  const res = await handleTrialStart(req({ action: "request", email: "second@b.com", device_id_hash: "not-a-valid-hash" }), deps(store, email));
+  assertEquals((await res.json()).status, "code_sent");
 });

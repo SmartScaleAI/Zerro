@@ -127,7 +127,11 @@ export default function PrivacyPage() {
         <P>
           <Strong>Trial verification.</Strong> Starting a free trial requires
           verifying your email with a one-time code sent via Resend. We store
-          only a hashed version of the code, never the raw code.
+          only a hashed version of the code, never the raw code. To prevent
+          trial abuse, we also collect a one-way hash of a hardware identifier
+          to limit free trials to one per device. The underlying identifier
+          never leaves your Mac — only the hash is sent — and it is used solely
+          for fraud prevention, never for tracking or advertising.
         </P>
         <P>
           <Strong>App analytics and crash reports.</Strong> The Zerro desktop

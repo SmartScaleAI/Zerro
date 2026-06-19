@@ -144,7 +144,7 @@ final class ArtifactParserTests: XCTestCase {
     }
 
     /// requestPresent stays true for an ordinary artifact-less reply (the
-    /// category-2 explain/advice case the convert button is FOR).
+    /// category-2 explain/advice case).
     func testRequestPresentDefaultsTrueWithoutSentinel() {
         let got = ArtifactParser.parse("Here's why that build fails — the cache key is stale.")
         XCTAssertTrue(got.isValid)

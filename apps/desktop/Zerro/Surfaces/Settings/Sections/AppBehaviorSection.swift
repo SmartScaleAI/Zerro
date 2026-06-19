@@ -61,14 +61,14 @@ private struct CrashReportingRow: View {
         ) {
             Toggle("Send Anonymous Usage Data & Crash Reports", isOn: $isEnabled)
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(Color.vfSuccessGreen)
+                .toggleStyle(VFSwitchToggleStyle())
                 .onChange(of: isEnabled) { _, newValue in
                     Analytics.setEnabled(newValue)
                 }
         }
     }
 }
+
 
 // MARK: - Launch at Login
 
@@ -82,8 +82,7 @@ private struct LaunchAtLoginRow: View {
         ) {
             Toggle("Launch at Login", isOn: binding)
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(Color.vfSuccessGreen)
+                .toggleStyle(VFSwitchToggleStyle())
         }
         .onAppear { controller.refresh() }
     }

@@ -49,6 +49,10 @@ final class AreaSelectorWindowController {
     private var preferences: PreferencesStore?
     private var mouseMonitor: Any?
     private var keyMonitor: Any?
+    /// Accumulates trackpad scroll deltas (points) for the dev-settings Model
+    /// viewport; steps the offset one row each time it crosses `devMenuRowHeight`.
+    /// Reset at the start of each scroll gesture.
+    private var devModelScrollAccum: CGFloat = 0
     private var screenChangeObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
 
@@ -89,6 +93,13 @@ final class AreaSelectorWindowController {
             return
         }
 
+        // The full-screen toolbar floats above the Dock: stash the presenting
+        // screen's bottom Dock inset (0 when hidden / on a side) so the static
+        // frame helpers raise it for BOTH the view render and this controller's
+        // hit-testing. visibleFrame excludes the Dock, so the bottom difference
+        // is the Dock height; it auto-adapts to Dock size/position/auto-hide.
+        AreaSelectorView.fullScreenBottomInset = max(0, screen.visibleFrame.minY - screen.frame.minY)
+
         self.preferences = preferences
 
         let state = AreaSelectorState()
@@ -112,6 +123,10 @@ final class AreaSelectorWindowController {
             Self.modelMenuItems(entitlements: entitlements),
             selectedID: preferences.selectedModelID
         )
+        // The model button shows the model name, so its width is dynamic — keep
+        // the shared geometry width in sync with the current selection (mirrors
+        // `fullScreenBottomInset`). Read by the frame helpers on render + hit-test.
+        AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
 
         // Dev Mode (Phase 1): seed the mode switch + remembered folder WITHOUT
         // probing for the agent — detection runs a slow login-shell PATH lookup
@@ -124,12 +139,19 @@ final class AreaSelectorWindowController {
             agentName: "Claude Code",
             projectURL: preferences.devProjectURL
         )
+        // Seed the dev-settings "Auto-Detect Project" toggle (default OFF) so the
+        // menu's switch reflects the persisted opt-in.
+        state.setAutoDetectProjectEnabled(preferences.devAutoDetectProject)
+        // Seed the Permissions section's checkmark from the persisted mode.
+        state.setDevPermissionMode(preferences.devPermissionMode)
         if preferences.devModeEnabled {
             beginAgentDetection(for: state)
             // Verify the remembered folder is still a git repo (Milestone 7).
             if let folder = preferences.devProjectURL {
                 beginGitRepoCheck(for: folder, state: state)
             }
+            // Phase 3: try to auto-match the folder to the browser's localhost port.
+            beginLocalhostFolderDetection(for: state)
         }
 
         state.onConfirm = { [weak self] rect in
@@ -156,7 +178,9 @@ final class AreaSelectorWindowController {
             let devSelection: DevModeSelection? = {
                 guard let s = self?.state, s.isDevMode,
                       let agentID = s.selectedAgentID, let projectURL = s.projectURL else { return nil }
-                return DevModeSelection(agentID: agentID, projectURL: projectURL)
+                // Capture the Model section's current pick (Phase 2). nil ⇒ the
+                // agent's own default (no `--model` flag).
+                return DevModeSelection(agentID: agentID, projectURL: projectURL, modelID: s.selectedDevModelID)
             }()
             self?.dismiss()
             onConfirm(rect, modelID, devSelection)
@@ -308,7 +332,7 @@ final class AreaSelectorWindowController {
         // moved events for the monitor to see them while not tracking a drag.
         window.acceptsMouseMovedEvents = true
         let mouseTypes: NSEvent.EventTypeMask = [
-            .leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved
+            .leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved, .scrollWheel
         ]
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseTypes) { [weak self, weak window, weak state] event in
             // Filter: only this window's events. Returning the event
@@ -328,13 +352,13 @@ final class AreaSelectorWindowController {
                 y: contentView.bounds.height - location.y
             )
 
-            // Floating toolbar (mic chip + Record button + mic dropdown)
-            // — shared across modes. The SwiftUI tree is hit-test-disabled,
-            // so the controller owns both the click hit-test and the hover
-            // feedback by re-deriving the item frames from the same static
-            // helpers the view renders with. Handled before the per-mode
-            // drag/settle logic so a click on the toolbar acts on it rather
-            // than re-dragging or re-settling underneath it.
+            // Compact toolbar hit regions. The SwiftUI tree is hit-test-disabled,
+            // so the controller owns clicks + hover by re-deriving each control's
+            // frame from the same static helpers the view renders with. Handled
+            // before the per-mode drag/settle logic so a toolbar click acts on the
+            // toolbar rather than re-dragging underneath it. The mode switch is two
+            // separate hit regions (Artifact | Dev), present in both modes; the
+            // dev-settings icon exists only in Dev Mode.
             let size = contentView.bounds.size
             let fullScreen = state.mode == .fullScreen
             let devMode = state.isDevMode
@@ -348,25 +372,43 @@ final class AreaSelectorWindowController {
             let modelFrame = selectionRect.map {
                 AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
-            // Standalone mode switch — always available; the agent + folder
-            // chips only exist while Dev Mode is on.
-            let devToggleFrame = selectionRect.map {
-                AreaSelectorView.devToggleFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
+            let artifactFrame = selectionRect.map {
+                AreaSelectorView.modeArtifactSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
-            let agentFrame = (devMode ? selectionRect : nil).map {
-                AreaSelectorView.agentChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+            let devSegmentFrame = selectionRect.map {
+                AreaSelectorView.modeDevSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
-            let folderFrame = (devMode ? selectionRect : nil).map {
-                AreaSelectorView.folderChipFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+            let devSettingsFrame = (devMode ? selectionRect : nil).map {
+                AreaSelectorView.devSettingsIconFrame(forSelection: $0, in: size, fullScreen: fullScreen)
+            }
+            // The whole container, so a click on toolbar chrome that misses a
+            // specific control (inter-icon gaps, the divider, the padding, the
+            // mode-switch well) is inert rather than starting a selection drag.
+            let toolbarContainerFrame = selectionRect.map {
+                AreaSelectorView.toolbarFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
+            }
+
+            // Scroll wheel — when the dev-settings menu is open and the pointer is
+            // over the (capped) Model viewport, scroll the model list. Routed
+            // through this monitor because the SwiftUI tree is hit-test-disabled (a
+            // ScrollView would never receive the event, and its offset would desync
+            // from the geometry-based hit-testing). Consumed only when handled.
+            if event.type == .scrollWheel {
+                if let rect = (state.isDevSettingsMenuOpen ? selectionRect : nil),
+                   self?.handleDevModelScroll(event: event, at: point, forSelection: rect,
+                                              in: size, fullScreen: fullScreen, state: state) == true {
+                    return nil
+                }
+                return event
             }
 
             if event.type == .mouseMoved {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
                 state.setModelChipHovered(modelFrame?.contains(point) ?? false)
-                state.setDevToggleHovered(devToggleFrame?.contains(point) ?? false)
-                state.setAgentChipHovered(agentFrame?.contains(point) ?? false)
-                state.setFolderChipHovered(folderFrame?.contains(point) ?? false)
+                state.setModeArtifactHovered(artifactFrame?.contains(point) ?? false)
+                state.setModeDevHovered(devSegmentFrame?.contains(point) ?? false)
+                state.setDevSettingsHovered(devSettingsFrame?.contains(point) ?? false)
                 if state.isMicMenuOpen, let rect = selectionRect {
                     state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
                         at: point, forSelection: rect, in: size,
@@ -378,6 +420,36 @@ final class AreaSelectorWindowController {
                         at: point, forSelection: rect, in: size,
                         itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
                     ))
+                }
+                if state.isDevSettingsMenuOpen, let rect = selectionRect {
+                    let agentCount = state.devAgentMenuItems.count
+                    let modelCount = state.devModelMenuItems.count
+                    state.setHighlightedDevAgentIndex(AreaSelectorView.devSettingsAgentRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    ))
+                    state.setHighlightedDevModelIndex(AreaSelectorView.devSettingsModelRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount,
+                        scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
+                    ))
+                    state.setHighlightedDevPermissionIndex(AreaSelectorView.devSettingsPermissionRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    ))
+                    // Auto-Detect info-icon hover → drives the custom tooltip (the
+                    // glyph's `.help` can't fire through the hit-test-disabled tree).
+                    let infoIcon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(
+                        forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    )
+                    state.setAutoDetectInfoHovered(infoIcon.contains(point))
+                    // Permissions header info-icon hover → its custom tooltip.
+                    let permInfoIcon = AreaSelectorView.devSettingsPermissionInfoIconRect(
+                        forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    )
+                    state.setPermissionInfoHovered(permInfoIcon.contains(point))
                 }
             }
 
@@ -393,25 +465,22 @@ final class AreaSelectorWindowController {
                 // overlay. makeKey() (not NSApp.activate) keeps this scoped
                 // to the panel and never re-orders other Zerro windows.
                 if !window.isKeyWindow { window.makeKey() }
-                // Dev Mode switch — flip the mode (persist + analytics). Handled
-                // before the cluster controls since it's a standalone affordance.
-                if let devToggleFrame, devToggleFrame.contains(point) {
-                    self?.toggleDevMode(state: state)
+
+                // Mode switch — two segments, each maps to a mode (Artifact = off,
+                // Dev = on). Clicking the already-active segment is a no-op (the
+                // state guards it). Handled first since the switch leads the
+                // cluster. Present in BOTH modes (it's how you enter/leave Dev).
+                if let artifactFrame, artifactFrame.contains(point) {
+                    self?.setDevMode(false, state: state)
                     return nil
                 }
-                // Folder chip (Dev Mode) — open the directory picker.
-                if let folderFrame, folderFrame.contains(point) {
-                    self?.presentFolderPicker(window: window, state: state)
+                if let devSegmentFrame, devSegmentFrame.contains(point) {
+                    self?.setDevMode(true, state: state)
                     return nil
                 }
-                // Agent chip (Dev Mode) — Phase 1 ships a single agent, so the
-                // chip is a confirmation, not a picker. When the agent isn't
-                // installed, clicking opens the install docs; otherwise it's a
-                // no-op. Either way consume the click so it doesn't start a drag.
-                if let agentFrame, agentFrame.contains(point) {
-                    if state.isAgentMissing {
-                        NSWorkspace.shared.open(Self.claudeCodeInstallURL)
-                    }
+                // Dev-settings icon (Dev Mode) — open/close the agent+project menu.
+                if let devSettingsFrame, devSettingsFrame.contains(point) {
+                    state.toggleDevSettingsMenu()
                     return nil
                 }
                 // Record button — start recording.
@@ -419,13 +488,13 @@ final class AreaSelectorWindowController {
                     self?.confirmCurrentSelection(window: window, state: state)
                     return nil
                 }
-                // Model chip — open/close the model dropdown (closing the
-                // mic menu; one dropdown at a time).
+                // Model icon — open/close the model dropdown (one dropdown at a
+                // time; the state closes the others).
                 if let modelFrame, modelFrame.contains(point) {
                     state.toggleModelMenu()
                     return nil
                 }
-                // Mic chip — open/close the dropdown.
+                // Mic icon — open/close the device dropdown.
                 if let micFrame, micFrame.contains(point) {
                     state.toggleMicMenu()
                     return nil
@@ -444,6 +513,9 @@ final class AreaSelectorWindowController {
                         let item = state.models[idx]
                         if !item.gated {
                             state.selectModel(id: item.id)
+                            // New model name → re-measure the model button so the
+                            // toolbar reflows around the new label.
+                            AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
                         } else {
                             // Gated row (BYOK, keyless provider): ignore the
                             // click but keep the menu open — mirrors the
@@ -454,9 +526,9 @@ final class AreaSelectorWindowController {
                     state.closeModelMenu()
                     return nil
                 }
-                // Dropdown open — a click selects the row under the cursor
-                // (persisting to prefs) or, if outside, dismisses. Either
-                // way the click is consumed so it never starts a new drag.
+                // Mic dropdown open — a click selects the row under the cursor
+                // (persisting to prefs) or, if outside, dismisses. Either way
+                // the click is consumed so it never starts a new drag.
                 if state.isMicMenuOpen {
                     if let rect = selectionRect,
                        let idx = AreaSelectorView.micMenuRowIndex(
@@ -468,6 +540,64 @@ final class AreaSelectorWindowController {
                         state.selectMicrophone(id: id)
                     }
                     state.closeMicMenu()
+                    return nil
+                }
+                // Dev-settings menu open — an agent row picks that agent (or, for
+                // a not-installed agent, opens its install docs); the project row
+                // opens the folder picker; a click elsewhere dismisses. The menu
+                // stays open after a row action so the user can finish setup.
+                if state.isDevSettingsMenuOpen {
+                    if let rect = selectionRect {
+                        let agentCount = state.devAgentMenuItems.count
+                        let modelCount = state.devModelMenuItems.count
+                        if let idx = AreaSelectorView.devSettingsAgentRowIndex(
+                            at: point, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        ) {
+                            self?.selectDevAgent(at: idx, state: state)
+                            return nil
+                        }
+                        if let idx = AreaSelectorView.devSettingsModelRowIndex(
+                            at: point, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount,
+                            scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
+                        ) {
+                            self?.selectDevModel(at: idx, state: state)
+                            return nil
+                        }
+                        if let idx = AreaSelectorView.devSettingsPermissionRowIndex(
+                            at: point, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        ) {
+                            self?.selectDevPermission(at: idx, state: state)
+                            return nil
+                        }
+                        // Auto-Detect Project toggle row (Project section, above
+                        // "Change…") — clicking anywhere on it flips the opt-in.
+                        let autoDetectRow = AreaSelectorView.devSettingsAutoDetectRowFrame(
+                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        )
+                        if autoDetectRow.contains(point) {
+                            self?.toggleAutoDetectProject(state: state)
+                            return nil
+                        }
+                        let projectRow = AreaSelectorView.devSettingsProjectRowFrame(
+                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        )
+                        if projectRow.contains(point) {
+                            self?.presentFolderPicker(window: window, state: state)
+                            return nil
+                        }
+                    }
+                    state.closeDevSettingsMenu()
+                    return nil
+                }
+                // No control was hit and no menu was open. If the press landed
+                // anywhere on the toolbar container (a gap, the divider, the
+                // padding, the mode-switch well), consume it so toolbar chrome
+                // never starts a selection drag. Clicks on the dimmed capture
+                // area below fall through to begin a new drag.
+                if let toolbarContainerFrame, toolbarContainerFrame.contains(point) {
                     return nil
                 }
             }
@@ -500,15 +630,19 @@ final class AreaSelectorWindowController {
             }
             switch event.keyCode {
             case 53: // ESC
-                // ESC closes an open toolbar dropdown first (mic or model),
-                // so the first press dismisses the menu and only a second
-                // press cancels the whole overlay.
+                // ESC closes an open toolbar dropdown first (mic, model, or
+                // dev-settings), so the first press dismisses the menu and only a
+                // second press cancels the whole overlay.
                 if state.isMicMenuOpen {
                     state.closeMicMenu()
                     return nil
                 }
                 if state.isModelMenuOpen {
                     state.closeModelMenu()
+                    return nil
+                }
+                if state.isDevSettingsMenuOpen {
+                    state.closeDevSettingsMenu()
                     return nil
                 }
                 state.cancel()
@@ -563,6 +697,10 @@ final class AreaSelectorWindowController {
             state.setDevValidationMessage(message)
             return
         }
+        // Phase 3: a Dev recording on a detected localhost port LEARNS the folder
+        // for that port (pre-filled next time). No-op outside Dev Mode or when no
+        // port was detected this session.
+        if state.isDevMode { rememberLocalhostPortMapping(state: state) }
         switch state.mode {
         case .area:
             confirmAreaSelection(window: window, state: state)
@@ -626,26 +764,192 @@ final class AreaSelectorWindowController {
     // to PreferencesStore and runs the native panel. Milestone 2 replaces the
     // hard-coded agent default with live `DevAgentRegistry` detection.
 
-    /// Where the agent chip's "· install" affordance points when Claude Code
-    /// isn't found on PATH.
+    /// Where the dev-settings menu's "Install" hint points when a CLI isn't found
+    /// on PATH, per agent (Claude Code's setup docs are the fallback).
     private static let claudeCodeInstallURL = URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!
+    private static let codexInstallURL = URL(string: "https://developers.openai.com/codex/cli/")!
+    private static let cursorInstallURL = URL(string: "https://docs.cursor.com/en/cli/overview")!
 
-    /// Flip the Dev Mode switch: update state, persist the mode, kick off agent
-    /// detection on turn-on, and fire the toggle analytics (metadata only).
-    private func toggleDevMode(state: AreaSelectorState) {
-        state.toggleDevMode()
-        let enabled = state.isDevMode
-        preferences?.devModeEnabled = enabled
-        if enabled {
-            // First time a normal-mode user turns Dev Mode on: resolve the agent
-            // off-main. The chip shows "checking" until it lands.
+    private static func installURL(forAgent agentID: String) -> URL {
+        switch agentID {
+        case DevAgentRegistry.codexID:  return codexInstallURL
+        case DevAgentRegistry.cursorID: return cursorInstallURL
+        default:                        return claudeCodeInstallURL
+        }
+    }
+
+    /// Set the mode from a mode-switch segment click. Clicking the already-active
+    /// segment is a no-op (the state guards it) — so persistence, analytics, and
+    /// detection only fire on a real change. Turning Dev ON resolves the agent
+    /// off-main and verifies a remembered folder's git status. The user's explicit
+    /// Dev click also offers the setup menu via `handleDevModeEntered` (its
+    /// auto-open guard decides whether it actually opens) — this is the ONLY
+    /// auto-open trigger; seeding/present never calls it.
+    private func setDevMode(_ on: Bool, state: AreaSelectorState) {
+        let changed = state.isDevMode != on
+        state.setDevMode(on)
+        // Clicking the already-active segment is a no-op — no persistence,
+        // analytics, detection, or auto-open re-fires.
+        guard changed else { return }
+        // The mode change resizes + re-centers the container, so the controls
+        // move out from under the cursor; clear the now-stale hover highlights
+        // (the next mouse-move re-establishes them).
+        state.resetToolbarHovers()
+        preferences?.devModeEnabled = on
+        Analytics.capture("dev_mode_toggled", ["enabled": on])
+        if on {
             beginAgentDetection(for: state)
-            // Verify a remembered folder is a git repo (Milestone 7).
             if let folder = state.projectURL {
                 beginGitRepoCheck(for: folder, state: state)
             }
+            // The user's Dev ENTRY offers the setup menu (the auto-open guard
+            // decides whether it actually opens — first entry this session, or
+            // folder unset). Re-opening later is done via the dev-settings icon.
+            state.handleDevModeEntered()
+            // Phase 3: try to auto-match the folder to the browser's localhost port.
+            beginLocalhostFolderDetection(for: state)
         }
-        Analytics.capture("dev_mode_toggled", ["enabled": enabled])
+    }
+
+    /// Act on a dev-settings menu Agent row: an installed agent becomes the
+    /// selection (persisted); a not-installed one opens its install docs.
+    private func selectDevAgent(at index: Int, state: AreaSelectorState) {
+        guard index >= 0, index < state.devAgentMenuItems.count else { return }
+        let item = state.devAgentMenuItems[index]
+        if item.installed {
+            state.setSelectedAgent(id: item.id, name: item.name)
+            preferences?.selectedAgentID = item.id
+            // The model list is per-agent — repopulate the Model section for the
+            // newly-selected agent (its remembered pick, else newest).
+            refreshDevModelItems(forAgent: item.id, state: state)
+        } else {
+            // A not-installed agent row opens that agent's install docs.
+            NSWorkspace.shared.open(Self.installURL(forAgent: item.id))
+        }
+    }
+
+    /// Act on a dev-settings menu Model row: remember the pick for the current
+    /// agent (persisted) and checkmark it. No-op without a selected agent.
+    private func selectDevModel(at index: Int, state: AreaSelectorState) {
+        guard index >= 0, index < state.devModelMenuItems.count,
+              let agentID = state.selectedAgentID else { return }
+        let item = state.devModelMenuItems[index]
+        preferences?.selectedModelByAgent[agentID] = item.id
+        state.setSelectedDevModelID(item.id)
+    }
+
+    /// Act on a dev-settings menu Permissions row: persist the chosen mode and
+    /// checkmark it. Row order matches `DevPermissionMode.allCases` (0 = Ask
+    /// Permission, 1 = Auto Approve), the same order the view renders + the
+    /// hit-test indexes. The menu stays open after the pick.
+    private func selectDevPermission(at index: Int, state: AreaSelectorState) {
+        let modes = DevPermissionMode.allCases
+        guard index >= 0, index < modes.count else { return }
+        let mode = modes[index]
+        preferences?.devPermissionMode = mode
+        state.setDevPermissionMode(mode)
+        Analytics.capture("dev_permission_mode_selected", ["mode": mode.rawValue])
+    }
+
+    /// Flip the dev-settings "Auto-Detect Project" toggle (Project section). The
+    /// toggle IS the permission primer: on OFF→ON we fire one browser read so the
+    /// Apple Event surfaces the macOS per-browser Automation prompt NOW — in the
+    /// obvious context of the user having just asked for this — and pre-fill the
+    /// folder if a mapped port comes back. Fire-and-forget: the toggle stays ON
+    /// regardless of the grant outcome (a denial degrades to silent fallback, with
+    /// the one-time explainer). On ON→OFF the browser is never read again (the gate
+    /// in `beginLocalhostFolderDetection`) and any standing denial note is dropped.
+    /// The live AppleScript path is covered by the E2E, not unit tests.
+    private func toggleAutoDetectProject(state: AreaSelectorState) {
+        let enabled = !(preferences?.devAutoDetectProject ?? false)
+        preferences?.devAutoDetectProject = enabled
+        state.setAutoDetectProjectEnabled(enabled)
+        Analytics.capture("dev_auto_detect_project_toggled", ["enabled": enabled])
+        if enabled {
+            // beginLocalhostFolderDetection self-gates on the pref we just set, so
+            // this triggers exactly one detection (prompt + immediate match attempt).
+            beginLocalhostFolderDetection(for: state)
+        } else {
+            state.dismissLocalhostNotice()
+        }
+    }
+
+    /// Scroll the dev-settings Model viewport from a scroll-wheel event. Returns
+    /// true (→ the monitor consumes the event) only when the pointer is within the
+    /// Model viewport AND the list is longer than the cap. Row-stepped to stay in
+    /// lockstep with the geometry-based hit-testing: trackpad deltas accumulate
+    /// against the row height; a mouse-wheel notch is one row. Sign follows
+    /// `scrollingDeltaY` directly, which already reflects the user's natural-scroll
+    /// setting (positive = content down = reveal earlier rows = offset decreases).
+    private func handleDevModelScroll(
+        event: NSEvent,
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in size: CGSize,
+        fullScreen: Bool,
+        state: AreaSelectorState
+    ) -> Bool {
+        let modelCount = state.devModelMenuItems.count
+        guard modelCount > AreaSelectorView.maxVisibleModelRows else { return false }   // nothing to scroll
+        let agentCount = state.devAgentMenuItems.count
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(
+            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+        )
+        guard viewport.contains(point) else { return false }
+
+        let rowH = AreaSelectorView.devMenuRowHeight
+        if event.hasPreciseScrollingDeltas {
+            // Trackpad: accumulate points, step per row. Reset at gesture start so
+            // a prior swipe's momentum doesn't carry into this one.
+            if event.phase == .began { devModelScrollAccum = 0 }
+            devModelScrollAccum += event.scrollingDeltaY
+            while devModelScrollAccum >= rowH {
+                devModelScrollAccum -= rowH
+                state.setDevModelScrollOffset(state.devModelScrollOffset - 1)
+            }
+            while devModelScrollAccum <= -rowH {
+                devModelScrollAccum += rowH
+                state.setDevModelScrollOffset(state.devModelScrollOffset + 1)
+            }
+        } else {
+            // Mouse wheel (line-based): one notch ≈ one row.
+            devModelScrollAccum = 0
+            if event.scrollingDeltaY > 0 {
+                state.setDevModelScrollOffset(state.devModelScrollOffset - 1)
+            } else if event.scrollingDeltaY < 0 {
+                state.setDevModelScrollOffset(state.devModelScrollOffset + 1)
+            }
+        }
+        // Re-evaluate the hover highlight at the now-scrolled position so it tracks
+        // without needing a mouse move.
+        state.setHighlightedDevModelIndex(AreaSelectorView.devSettingsModelRowIndex(
+            at: point, forSelection: rect, in: size,
+            agentCount: agentCount, modelCount: modelCount,
+            scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
+        ))
+        return true
+    }
+
+    /// Populate the Model section for `agentID`: the agent's available models
+    /// (manifest provider, or the Cursor CLI) and the resolved pick (remembered,
+    /// else newest/rank-0). Reads through `PreferencesStore.selectedModel(...)`
+    /// so a retired remembered pick falls back to newest. The list is ALWAYS
+    /// non-empty for a manifest agent (cache→bundled fallback), so offline never
+    /// empties the section.
+    private func refreshDevModelItems(forAgent agentID: String?, state: AreaSelectorState) {
+        guard let agentID else {
+            state.setDevModelMenuItems([], selectedID: nil)
+            return
+        }
+        let available = AgentModelManifestStore.shared.models(forAgent: agentID)
+        let items = available.map { AreaSelectorState.DevModelMenuItem(id: $0.modelID, name: $0.displayName) }
+        let selected = preferences?.selectedModel(forAgent: agentID, available: available)
+        // Persist the resolved default so the captured `DevModeSelection` and the
+        // checkmark agree even before the user touches the Model section.
+        if let selected, preferences?.selectedModelByAgent[agentID] == nil {
+            preferences?.selectedModelByAgent[agentID] = selected
+        }
+        state.setDevModelMenuItems(items, selectedID: selected)
     }
 
     /// Warm agent detection (background, cached) and apply the result to the
@@ -658,25 +962,128 @@ final class AreaSelectorWindowController {
             guard let state else { return }
             self?.applyAgentDetection(entries, to: state)
         }
+        // Phase 2: refresh the server model manifest in the background (covers a
+        // session that launched in normal mode, where ZerroApp didn't warm it).
+        // When it lands, re-seed the Model section for the current agent so
+        // freshly-fetched models appear. Fail-open — offline keeps cache/bundled.
+        Task { [weak self, weak state] in
+            await AgentModelManifestStore.shared.warm()
+            guard let self, let state else { return }
+            self.refreshDevModelItems(forAgent: state.selectedAgentID, state: state)
+        }
+    }
+
+    /// Phase 3 — auto-match the project folder to the `localhost:<port>` in the
+    /// user's browser. Opt-in (the toggle) + Dev-Mode-only + off-main + best-
+    /// effort: any failure falls back to the last-used folder, and a failed
+    /// detection NEVER clears an already-set folder. Kicked off on Dev entry,
+    /// alongside agent detection + the git-repo check.
+    private func beginLocalhostFolderDetection(for state: AreaSelectorState) {
+        // Opt-in gate (default OFF): never read the browser unless the user enabled
+        // the dev-settings "Auto-Detect Project" toggle. With it off, this is
+        // byte-identical to pre-Phase-3 behavior.
+        guard preferences?.devAutoDetectProject == true else { return }
+
+        // Will a detection here surface the system Automation prompt (some running
+        // browser's permission isn't determined yet)? Checked WITHOUT prompting.
+        // (No pre-prompt primer: enabling the toggle IS the primer — the user just
+        // asked for this, so the system dialog already has obvious context.)
+        let willPrompt = BrowserURLReader.automationWouldPrompt()
+
+        // The system TCC prompt is presented BELOW our `.screenSaver`-level overlay
+        // → "Allow"/"Don't Allow" are unclickable (the user literally can't grant
+        // it). So when a prompt is pending, drop the overlay to `.normal` for its
+        // duration (mirroring `presentFolderPicker`) and give detection a longer
+        // budget to await the user's response; restore the level the instant
+        // detection resolves. Once permission is determined, future entries take
+        // the silent short path and the overlay is never lowered.
+        let savedLevel: NSWindow.Level?
+        if willPrompt, let window {
+            savedLevel = window.level
+            window.level = .normal
+        } else {
+            savedLevel = nil
+        }
+        let timeout: TimeInterval = willPrompt ? 30 : 1.5
+
+        Task { @MainActor [weak self, weak state] in
+            let url = await BrowserURLReader.detectLocalhostURL(timeout: timeout)
+            // Restore the overlay to its on-top level (it was lowered for the
+            // prompt) and re-key it so ESC/Return keep working.
+            if let savedLevel, let window = self?.window {
+                window.level = savedLevel
+                window.makeKeyAndOrderFront(nil)
+            }
+            guard let self, let state, state.isDevMode else { return }
+            switch BrowserURLReader.resolveFolder(forURL: url, folderForPort: { self.preferences?.projectURL(forPort: $0) }) {
+            case .autoFill(let folder, let port):
+                // HIT → pre-fill the mapped folder, show the hint, verify the repo.
+                state.setAutoMatchedProject(folder, port: port)
+                self.beginGitRepoCheck(for: folder, state: state)
+            case .notePort(let port):
+                // Port detected but unmapped → remember it so a folder pick /
+                // record LEARNS the mapping; leave the current folder untouched.
+                state.noteDetectedLocalhostPort(port)
+            case .none:
+                // Miss / no localhost tab / denied / timeout → keep the last-used
+                // folder. If permission was actually DENIED, surface the one-time,
+                // dismissible explainer (non-blocking) — never nag.
+                if self.preferences?.hasShownLocalhostDenialNote != true,
+                   BrowserURLReader.automationDenied() {
+                    self.preferences?.hasShownLocalhostDenialNote = true
+                    state.showLocalhostNotice(.denied)
+                }
+            }
+        }
+    }
+
+    /// Learn `port → folder` for the localhost port detected this session (if any)
+    /// — called when the user picks a folder via "Change…" or records. Keeps the
+    /// global last-used (`devProjectURL`) in sync at its own call sites.
+    private func rememberLocalhostPortMapping(state: AreaSelectorState) {
+        guard let port = state.detectedLocalhostPort, let folder = state.projectURL else { return }
+        preferences?.setProjectURL(folder, forPort: port)
     }
 
     /// Reconcile detection results into `state`: select the installed agent (or
     /// nil → install attention state) and remember it for next time.
     private func applyAgentDetection(_ entries: [DevAgentEntry], to state: AreaSelectorState) {
         state.setDetectingAgent(false)
-        let claude = entries.first { $0.id == DevAgentRegistry.recommendedID }
-        guard claude?.installed == true, let claude else {
-            // Not installed: agent stays unset so validation blocks; keep the
-            // display name for the chip's install affordance.
-            state.setSelectedAgent(id: nil, name: claude?.displayName ?? "Claude Code")
+        // Seed the dev-settings menu's Agent rows from every known agent; the
+        // green check + "Detected" badge vs. dim "Install" hint follow `installed`.
+        state.setDevAgentMenuItems(entries.map {
+            .init(id: $0.id, name: $0.displayName, installed: $0.installed)
+        })
+        // Resolve the agent to pre-select, agent-agnostically (Codex/Cursor are
+        // first-class now, not just Claude Code): the remembered pick if it's
+        // installed, else the recommended default if installed, else ANY installed
+        // agent (so a machine with only Cursor isn't blocked just because the
+        // Claude-Code default is absent), else nil.
+        let installed = entries.filter(\.installed)
+        let resolved = installed.first { $0.id == preferences?.selectedAgentID }
+            ?? installed.first { $0.id == DevAgentRegistry.recommendedID }
+            ?? installed.first
+        guard let resolved else {
+            // Nothing usable installed: agent stays unset so validation blocks.
+            // Keep the recommended agent's display name for the menu's install
+            // affordance. No agent → no models.
+            let fallbackName = entries.first { $0.id == DevAgentRegistry.recommendedID }?.displayName ?? "Claude Code"
+            state.setSelectedAgent(id: nil, name: fallbackName)
+            state.setDevModelMenuItems([], selectedID: nil)
             return
         }
-        let id = preferences?.selectedAgentID ?? claude.id
-        state.setSelectedAgent(id: id, name: claude.displayName)
-        // Persist the detected agent so a returning user lands pre-filled.
+        // Use the RESOLVED agent's own name (not always Claude Code) so the chip
+        // label matches the selection — fixes a remembered Codex/Cursor pick
+        // surfacing as "Claude Code".
+        state.setSelectedAgent(id: resolved.id, name: resolved.displayName)
+        // Persist the detected default ONLY when nothing was remembered — never
+        // clobber a remembered-but-currently-uninstalled pick (the user may
+        // reinstall it).
         if preferences?.selectedAgentID == nil {
-            preferences?.selectedAgentID = id
+            preferences?.selectedAgentID = resolved.id
         }
+        // Seed the Model section for the resolved agent (Phase 2).
+        refreshDevModelItems(forAgent: resolved.id, state: state)
     }
 
     /// Open a directories-only `NSOpenPanel` to choose the project folder.
@@ -715,6 +1122,10 @@ final class AreaSelectorWindowController {
         if response == .OK, let url = panel.url {
             state.setProjectURL(url)
             preferences?.devProjectURL = url
+            // Phase 3: if a localhost port was detected this session, LEARN this
+            // folder for it (so the manual pick is remembered next time on that
+            // port). The global last-used (`devProjectURL`) is updated above.
+            rememberLocalhostPortMapping(state: state)
             // Dev Mode needs a git repo for its checkpoint/revert (Milestone 7).
             // Verify async so the user learns BEFORE recording if the folder
             // isn't one — non-blocking, mirrors agent detection.

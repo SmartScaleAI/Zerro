@@ -2,16 +2,18 @@
 //  AreaSelectorToolbarLayoutTests.swift
 //  ZerroTests
 //
-//  Multi-model — the capture toolbar's frame math (typed-artifact refactor:
-//  the mode toggle is gone; the model chip is now leftmost). The toolbar is
-//  not a SwiftUI HStack: every control's rect comes from static frame
-//  helpers that the view renders with AND the controller hit-tests against,
-//  so an arithmetic slip here means overlapping chrome and clicks landing
-//  on the wrong control. These tests pin the invariants:
-//    • cluster order model → mic → record, gap-separated,
-//      mutually disjoint, all inside the toolbar frame;
-//    • the toolbar width includes the model chip;
-//    • the model dropdown's frame/row hit-test round-trips.
+//  Compact icon toolbar — the capture toolbar's frame math. The toolbar is
+//  ONE rounded container holding: a two-segment mode switch, a divider, the
+//  model/mic icon buttons, then the Record pill. It is not a SwiftUI HStack:
+//  every control's rect comes from static frame helpers that the view renders
+//  with AND the controller hit-tests against, so an arithmetic slip here means
+//  overlapping chrome and clicks landing on the wrong control. These tests pin
+//  the invariants:
+//    • mode switch is the leading control, inset symmetrically from both ends;
+//    • cluster order mode → model → mic → record, gap-separated, disjoint,
+//      all inside the toolbar frame;
+//    • the two mode segments tile the switch exactly;
+//    • the model dropdown centers under its icon and its rows hit-test back.
 //
 
 import XCTest
@@ -26,32 +28,47 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
     private let bounds = CGSize(width: 1728, height: 1080)
 
     private var toolbar: CGRect { AreaSelectorView.toolbarFrame(forSelection: selection, in: bounds) }
+    private var modeSwitch: CGRect { AreaSelectorView.devToggleFrame(forSelection: selection, in: bounds) }
     private var model: CGRect { AreaSelectorView.modelChipFrame(forSelection: selection, in: bounds) }
     private var mic: CGRect { AreaSelectorView.micChipFrame(forSelection: selection, in: bounds) }
     private var record: CGRect { AreaSelectorView.recordButtonFrame(forSelection: selection, in: bounds) }
 
     // MARK: - Cluster order + widths
 
-    func testToolbarWidthIncludesModelChip() {
-        // model + gap + mic + gap + record — derived from the segment
-        // frames so the assertion tracks the constants.
-        let gap = mic.minX - model.maxX
-        let expected = model.width + gap + mic.width + gap + record.width
-        XCTAssertEqual(toolbar.width, expected, accuracy: 0.001)
-        XCTAssertEqual(model.width, AreaSelectorView.modelChipWidth)
+    func testControlWidthsMatchCompactMetrics() {
+        XCTAssertEqual(modeSwitch.width, AreaSelectorView.modeSwitchWidth)
+        XCTAssertEqual(model.width, AreaSelectorView.iconButtonWidth)
+        XCTAssertEqual(mic.width, AreaSelectorView.iconButtonWidth)
+        XCTAssertEqual(record.width, AreaSelectorView.recordButtonWidth)
     }
 
-    func testClusterOrderIsModelMicRecord() {
-        let gap = mic.minX - model.maxX
-        XCTAssertGreaterThan(gap, 0, "mic chip must sit AFTER the model chip with a gap")
-        XCTAssertEqual(model.minX, toolbar.minX, "model chip is leftmost since the mode toggle's removal")
-        XCTAssertEqual(mic.minX, model.maxX + gap, accuracy: 0.001)
-        XCTAssertEqual(record.minX, mic.maxX + gap, accuracy: 0.001)
-        XCTAssertEqual(record.maxX, toolbar.maxX, accuracy: 0.001)
+    func testToolbarWidthMatchesClusterWidth() {
+        XCTAssertEqual(toolbar.width, AreaSelectorView.toolbarClusterWidth(devMode: false), accuracy: 0.001)
+    }
+
+    func testModeSwitchIsLeadingControlSymmetricallyInset() {
+        // The mode switch now lives INSIDE the container (no longer floating
+        // left), inset from the leading edge by the same margin Record is inset
+        // from the trailing edge.
+        XCTAssertTrue(toolbar.contains(modeSwitch), "mode switch must sit inside the toolbar")
+        let leadingInset = modeSwitch.minX - toolbar.minX
+        let trailingInset = toolbar.maxX - record.maxX
+        XCTAssertGreaterThan(leadingInset, 0)
+        XCTAssertEqual(leadingInset, trailingInset, accuracy: 0.001, "container insets are symmetric")
+    }
+
+    func testClusterOrderIsModeModelMicRecord() {
+        // mode switch → (divider) → model → mic → record, left to right.
+        XCTAssertLessThan(modeSwitch.maxX, model.minX, "divider gap separates the switch from model")
+        let modelMicGap = mic.minX - model.maxX
+        let micRecordGap = record.minX - mic.maxX
+        XCTAssertGreaterThan(modelMicGap, 0, "mic sits after model with a gap")
+        XCTAssertGreaterThan(micRecordGap, 0, "record sits after mic with a gap")
+        XCTAssertEqual(mic.minX, model.maxX + modelMicGap, accuracy: 0.001)
     }
 
     func testSegmentsAreDisjointAndInsideToolbar() {
-        let frames = [model, mic, record]
+        let frames = [modeSwitch, model, mic, record]
         for (i, a) in frames.enumerated() {
             XCTAssertTrue(toolbar.contains(a), "segment \(i) escapes the toolbar")
             for (j, b) in frames.enumerated() where i < j {
@@ -60,45 +77,84 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
         }
     }
 
-    /// A click at each segment's center must hit-test to that segment
-    /// and no other — the controller's monitor dispatches on exactly
-    /// these `contains(point)` checks.
+    /// A click at each control's center must hit-test to that control and no
+    /// other — the controller's monitor dispatches on these `contains(point)`.
     func testCenterPointsHitTheRightControl() {
-        let centers = [model, mic, record].map { CGPoint(x: $0.midX, y: $0.midY) }
-        let frames = [model, mic, record]
+        let frames = [modeSwitch, model, mic, record]
+        let centers = frames.map { CGPoint(x: $0.midX, y: $0.midY) }
         for (i, point) in centers.enumerated() {
             for (j, frame) in frames.enumerated() {
                 XCTAssertEqual(frame.contains(point), i == j,
-                               "center of segment \(i) vs frame \(j)")
+                               "center of control \(i) vs frame \(j)")
             }
         }
     }
 
+    // MARK: - Area-mode positioning
+
+    func testToolbarCentersInComfortablyLargeSelection() {
+        // A selection comfortably larger than the toolbar → centered ON the region.
+        let big = CGRect(x: 200, y: 150, width: 900, height: 500)
+        let t = AreaSelectorView.toolbarFrame(forSelection: big, in: bounds)
+        XCTAssertEqual(t.midX, big.midX, accuracy: 0.001)
+        XCTAssertEqual(t.midY, big.midY, accuracy: 0.001)
+        XCTAssertTrue(big.contains(t), "the centered toolbar stays inside the region")
+    }
+
+    func testToolbarDropsBelowSelectionTooNarrowToCenter() {
+        // A tall-but-narrow selection (confirmable, but narrower than the toolbar)
+        // → falls back to hanging below the selection.
+        let narrow = CGRect(x: 400, y: 200, width: 200, height: 500)
+        let t = AreaSelectorView.toolbarFrame(forSelection: narrow, in: bounds)
+        XCTAssertGreaterThanOrEqual(t.minY, narrow.maxY, "toolbar hangs below the selection")
+        XCTAssertEqual(t.midX, narrow.midX, accuracy: 0.001)
+        XCTAssertFalse(narrow.contains(t), "it is not centered inside such a small region")
+    }
+
+    // MARK: - Mode switch segments
+
+    func testModeSegmentsTileTheSwitchExactly() {
+        let artifact = AreaSelectorView.modeArtifactSegmentFrame(forSelection: selection, in: bounds)
+        let dev = AreaSelectorView.modeDevSegmentFrame(forSelection: selection, in: bounds)
+        XCTAssertEqual(artifact.minX, modeSwitch.minX, accuracy: 0.001)
+        XCTAssertEqual(artifact.maxX, dev.minX, accuracy: 0.001, "segments share a seam")
+        XCTAssertEqual(dev.maxX, modeSwitch.maxX, accuracy: 0.001)
+        XCTAssertEqual(artifact.width, dev.width, accuracy: 0.001, "segments are equal halves")
+        XCTAssertFalse(artifact.intersects(dev))
+    }
+
     // MARK: - Model dropdown geometry
 
-    func testModelMenuHangsUnderTheChipAndHitTestsRows() {
+    func testModelMenuCentersUnderTheIconAndHitTestsRows() {
         let itemCount = 6
         let menu = AreaSelectorView.modelMenuFrame(
             forSelection: selection, in: bounds, itemCount: itemCount
         )
-        XCTAssertEqual(menu.minX, model.minX, accuracy: 0.001)
+        // Centered under the icon (roomy case → un-clamped).
+        XCTAssertEqual(menu.midX, model.midX, accuracy: 0.001)
         XCTAssertGreaterThan(menu.minY, model.maxY)
         XCTAssertEqual(menu.width, AreaSelectorView.modelMenuWidth)
 
-        // Row 0's vertical center maps back to index 0; the last row to
-        // itemCount-1; a point above the panel maps to nil.
-        let row0 = CGPoint(x: menu.midX, y: menu.minY + 6 + AreaSelectorView.modelMenuRowHeight / 2)
+        // Rows begin BELOW the section header. Row 0's center maps to index 0;
+        // the last row to itemCount-1; a point in the header maps to nil.
+        let rowsTop = menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
+        let row0 = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.modelMenuRowHeight / 2)
         XCTAssertEqual(
             AreaSelectorView.modelMenuRowIndex(at: row0, forSelection: selection, in: bounds, itemCount: itemCount),
             0
         )
         let rowLast = CGPoint(
             x: menu.midX,
-            y: menu.minY + 6 + AreaSelectorView.modelMenuRowHeight * (CGFloat(itemCount) - 0.5)
+            y: rowsTop + AreaSelectorView.modelMenuRowHeight * (CGFloat(itemCount) - 0.5)
         )
         XCTAssertEqual(
             AreaSelectorView.modelMenuRowIndex(at: rowLast, forSelection: selection, in: bounds, itemCount: itemCount),
             itemCount - 1
+        )
+        // A point inside the section header band is not a row.
+        let inHeader = CGPoint(x: menu.midX, y: menu.minY + AreaSelectorView.menuVPad + 2)
+        XCTAssertNil(
+            AreaSelectorView.modelMenuRowIndex(at: inHeader, forSelection: selection, in: bounds, itemCount: itemCount)
         )
         let outside = CGPoint(x: menu.midX, y: menu.minY - 10)
         XCTAssertNil(

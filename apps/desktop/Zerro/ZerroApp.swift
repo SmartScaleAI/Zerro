@@ -55,6 +55,19 @@ struct ZerroApp: App {
     /// drowned out by the dead ones in practice.
     private static var didRegisterGlobalShortcuts = false
 
+    /// True when the process is hosting a SwiftUI `#Preview`, not a real
+    /// launch. Xcode sets `XCODE_RUNNING_FOR_PREVIEWS=1` in the preview
+    /// agent's environment. The `@main` App is still instantiated to host a
+    /// preview, so its `init` runs — but the launch-time bootstrap below
+    /// (global-hotkey registration, working-dir sweeps, the wake observer,
+    /// and the network refresh Tasks) is preview-hostile: it's what makes the
+    /// canvas spin and then fail with `AppLaunchTimeoutError`. Skip it under
+    /// previews; the long-lived services are still constructed above (cheap,
+    /// synchronous Keychain reads) so any view's preview renders normally.
+    static var isRunningInXcodePreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
     init() {
         let state = AppState()
         let prefs = PreferencesStore()
@@ -118,7 +131,7 @@ struct ZerroApp: App {
         // Register the global hotkey exactly once. Captures the long-
         // lived instances weakly — @State keeps them alive for the
         // app's lifetime, so weak references stay valid.
-        if !Self.didRegisterGlobalShortcuts {
+        if !Self.didRegisterGlobalShortcuts && !Self.isRunningInXcodePreview {
             Self.didRegisterGlobalShortcuts = true
             // Phase 13 (Part B): bring up analytics + error tracking FIRST inside the
             // one-shot block so the crash reporter is live before any
@@ -191,6 +204,21 @@ struct ZerroApp: App {
             state.onboardingCompleteProvider = { [weak onb] in
                 onb?.hasCompletedOnboarding ?? false
             }
+            // The error pill's "Retry" (when there's nothing to re-run on disk)
+            // reopens the screen-region overlay — route it through the same
+            // gated hotkey flow the global shortcut + menu use, so it re-checks
+            // permissions/entitlement before presenting the selector.
+            state.requestAreaSelector = { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
+                Self.handleHotkey(
+                    state: state,
+                    preferences: prefs,
+                    permissions: perms,
+                    onboarding: onb,
+                    entitlements: ent,
+                    areaSelector: selectorCtrl,
+                    pillController: pillCtrl
+                )
+            }
             // M2 (rev 3): recover on WAKE too — the common lid-close case
             // survives sleep and never relaunches, so a launch-only check would
             // never surface it. App-lifetime observer, registered once here.
@@ -207,7 +235,15 @@ struct ZerroApp: App {
             // Launch recovery still covers crash / force-quit / relaunch (where
             // the app actually exited). Both paths OFFER (ask before
             // generating); neither auto-spends a credit.
+            //
+            // Dev Mode quit-recovery runs FIRST — it restores real source files
+            // (higher stakes) than re-offering a recording. If it makes an offer,
+            // skip the recording scan this launch (the recording orphan re-offers
+            // next launch); otherwise fall through to the unchanged recording
+            // recovery.
             Task { @MainActor [weak state] in
+                let offeredDevRecovery = await state?.recoverInterruptedDevCheckpointIfAny() ?? false
+                guard !offeredDevRecovery else { return }
                 await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
             }
 
@@ -217,6 +253,10 @@ struct ZerroApp: App {
             // persisted toggle so normal-mode users never spawn the shell probe.
             if prefs.devModeEnabled {
                 DevAgentDetection.shared.warm()
+                // Phase 2: refresh the server-fetched model manifest (cache→disk)
+                // so the dev-settings Model section shows the current pinned list.
+                // Fail-open: offline keeps the cached/bundled list, never empty.
+                Task { await AgentModelManifestStore.shared.warm() }
             }
 
             // Phase C: throttled background re-validation of a cached BYOK
@@ -487,6 +527,15 @@ struct ZerroApp: App {
         // first" (the pill's "x" is the quick "not now").
         if case .confirmingRecovery = state.state {
             Log.hotkey.notice("recovery confirm in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
+            return
+        }
+        // Dev Mode quit-recovery: the cross-launch Undo/Keep offer is awaiting an
+        // answer. Like .confirmingRecovery, the record hotkey must not start a new
+        // recording over it (resolving it first protects the interrupted edits) —
+        // flash to signal "registered, resolve the pill".
+        if case .confirmingDevRecovery = state.state {
+            Log.hotkey.notice("dev recovery confirm in flight — flashing pill instead of starting")
             pillController?.flashBusy()
             return
         }

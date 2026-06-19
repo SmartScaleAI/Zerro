@@ -52,4 +52,16 @@ final class DevPromptTests: XCTestCase {
         XCTAssertTrue(dev.contains("<<<ZERRO_ARTIFACT"))
         XCTAssertTrue(dev.contains("<<<END_ZERRO_ARTIFACT>>>"))
     }
+
+    func testDevPromptCarriesTheDeixisAnchorContract() {
+        // Phase 2 (M5/M7): the marked-reference input + the structured-anchor
+        // return contract the client parses for the confirm gate.
+        let dev = PromptGenerationSystemPrompt.devText
+        XCTAssertTrue(dev.contains("DEIXIS REFERENCE"), "explains the crosshair-marked reference frames")
+        XCTAssertTrue(dev.contains("zerro_anchors"), "asks for the structured anchor block")
+        XCTAssertTrue(dev.contains("confidence"), "anchors carry the model's confidence (combined with the client's)")
+        // The anchors block must stay OUTSIDE the artifact fence so ArtifactParser
+        // doesn't swallow it and DevAnchorParser can read it.
+        XCTAssertTrue(dev.contains("OUTSIDE"))
+    }
 }

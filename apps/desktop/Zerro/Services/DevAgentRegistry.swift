@@ -9,8 +9,9 @@
 //  (Milestone 4) can spawn any of them from data alone — and a future
 //  first-party API agent is a clean substitution.
 //
-//  Phase 1 ships exactly ONE agent: Claude Code. Codex / Cursor / a custom
-//  command escape hatch + the auto-detect dropdown are Phase 3 (design §2).
+//  Three CLIs now ship — Claude Code (Phase 1), Codex, and Cursor (Phase 3,
+//  design §2) — each pinned against its live `--help`. The custom-command
+//  escape hatch + the port→folder zero-setup are the remaining Phase 3 items.
 //
 //  CLI contract (verified against current Claude Code docs, design §11):
 //    claude -p --output-format stream-json --verbose
@@ -83,13 +84,54 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     /// spawns this directly), or nil when not installed.
     let absolutePath: URL?
 
-    /// Full argv (excluding the prompt, which is delivered per
-    /// `promptDelivery`) for a run at `permission`.
-    func arguments(permission: DevAgentPermission) -> [String] {
+    /// The flag name used to select a model (Phase 2), or nil when the agent
+    /// has no model picker. Claude Code / Codex / Cursor all use `--model`; the
+    /// runner appends `[modelFlagName, modelID]` ONLY when a model is selected
+    /// AND this is non-nil (no flag ⇒ the agent's own default).
+    let modelFlagName: String?
+
+    /// Explicit memberwise init with `modelFlagName` defaulted to nil so the
+    /// pre-Phase-2 construction sites (tests) compile unchanged.
+    init(
+        id: String,
+        displayName: String,
+        executableName: String,
+        promptDelivery: DevAgentPromptDelivery,
+        outputFormat: DevAgentOutputFormat,
+        baseArgs: [String],
+        editsOnlyArgs: [String],
+        allowCommandsArgs: [String],
+        installed: Bool,
+        absolutePath: URL?,
+        modelFlagName: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.executableName = executableName
+        self.promptDelivery = promptDelivery
+        self.outputFormat = outputFormat
+        self.baseArgs = baseArgs
+        self.editsOnlyArgs = editsOnlyArgs
+        self.allowCommandsArgs = allowCommandsArgs
+        self.installed = installed
+        self.absolutePath = absolutePath
+        self.modelFlagName = modelFlagName
+    }
+
+    /// Full argv (excluding the prompt, which is delivered per `promptDelivery`)
+    /// for a run at `permission`, with the optional `--model <id>` appended last.
+    /// The model flag is added ONLY when `model` is non-nil AND the agent
+    /// declares a `modelFlagName` — otherwise the agent runs on its own default.
+    func arguments(permission: DevAgentPermission, model: String? = nil) -> [String] {
+        var args: [String]
         switch permission {
-        case .editsOnly:     return baseArgs + editsOnlyArgs
-        case .allowCommands: return baseArgs + allowCommandsArgs
+        case .editsOnly:     args = baseArgs + editsOnlyArgs
+        case .allowCommands: args = baseArgs + allowCommandsArgs
         }
+        if let model, !model.isEmpty, let flag = modelFlagName {
+            args += [flag, model]
+        }
+        return args
     }
 }
 
@@ -97,11 +139,17 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
 
 enum DevAgentRegistry {
 
-    /// Wire id of the Phase 1 agent.
+    /// Wire id of the original agent (Phase 1).
     static let claudeCodeID = "claude-code"
+    /// Wire id of the Codex agent (Phase 2 — `codex exec`).
+    static let codexID = "codex"
+    /// Wire id of the Cursor agent (Phase 3 — `cursor-agent -p`). MUST be the
+    /// literal "cursor" so `AgentModelMapping.source(forAgent:)` routes it to
+    /// `.cursorCLI` (its model list comes from `cursor-agent models`, not a
+    /// server manifest).
+    static let cursorID = "cursor"
 
-    /// The agent pre-selected when none is remembered. Phase 3 turns this into
-    /// "recommended installed agent"; Phase 1 has exactly one.
+    /// The agent pre-selected when none is remembered (the recommended default).
     static let recommendedID = claudeCodeID
 
     /// All known agents with live detection applied. Detection is cached in
@@ -109,7 +157,7 @@ enum DevAgentRegistry {
     /// (the module defaults to MainActor isolation) so the BLOCKING resolve it
     /// triggers can run off the main thread — see `DevAgentDetection`.
     nonisolated static func all() -> [DevAgentEntry] {
-        [makeClaudeCode()]
+        [makeClaudeCode(), makeCodex(), makeCursor()]
     }
 
     /// Registry lookup by wire id (with detection applied). BLOCKING on a cold
@@ -139,7 +187,114 @@ enum DevAgentRegistry {
             // builds, can self-verify). Heavier trust; off by default.
             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
             installed: path != nil,
-            absolutePath: path
+            absolutePath: path,
+            // Claude Code's `--model` accepts an alias or a full model id (e.g.
+            // `claude-opus-4-8`), exactly the strings the anthropic manifest
+            // serves. Verified against `claude --help` (June 2026).
+            modelFlagName: "--model"
+        )
+    }
+
+    // MARK: - Codex
+
+    /// Codex CLI agent (`codex exec`). Verified against `codex exec --help`
+    /// (codex-cli 0.140.0, 2026-06-18):
+    ///   • `exec` is the non-interactive subcommand; the prompt is a POSITIONAL
+    ///     argument (stdin is only appended when piped — so we pass it as an arg
+    ///     and close stdin), hence `.argument` delivery.
+    ///   • Sandbox: `-s/--sandbox` with `workspace-write` (files yes, the
+    ///     edits-only posture) vs `danger-full-access` (allow-commands). NOT the
+    ///     deprecated `--full-auto`. `exec` is already non-interactive
+    ///     (approval never), so no approval flag is needed.
+    ///   • `--skip-git-repo-check` is harmless inside a repo (the dispatch always
+    ///     runs in one — the checkpoint requires git) and avoids a repo-detection
+    ///     mismatch; `--color never` keeps the `.text` tail clean.
+    ///   • Output is parsed as `.text` (spinner + tail) — Codex's `--json` event
+    ///     schema differs from Claude's stream-json, so we don't pretend to parse
+    ///     it; the result card falls back to the diff-generated change line.
+    ///   • `-m/--model` selects the model; the ids come from Codex's OWN
+    ///     per-account list (see `DevAgentDetection.codexModels`), NOT the OpenAI
+    ///     API manifest (a ChatGPT-account Codex rejects the API codex ids).
+    nonisolated private static func makeCodex() -> DevAgentEntry {
+        let path = DevAgentBinaryResolver.resolve("codex")
+        return DevAgentEntry(
+            id: codexID,
+            displayName: "Codex",
+            executableName: "codex",
+            promptDelivery: .argument,
+            outputFormat: .text,
+            baseArgs: ["exec", "--skip-git-repo-check", "--color", "never"],
+            editsOnlyArgs: ["--sandbox", "workspace-write"],
+            allowCommandsArgs: ["--sandbox", "danger-full-access"],
+            installed: path != nil,
+            absolutePath: path,
+            modelFlagName: "--model"
+        )
+    }
+
+    // MARK: - Cursor
+
+    /// Cursor CLI agent (`cursor-agent -p`). Verified against the LIVE CLI —
+    /// `cursor-agent --help` + six headless smoke dispatches in a throwaway repo
+    /// (cursor-agent 2026.06.16-20-30-07-a07d3ac, 2026-06-18). The design doc's
+    /// guessed `cursor-agent -p --force --output-format json` was stale; the real
+    /// contract:
+    ///   • There is NO `exec`-style subcommand — the headless form is the
+    ///     TOP-LEVEL command with `-p`/`--print` (`agent` is just an alias).
+    ///   • The prompt is a trailing POSITIONAL argument (`[prompt...]`), so we use
+    ///     `.argument` delivery (the runner appends it last and closes stdin) —
+    ///     same shape as Codex. Verified to run headlessly with stdin closed.
+    ///   • `--output-format stream-json` emits a clean, line-delimited event
+    ///     stream (`system`/`assistant`/`tool_call`/`thinking`/`result`) whose
+    ///     `result` event carries the summary string — so we parse it as
+    ///     `.streamJSON` for live substatus + the result card (see
+    ///     `DevAgentProcessExecution.parseStreamJSONLine` / `parseResultSummary`,
+    ///     extended to Cursor's `tool_call` shape). NOT `--output-format json`
+    ///     (a single blob) or `text`.
+    ///   • `--trust` trusts the workspace without prompting — REQUIRED for
+    ///     unattended runs (a `--print`-only flag, by design), else the CLI can
+    ///     stall on a trust prompt. We always dispatch INTO the user's chosen
+    ///     project, so trusting it is intended.
+    ///   • Permission posture (verified, and OPPOSITE of the design doc's sandbox
+    ///     assumption): the plain `-p` default is edits-only — file edits apply
+    ///     but shell commands are REJECTED ("all shell invocations returned
+    ///     'Rejected'"). `--force` (alias `--yolo`, "Run Everything") is the
+    ///     allow-commands opt-in — shell runs unsandboxed (so it can add deps /
+    ///     run builds). Hence `editsOnlyArgs == []` (the default already denies
+    ///     shell) and `allowCommandsArgs == ["--force"]`.
+    ///       NUANCE: unlike Claude's `--disallowedTools Bash` / Codex's
+    ///       `--sandbox workspace-write`, cursor-agent has NO explicit deny-shell
+    ///       flag — the edits-only behavior is the default `-p` posture, which a
+    ///       user who has globally enabled Cursor auto-run COULD weaken. We do not
+    ///       use `--sandbox enabled` (it AUTO-RUNS sandboxed shell — not
+    ///       edits-only) nor `--sandbox disabled` (it rejects shell but degrades
+    ///       the primary edit tool into a Write fallback). Clean/reliable edits
+    ///       matter more than closing a narrow, config-dependent shell hole — the
+    ///       git checkpoint + revert is the real containment, and Dev Mode is
+    ///       watched, not autonomous.
+    ///   • `--model <id>` selects the model; the ids come from `cursor-agent
+    ///     models` (per-account; see `DevAgentDetection.cursorModels`), e.g.
+    ///     `auto` / `claude-opus-4-8-high` / `gpt-5.5-medium`, NOT a server
+    ///     manifest.
+    nonisolated private static func makeCursor() -> DevAgentEntry {
+        let path = DevAgentBinaryResolver.resolve("cursor-agent")
+        return DevAgentEntry(
+            id: cursorID,
+            displayName: "Cursor",
+            executableName: "cursor-agent",
+            promptDelivery: .argument,
+            outputFormat: .streamJSON,
+            // -p (headless/print) + clean line-delimited events + trust the
+            // workspace so an unattended run never stalls on a trust prompt.
+            baseArgs: ["-p", "--output-format", "stream-json", "--trust"],
+            // Edits-only IS the default `-p` posture (shell rejected) — there's no
+            // deny-shell flag to add, so this is empty. See the NUANCE above.
+            editsOnlyArgs: [],
+            // Allow-commands opt-in: --force (== --yolo) runs everything unsandboxed.
+            allowCommandsArgs: ["--force"],
+            installed: path != nil,
+            absolutePath: path,
+            modelFlagName: "--model"
         )
     }
 }

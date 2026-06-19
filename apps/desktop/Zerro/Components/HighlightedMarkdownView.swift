@@ -62,7 +62,7 @@ struct HighlightedMarkdownView: View {
     ## Current State
     - Two-column form: email + password stacked on the left
     - Brand-blue "Sign in" primary CTA
-    - Three social auth buttons below (Google, Microsoft, SSO)
+    - Three social auth buttons below (Google,   Microsoft, SSO)
     - Password helper text wraps to two lines at this viewport width
     - "Forgot password?" link sits adjacent to the password field
 

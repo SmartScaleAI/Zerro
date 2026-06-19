@@ -25,6 +25,8 @@ import XCTest
 private enum TrialFixtures {
     static func codeSent() -> String { #"{"status":"code_sent"}"# }
     static func alreadyUsed() -> String { #"{"status":"already_used"}"# }
+    /// Trial device binding: this Mac already trialed under a different email.
+    static func deviceTrialUsed() -> String { #"{"status":"device_trial_used"}"# }
     /// A `verify`/`resume` success body. The same shape covers both actions, so
     /// `expiresAt` is parameterized for the TTL-gap tests (resume returns a token
     /// whose expiry is in the future of the ADVANCED clock). `limit` is the E4
@@ -108,6 +110,44 @@ final class TrialCreditsManagerTests: XCTestCase {
         transport.enqueue(TrialFixtures.error("disposable_email"), status: 422)
         let mgr = makeTrialManager(transport)
         await assertTrialThrows(.disposableEmail) { try await mgr.requestCode(email: "a@mailinator.com") }
+    }
+
+    // MARK: - Trial device binding
+
+    func testRequestInjectsDeviceIdHash() async throws {
+        // Every /trial-start POST carries the hashed hardware id so the backend
+        // can cap one grant per physical Mac. The hash must match DeviceIdentity
+        // and be a well-formed 64-char SHA-256 hex digest.
+        let deviceHash = try XCTUnwrap(
+            DeviceIdentity.hashedDeviceID(),
+            "hardware UUID should be readable in the test host"
+        )
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.codeSent(), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        try await mgr.requestCode(email: "user@example.com")
+        let body = try XCTUnwrap(transport.requests[0].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["device_id_hash"] as? String, deviceHash)
+        XCTAssertEqual(deviceHash.count, 64)
+        XCTAssertTrue(deviceHash.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) })
+    }
+
+    func testRequestDeviceTrialUsedThrows() async {
+        // This Mac already trialed under a different email → distinct typed error
+        // (NOT alreadyUsed: a new email won't help).
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.deviceTrialUsed(), status: 200)
+        let mgr = makeTrialManager(transport)
+        await assertTrialThrows(.deviceTrialUsed) { try await mgr.requestCode(email: "fresh@b.com") }
+    }
+
+    func testVerifyDeviceTrialUsedThrows() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.deviceTrialUsed(), status: 200)
+        let mgr = makeTrialManager(transport)
+        await assertTrialThrows(.deviceTrialUsed) { _ = try await mgr.verifyCode(email: "fresh@b.com", code: "123456") }
     }
 
     func testVerifyStoresTokenAndCredits() async throws {
@@ -626,5 +666,29 @@ final class TrialProxyRoutingTests: XCTestCase {
         XCTAssertEqual(genTransport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer TOK2")
         // verify + exactly one resume — no re-verify round-trip.
         XCTAssertEqual(trialTransport.requests.count, 2)
+    }
+}
+
+// MARK: - DeviceIdentity (trial device binding)
+
+final class DeviceIdentityTests: XCTestCase {
+
+    func testHashedDeviceIDIsStableNonNil64Hex() throws {
+        // On a real Mac (the test host) the platform UUID is readable, so the hash
+        // is a non-nil, 64-char lowercase-hex SHA-256 digest...
+        let a = try XCTUnwrap(DeviceIdentity.hashedDeviceID(), "platform UUID should be readable on the test host")
+        XCTAssertEqual(a.count, 64)
+        XCTAssertTrue(a.allSatisfy { $0.isHexDigit })
+        XCTAssertEqual(a, a.lowercased())
+        // ...and stable across calls within the process (memoized hardware read).
+        XCTAssertEqual(DeviceIdentity.hashedDeviceID(), a)
+    }
+
+    func testHashedDeviceIDNeverLeaksTheRawUUID() throws {
+        // The hash must not be the raw IOPlatformUUID, which is upper-case with
+        // dashes (e.g. "XXXXXXXX-XXXX-..."). A 64-hex digest contains neither.
+        let hash = try XCTUnwrap(DeviceIdentity.hashedDeviceID())
+        XCTAssertFalse(hash.contains("-"))
+        XCTAssertEqual(hash, hash.lowercased())
     }
 }

@@ -109,13 +109,14 @@ enum ManagedBackend {
     static var entitlementURL: URL { baseURL.appendingPathComponent("entitlement") }
     /// Phase F — the email-gated trial-credits endpoint (request + verify code).
     static var trialStartURL: URL { baseURL.appendingPathComponent("trial-start") }
-    /// Phase 6 (typed-artifact refactor) — the free "Write agent prompt"
-    /// conversion endpoint.
-    static var convertURL: URL { baseURL.appendingPathComponent("convert") }
     /// In-app feedback / issue report relay → Slack. Unauthenticated (the
     /// dialog works signed-out); shares this same base URL resolution so a
     /// DEBUG backend override points feedback at the local stack too.
     static var feedbackURL: URL { baseURL.appendingPathComponent("feedback") }
+    /// Dev Mode model manifest (server-fetched coding-agent models). PUBLIC GET,
+    /// no auth — the list is public model ids. Shares the base-URL resolution so
+    /// a DEBUG override reads the manifest from the local stack too.
+    static var agentModelsURL: URL { baseURL.appendingPathComponent("agent-models") }
 
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,
@@ -344,6 +345,47 @@ struct GenerateResponseDTO: Decodable {
             case inputTokens = "input_tokens"
             case outputTokens = "output_tokens"
             case model
+        }
+    }
+}
+
+/// Dev Mode CALL 1 (`dev_transcribe`) success body: a word-level transcript and
+/// nothing else (the call is free — no usage, no credits). Shape:
+/// `{ "transcript": { "segments": [{start,end,text}], "words": [{word,start,end}],
+/// "durationSeconds": N } }`. Mapped to the app's `Transcript` so the deixis
+/// resolver + the dev call-2 payload consume it exactly like the BYOK local
+/// Whisper pass. `words` is always present on a success body (empty on the
+/// no-speech path) but decoded defensively as optional.
+struct TranscribeResponseDTO: Decodable {
+    let transcript: TranscriptDTO
+
+    struct TranscriptDTO: Decodable {
+        let segments: [SegmentDTO]
+        let words: [WordDTO]?
+        let durationSeconds: Double?
+
+        struct SegmentDTO: Decodable {
+            let start: Double
+            let end: Double
+            let text: String
+        }
+
+        struct WordDTO: Decodable {
+            let word: String
+            let start: Double
+            let end: Double
+        }
+
+        /// Map the wire DTO to the app's `Transcript`. `fullText` is the joined
+        /// segment text (the dev path uses it only for the domain-dictionary
+        /// emptiness check); `words` drive the deixis resolver; `durationSeconds`
+        /// is the server's measured length, carried so call 2 bills against it
+        /// (the same duration the normal managed path meters on).
+        func toTranscript() -> Transcript {
+            let segs = segments.map { TranscriptSegment(start: $0.start, end: $0.end, text: $0.text) }
+            let wordTimings = (words ?? []).map { WordTiming(word: $0.word, start: $0.start, end: $0.end) }
+            let fullText = segs.map(\.text).joined(separator: " ")
+            return Transcript(segments: segs, fullText: fullText, words: wordTimings, durationSeconds: durationSeconds)
         }
     }
 }

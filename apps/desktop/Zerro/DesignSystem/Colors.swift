@@ -13,6 +13,13 @@ extension Color {
     // Text/icons sitting on top of a `vfBrandAccent` fill.
     static let vfOnBrand = Color(red: 0.07, green: 0.07, blue: 0.09)
 
+    /// Dev Mode accent — the one place the otherwise-monochrome selection +
+    /// toolbar chrome turns chromatic, to signal "this recording dispatches to
+    /// a coding agent." Fixed #34E27A. `vfOnBrand` (the near-black above) is the
+    /// text/knob color to sit ON this green for contrast. Gated entirely on
+    /// `state.isDevMode`; nothing renders green when Dev Mode is off.
+    static let vfDevAccent = Color(red: 0.204, green: 0.886, blue: 0.478) // #34E27A
+
     // Status — Apple HIG palette per the Phase 2.5 design decision
     // (#FF453A / #FF9F0A / #30D158). Values had drifted slightly before
     // Phase 11 R2; re-pinned here so the Settings destructive buttons +
@@ -45,6 +52,11 @@ extension Color {
     // #1868BF — a muted blue that holds up over the panel's dark
     // background without the saturation of full `systemBlue`.
     static let vfMenuRowHover = Color(red: 0x18 / 255.0, green: 0x68 / 255.0, blue: 0xBF / 255.0)
+
+    /// Hover fill for quiet pill controls (secondary buttons, the dismiss "x"
+    /// circle). Replaces the literal Color(red: 0.28, green: 0.28, blue: 0.30)
+    /// that was copy-pasted across the pill content views.
+    static let vfPillControlHover = Color(red: 0.28, green: 0.28, blue: 0.30)
 
     /// Locked accent for the Phase 17 mode-switch confirmation pill —
     /// the "arrow.left.arrow.right" glyph and the primary "Switch" fill.

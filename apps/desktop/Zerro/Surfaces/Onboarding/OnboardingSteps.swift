@@ -86,6 +86,10 @@ struct EmailStepView: View {
     /// The email's trial is already spent (exhausted grant) — there are no
     /// credits to grant, but the user may still continue (it's not an error).
     @State private var alreadyUsed: Bool = false
+    /// THIS Mac already used its trial under a different email (device binding).
+    /// A new email won't help — distinct copy, but still not a dead end: the user
+    /// can continue and add API keys / subscribe.
+    @State private var deviceUsed: Bool = false
     @State private var errorMessage: String?
     /// True when the last error was an infrastructure failure (network/5xx/send)
     /// rather than user error (wrong code, etc.) — only these unlock the
@@ -120,7 +124,7 @@ struct EmailStepView: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !verified && !alreadyUsed {
+                if !verified && !alreadyUsed && !deviceUsed {
                     field
                 }
             }
@@ -134,6 +138,7 @@ struct EmailStepView: View {
 
     private var headline: String {
         if verified { return "Email verified" }
+        if deviceUsed { return "Trial already used" }
         if alreadyUsed { return "Welcome back" }
         return step == .email ? "Verify your email" : "Enter your code"
     }
@@ -141,6 +146,9 @@ struct EmailStepView: View {
     private var subhead: String {
         if verified {
             return "Your free trial is ready \u{2014} you\u{2019}re good to go."
+        }
+        if deviceUsed {
+            return "This Mac has already used its free trial. You can continue \u{2014} add your own API keys or subscribe anytime."
         }
         if alreadyUsed {
             return "This email has already used its free trial. You can continue \u{2014} add your own API keys or subscribe anytime."
@@ -219,9 +227,9 @@ struct EmailStepView: View {
 
     @ViewBuilder
     private var actions: some View {
-        if verified || alreadyUsed {
+        if verified || alreadyUsed || deviceUsed {
             // The ONLY way to advance is after verification (or a genuinely
-            // already-used email). No skip exists for an unverified user.
+            // already-used email / device). No skip exists for an unverified user.
             OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
         } else {
             switch step {
@@ -362,6 +370,13 @@ struct EmailStepView: View {
             // Not an error — the email's trial is spent. Let them continue.
             alreadyUsed = true
             errorMessage = nil
+        case .deviceTrialUsed:
+            // Not an error — this Mac's trial is spent (a new email won't help).
+            // Distinct copy, still continuable. Log so we can measure how often
+            // the hard block fires on real (possibly shared-machine) users.
+            deviceUsed = true
+            errorMessage = nil
+            Log.billing.notice("trial email verification: device already trialed (onboarding) — continuing without credits")
         case .network, .server, .sendFailed, .malformedResponse, .malformedRequest:
             handleSystem(error.userMessage, error)
         case .invalidEmail, .disposableEmail, .invalidCode, .codeExpired,
