@@ -329,6 +329,10 @@ private struct PillHostView: View {
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
             onRecoveryDiscard: { appState.resolveRecovery(generate: false) },
+            // Dev Mode (M7) terminal-card actions: restore the tree to the
+            // checkpoint, or re-dispatch the same prompt.
+            onDevRevert: { appState.revertDevDispatch() },
+            onDevRetry: { appState.retryDevDispatch() },
             // Phase 5: the parsed result — chat text + optional artifact
             // card.
             result: appState.resultPresentation,

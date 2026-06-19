@@ -36,6 +36,13 @@ final class PreferencesStore {
         static let redactSecrets = "redactSecrets"
         static let selectedModelID = "selectedModelID"
 
+        // Dev Mode (Phase 1) — the mode switch + its two remembered
+        // selections. Non-sandboxed, so the project folder is persisted as a
+        // plain path (no security-scoped bookmark needed).
+        static let devModeEnabled = "vf.dev.modeEnabled"
+        static let devProjectPath = "vf.dev.projectPath"
+        static let devAgentID = "vf.dev.agentID"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -45,6 +52,9 @@ final class PreferencesStore {
             microphoneDeviceID,
             redactSecrets,
             selectedModelID,
+            devModeEnabled,
+            devProjectPath,
+            devAgentID,
         ]
     }
 
@@ -82,6 +92,39 @@ final class PreferencesStore {
         didSet { defaults.set(selectedModelID, forKey: Keys.selectedModelID) }
     }
 
+    // MARK: - Dev Mode (Phase 1)
+
+    /// Whether Dev Mode was last left engaged. Seeds the toolbar's mode
+    /// switch so a returning user lands back in the mode they were using.
+    var devModeEnabled: Bool {
+        didSet { defaults.set(devModeEnabled, forKey: Keys.devModeEnabled) }
+    }
+
+    /// Last-used project folder for Dev Mode (globally remembered in v1;
+    /// port-keyed in a later phase). Persisted as a path; nil when unset.
+    var devProjectURL: URL? {
+        didSet {
+            if let path = devProjectURL?.path {
+                defaults.set(path, forKey: Keys.devProjectPath)
+            } else {
+                defaults.removeObject(forKey: Keys.devProjectPath)
+            }
+        }
+    }
+
+    /// Last-used Dev Mode agent (registry wire id), or nil. Re-seeded against
+    /// live detection at present time, so a since-uninstalled agent doesn't
+    /// ride forward as selectable.
+    var selectedAgentID: String? {
+        didSet {
+            if let selectedAgentID {
+                defaults.set(selectedAgentID, forKey: Keys.devAgentID)
+            } else {
+                defaults.removeObject(forKey: Keys.devAgentID)
+            }
+        }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -100,6 +143,13 @@ final class PreferencesStore {
         } else {
             self.selectedModelID = ModelRegistry.defaultModelID
         }
+        self.devModeEnabled = defaults.bool(forKey: Keys.devModeEnabled)
+        if let path = defaults.string(forKey: Keys.devProjectPath), !path.isEmpty {
+            self.devProjectURL = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            self.devProjectURL = nil
+        }
+        self.selectedAgentID = defaults.string(forKey: Keys.devAgentID)
     }
 
     // MARK: - Reset
@@ -118,5 +168,8 @@ final class PreferencesStore {
         microphoneDeviceID = ""
         redactSecrets = ProcessingConfig.redactSecretsDefault
         selectedModelID = ModelRegistry.defaultModelID
+        devModeEnabled = false
+        devProjectURL = nil
+        selectedAgentID = nil
     }
 }

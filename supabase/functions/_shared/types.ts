@@ -32,6 +32,7 @@ export interface LsWebhook<A = Record<string, unknown>> {
 export interface LsSubscriptionAttributes {
   store_id?: number;
   customer_id?: number;
+  user_email?: string | null; // buyer email — mirrored to subscriptions.email_normalized for human identification
   order_id?: number;
   product_id?: number;
   variant_id?: number;

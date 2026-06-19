@@ -63,6 +63,22 @@ enum PillState: Equatable {
     /// with consent) and Discard (delete it). Dismissing the pill any other way
     /// also resolves to Discard. Recovery NEVER auto-generates — it always asks.
     case confirmRecovery
+
+    // MARK: Dev Mode (Phase 1) — dispatch tail (design §8)
+
+    /// Progress capsule for checkpointing → dispatching → agentRunning → (M7)
+    /// reverting. `label` is the current substatus ("Checkpointing…", "editing
+    /// App.css", "Reverting…"). `cancellable` shows the Cancel control on the
+    /// in-flight dispatch states (a cancel triggers the safe terminate→revert)
+    /// and hides it while reverting (interrupting a revert is unsafe).
+    case devProgress(label: String, cancellable: Bool)
+    /// Terminal success. `summary` is the diff stat ("2 files changed (+8 −3)").
+    /// Renders Revert + Done (M7).
+    case devDone(summary: String)
+    /// Terminal failure. `detail` is the single-line reason; `canRevert` gates
+    /// the Revert button (a failure before the checkpoint has nothing to undo).
+    /// Renders [Revert] + Retry (M7).
+    case devFailed(detail: String, canRevert: Bool)
 }
 
 // MARK: - PillView
@@ -105,6 +121,14 @@ struct PillView: View {
     /// literal `.confirmRecovery` state without ceremony.
     var onRecoveryGenerate: () -> Void = {}
     var onRecoveryDiscard: () -> Void = {}
+
+    /// Dev Mode (M7) terminal-card actions. `onDevRevert` restores the working
+    /// tree to the pre-run checkpoint (offered on `.devDone`, and on `.devFailed`
+    /// when `canRevert`); `onDevRetry` re-dispatches the same prompt. The "Done"
+    /// button and the failed card's dismiss reuse `onDismissResult` (reset to
+    /// idle). Default no-ops so `#Preview` blocks can pass literal dev states.
+    var onDevRevert: () -> Void = {}
+    var onDevRetry: () -> Void = {}
 
     /// The parsed result the pill renders (Phase 5): chat text and the
     /// optional artifact card. Threaded from
@@ -188,10 +212,10 @@ struct PillView: View {
     /// capsule-to-non-capsule morph and keeps its content-driven sizing.
     private var lockedCapsuleWidth: CGFloat? {
         switch state {
-        case .recording, .wrappingUp, .processing, .error:
+        case .recording, .wrappingUp, .processing, .error, .devProgress:
             return Self.capsuleWidth
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .paidBlockResume:
+             .paidBlockResume, .devDone, .devFailed:
             return nil
         }
     }
@@ -199,7 +223,7 @@ struct PillView: View {
     private var lockedCapsuleHeight: CGFloat? {
         switch state {
         case .recording, .wrappingUp, .processing, .resultCompact, .confirmRecovery,
-             .paidBlockResume:
+             .paidBlockResume, .devProgress:
             return Self.capsuleHeight
         // .error keeps the locked 392 width (so it still reads as the same
         // capsule it morphed from) but drives its own height: a long
@@ -207,7 +231,7 @@ struct PillView: View {
         // down rather than truncating or overflowing the fixed frame.
         // ErrorPillContent floors itself at capsuleHeight so short messages
         // still render as the familiar 50pt capsule.
-        case .resultExpanded, .failureExpanded, .error:
+        case .resultExpanded, .failureExpanded, .error, .devDone, .devFailed:
             return nil
         }
     }
@@ -316,6 +340,34 @@ struct PillView: View {
                 onGenerate: onRecoveryGenerate,
                 onDiscard: onRecoveryDiscard
             )
+        // Dev Mode (Phase 1) dispatch tail. Progress reuses the processing
+        // capsule (Cancel hidden while reverting); the terminal states render
+        // the full card with Revert/Done and Revert/Retry (Milestone 7).
+        case .devProgress(let label, let cancellable):
+            ProcessingPillContent(stepLabel: label, onCancel: cancellable ? onCancel : nil)
+        case .devDone(let summary):
+            DevResultPillContent(
+                symbol: "checkmark.circle.fill",
+                tint: .vfSuccessGreen,
+                text: summary,
+                buttons: [
+                    .init(title: "Revert", role: .secondary, action: onDevRevert),
+                    .init(title: "Done", role: .primary, action: onDismissResult),
+                ],
+                onDismiss: nil // "Done" is the close affordance
+            )
+        case .devFailed(let detail, let canRevert):
+            DevResultPillContent(
+                symbol: "exclamationmark.triangle.fill",
+                tint: .vfWarningAmber,
+                text: detail,
+                buttons: [
+                    canRevert ? DevResultPillContent.Button(title: "Revert", role: .secondary, action: onDevRevert) : nil,
+                    DevResultPillContent.Button(title: "Retry", role: .primary, action: onDevRetry),
+                ].compactMap { $0 },
+                // Keep the partial edits and close (no auto-revert, §8).
+                onDismiss: onDismissResult
+            )
         }
     }
 
@@ -323,6 +375,97 @@ struct PillView: View {
         switch state {
         case .resultExpanded, .failureExpanded: return 18
         default:                                return 28
+        }
+    }
+}
+
+// MARK: - DevResultPillContent (Dev Mode, Phase 1 — Milestone 7)
+//
+// The terminal dev-dispatch card. `.devDone` shows the diff stat with
+// [Revert] [Done]; `.devFailed` shows the failure reason with [Revert] (when a
+// checkpoint exists) and [Retry], plus a dismiss "x" to keep the partial edits
+// and close. Same capsule chrome as ErrorPillContent so the dispatch tail reads
+// as a continuation of the recording flow, not a separate surface.
+
+private struct DevResultPillContent: View {
+    /// One trailing action. `.primary` is filled (Done / Retry); `.secondary`
+    /// is a plain text button (Revert).
+    struct Button: Identifiable {
+        enum Role { case primary, secondary }
+        let id = UUID()
+        let title: String
+        let role: Role
+        let action: () -> Void
+    }
+
+    let symbol: String
+    let tint: Color
+    let text: String
+    let buttons: [Button]
+    /// The "x" affordance (keep & close). nil → no separate dismiss (a primary
+    /// "Done" button already closes).
+    let onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: VFSpacing.md) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextPrimary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: VFSpacing.md)
+
+            ForEach(buttons) { button in
+                actionButton(button)
+            }
+
+            if let onDismiss {
+                SwiftUI.Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .contentShape(Rectangle())
+                        .padding(6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, 10)
+        .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
+    }
+
+    @ViewBuilder
+    private func actionButton(_ button: Button) -> some View {
+        switch button.role {
+        case .primary:
+            SwiftUI.Button(action: button.action) {
+                Text(button.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .padding(.horizontal, VFSpacing.sm)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.white.opacity(0.10)))
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+        case .secondary:
+            SwiftUI.Button(action: button.action) {
+                Text(button.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
         }
     }
 }
@@ -565,7 +708,9 @@ private struct RecordingPillContent: View {
 
 private struct ProcessingPillContent: View {
     let stepLabel: String
-    let onCancel: () -> Void
+    /// nil hides the Cancel control (e.g. the dev "Reverting…" state, where
+    /// interrupting the restore is the unsafe case we're guarding against).
+    let onCancel: (() -> Void)?
 
     // The "thinking" label arrives as "<phrase>… \u{00B7} <elapsed>". Split
     // on the middot so the phrase can truncate while the elapsed timer stays
@@ -615,13 +760,13 @@ private struct ProcessingPillContent: View {
             // cluster, right action.
             Spacer(minLength: VFSpacing.md)
 
-            cancelButton
+            if let onCancel { cancelButton(onCancel) }
         }
         .padding(.horizontal, VFSpacing.lg)
         .padding(.vertical, 10)
     }
 
-    private var cancelButton: some View {
+    private func cancelButton(_ onCancel: @escaping () -> Void) -> some View {
         Button(action: onCancel) {
             HStack(spacing: 4) {
                 Image(systemName: "xmark")

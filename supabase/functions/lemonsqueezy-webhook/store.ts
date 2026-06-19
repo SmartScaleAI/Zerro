@@ -30,6 +30,9 @@ export interface MirrorSub {
 export interface SubscriptionUpsert {
   ls_subscription_id: string;
   ls_customer_id: string | null;
+  /** Buyer email, lowercased + trimmed (attributes.user_email). Denormalized,
+   *  mutable, non-key identifier for human lookups; null when LS omits it. */
+  email_normalized: string | null;
   ls_order_id: string | null;
   tier: Tier;
   status: Status;
@@ -51,6 +54,9 @@ export interface SubscriptionPatch {
   billing_interval?: BillingInterval | null;
   ls_updated_at?: string | null;
   license_key_hash?: string;
+  /** Refresh the denormalized buyer email on subscription_updated (it can change
+   *  in LemonSqueezy). Omitted when the event carries no user_email. */
+  email_normalized?: string | null;
 }
 
 /** A top-up pack purchase (order_created → topup_credits row). */

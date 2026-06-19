@@ -309,6 +309,153 @@ final class AreaSelectorState {
         if highlightedModelIndex != index { highlightedModelIndex = index }
     }
 
+    // MARK: - Dev Mode (Phase 1)
+    //
+    // Dev Mode is a standalone mode switch on the toolbar's left — not a
+    // setting. When on, the recording is handed to a local coding agent
+    // (Claude Code in Phase 1) that edits files in `projectURL`, instead of
+    // the normal clipboard hand-off. This state holds the toggle + the two
+    // Dev-Mode-critical selections (agent + folder); the controller owns
+    // persistence (PreferencesStore) and the folder picker, mirroring how it
+    // owns the mic/model pickers. Everything here is inert in normal mode
+    // (`isDevMode == false`), so non-Dev recordings behave exactly as today.
+
+    /// Whether Dev Mode is engaged for this recording. Flipping it on grows
+    /// the toolbar cluster from `model · mic · record` to
+    /// `model · mic · agent · folder · record`.
+    private(set) var isDevMode: Bool = false
+
+    /// The coding agent this recording will dispatch to (registry wire id,
+    /// e.g. "claude-code"). nil when no agent is installed/selected — which
+    /// blocks the Record action (see `devRequirementsMet`). Phase 1 ships a
+    /// single agent; the chip is a confirmation, not a picker.
+    private(set) var selectedAgentID: String?
+
+    /// Display label for the agent chip. Phase 1 hard-shows "Claude Code";
+    /// Milestone 2 sources this from `DevAgentRegistry`.
+    private(set) var selectedAgentName: String = "Claude Code"
+
+    /// The project folder the agent runs in (`cwd`). nil until the user picks
+    /// one; an unset folder shows the chip's amber/dashed attention state and
+    /// blocks the Record action.
+    private(set) var projectURL: URL?
+
+    /// Folder chip label: the project directory's name, or nil when unset
+    /// (the view renders the "Select folder" attention state).
+    var projectDisplayName: String? {
+        projectURL?.lastPathComponent
+    }
+
+    /// Transient, inline "you can't record yet" message set by the
+    /// record-time validation gate (e.g. no folder picked). Cleared once the
+    /// blocking condition is resolved. Never persisted.
+    private(set) var devValidationMessage: String?
+
+    /// Whether the Record action may proceed in Dev Mode: both an agent and a
+    /// project folder must be chosen. Always true in normal mode.
+    var devRequirementsMet: Bool {
+        !isDevMode || (selectedAgentID != nil && projectURL != nil)
+    }
+
+    /// True while agent detection is in flight (the login-shell PATH probe runs
+    /// off the main thread). The agent chip shows a neutral "checking" state
+    /// rather than the install attention state until it resolves.
+    private(set) var isDetectingAgent: Bool = false
+
+    func setDetectingAgent(_ detecting: Bool) {
+        if isDetectingAgent != detecting { isDetectingAgent = detecting }
+    }
+
+    /// In Dev Mode with detection finished and no usable agent (Phase 1: Claude
+    /// Code not installed). Drives the agent chip's attention state + the
+    /// install-hint validation message. Always false in normal mode and while
+    /// detection is still running.
+    var isAgentMissing: Bool {
+        isDevMode && !isDetectingAgent && selectedAgentID == nil
+    }
+
+    /// Git-repo status of the picked `projectURL` (Milestone 7): nil while
+    /// unknown/checking, true/false once the async `git rev-parse` lands. Dev
+    /// Mode requires a git repo for its checkpoint/revert safety net, so a
+    /// non-repo folder is surfaced as a NON-BLOCKING attention state on the
+    /// folder chip — the user learns before recording, not at the checkpoint
+    /// gate. The controller owns the probe (mirrors agent detection).
+    private(set) var projectIsGitRepo: Bool?
+
+    /// True while the git-repo probe for the current folder is in flight.
+    private(set) var isCheckingGitRepo: Bool = false
+
+    /// Folder picked but confirmed NOT inside a git work tree. Drives the folder
+    /// chip's "not a git repo" attention note. False while unknown/checking and
+    /// in normal mode.
+    var isProjectNotGitRepo: Bool {
+        isDevMode && projectURL != nil && projectIsGitRepo == false
+    }
+
+    func setCheckingGitRepo(_ checking: Bool) {
+        if isCheckingGitRepo != checking { isCheckingGitRepo = checking }
+    }
+
+    /// Apply the async git-repo probe result for the current folder.
+    func setProjectGitRepo(_ isRepo: Bool) {
+        isCheckingGitRepo = false
+        projectIsGitRepo = isRepo
+    }
+
+    private(set) var isDevToggleHovered: Bool = false
+    private(set) var isAgentChipHovered: Bool = false
+    private(set) var isFolderChipHovered: Bool = false
+
+    func setDevToggleHovered(_ hovered: Bool) {
+        if isDevToggleHovered != hovered { isDevToggleHovered = hovered }
+    }
+
+    func setAgentChipHovered(_ hovered: Bool) {
+        if isAgentChipHovered != hovered { isAgentChipHovered = hovered }
+    }
+
+    func setFolderChipHovered(_ hovered: Bool) {
+        if isFolderChipHovered != hovered { isFolderChipHovered = hovered }
+    }
+
+    /// Seed the Dev Mode selections at present time from persisted prefs +
+    /// agent detection (mirrors `setMicrophones`/`setModels`).
+    func setDevState(isDevMode: Bool, agentID: String?, agentName: String, projectURL: URL?) {
+        self.isDevMode = isDevMode
+        self.selectedAgentID = agentID
+        self.selectedAgentName = agentName
+        self.projectURL = projectURL
+    }
+
+    /// Flip the mode switch. Toggling on while requirements are already met
+    /// leaves the chips as-is; toggling off clears any inline validation
+    /// message (it only applies to Dev Mode).
+    func toggleDevMode() {
+        isDevMode.toggle()
+        if !isDevMode { devValidationMessage = nil }
+        // Opening the mode switch shouldn't leave a toolbar dropdown open.
+        closeMicMenu()
+        closeModelMenu()
+    }
+
+    func setProjectURL(_ url: URL?) {
+        projectURL = url
+        // A new folder invalidates the prior git-repo verdict; the controller
+        // kicks off a fresh probe.
+        projectIsGitRepo = nil
+        isCheckingGitRepo = false
+        if url != nil { devValidationMessage = nil }
+    }
+
+    func setSelectedAgent(id: String?, name: String) {
+        selectedAgentID = id
+        selectedAgentName = name
+    }
+
+    func setDevValidationMessage(_ message: String?) {
+        devValidationMessage = message
+    }
+
     // MARK: - Mutations driven by AreaSelectorEventView
 
     func beginDrag(at point: CGPoint) {

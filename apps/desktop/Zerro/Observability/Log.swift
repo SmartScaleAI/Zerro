@@ -132,6 +132,11 @@ enum Log {
     /// these lines without dragging in pipeline noise.
     nonisolated static let cost = Logger(subsystem: subsystem, category: "cost")
 
+    /// Dev Mode (Phase 1): agent detection, git checkpoint/revert, and the
+    /// agent runner spawn/stream/timeout. Privacy discipline as elsewhere —
+    /// never prompt text, transcript, or file paths at non-private levels.
+    nonisolated static let dev = Logger(subsystem: subsystem, category: "dev")
+
     /// Billing / entitlement: BYOK license activation & validation against
     /// LemonSqueezy (Phase C), and entitlement transitions driven by it.
     /// SECRET-HANDLING CONTRACT for this category: the raw license key is

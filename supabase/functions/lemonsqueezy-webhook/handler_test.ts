@@ -20,6 +20,7 @@ interface Sub {
   id: string;
   ls_subscription_id: string;
   ls_customer_id: string | null;
+  email_normalized: string | null;
   ls_order_id: string | null;
   tier: string;
   status: string;
@@ -188,6 +189,7 @@ function subPayload(over: {
   order_id?: string;
   created_at?: string;
   custom_tier?: string;
+  user_email?: string | null;
 } = {}) {
   return {
     meta: { event_name: "placeholder", custom_data: over.custom_tier ? { tier: over.custom_tier } : undefined },
@@ -196,6 +198,7 @@ function subPayload(over: {
       id: over.id ?? "ls_1",
       attributes: {
         customer_id: 5,
+        user_email: over.user_email !== undefined ? over.user_email : "Buyer@Example.com",
         order_id: over.order_id ?? "order_1",
         variant_id: over.variant_id ?? 101, // a managed variant by default (test_setup mapping)
         status: over.status ?? "active",
@@ -259,6 +262,42 @@ Deno.test("replay: identical event delivered twice → processed once (composite
   // Exactly one subscription, exactly one period (no double-roll).
   assertEquals(store.subs.length, 1);
   assertEquals(store.periodsFor("sub-1").length, 1);
+});
+
+// ===========================================================================
+// §2b — buyer email mirrored to email_normalized (human identification)
+// ===========================================================================
+Deno.test("subscription_created mirrors user_email → email_normalized (lowercased+trimmed)", async () => {
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ user_email: "  Buyer@Example.COM " }));
+  assertEquals(store.sub("ls_1")!.email_normalized, "buyer@example.com");
+});
+
+Deno.test("subscription_created with no/blank email → email_normalized null", async () => {
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ user_email: null }));
+  assertEquals(store.sub("ls_1")!.email_normalized, null);
+});
+
+Deno.test("subscription_updated refreshes a changed email; an event without one keeps the known address", async () => {
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ user_email: "old@example.com" }));
+
+  // A later update carrying a new email refreshes it.
+  await deliver(
+    store,
+    "subscription_updated",
+    subPayload({ user_email: "New@Example.com", updated_at: "2026-06-03T00:00:00.000Z" }),
+  );
+  assertEquals(store.sub("ls_1")!.email_normalized, "new@example.com");
+
+  // A still-later update with NO email must not wipe the stored one.
+  await deliver(
+    store,
+    "subscription_updated",
+    subPayload({ user_email: null, updated_at: "2026-06-04T00:00:00.000Z" }),
+  );
+  assertEquals(store.sub("ls_1")!.email_normalized, "new@example.com");
 });
 
 // ===========================================================================

@@ -211,6 +211,14 @@ struct ZerroApp: App {
                 await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
             }
 
+            // Dev Mode (Phase 1): for a returning Dev Mode user, warm agent
+            // detection now (background) so the agent chip is resolved by the
+            // time they open the overlay — no "checking" flicker. Gated on the
+            // persisted toggle so normal-mode users never spawn the shell probe.
+            if prefs.devModeEnabled {
+                DevAgentDetection.shared.warm()
+            }
+
             // Phase C: throttled background re-validation of a cached BYOK
             // license. No-ops unless a license is present AND the ~weekly
             // throttle window has elapsed, so it's offline-first and never
@@ -482,6 +490,16 @@ struct ZerroApp: App {
             pillController?.flashBusy()
             return
         }
+        // Dev Mode (M7 #3): a dispatch/revert is in flight — the record hotkey
+        // must NOT start a new recording over it. Doing so would route through
+        // resetToIdle → startRecording and abandon the running agent + destroy
+        // its undo snapshot ("cancelled but files changed with no undo"). Flash,
+        // like .processing; the pill's Cancel is the way to stop a live agent.
+        if state.isDevBusy {
+            Log.hotkey.notice("dev dispatch in flight — flashing pill instead of starting")
+            pillController?.flashBusy()
+            return
+        }
 
         if !onboarding.hasCompletedOnboarding {
             Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
@@ -566,7 +584,7 @@ struct ZerroApp: App {
             // Multi-model: feeds the toolbar model dropdown's credit detail
             // (Managed/Trial) and BYOK key-gating.
             entitlements: entitlements,
-            onConfirm: { [weak state, weak preferences] selection, modelID in
+            onConfirm: { [weak state, weak preferences] selection, modelID, devSelection in
                 guard let state else { return }
                 // From a visible result/error (done/failed) reset to idle
                 // first so startRecording's `guard state == .idle` passes
@@ -583,7 +601,10 @@ struct ZerroApp: App {
                     // Multi-model: the toolbar chip's pick, a PER-RECORDING
                     // override — handed through here, never persisted (unlike
                     // the mic above, by design).
-                    modelID: modelID
+                    modelID: modelID,
+                    // Dev Mode (Phase 1): the toolbar's agent + folder, or nil
+                    // for a normal clipboard recording.
+                    devMode: devSelection
                 )
             },
             onCancel: {

@@ -58,3 +58,43 @@ Deno.test("composedSystemPrompt() carries the v2 artifact contract, not the v1 m
   assert(!p.includes("OUTPUT MODE:"), "v1 mode paragraph must be gone");
   assert(!p.includes("goes straight to the clipboard"), "v1 clipboard paragraph must be gone");
 });
+
+// Dev Mode (Phase 1, Milestone 5) — `mode:"dev"` selects the repo-scoped
+// prompt. Structural assertions, not a byte-mirror (the dev prompt has no md
+// source); it must stay in sync with the Swift `devText` by review.
+Deno.test("composedSystemPrompt('dev') is the repo-scoped Dev Mode variant", () => {
+  const dev = composedSystemPrompt("dev");
+  const normal = composedSystemPrompt();
+  assert(dev !== normal, "dev prompt must differ from the normal prompt");
+
+  // The Goal / Changes / Scope / user said body shape (design §6).
+  assert(dev.includes("Goal:"), "Goal: line");
+  assert(dev.includes("Changes:"), "Changes: list");
+  assert(dev.includes("Scope:"), "Scope: line");
+  assert(dev.includes("user said:"), "verbatim user-said tiebreaker");
+
+  // Eyes/hands framing — the agent has the repo but not the recording.
+  assert(dev.includes("did NOT see the recording"), "agent blindness note");
+
+  // Route context + runtime note + the CSS/quality constraints (§11 #1 failure).
+  assert(dev.includes("localhost"), "route context");
+  assert(dev.includes("hot reload"), "runtime hot-reload note");
+  assert(dev.toLowerCase().includes("dark mode"), "dark-mode constraint");
+  assert(dev.includes("smallest change"), "smallest-change constraint");
+  assert(dev.includes("design token"), "existing-tokens constraint");
+  assert(dev.includes("grepping"), "anchor-by-visible-text instruction");
+
+  // Still emits the agent_prompt artifact fence the client parser expects.
+  assert(dev.includes('type="agent_prompt"'), "agent_prompt artifact type");
+  assert(dev.includes("<<<ZERRO_ARTIFACT"), "open fence");
+  assert(dev.includes("<<<END_ZERRO_ARTIFACT>>>"), "close fence");
+});
+
+Deno.test("composedSystemPrompt() treats unknown/absent modes as normal", () => {
+  // An old client (no mode) or a garbage value must get the locked v2 prompt —
+  // never an error, never the dev prompt by accident.
+  const normal = composedSystemPrompt();
+  assertEquals(composedSystemPrompt("bogus"), normal);
+  assertEquals(composedSystemPrompt("normal"), normal);
+  assert(composedSystemPrompt("dev") !== normal);
+});
