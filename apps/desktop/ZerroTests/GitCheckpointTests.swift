@@ -212,6 +212,56 @@ final class GitCheckpointTests: XCTestCase {
         XCTAssertTrue(diff.contains("@@"), "diff should include a hunk header:\n\(diff)")
     }
 
+    /// The result card must show agent-CREATED (untracked) files, not just edits
+    /// to tracked ones — otherwise a no-commit repo (all untracked) reads as
+    /// "No tracked-file changes." Regression test for the empty diff.
+    func testDiffIncludesUntrackedAgentFiles() throws {
+        try initRepo()
+        write("a.txt", "line1\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // Agent CREATES a new (untracked) file — no `git add`.
+        write("new.ts", "export const added = true\n")
+
+        let stat = try service.diffStat(since: checkpoint)
+        XCTAssertEqual(stat.filesChanged, 1, "the created file must be counted")
+        XCTAssertEqual(stat.added, 1)
+
+        let diff = try service.diff(since: checkpoint)
+        XCTAssertTrue(diff.contains("new.ts"), "diff should name the created file:\n\(diff)")
+        XCTAssertTrue(diff.contains("+export const added"), "diff should show the new content:\n\(diff)")
+    }
+
+    /// Computing the diff must NOT disturb the index — work the user staged before
+    /// the run has to survive (the intent-to-add is scoped + reset).
+    func testDiffLeavesUserStagedChangesIntact() throws {
+        try initRepo()
+        write("a.txt", "base\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // The user staged a file BEFORE the run; the agent then created an
+        // untracked file (which the diff will intent-to-add + reset).
+        write("staged.txt", "user\n")
+        git("add", "staged.txt")
+        write("agent.txt", "agent\n")
+
+        _ = try service.diffStat(since: checkpoint)
+        _ = try service.diff(since: checkpoint)
+
+        // staged.txt is still STAGED; agent.txt is still untracked.
+        let status = git("status", "--porcelain")
+        XCTAssertTrue(status.contains("A  staged.txt"), "user-staged file must stay staged:\n\(status)")
+        XCTAssertTrue(status.contains("?? agent.txt"), "agent file must remain untracked:\n\(status)")
+    }
+
     func testCappedDiffTruncatesByLineCount() {
         // 50 lines, capped to 10 → 10 kept + 1 truncation note, naming the
         // remaining count.

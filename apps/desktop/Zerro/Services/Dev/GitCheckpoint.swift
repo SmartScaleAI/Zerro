@@ -200,13 +200,15 @@ struct GitCheckpointService: Sendable {
 
     // MARK: Diff stat
 
-    /// Tracked-file changes between the checkpoint and the current working tree
-    /// (design §4: `N files changed (+x −y)`). `git diff <ref>` compares the
-    /// snapshot commit to the work tree, so it reflects all of the agent's edits
-    /// to tracked files. (Agent-created untracked files aren't counted — Phase 1
-    /// matches the design's stated `git diff --stat` surface.)
+    /// File changes between the checkpoint and the current working tree
+    /// (design §4: `N files changed (+x −y)`). Counts the agent's edits to
+    /// tracked files AND files it CREATED (untracked) — the latter via a scoped
+    /// intent-to-add so `git diff` sees them as new-file additions (see
+    /// `diffArgsIncludingUntracked`). Critical for a no-commit repo, where the
+    /// agent's entire output is untracked and would otherwise read as
+    /// "0 files changed".
     nonisolated func diffStat(since checkpoint: GitCheckpoint) throws -> GitDiffStat {
-        let out = try run(["diff", "--numstat", checkpoint.restoreRef]).stdout
+        let out = try diffIncludingUntracked(["diff", "--numstat", checkpoint.restoreRef])
         var files = 0, added = 0, removed = 0
         for line in out.split(whereSeparator: \.isNewline) {
             // numstat: "<added>\t<removed>\t<path>"; binary files show "-\t-".
@@ -217,6 +219,33 @@ struct GitCheckpointService: Sendable {
             removed += Int(cols[1]) ?? 0
         }
         return GitDiffStat(filesChanged: files, added: added, removed: removed)
+    }
+
+    /// Run a `git diff …` invocation so that agent-CREATED untracked files are
+    /// included as new-file additions. `git diff` ignores untracked files, so we
+    /// briefly `git add --intent-to-add` (`-N`) ONLY the currently-untracked
+    /// paths (content is NOT staged — `-N` records just their existence), run the
+    /// diff, then `git reset` exactly those paths back to untracked. Scoping the
+    /// reset to the `-N`'d paths leaves any work the USER had staged before the
+    /// run untouched. The reset runs even if the diff throws.
+    nonisolated private func diffIncludingUntracked(_ diffArgs: [String]) throws -> String {
+        // The untracked, non-ignored paths at diff time (NUL-separated for paths
+        // with spaces/newlines). Empty ⇒ nothing to mark; just run the diff.
+        let raw = try run(["ls-files", "--others", "--exclude-standard", "-z"]).stdout
+        let untracked = raw.split(separator: "\0").map(String.init).filter { !$0.isEmpty }
+        guard !untracked.isEmpty else {
+            return try run(diffArgs).stdout
+        }
+
+        // Mark them intent-to-add so the diff sees them. Best-effort: a path that
+        // vanished between ls-files and here just won't be marked.
+        try run(["add", "--intent-to-add", "--"] + untracked, allowFailure: true)
+        defer {
+            // Always undo the intent-to-add, scoped to exactly these paths, so the
+            // index is left as we found it (user-staged changes preserved).
+            try? run(["reset", "-q", "--"] + untracked, allowFailure: true)
+        }
+        return try run(diffArgs).stdout
     }
 
     // MARK: Unified diff
@@ -230,10 +259,11 @@ struct GitCheckpointService: Sendable {
     /// `--no-color` is explicit (a user's `color.diff = always` would otherwise
     /// leak ANSI escapes into the text); context defaults to git's standard 3
     /// lines (no `-U` flag is passed — add one here if non-default context is ever
-    /// wanted). Like `diffStat`, this covers tracked-file edits — agent-created
-    /// untracked files aren't part of `git diff` (Phase 1 scope).
+    /// wanted). Agent-CREATED untracked files are included as new-file hunks via
+    /// the scoped intent-to-add in `diffIncludingUntracked` — so a no-commit
+    /// repo's all-untracked output still renders in the result card.
     nonisolated func diff(since checkpoint: GitCheckpoint, maxLines: Int = 400, maxBytes: Int = 24_000) throws -> String {
-        let raw = try run(["diff", "--no-color", checkpoint.restoreRef]).stdout
+        let raw = try diffIncludingUntracked(["diff", "--no-color", checkpoint.restoreRef])
         return Self.cappedDiff(raw, maxLines: maxLines, maxBytes: maxBytes)
     }
 

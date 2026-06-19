@@ -1784,17 +1784,13 @@ final class AppState {
         let checkpoint = marker.checkpoint
 
         // Validate 2 + 4 (off-main — it shells out to git): `diffStat` runs
-        // `git diff --numstat <restoreRef>`, which throws if the ref no longer
-        // resolves (GC'd stash commit). A nil result → unresolvable → clear, no
-        // offer; an empty diff → nothing to undo → clear, no offer.
-        //
-        // KNOWN LIMITATION (no-commit repos): on a fresh `git init` with no HEAD
-        // every agent file is UNTRACKED, and `git diff --numstat <empty-tree>`
-        // reports only tracked files → filesChanged == 0 → the cross-launch undo
-        // offer is suppressed below. In-session Undo is unaffected (it reverts
-        // directly, not via diffStat). Closing this needs diffStat to count
-        // untracked changes (a repo-wide behavior change) — deliberately out of
-        // scope for the empty-repo checkpoint fix.
+        // `git diff --numstat <restoreRef>` (counting agent-created untracked
+        // files too — see GitCheckpointService.diffIncludingUntracked), which
+        // throws if the ref no longer resolves (GC'd stash commit). A nil result
+        // → unresolvable → clear, no offer; an empty diff → nothing to undo →
+        // clear, no offer. Because untracked files are now counted, this also
+        // offers recovery correctly for a no-commit repo (where the agent's whole
+        // output is untracked).
         let diff: GitDiffStat? = await Task.detached {
             try? service.diffStat(since: checkpoint)
         }.value
