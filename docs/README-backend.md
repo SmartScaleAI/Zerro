@@ -163,6 +163,7 @@ the runtime — do NOT set them yourself.**
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
 | `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
 | `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
+| `TRIAL_DEVICE_BINDING_ENABLED` | optional | Trial device binding kill switch (default `true`). The app sends a SHA-256 hash of a hardware UUID (`device_id_hash`); a second grant from a Mac that already trialed is hard-blocked regardless of email (`verify_trial_grant` + the partial unique index on `device_id_hash`). Set `false` to disable the cap (degrade to the email-only cap) without an app release if it misfires. The raw UUID never leaves the device; the DB holds only the hash. |
 | `REFRESH_CRON_SECRET` | ✅ **Dev Mode manifest** | Shared secret guarding `refresh-agent-models`. The function rejects any POST whose `x-refresh-secret` header ≠ this value (constant-time). Set it as an Edge secret **and** seed the SAME value into Vault as `refresh_cron_secret` so the daily cron can read it (see "Dev Mode model manifest" below). Generate: `openssl rand -hex 32`. The `agent-models` read function needs no secret (public). `refresh-agent-models` reuses the existing `ANTHROPIC_API_KEY` to fetch the Anthropic model list (OpenAI is retired — Codex sources its own per-account list client-side). |
 
 ---

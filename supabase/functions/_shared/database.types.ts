@@ -309,6 +309,7 @@ export type Database = {
       trial_grants: {
         Row: {
           created_at: string
+          device_id_hash: string | null
           email_normalized: string
           id: string
           trial_credits_limit: number
@@ -317,6 +318,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          device_id_hash?: string | null
           email_normalized: string
           id?: string
           trial_credits_limit: number
@@ -325,6 +327,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          device_id_hash?: string | null
           email_normalized?: string
           id?: string
           trial_credits_limit?: number
@@ -422,7 +425,7 @@ export type Database = {
       }
       release_trial_slot: { Args: { p_grant_id: string }; Returns: undefined }
       verify_trial_grant: {
-        Args: { p_email: string; p_limit: number }
+        Args: { p_email: string; p_limit: number; p_device_id_hash?: string }
         Returns: {
           credits_remaining: number
           grant_id: string

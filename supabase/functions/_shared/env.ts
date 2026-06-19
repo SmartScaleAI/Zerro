@@ -25,3 +25,17 @@ export function optionalEnvInt(name: string, fallback: number): number {
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
 }
+
+/**
+ * Read an optional boolean env var with a fallback. Truthy: "1", "true", "yes",
+ * "on" (case-insensitive); falsy: "0", "false", "no", "off". Anything else (incl.
+ * unset/empty) returns the fallback, so a typo never silently flips a kill switch.
+ */
+export function optionalEnvBool(name: string, fallback: boolean): boolean {
+  const v = Deno.env.get(name);
+  if (v === undefined || v === "") return fallback;
+  const s = v.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(s)) return true;
+  if (["0", "false", "no", "off"].includes(s)) return false;
+  return fallback;
+}

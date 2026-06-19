@@ -6,7 +6,13 @@
 // to present. The anti-abuse controls are: a per-email + per-IP rate limit, a
 // hashed short-TTL attempt-limited code, a disposable-domain block, and — the
 // hard cap — one server-funded grant per VERIFIED email (verify_trial_grant +
-// the email_normalized UNIQUE), so reinstalling never farms fresh credits.
+// the email_normalized UNIQUE), so reinstalling never farms fresh credits. A
+// SECOND hard cap closes the "different emails, same Mac" hole: each grant is
+// bound to a hashed hardware id (`device_id_hash`), so a device that already
+// trialed is blocked regardless of which email it presents (the partial unique
+// index on device_id_hash is the race backstop). The device hash is optional +
+// tolerated-missing (old builds / unreadable UUID degrade to the email cap) and
+// kill-switchable via TRIAL_DEVICE_BINDING_ENABLED.
 //
 // Two actions on one function (dispatched on the `action` field):
 //   request — { action:"request", email } → normalize, block disposables,
@@ -46,6 +52,7 @@ import {
   CODE_MAX_ATTEMPTS,
   CODE_TTL_SECONDS,
   TRIAL_CREDITS,
+  TRIAL_DEVICE_BINDING_ENABLED,
   TRIAL_RATE_LIMIT_PER_EMAIL,
   TRIAL_RATE_LIMIT_PER_IP,
   TRIAL_RATE_LIMIT_WINDOW_SECONDS,
@@ -111,18 +118,61 @@ export async function handleTrialStart(req: Request, deps: TrialStartDeps): Prom
     return json({ error: "rate_limited" }, 429);
   }
 
+  // The hashed hardware id (trial device binding). Optional + tolerated-missing
+  // so old app builds (no `device_id_hash`) and rare unreadable-UUID clients
+  // degrade to the email-only cap. The kill switch ignores it entirely when off.
+  const deviceIdHash = readDeviceIdHash(body);
+
+  // resume grants nothing new and is email-keyed, so the device hash is
+  // telemetry-only there — handled inside handleResume (no behavioral change).
   if (isResume) return await handleResume(deps, email);
   return isVerify
-    ? await handleVerify(deps, email, body)
-    : await handleRequest(deps, email);
+    ? await handleVerify(deps, email, body, deviceIdHash)
+    : await handleRequest(deps, email, deviceIdHash);
+}
+
+/** Read + sanitize the optional `device_id_hash` from the body. Returns null
+ * when binding is disabled, the field is missing, or it isn't a plausible
+ * SHA-256 hex digest — so a malformed value never poisons the device cap. */
+function readDeviceIdHash(body: Record<string, unknown>): string | null {
+  if (!TRIAL_DEVICE_BINDING_ENABLED) return null;
+  const raw = body.device_id_hash;
+  if (typeof raw !== "string") return null;
+  const hex = raw.trim().toLowerCase();
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
+}
+
+/** Structured device-block telemetry: the hashed device id only — never an email
+ * or a raw UUID (tier-only analytics rule). Greppable in the function logs; a
+ * PostHog event can be layered on via the shared `capturePostHog` helper. */
+function logDeviceBlock(phase: "request" | "verify", deviceIdHash: string): void {
+  console.log(JSON.stringify({
+    fn: "trial-start",
+    event: "trial_device_block",
+    phase,
+    device_id_hash: deviceIdHash,
+  }));
 }
 
 // -----------------------------------------------------------------------------
 // request — issue + email a code.
 // -----------------------------------------------------------------------------
-async function handleRequest(deps: TrialStartDeps, email: string): Promise<Response> {
+async function handleRequest(
+  deps: TrialStartDeps,
+  email: string,
+  deviceIdHash: string | null,
+): Promise<Response> {
   if (isDisposableEmail(email)) {
     return json({ error: "disposable_email" }, 422);
+  }
+
+  // Trial device binding: if THIS Mac already trialed under a DIFFERENT email,
+  // hard-block here — BEFORE generating/emailing a code (saves the mail + gives
+  // instant UX). A grant under the SAME email is a legitimate reinstall and
+  // falls through to the normal re-verify path below.
+  if (deviceIdHash && (await deps.store.deviceAlreadyGranted(deviceIdHash, email))) {
+    logDeviceBlock("request", deviceIdHash);
+    return json({ status: "device_trial_used" }, 200);
   }
 
   // One grant per email, ever. If this email already verified AND spent all its
@@ -166,6 +216,7 @@ async function handleVerify(
   deps: TrialStartDeps,
   email: string,
   body: Record<string, unknown>,
+  deviceIdHash: string | null,
 ): Promise<Response> {
   const code = String(body.code ?? "").trim();
   if (!/^\d{6}$/.test(code)) return json({ error: "invalid_code" }, 400);
@@ -196,9 +247,20 @@ async function handleVerify(
     return json({ error: "invalid_code" }, 400);
   }
 
-  // Correct code — consume it (single use) and establish the grant.
+  // Correct code — consume it (single use) and establish the grant, atomically
+  // enforcing the one-grant-per-device cap (the partial unique index is the race
+  // backstop behind verify_trial_grant).
   await deps.store.deleteCode(email);
-  const { grantId, creditsRemaining } = await deps.store.verifyGrant(email, TRIAL_CREDITS);
+  const result = await deps.store.verifyGrant(email, TRIAL_CREDITS, deviceIdHash);
+
+  // This Mac already trialed under a different email → hard block (mirrors the
+  // `request` early-block for the race where two emails verify near-simultaneously
+  // or the app skipped straight to verify).
+  if (result.deviceBlocked) {
+    if (deviceIdHash) logDeviceBlock("verify", deviceIdHash);
+    return json({ status: "device_trial_used" }, 200);
+  }
+  const { grantId, creditsRemaining } = result;
 
   // A re-verify of an already-exhausted grant: nothing to authorize.
   if (creditsRemaining <= 0) {

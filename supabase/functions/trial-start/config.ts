@@ -5,7 +5,7 @@
 // Documented in README-backend.md.
 // =============================================================================
 
-import { optionalEnv, optionalEnvInt } from "../_shared/env.ts";
+import { optionalEnv, optionalEnvBool, optionalEnvInt } from "../_shared/env.ts";
 
 // ---- The trial credit grant -------------------------------------------------
 // How many server-funded CREDITS a verified trial email gets, total (variable
@@ -39,6 +39,16 @@ export const TRIAL_RATE_LIMIT_WINDOW_SECONDS = optionalEnvInt(
 export const TRIAL_RATE_LIMIT_PER_EMAIL = optionalEnvInt("TRIAL_RATE_LIMIT_PER_EMAIL", 8);
 // Requests per IP per window — higher (shared NATs) but still bounds bulk abuse.
 export const TRIAL_RATE_LIMIT_PER_IP = optionalEnvInt("TRIAL_RATE_LIMIT_PER_IP", 30);
+
+// ---- Trial device binding (trial-abuse hardening) ---------------------------
+// The one-grant-per-physical-Mac cap. The app sends a SHA-256 hash of a hardware
+// UUID (`device_id_hash`); a second grant from a device that already trialed is
+// hard-blocked regardless of email. This flag is a kill switch so the cap can be
+// disabled via `supabase secrets set TRIAL_DEVICE_BINDING_ENABLED=false` +
+// redeploy (no app release) if it ever misfires at launch. Default ON. When OFF,
+// the device hash is ignored end-to-end and the function degrades to the
+// email-only cap (status quo).
+export const TRIAL_DEVICE_BINDING_ENABLED = optionalEnvBool("TRIAL_DEVICE_BINDING_ENABLED", true);
 
 // ---- Email (Resend) ---------------------------------------------------------
 // The verified getzerro.app sender address. RESEND_API_KEY is a REQUIRED secret
