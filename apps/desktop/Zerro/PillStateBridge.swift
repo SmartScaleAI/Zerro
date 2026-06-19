@@ -162,8 +162,13 @@ extension AppState {
 
     /// The `.devDone` success card's render model: a fixed title, the summary
     /// (agent text when present, else a generated change line), the readable diff
-    /// text, and the diff stat counts (the collapsed pill renders "Changes applied
-    /// (+a −r)" from these; the expanded card uses summary/diffText).
+    /// text, the diff stat counts (the collapsed pill renders "Changes applied
+    /// (+a −r)" from these; the expanded card uses summary/diffText), and — for a
+    /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
+    /// its prompt-generation step just like artifact mode, so the same readout
+    /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
+    /// artifact path uses (see PillWindowController) so the two read identically.
+    /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.
     var devResultCard: DevResultCard {
         DevResultCard(
             title: "Changes applied",
@@ -171,7 +176,10 @@ extension AppState {
             diffText: devDiffText ?? "",
             linesAdded: devDiffStat?.added ?? 0,
             linesRemoved: devDiffStat?.removed ?? 0,
-            filesChanged: devDiffStat?.filesChanged ?? 0
+            filesChanged: devDiffStat?.filesChanged ?? 0,
+            chargeLine: lastGenerationCharge.map {
+                CreditDisplay.chargeLine(charged: $0.charged, remaining: $0.remaining)
+            }
         )
     }
 

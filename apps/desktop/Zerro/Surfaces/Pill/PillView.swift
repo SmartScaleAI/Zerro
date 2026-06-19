@@ -123,6 +123,13 @@ struct DevResultCard: Equatable {
     var linesAdded: Int = 0
     var linesRemoved: Int = 0
     var filesChanged: Int = 0
+    /// The "−N credits · M left" charge readout for the EXPANDED card's footer —
+    /// managed Dev Mode meters its prompt-generation step exactly like artifact
+    /// mode, so the same line belongs on both result cards. `nil` for BYOK/local
+    /// (no managed call, no charge). Formatted in the bridge via the SAME
+    /// `CreditDisplay.chargeLine` the artifact path uses, so the two read
+    /// identically. Defaulted so literal `#Preview` constructions stay terse.
+    var chargeLine: String? = nil
 }
 
 // MARK: - PillView
@@ -472,7 +479,10 @@ struct PillView: View {
                 ArtifactCardView(
                     artifact: nil,
                     chatText: "",
-                    chargeLine: nil,
+                    // Managed Dev Mode bills its prompt generation just like
+                    // artifact mode — surface the same "−N credits · M left"
+                    // readout bottom-left. `nil` (BYOK/local) shows nothing.
+                    chargeLine: card.chargeLine,
                     noNarration: false,
                     stoppedBySleep: false,
                     conversion: .hidden,
@@ -1425,6 +1435,32 @@ private struct ResultPillContent: View {
              }
             """,
             linesAdded: 3, linesRemoved: 2, filesChanged: 1
+        ),
+        expanded: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev result \u{00B7} Expanded \u{00B7} charged") {
+    // The MANAGED variant: the same card as above, now showing the "−N credits ·
+    // M left" charge line bottom-left in the footer (left of Undo/Accept), exactly
+    // where artifact mode shows it. BYOK leaves it nil → nothing renders.
+    PillView(state: .devDone(
+        card: DevResultCard(
+            title: "Changes applied",
+            summary: "Reworked the Pulse login screen layout: moved \u{201C}Forgot "
+                + "password?\u{201D} into the Sign In cluster.",
+            diffText: """
+            diff --git a/src/Login.css b/src/Login.css
+            @@ -12,7 +12,7 @@
+             .login-form {
+            -  flex-direction: row;
+            +  flex-direction: column;
+             }
+            """,
+            linesAdded: 1, linesRemoved: 1, filesChanged: 1,
+            chargeLine: CreditDisplay.chargeLine(charged: 4, remaining: 96)
         ),
         expanded: true
     ))

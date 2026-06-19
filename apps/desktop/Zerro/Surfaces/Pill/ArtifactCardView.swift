@@ -74,8 +74,10 @@ struct ArtifactCardView: View {
     /// agent's human-readable summary in the text region, the readable git diff
     /// in the body well (monospace), and a destructive "Undo" + green "Accept"
     /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
-    /// kept; all other success-only chrome (chat text, charge line, conversion
-    /// affordance, copy) is suppressed — exactly as `failure` suppresses it. nil → the normal card.
+    /// kept; the success-only chat text, conversion affordance, and copy are
+    /// suppressed — exactly as `failure` suppresses them. The charge line is NOT
+    /// suppressed (managed Dev Mode meters its prompt generation like artifact
+    /// mode), so it still renders bottom-left from the shared `chargeLine`. nil → the normal card.
     /// Mutually exclusive with `failure`. Defaulted so existing call sites are
     /// unchanged.
     var devResult: DevResultConfig? = nil
@@ -300,8 +302,11 @@ struct ArtifactCardView: View {
     private var footer: some View {
         HStack(spacing: VFSpacing.md) {
             // The charge line is a success-only readout — suppressed in the
-            // failure and dev-result configurations.
-            if let chargeLine, failure == nil, devResult == nil {
+            // failure configuration, but shown for the dev-result card too
+            // (managed Dev Mode meters its prompt generation just like artifact
+            // mode). `.devFailed` routes through `failure`, so it's still hidden
+            // there.
+            if let chargeLine, failure == nil {
                 Text(chargeLine)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextSecondary)
