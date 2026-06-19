@@ -54,7 +54,6 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
     case history
     case advanced
-    case developer
     case accountBilling
     case about
 
@@ -65,7 +64,6 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .general:        return "General"
         case .history:        return "History"
         case .advanced:       return "Advanced"
-        case .developer:      return "Developer"
         case .accountBilling: return "Account & Billing"
         case .about:          return "About"
         }
@@ -77,13 +75,12 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .general:        return "slider.horizontal.3"
         case .history:        return "clock.arrow.circlepath"
         case .advanced:       return "gearshape.2"
-        case .developer:      return "chevron.left.forwardslash.chevron.right"
         case .accountBilling: return "person.crop.circle"
         case .about:          return "info.circle"
         }
     }
 
-    static let settingsGroup: [SettingsCategory] = [.general, .history, .advanced, .developer]
+    static let settingsGroup: [SettingsCategory] = [.general, .history, .advanced]
     static let accountGroup: [SettingsCategory] = [.accountBilling, .about]
 }
 
@@ -169,12 +166,11 @@ struct SettingsView: View {
                 switch selection {
                 case .general:
                     CaptureSection()
+                    AppearanceSection()
                 case .history:
                     HistorySection(onOpenRecentPrompts: { route = .recentPrompts })
                 case .advanced:
                     AppBehaviorSection()
-                case .developer:
-                    DeveloperSection()
                 case .accountBilling:
                     // Multi-model 6E: ONE mode at a time (Managed or BYOK)
                     // with a switch link — never the old API-key + license

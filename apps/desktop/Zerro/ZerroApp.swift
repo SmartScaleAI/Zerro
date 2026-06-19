@@ -37,6 +37,11 @@ struct ZerroApp: App {
     /// progress. Self-observes `AppState.devRingActive`; owned here for the
     /// app's lifetime like the other overlay controllers.
     @State private var devRingController: DevRingWindowController
+    /// Soft green glow drawn under the cursor while a Dev Mode recording is in
+    /// progress (the system cursor itself is left untouched). Self-observes
+    /// `AppState.devCursorActive`; owned here for the app's lifetime like the
+    /// other overlay controllers.
+    @State private var devCursorController: DevCursorWindowController
 
     /// Phase 14 / C3.4: Sparkle updater. Must live for the full app
     /// session — owning it inside the MenuBarExtra content closure
@@ -123,6 +128,7 @@ struct ZerroApp: App {
         _recordingFocusController = State(initialValue: RecordingFocusWindowController(appState: state))
         _areaSelectorController = State(initialValue: selectorCtrl)
         _devRingController = State(initialValue: DevRingWindowController(appState: state, preferences: prefs))
+        _devCursorController = State(initialValue: DevCursorWindowController(appState: state, preferences: prefs))
 
         // Tell the AppDelegate whether to bring the onboarding window
         // forward post-launch. `.defaultLaunchBehavior(.presented)`

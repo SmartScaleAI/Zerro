@@ -36,6 +36,7 @@ final class PreferencesStore {
         static let redactSecrets = "redactSecrets"
         static let selectedModelID = "selectedModelID"
         static let pulsingRingEnabled = "pulsingRingEnabled"
+        static let devCursorEnabled = "devCursorEnabled"
 
         // Dev Mode (Phase 1) — the mode switch + its two remembered
         // selections. Non-sandboxed, so the project folder is persisted as a
@@ -82,6 +83,7 @@ final class PreferencesStore {
             redactSecrets,
             selectedModelID,
             pulsingRingEnabled,
+            devCursorEnabled,
             devModeEnabled,
             devProjectPath,
             devAgentID,
@@ -136,6 +138,17 @@ final class PreferencesStore {
     /// the agent is still active.
     var pulsingRingEnabled: Bool {
         didSet { defaults.set(pulsingRingEnabled, forKey: Keys.pulsingRingEnabled) }
+    }
+
+    /// Whether a soft green glow is drawn under the cursor (the system cursor
+    /// itself is left untouched) while a Dev Mode recording is in progress.
+    /// Default ON; surfaced as the Appearance settings section's second toggle.
+    /// Read live by `DevCursorWindowController`'s observation loop (alongside
+    /// `AppState.devCursorActive`) so flipping it OFF fades the glow out
+    /// immediately mid-recording and flipping it back ON re-applies it while the
+    /// recording is still running.
+    var devCursorEnabled: Bool {
+        didSet { defaults.set(devCursorEnabled, forKey: Keys.devCursorEnabled) }
     }
 
     // MARK: - Dev Mode (Phase 1)
@@ -262,6 +275,9 @@ final class PreferencesStore {
         // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
         // the ON default instead of UserDefaults' false-for-missing.
         self.pulsingRingEnabled = defaults.object(forKey: Keys.pulsingRingEnabled) as? Bool ?? true
+        // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
+        // the ON default instead of UserDefaults' false-for-missing.
+        self.devCursorEnabled = defaults.object(forKey: Keys.devCursorEnabled) as? Bool ?? true
         self.devModeEnabled = defaults.bool(forKey: Keys.devModeEnabled)
         if let path = defaults.string(forKey: Keys.devProjectPath), !path.isEmpty {
             self.devProjectURL = URL(fileURLWithPath: path, isDirectory: true)
@@ -308,6 +324,7 @@ final class PreferencesStore {
         redactSecrets = ProcessingConfig.redactSecretsDefault
         selectedModelID = ModelRegistry.defaultModelID
         pulsingRingEnabled = true
+        devCursorEnabled = true
         devModeEnabled = false
         devProjectURL = nil
         selectedAgentID = nil

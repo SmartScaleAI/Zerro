@@ -974,6 +974,21 @@ final class AppState {
         }
     }
 
+    /// True while the Dev-Mode green cursor glow should be shown: a Dev Mode
+    /// recording is actively in progress. Single source of truth for
+    /// `DevCursorWindowController`. Unlike `devRingActive` (which tracks the
+    /// agent-run window AFTER the recording), this is bound to the RECORDING
+    /// itself — `isRecordingActive` is true only in `.recording`/`.wrappingUp`/
+    /// `.autoStopped`, so the glow appears the instant a Dev Mode recording
+    /// starts and disappears the instant it stops (normal stop, auto-stop, or
+    /// failure all drop `state` out of that window). Deriving it from the
+    /// recording state means every start/stop/auto-stop/fail path drives it for
+    /// free, and `recordingIsDevMode` resetting to false on teardown is a second
+    /// guarantee the glow can never outlive the recording.
+    var devCursorActive: Bool {
+        isRecordingActive && recordingIsDevMode
+    }
+
     /// Total recording budget, pre-formatted for the pill timer chip.
     /// Matches the 180s threshold handleElapsedUpdate enforces.
     var totalDisplay: String { "3:00" }
