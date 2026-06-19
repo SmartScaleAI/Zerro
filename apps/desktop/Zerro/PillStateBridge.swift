@@ -121,14 +121,11 @@ extension AppState {
             // dangerous case we're guarding against).
             return .devProgress(label: "Reverting\u{2026}", cancellable: false)
         case .reviewingPrompt:
-            // Ask Permission — the SOLE pre-edit gate. Show the target agent, the
-            // resolved target label(s), and the exact prompt so the user can
-            // approve precisely what will be sent before any file change.
+            // Ask Permission — the SOLE pre-edit gate. Show the target agent and
+            // the exact prompt so the user can approve precisely what will be sent
+            // before any file change.
             return .reviewPrompt(
                 agent: devReviewAgentName,
-                targets: devConfirmAnchorSummaries.map {
-                    ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
-                },
                 prompt: devReviewPromptText
             )
         case .devDone:

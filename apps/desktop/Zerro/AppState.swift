@@ -3023,32 +3023,19 @@ final class AppState {
         devRecoveryStore.save(marker)
     }
 
-    // MARK: - Dev Mode anchor resolution → review-card targets
+    // MARK: - Dev Mode anchor resolution analytics
 
     /// Combined per-reference confidence (§7): the client dwell/OCR signal, MIN'd
     /// with the model's agreement WHEN the model returned an anchor for it —
     /// otherwise the client signal alone (never `min`-ing against a missing
     /// model value). Model anchors pair by echoed `ref`, falling back to position.
-    /// Feeds the review card's low-confidence flag and the resolution analytics.
-    private func combinedConfidence(_ r: ResolvedDeixisAnchor) -> Double {
+    /// Feeds the resolution analytics histogram.
+    func combinedConfidence(_ r: ResolvedDeixisAnchor) -> Double {
         let client = r.clientConfidence
         let model = devModelAnchors.first { $0.refIndex == r.refIndex }
             ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
         guard let model else { return client }
         return Swift.min(client, model.modelConfidence)
-    }
-
-    /// The resolved label per reference for the review card's "Targeting: …" rows:
-    /// the model's verbatim label, else the nearest OCR string, else the spoken
-    /// phrase. Paired with whether it's a low-confidence one (flagged amber so the
-    /// user knows which target to scrutinize before approving).
-    var devConfirmAnchorSummaries: [(label: String, isLow: Bool)] {
-        devResolvedAnchors.map { r in
-            let model = devModelAnchors.first { $0.refIndex == r.refIndex }
-                ?? (r.refIndex < devModelAnchors.count ? devModelAnchors[r.refIndex] : nil)
-            let label = model?.label ?? r.ocrStrings.first ?? r.candidate.phrase
-            return (label, combinedConfidence(r) < Self.devLowConfidenceThreshold)
-        }
     }
 
     // MARK: - Dev Mode Ask Permission review gate

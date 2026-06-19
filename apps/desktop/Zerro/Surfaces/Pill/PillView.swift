@@ -79,24 +79,17 @@ enum PillState: Equatable {
     /// the checkpoint has nothing to undo); Retry re-dispatches. The header `×`
     /// keeps the partial edits and closes (M7).
     case devFailed(headline: String, detail: String, canRevert: Bool)
-    /// Ask Permission — the SOLE pre-edit gate. Shows the target `agent`, the
-    /// resolved `targets` the agent will act on, and the exact `prompt` that will
-    /// be dispatched, in a scrollable monospace well, with Approve / Cancel. Lets
-    /// the user see precisely what will be sent before any file change.
-    case reviewPrompt(agent: String, targets: [ConfirmAnchorRow], prompt: String)
+    /// Ask Permission — the SOLE pre-edit gate. Shows the target `agent` and the
+    /// exact `prompt` that will be dispatched, in a scrollable monospace well, with
+    /// Approve / Cancel. Lets the user see precisely what will be sent before any
+    /// file change.
+    case reviewPrompt(agent: String, prompt: String)
     /// Quit-recovery — a prior launch's Dev Mode dispatch was interrupted mid-edit
     /// and the durable checkpoint marker validated at launch. `detail` is the
     /// pre-formatted one-line body (diff stat + agent name, assembled in the
     /// bridge). Two outcomes: Undo (revert to the checkpoint, destructive) / Keep
     /// (retain the agent's edits, neutral).
     case confirmDevRecovery(detail: String)
-}
-
-/// One resolved-target row in the review card: the label the agent will act on,
-/// and whether it's the low-confidence one the user most needs to check.
-struct ConfirmAnchorRow: Equatable {
-    let label: String
-    let isLow: Bool
 }
 
 /// What the Dev Mode success card (`.devDone`) renders: the header `title`, the
@@ -517,10 +510,9 @@ struct PillView: View {
             .frame(width: 760)
             .fixedSize(horizontal: false, vertical: true)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        case .reviewPrompt(let agent, let targets, let prompt):
+        case .reviewPrompt(let agent, let prompt):
             ReviewPromptPillContent(
                 agent: agent,
-                targets: targets,
                 prompt: prompt,
                 onApprove: onApproveReview,
                 onCancel: onCancelReview
@@ -624,15 +616,14 @@ private struct DevResultSummaryPill: View {
 //
 // The review card — the SOLE pre-edit checkpoint, shown after generation under
 // the Ask Permission mode, so the user sees the exact prompt the agent will
-// receive before any file change. A header naming the target agent, the resolved
-// target label(s), the prompt in the same dark monospace well the artifact card
-// uses (scrolls/caps a long prompt), and two terminal actions: Approve (green —
-// apply) and Cancel (quiet — abort, nothing touched). v1 is show-and-approve
-// only: no in-pill editing (the dispatched body is captured before the gate runs).
+// receive before any file change. A header naming the target agent, the prompt in
+// the same dark monospace well the artifact card uses (scrolls/caps a long
+// prompt), and two terminal actions: Approve (green — apply) and Cancel (quiet —
+// abort, nothing touched). v1 is show-and-approve only: no in-pill editing (the
+// dispatched body is captured before the gate runs).
 
 private struct ReviewPromptPillContent: View {
     let agent: String
-    let targets: [ConfirmAnchorRow]
     let prompt: String
     let onApprove: () -> Void
     let onCancel: () -> Void
@@ -644,25 +635,6 @@ private struct ReviewPromptPillContent: View {
                 Text("Send to \(agent)?")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
-            }
-
-            // The resolved target label(s) the agent will act on — low-confidence
-            // ones flagged amber so the user knows which target to scrutinize.
-            if !targets.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(targets.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 6) {
-                            Image(systemName: row.isLow ? "questionmark.circle.fill" : "scope")
-                                .font(.system(size: 11))
-                                .foregroundStyle(row.isLow ? Color.vfWarningAmber : Color.vfTextSecondary)
-                            Text("Targeting: \(row.label)")
-                                .font(.system(size: 12))
-                                .foregroundStyle(row.isLow ? Color.vfTextPrimary : Color.vfTextSecondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
             }
 
             // The exact prompt body in the dark monospace well — the same deepest
@@ -1513,10 +1485,9 @@ private struct ResultPillContent: View {
         .background(Color.vfPanelBackground)
 }
 
-#Preview("Review prompt \u{00B7} with target") {
+#Preview("Review prompt \u{00B7} long") {
     PillView(state: .reviewPrompt(
         agent: "Claude Code",
-        targets: [ConfirmAnchorRow(label: "the \u{201C}Get started\u{201D} button", isLow: false)],
         prompt: """
         Change the primary call-to-action button on the landing page from blue to \
         teal, and tighten the header's vertical padding so the nav sits closer to \
@@ -1527,10 +1498,9 @@ private struct ResultPillContent: View {
         .background(Color.vfPanelBackground)
 }
 
-#Preview("Review prompt \u{00B7} no target") {
+#Preview("Review prompt \u{00B7} short") {
     PillView(state: .reviewPrompt(
         agent: "Codex",
-        targets: [],
         prompt: "Add a dark-mode toggle to the settings page."
     ))
         .padding(40)

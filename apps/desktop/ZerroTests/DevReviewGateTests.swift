@@ -13,7 +13,7 @@
 //     under `.autoApprove`, or shows ONLY the review card under `.askPermission`.
 //   • Teardown: a reset/quit while `.reviewingPrompt` resolves the continuation
 //     false (no hang) and discards the checkpoint/marker.
-//   • Bridge: `.reviewingPrompt` maps to `.reviewPrompt(agent:targets:prompt:)`.
+//   • Bridge: `.reviewingPrompt` maps to `.reviewPrompt(agent:prompt:)`.
 //
 
 import XCTest
@@ -211,7 +211,7 @@ final class DevReviewGateTests: XCTestCase {
         app.devReviewPromptText = "make the button teal"
         app.state = .reviewingPrompt
 
-        guard case .reviewPrompt(let agent, _, let prompt)? = app.pillState else {
+        guard case .reviewPrompt(let agent, let prompt)? = app.pillState else {
             return XCTFail("expected .reviewPrompt, got \(String(describing: app.pillState))")
         }
         XCTAssertFalse(agent.isEmpty, "the target agent name is surfaced")

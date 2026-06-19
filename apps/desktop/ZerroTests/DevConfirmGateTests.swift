@@ -2,15 +2,15 @@
 //  DevConfirmGateTests.swift
 //  ZerroTests
 //
-//  Dev Mode anchor resolution — the confidence combine that drives the review
-//  card's low-confidence (amber) target flag. Pins: combined = min(client, model)
-//  WHEN a model anchor exists, else the client signal alone (never min'd against a
-//  missing value); any low combined → that target row is flagged `isLow`; the
-//  review card's labels prefer the model label, then OCR, then the spoken phrase.
+//  Dev Mode anchor resolution — the confidence combine that drives the
+//  resolution analytics histogram. Pins: combined = min(client, model) WHEN a
+//  model anchor exists, else the client signal alone (never min'd against a
+//  missing value); any combined below the threshold is a low-confidence target.
 //
-//  (The low-confidence anchor-CONFIRM gate was removed — resolution no longer
-//  pauses the dispatch. The signal lives on only as the review card's amber flag
-//  + the resolution analytics, which these tests cover via `devConfirmAnchorSummaries`.)
+//  (The low-confidence anchor-CONFIRM gate AND the review card's "Targeting: …"
+//  rows were removed — resolution no longer pauses the dispatch and the card no
+//  longer lists targets. The combine signal lives on only in the resolution
+//  analytics, which these tests cover via `combinedConfidence`.)
 //
 
 import XCTest
@@ -37,10 +37,10 @@ final class DevConfirmGateTests: XCTestCase {
                   currentState: nil, modelConfidence: confidence, altCandidates: [])
     }
 
-    /// True when ANY resolved target is low-confidence (the review card flags it
-    /// amber). Reads the same derived summary the card + analytics consume.
+    /// True when ANY resolved target is low-confidence — the same combine the
+    /// resolution analytics histogram consumes.
     private func hasLow(_ app: AppState) -> Bool {
-        app.devConfirmAnchorSummaries.contains { $0.isLow }
+        app.devResolvedAnchors.contains { app.combinedConfidence($0) < AppState.devLowConfidenceThreshold }
     }
 
     func testAllHighNoLowFlag() {
@@ -77,20 +77,5 @@ final class DevConfirmGateTests: XCTestCase {
         // And a low client with no model still flags low.
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.2)]
         XCTAssertTrue(hasLow(app))
-    }
-
-    func testConfirmSummariesPreferModelLabelThenOCRThenPhrase() {
-        let app = AppState()
-        app.devResolvedAnchors = [
-            resolved(ref: 0, clientConfidence: 0.9, ocr: ["OCR label"], phrase: "this"),
-            resolved(ref: 1, clientConfidence: 0.1, ocr: [], phrase: "the header"),
-        ]
-        app.devModelAnchors = [model(ref: 0, label: "Get started", confidence: 0.9)]
-        let s = app.devConfirmAnchorSummaries
-        XCTAssertEqual(s.count, 2)
-        XCTAssertEqual(s[0].label, "Get started") // model label preferred
-        XCTAssertFalse(s[0].isLow)
-        XCTAssertEqual(s[1].label, "the header")  // no model + no OCR → phrase
-        XCTAssertTrue(s[1].isLow)                  // low-confidence one flagged
     }
 }
