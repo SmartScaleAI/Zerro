@@ -1787,6 +1787,14 @@ final class AppState {
         // `git diff --numstat <restoreRef>`, which throws if the ref no longer
         // resolves (GC'd stash commit). A nil result → unresolvable → clear, no
         // offer; an empty diff → nothing to undo → clear, no offer.
+        //
+        // KNOWN LIMITATION (no-commit repos): on a fresh `git init` with no HEAD
+        // every agent file is UNTRACKED, and `git diff --numstat <empty-tree>`
+        // reports only tracked files → filesChanged == 0 → the cross-launch undo
+        // offer is suppressed below. In-session Undo is unaffected (it reverts
+        // directly, not via diffStat). Closing this needs diffStat to count
+        // untracked changes (a repo-wide behavior change) — deliberately out of
+        // scope for the empty-repo checkpoint fix.
         let diff: GitDiffStat? = await Task.detached {
             try? service.diffStat(since: checkpoint)
         }.value
@@ -3271,6 +3279,7 @@ final class AppState {
         switch failure {
         case .notAGitRepo:        return "not_a_git_repo"
         case .gitUnavailable:     return "git_unavailable"
+        case .indexLocked:        return "index_locked"
         case .checkpointFailed:   return "checkpoint_failed"
         case .agentUnavailable:   return "agent_unavailable"
         case .noChangeRequested:  return "no_change_requested"

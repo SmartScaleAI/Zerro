@@ -78,8 +78,8 @@ final class DevFailedPillCardTests: XCTestCase {
     /// title over wrapped prose.
     func testEveryFailureHeadlineIsShortLabel() {
         let failures: [DevDispatchFailure] = [
-            .notAGitRepo, .gitUnavailable, .checkpointFailed, .agentUnavailable,
-            .noChangeRequested, .revertFailed, .confirmDeclined,
+            .notAGitRepo, .gitUnavailable, .indexLocked, .checkpointFailed,
+            .agentUnavailable, .noChangeRequested, .revertFailed, .confirmDeclined,
             .agent(.nonZeroExit(code: 2, stderrTail: Self.longAgentError)),
             .agent(.spawnFailed("boom")), .agent(.busy), .agent(.cancelled),
         ]

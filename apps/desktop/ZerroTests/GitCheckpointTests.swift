@@ -132,6 +132,43 @@ final class GitCheckpointTests: XCTestCase {
         XCTAssertEqual(read("src.txt"), "s1\n")
     }
 
+    // MARK: - Empty repo (no initial commit)
+
+    /// A fresh `git init` with NO commits must checkpoint + revert cleanly: there
+    /// is no HEAD (so `rev-parse HEAD` / `stash create` would error), and every
+    /// file is untracked. Regression test for the "Couldn't snapshot the project"
+    /// failure on a brand-new repo.
+    func testCheckpointAndRevertOnRepoWithNoCommits() throws {
+        git("init", "-q")
+        // NOTE: deliberately NO commit — this is the empty-repo case.
+
+        // Pre-run state: a couple of untracked files the user already had.
+        write("index.html", "<h1>v1</h1>\n")
+        write("src/app.ts", "export const v = 1\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        // No commit → empty base, no stash, restore base is the empty tree.
+        XCTAssertEqual(checkpoint.baseSha, "")
+        XCTAssertNil(checkpoint.stashSha)
+        XCTAssertFalse(checkpoint.hasBaseCommit)
+        XCTAssertEqual(checkpoint.restoreRef, GitCheckpoint.emptyTreeSha)
+        XCTAssertEqual(Set(checkpoint.untrackedRelativePaths), ["index.html", "src/app.ts"])
+
+        // Simulate the agent: modify an existing file, add a new one, delete one.
+        write("index.html", "<h1>agent-edited</h1>\n")
+        write("src/new.ts", "export const added = true\n")
+        remove("src/app.ts")
+
+        try service.revert(checkpoint)
+
+        // The pre-run state is restored byte-identically.
+        XCTAssertEqual(read("index.html"), "<h1>v1</h1>\n")
+        XCTAssertEqual(read("src/app.ts"), "export const v = 1\n")
+        // The agent-created file is gone.
+        XCTAssertFalse(exists("src/new.ts"))
+    }
+
     // MARK: - diffStat
 
     func testDiffStatCountsTrackedChanges() throws {

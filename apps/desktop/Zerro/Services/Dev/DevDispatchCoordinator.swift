@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import os
 
 /// Progress the pill reflects during a dispatch.
 enum DevDispatchPhase: Equatable, Sendable {
@@ -34,6 +35,10 @@ enum DevDispatchFailure: Equatable, Sendable {
     case notAGitRepo
     /// `git` couldn't be found on the system.
     case gitUnavailable
+    /// A stale `.git/index.lock` is blocking git's index writes (left by an
+    /// interrupted git/agent run). Distinct from `checkpointFailed` so we can
+    /// give the one-line fix.
+    case indexLocked
     /// Taking the pre-run checkpoint threw for some other reason.
     case checkpointFailed
     /// The agent couldn't be resolved/spawned (not installed at dispatch).
@@ -57,6 +62,8 @@ enum DevDispatchFailure: Equatable, Sendable {
             return "Dev Mode needs a git repo — pick a folder that's inside one."
         case .gitUnavailable:
             return "Couldn't find git on your system."
+        case .indexLocked:
+            return "A leftover git lock is blocking edits. In Terminal, run: rm -f .git/index.lock in your project, then Retry."
         case .checkpointFailed:
             return "Couldn't snapshot the project before editing."
         case .agentUnavailable:
@@ -86,6 +93,7 @@ enum DevDispatchFailure: Equatable, Sendable {
         switch self {
         case .notAGitRepo:      return "Dev Mode needs a git repo"
         case .gitUnavailable:   return "Git unavailable"
+        case .indexLocked:      return "Git is locked"
         case .checkpointFailed: return "Couldn\u{2019}t snapshot the project"
         case .agentUnavailable: return "Coding agent unavailable"
         case .noChangeRequested: return "Nothing to change"
@@ -188,6 +196,11 @@ final class DevDispatchCoordinator {
         } catch GitCheckpointError.gitUnavailable {
             return .failed(.gitUnavailable, checkpoint: nil, service: nil, diff: nil)
         } catch {
+            // Keep the underlying reason (git stderr tail / fs error) in the device
+            // log so a checkpoint failure is diagnosable — the pill only shows the
+            // generic message, and analytics carry the coarse code only. .private:
+            // the detail can include repo paths.
+            Log.dev.error("Dev checkpoint setup failed: \(String(describing: error), privacy: .private)")
             return .failed(.checkpointFailed, checkpoint: nil, service: nil, diff: nil)
         }
 
@@ -196,7 +209,13 @@ final class DevDispatchCoordinator {
             checkpoint = try await Task.detached { try service.checkpoint() }.value
         } catch GitCheckpointError.notAGitRepository {
             return .failed(.notAGitRepo, checkpoint: nil, service: nil, diff: nil)
+        } catch GitCheckpointError.indexLocked {
+            // A stale .git/index.lock — give the actionable fix, not the generic
+            // message. Logged so the device trail still shows it.
+            Log.dev.error("Dev checkpoint failed: stale git index lock (.git/index.lock)")
+            return .failed(.indexLocked, checkpoint: nil, service: nil, diff: nil)
         } catch {
+            Log.dev.error("Dev checkpoint failed: \(String(describing: error), privacy: .private)")
             return .failed(.checkpointFailed, checkpoint: nil, service: nil, diff: nil)
         }
 

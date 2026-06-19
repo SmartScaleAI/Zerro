@@ -34,6 +34,12 @@ enum GitCheckpointError: Error, Equatable, Sendable {
     case notAGitRepository
     /// `git` couldn't be located on disk.
     case gitUnavailable
+    /// git couldn't write the index — almost always a stale `.git/index.lock`
+    /// left by an interrupted git/agent process (the lock blocks every later
+    /// index write until removed). Distinct from `commandFailed` so the UI can
+    /// give the one-line fix (`rm -f .git/index.lock`) instead of a generic
+    /// "couldn't snapshot" message.
+    case indexLocked
     /// A git invocation exited non-zero. `stderr` is the trimmed tail.
     case commandFailed(arguments: [String], status: Int32, stderr: String)
     /// A filesystem step (untracked snapshot copy/restore) failed.
@@ -46,10 +52,13 @@ enum GitCheckpointError: Error, Equatable, Sendable {
 /// recording and used later by Revert (Milestone 7).
 struct GitCheckpoint: Equatable, Sendable {
     /// HEAD at checkpoint time — the restore base when the tree was clean
-    /// (no stash commit was produced).
+    /// (no stash commit was produced). EMPTY STRING for a repo with no commits
+    /// yet (fresh `git init`): there is no HEAD to resolve, so the pre-run state
+    /// is purely the untracked snapshot and the restore base is the empty tree.
     let baseSha: String
     /// The `git stash create` commit capturing tracked + dirty state, or nil
-    /// when the working tree was clean.
+    /// when the working tree was clean OR the repo has no initial commit (stash
+    /// create needs a HEAD, so it's skipped on an empty repo).
     let stashSha: String?
     /// Directory holding copies of the untracked files that existed at
     /// checkpoint time (stash-create omits untracked). nil when there were
@@ -58,9 +67,21 @@ struct GitCheckpoint: Equatable, Sendable {
     /// Relative paths (repo-root-relative) of the snapshotted untracked files.
     let untrackedRelativePaths: [String]
 
-    /// The ref Revert/diff restore tracked files from: the stash snapshot if
-    /// one was taken, else HEAD.
-    var restoreRef: String { stashSha ?? baseSha }
+    /// Git's well-known EMPTY TREE object — every repo has it without any
+    /// commit. Used as the restore/diff base on a repo with no initial commit,
+    /// so `git diff <ref>` shows the agent's additions and tracked-file restore
+    /// has a valid (empty) base.
+    static let emptyTreeSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+    /// True when the repo had at least one commit at checkpoint time. False for a
+    /// fresh `git init` (no HEAD) — revert then only removes agent-created files
+    /// and restores the untracked snapshot (no `checkout`, which can't run
+    /// against a path-less empty base).
+    var hasBaseCommit: Bool { !baseSha.isEmpty }
+
+    /// The ref Revert/diff restore tracked files from: the stash snapshot if one
+    /// was taken, else HEAD — or the empty tree when the repo has no commits yet.
+    var restoreRef: String { stashSha ?? (hasBaseCommit ? baseSha : Self.emptyTreeSha) }
 }
 
 // MARK: - Diff stat
@@ -103,8 +124,15 @@ struct GitCheckpointService: Sendable {
     nonisolated func checkpoint() throws -> GitCheckpoint {
         try verifyRepository()
 
-        let baseSha = try run(["rev-parse", "HEAD"]).stdout
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Resolve HEAD, but tolerate a repo with NO initial commit (fresh
+        // `git init`): `rev-parse HEAD` exits non-zero there. An empty baseSha
+        // marks that state — everything is untracked, so the snapshot below is
+        // the whole pre-run state and the restore base is the empty tree.
+        let headResult = try run(["rev-parse", "HEAD"], allowFailure: true)
+        let hasHead = headResult.status == 0
+        let baseSha = hasHead
+            ? headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
 
         // Settle "racy-clean" stat info: a file written within the same second
         // as the index timestamp is flagged maybe-dirty until git re-checksums
@@ -116,10 +144,18 @@ struct GitCheckpointService: Sendable {
 
         // `git stash create` snapshots tracked + index state into a commit
         // WITHOUT mutating the work tree or stash list. Empty output ⇒ the tree
-        // was clean, so the restore base is HEAD.
-        let stashOut = try run(["stash", "create"]).stdout
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let stashSha = stashOut.isEmpty ? nil : stashOut
+        // was clean, so the restore base is HEAD. SKIPPED on a repo with no
+        // initial commit: stash-create requires a HEAD ("you do not have the
+        // initial commit yet") — there, every file is untracked and captured by
+        // the snapshot below instead.
+        let stashSha: String?
+        if hasHead {
+            let stashOut = try run(["stash", "create"]).stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            stashSha = stashOut.isEmpty ? nil : stashOut
+        } else {
+            stashSha = nil
+        }
 
         let (snapshotDir, relPaths) = try snapshotUntracked()
 
@@ -140,7 +176,17 @@ struct GitCheckpointService: Sendable {
         // 1. Restore tracked files to the checkpoint (recreates files the agent
         //    deleted, reverts modifications). `checkout <ref> -- .` doesn't
         //    remove files absent from the ref — those are handled by clean.
-        try run(["checkout", checkpoint.restoreRef, "--", "."])
+        //    SKIPPED on a no-initial-commit repo: there are no tracked files to
+        //    restore, and `checkout <empty-tree> -- .` errors ("pathspec '.' did
+        //    not match") because the empty tree has no paths. The agent's work is
+        //    entirely untracked there, so clean + untracked-restore fully reverts.
+        if checkpoint.hasBaseCommit {
+            try run(["checkout", checkpoint.restoreRef, "--", "."])
+        } else {
+            // Drop any index entries the agent staged so the tree is truly back
+            // to the no-commit state (best-effort: a fresh repo may have none).
+            try run(["reset", "-q"], allowFailure: true)
+        }
 
         // 2. Remove untracked files the agent created. `-fd` covers files +
         //    directories; no `-x`, so .gitignore'd build output is preserved.
@@ -330,6 +376,15 @@ struct GitCheckpointService: Sendable {
         let stdout = String(data: outData, encoding: .utf8) ?? ""
         let stderr = String(data: errData, encoding: .utf8) ?? ""
         if process.terminationStatus != 0 && !allowFailure {
+            // A stale `.git/index.lock` (left by an interrupted git/agent run)
+            // makes every index write fail — git reports "could not write index"
+            // / "Unable to create '…/index.lock': File exists". Map it to a
+            // dedicated error so the pill can give the exact fix instead of a
+            // generic failure. Checked here so ANY index-writing git op surfaces
+            // it, not just `stash create`.
+            if Self.isIndexLockFailure(stderr) {
+                throw GitCheckpointError.indexLocked
+            }
             throw GitCheckpointError.commandFailed(
                 arguments: arguments,
                 status: process.terminationStatus,
@@ -337,5 +392,16 @@ struct GitCheckpointService: Sendable {
             )
         }
         return (process.terminationStatus, stdout, stderr)
+    }
+
+    /// Recognize the stale-lock signature in git's stderr. Matches both the
+    /// direct lock message and the "could not write index" that `stash create`
+    /// reports when the lock blocks the write. Case-insensitive + substring so a
+    /// localized or slightly reworded git build still matches.
+    nonisolated private static func isIndexLockFailure(_ stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("index.lock")
+            || s.contains("could not write index")
+            || s.contains("unable to write new index")
     }
 }
