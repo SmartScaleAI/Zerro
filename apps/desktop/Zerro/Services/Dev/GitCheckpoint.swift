@@ -198,6 +198,52 @@ struct GitCheckpointService: Sendable {
         Log.dev.notice("Dev checkpoint reverted to \(checkpoint.restoreRef, privacy: .public)")
     }
 
+    // MARK: Revert verification
+
+    /// Whether the working tree now matches the checkpoint's CAPTURED state —
+    /// the success check after a revert. This is deliberately NOT `diffStat == 0`:
+    /// `diffStat` counts untracked files (so the result card can show
+    /// agent-created files), but a checkpoint legitimately HAS untracked files
+    /// (e.g. a prior accepted-but-uncommitted run), and restoring them must NOT
+    /// read as a residual change. So we check the two halves the checkpoint
+    /// actually captured, separately:
+    ///   1. TRACKED files match `restoreRef` — a plain `git diff <ref>` (untracked
+    ///      NOT included) with no output.
+    ///   2. The current untracked set equals the snapshotted untracked set, both
+    ///      in PATHS and in CONTENT (the agent may have left an extra untracked
+    ///      file, or edited a restored one).
+    /// Returns true only when both hold.
+    nonisolated func isRestored(to checkpoint: GitCheckpoint) -> Bool {
+        // 1. Tracked-file parity: `diff --quiet` exits 0 when identical, 1 when
+        //    there are differences — so allowFailure (1 is not an error here) and
+        //    read the status. Any other failure (no such ref, git error) → not
+        //    restored.
+        guard let trackedResult = try? run(["diff", "--quiet", checkpoint.restoreRef], allowFailure: true),
+              trackedResult.status == 0 else {
+            return false
+        }
+
+        // 2. Untracked parity: same paths AND same bytes as the snapshot.
+        let raw = (try? run(["ls-files", "--others", "--exclude-standard", "-z"]).stdout) ?? ""
+        let nowUntracked = Set(raw.split(separator: "\0").map(String.init).filter { !$0.isEmpty })
+        guard nowUntracked == Set(checkpoint.untrackedRelativePaths) else { return false }
+
+        guard let snapshotDir = checkpoint.untrackedSnapshotDir else {
+            // No snapshot dir ⇒ the checkpoint had no untracked files; parity above
+            // already proved the current set is also empty.
+            return nowUntracked.isEmpty
+        }
+        for rel in checkpoint.untrackedRelativePaths {
+            let live = projectURL.appendingPathComponent(rel)
+            let saved = snapshotDir.appendingPathComponent(rel)
+            guard let a = try? Data(contentsOf: live),
+                  let b = try? Data(contentsOf: saved), a == b else {
+                return false
+            }
+        }
+        return true
+    }
+
     // MARK: Diff stat
 
     /// File changes between the checkpoint and the current working tree

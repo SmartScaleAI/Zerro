@@ -169,6 +169,61 @@ final class GitCheckpointTests: XCTestCase {
         XCTAssertFalse(exists("src/new.ts"))
     }
 
+    // MARK: - Revert verification (isRestored)
+
+    /// The exact bug a user hit: run 1 was accepted but NOT committed (so its
+    /// files sit untracked), run 2 edited them, and Undo reported "Couldn't
+    /// restore your files" even though the tree WAS restored. Cause: the success
+    /// check used `diffStat == 0`, but `diffStat` counts untracked files, so the
+    /// correctly-restored untracked files read as a residual change. `isRestored`
+    /// must return TRUE here (tree matches the checkpoint), even though `diffStat`
+    /// is non-zero (those untracked files differ from the empty-tree base).
+    func testIsRestoredTrueAfterRevertingUntrackedCheckpoint() throws {
+        git("init", "-q") // no commit — run-1 files are untracked
+
+        // Checkpoint state: untracked files from a prior accepted-but-uncommitted run.
+        write("index.html", "<h1>v1</h1>\n")
+        write("src/app.ts", "const v = 1\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // Agent edits + adds, then we revert.
+        write("index.html", "<h1>v2</h1>\n")
+        write("src/extra.ts", "const x = 2\n")
+        try service.revert(checkpoint)
+
+        // The tree matches the checkpoint → revert succeeded…
+        XCTAssertTrue(service.isRestored(to: checkpoint),
+                      "a correctly-restored untracked checkpoint must verify as restored")
+        // …even though diffStat (untracked-inclusive, for the result card) is non-zero.
+        XCTAssertGreaterThan(try service.diffStat(since: checkpoint).filesChanged, 0,
+                             "sanity: diffStat counts the restored untracked files")
+    }
+
+    /// `isRestored` must return FALSE when revert genuinely left the tree dirty —
+    /// otherwise a real failure would be silently treated as success.
+    func testIsRestoredFalseWhenTreeStillDiffers() throws {
+        try initRepo()
+        write("a.txt", "base\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // A tracked edit that was NOT reverted.
+        write("a.txt", "still-dirty\n")
+        XCTAssertFalse(service.isRestored(to: checkpoint),
+                       "an unreverted tracked edit must NOT verify as restored")
+
+        // An extra agent-created untracked file left behind also fails parity.
+        write("a.txt", "base\n")              // restore the tracked edit
+        write("leftover.txt", "oops\n")       // but a stray untracked file remains
+        XCTAssertFalse(service.isRestored(to: checkpoint),
+                       "a leftover untracked file must NOT verify as restored")
+    }
+
     // MARK: - diffStat
 
     func testDiffStatCountsTrackedChanges() throws {

@@ -3328,7 +3328,13 @@ final class AppState {
         await Task.detached {
             do {
                 try service.revert(checkpoint)
-                return (try? service.diffStat(since: checkpoint))?.filesChanged == 0
+                // Verify against the checkpoint's CAPTURED state (tracked parity +
+                // untracked snapshot), NOT `diffStat == 0`: a checkpoint can
+                // legitimately hold untracked files (e.g. a prior accepted-but-
+                // uncommitted run), and `diffStat` now counts untracked files for
+                // the result card — so a correctly-restored untracked file would
+                // otherwise read as a residual change and fail the revert.
+                return service.isRestored(to: checkpoint)
             } catch {
                 return false
             }
