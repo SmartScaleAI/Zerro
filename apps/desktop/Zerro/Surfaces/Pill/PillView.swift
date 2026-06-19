@@ -81,10 +81,14 @@ enum PillState: Equatable {
     /// Footer is a single "Undo" (reverts to the checkpoint); the X keeps the
     /// changes. No Retry, no Done.
     case devDone(card: DevResultCard, expanded: Bool)
-    /// Terminal failure. `detail` is the single-line reason; `canRevert` gates
-    /// the Revert button (a failure before the checkpoint has nothing to undo).
-    /// Renders [Revert] + Retry (M7).
-    case devFailed(detail: String, canRevert: Bool)
+    /// Terminal failure, rendered as the shared expanded failure card (same
+    /// 760-wide `ArtifactCardView` + `FailureConfig` chrome as `.error` /
+    /// `.failureExpanded`): a short `headline` in bold on top and the FULL agent
+    /// error / reason as wrapped, scrollable `detail` prose below — never
+    /// truncated. `canRevert` gates the footer's Revert button (a failure before
+    /// the checkpoint has nothing to undo); Retry re-dispatches. The header `×`
+    /// keeps the partial edits and closes (M7).
+    case devFailed(headline: String, detail: String, canRevert: Bool)
     /// Ask Permission — the SOLE pre-edit gate. Shows the target `agent`, the
     /// resolved `targets` the agent will act on, and the exact `prompt` that will
     /// be dispatched, in a scrollable monospace well, with Approve / Cancel. Lets
@@ -499,18 +503,40 @@ struct PillView: View {
                 // of a negotiable range that loops update-constraints.
                 .fixedSize(horizontal: true, vertical: false)
             }
-        case .devFailed(let detail, let canRevert):
-            DevResultPillContent(
-                symbol: "exclamationmark.triangle.fill",
-                tint: .vfWarningAmber,
-                text: detail,
-                buttons: [
-                    canRevert ? DevResultPillContent.Button(title: "Revert", role: .secondary, action: onDevRevert) : nil,
-                    DevResultPillContent.Button(title: "Retry", role: .primary, action: onDevRetry),
-                ].compactMap { $0 },
-                // Keep the partial edits and close (no auto-revert, §8).
-                onDismiss: onDismissResult
+        case .devFailed(let headline, let detail, let canRevert):
+            // Same expanded failure card as `.error` / `.failureExpanded`: short
+            // headline in bold, the FULL agent error / reason as wrapped,
+            // scrollable prose (never truncated). Footer mirrors `.error`'s
+            // secondary + primary, here Revert (when a checkpoint exists) + Retry.
+            // The header `×` keeps the partial edits and closes (no auto-revert,
+            // §8) — `keepsDismiss` keeps it visible even with the Revert secondary,
+            // since Revert (restore files) ≠ dismiss (keep edits & close).
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                conversion: .hidden,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissResult,
+                onConvert: {},
+                failure: ArtifactCardView.FailureConfig(
+                    headline: headline,
+                    detail: detail,
+                    secondaryTitle: canRevert ? "Revert" : nil,
+                    onSecondary: canRevert ? onDevRevert : nil,
+                    primaryTitle: "Retry",
+                    primaryIcon: "arrow.clockwise",
+                    primaryRole: .warning,
+                    keepsDismiss: true
+                ),
+                onRetry: onDevRetry
             )
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         case .reviewPrompt(let agent, let targets, let prompt):
             ReviewPromptPillContent(
                 agent: agent,
@@ -530,79 +556,13 @@ struct PillView: View {
 
     private var cornerRadius: CGFloat {
         switch state {
-        // The failure-card family (error / paid-block / generation-failure) and the
-        // review card all share the 18pt card radius, not the 28pt capsule radius.
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .reviewPrompt:
+        // The failure-card family (error / paid-block / generation-failure /
+        // dev-failure) and the review card all share the 18pt card radius, not the
+        // 28pt capsule radius.
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .reviewPrompt:
             return 18
         case .devDone(_, let expanded):            return expanded ? 18 : 28
         default:                                    return 28
-        }
-    }
-}
-
-// MARK: - DevResultPillContent (Dev Mode — terminal failure capsule)
-//
-// The terminal dev-dispatch FAILURE capsule. `.devFailed` shows the failure
-// reason with [Revert] (when a checkpoint exists) and [Retry], plus a dismiss
-// "x" to keep the partial edits and close. A compact amber capsule (badge +
-// reason + actions) so the dispatch tail reads as a continuation of the
-// recording flow, not a separate surface. (`.devDone` no longer uses this — it
-// renders the expandable `ArtifactCardView` dev-result card.)
-
-private struct DevResultPillContent: View {
-    /// One trailing action. `.primary` is filled (Retry); `.secondary`
-    /// is a plain text button (Revert).
-    struct Button: Identifiable {
-        enum Role { case primary, secondary }
-        let id = UUID()
-        let title: String
-        let role: Role
-        let action: () -> Void
-    }
-
-    let symbol: String
-    let tint: Color
-    let text: String
-    let buttons: [Button]
-    /// The "x" affordance (keep & close). nil → no separate dismiss (a primary
-    /// "Done" button already closes).
-    let onDismiss: (() -> Void)?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: VFSpacing.md) {
-            PillLeadingIconBadge(systemImage: symbol, tint: tint)
-
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextPrimary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: VFSpacing.md)
-
-            ForEach(buttons) { button in
-                actionButton(button)
-            }
-
-            if let onDismiss {
-                PillDismissButton(action: onDismiss)
-            }
-        }
-        .padding(.horizontal, VFSpacing.lg)
-        .padding(.vertical, 10)
-        .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
-    }
-
-    /// `.primary` (Retry) is the filled positive button; `.secondary` (Revert)
-    /// is the quiet gray-hover text button.
-    @ViewBuilder
-    private func actionButton(_ button: Button) -> some View {
-        switch button.role {
-        case .primary:
-            PillPrimaryButton(title: button.title, role: .positive, action: button.action)
-        case .secondary:
-            PillSecondaryButton(title: button.title, action: button.action)
         }
     }
 }
@@ -1499,6 +1459,35 @@ private struct ResultPillContent: View {
             linesAdded: 0, linesRemoved: 0, filesChanged: 1
         ),
         expanded: false
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev failed \u{00B7} long agent error") {
+    // The terminal dev FAILURE card — same expanded chrome as `.error`, with a
+    // long agent error string (the `cursor-agent` Free-plan `ActionRequiredError`
+    // that prompted this) that must render IN FULL, wrapped, not clipped. Footer:
+    // Revert + Retry; the header X keeps the partial edits and closes.
+    PillView(state: .devFailed(
+        headline: "Couldn\u{2019}t apply changes",
+        detail: "ActionRequiredError: Named models unavailable. Free plans can "
+            + "only use Auto. Re-run with the Auto model, or upgrade your Cursor "
+            + "plan to use a named model. (The coding agent exited with this error "
+            + "before making any changes; your working tree is untouched.)",
+        canRevert: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev failed \u{00B7} no revert") {
+    // A failure BEFORE the checkpoint (non-git folder / missing agent): nothing to
+    // undo, so the footer drops Revert and shows Retry alone — the header X stays.
+    PillView(state: .devFailed(
+        headline: "Dev Mode needs a git repo",
+        detail: "Dev Mode needs a git repo — pick a folder that\u{2019}s inside one.",
+        canRevert: false
     ))
         .padding(40)
         .background(Color.vfPanelBackground)

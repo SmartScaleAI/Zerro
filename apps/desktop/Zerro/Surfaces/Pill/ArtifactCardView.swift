@@ -106,6 +106,12 @@ struct ArtifactCardView: View {
         /// a blue checkmark ("you're all set" confirmation).
         var badgeTint: Color = .vfWarningAmber
         var badgeSymbol: String = "exclamationmark.triangle.fill"
+        /// Forces the header `×` dismiss to stay even when a secondary button is
+        /// present. By default a secondary (Cancel / Discard) IS the dismiss, so
+        /// the header X is dropped to avoid two close affordances. `.devFailed`
+        /// sets this: its secondary (Revert — restore files) is NOT the same as
+        /// dismiss (keep the partial edits and close), so both must show.
+        var keepsDismiss: Bool = false
     }
 
     /// What the dev-result card renders: the fixed header `title`, the
@@ -190,7 +196,10 @@ struct ArtifactCardView: View {
                     if failure == nil {
                         dismissDivider
                     }
-                    if failure?.secondaryTitle == nil {
+                    // Show the header X when there's no secondary acting as the
+                    // dismiss, OR when the card explicitly keeps it (`.devFailed`,
+                    // where Revert ≠ keep-and-close).
+                    if failure?.secondaryTitle == nil || failure?.keepsDismiss == true {
                         PillDismissButton(action: onDismiss)
                     }
                 }

@@ -137,9 +137,12 @@ extension AppState {
             // two states never coexist); lands expanded (set in applyDevOutcome).
             return .devDone(card: devResultCard, expanded: isResultExpanded)
         case .devFailed:
-            // Offer Revert only when a checkpoint exists (failures before the
-            // checkpoint — non-git folder, missing agent — have nothing to undo).
-            return .devFailed(detail: devFailure?.userMessage ?? "Dev Mode run failed.",
+            // The expanded failure card: a short headline over the FULL agent
+            // error / reason (wrapped + scrollable, never truncated). Offer Revert
+            // only when a checkpoint exists (failures before the checkpoint —
+            // non-git folder, missing agent — have nothing to undo).
+            return .devFailed(headline: devFailure?.headline ?? "Dev Mode run failed",
+                              detail: devFailure?.userMessage ?? "Dev Mode run failed.",
                               canRevert: devCanRevert)
         }
     }

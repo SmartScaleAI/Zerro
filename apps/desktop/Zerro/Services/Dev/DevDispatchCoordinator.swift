@@ -77,6 +77,29 @@ enum DevDispatchFailure: Equatable, Sendable {
             }
         }
     }
+
+    /// A short, bold label for the expanded failure card's header. `userMessage`
+    /// is the full prose detail shown beneath it (wrapped + scrollable, never
+    /// truncated) — so this is just the at-a-glance category, not the message.
+    /// Mirrors the `.error` / `.failureExpanded` cards' headline-over-detail split.
+    var headline: String {
+        switch self {
+        case .notAGitRepo:      return "Dev Mode needs a git repo"
+        case .gitUnavailable:   return "Git unavailable"
+        case .checkpointFailed: return "Couldn\u{2019}t snapshot the project"
+        case .agentUnavailable: return "Coding agent unavailable"
+        case .noChangeRequested: return "Nothing to change"
+        case .revertFailed:     return "Couldn\u{2019}t restore your files"
+        case .confirmDeclined:  return "Cancelled"
+        case .agent(let reason):
+            switch reason {
+            case .nonZeroExit:  return "Couldn\u{2019}t apply changes"
+            case .spawnFailed:  return "Couldn\u{2019}t start the agent"
+            case .busy:         return "A run is already in progress"
+            case .cancelled:    return "Run stopped"
+            }
+        }
+    }
 }
 
 @MainActor
