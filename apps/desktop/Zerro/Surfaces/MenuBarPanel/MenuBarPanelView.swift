@@ -253,11 +253,16 @@ struct MenuBarPanelView: View {
             // out of the environment so the controller stays alive
             // when the dropdown closes.
             CheckForUpdatesView()
-            // The single, always-present billing entry point (consolidation
-            // target): label + paywall trigger vary by state, replacing the
-            // scattered trial-upgrade / top-up / past-due CTAs. Opens the
-            // (context-aware) paywall window.
-            billingActionRow
+            // The billing entry point (consolidation target): label + paywall
+            // trigger vary by state, replacing the scattered trial-upgrade /
+            // top-up / past-due CTAs. Opens the (context-aware) paywall window.
+            // Hidden for BYOK — they fund generation with their own key, so
+            // there's nothing to upgrade, top up, or manage here.
+            if case .byok = entitlements.state {
+                // BYOK: omit the billing row entirely.
+            } else {
+                billingActionRow
+            }
             MenuRow(label: "Settings\u{2026}", trailing: .hotkey("\u{2318},")) {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsScene.windowID)
@@ -1377,6 +1382,8 @@ private func previewRecentPromptStore() -> RecentPromptStore {
     .background(Color.vfPanelBackground)
 }
 
+// BYOK has no billing row (nothing to upgrade/top up/manage) — this dropdown
+// should show only Settings + Quit below the divider, no "Manage Plan" row.
 #Preview("Dropdown \u{00B7} BYOK (no credits)") {
     MenuPanelChrome {
         MenuBarPanelView()

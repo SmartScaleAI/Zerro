@@ -710,10 +710,10 @@ private struct ReviewApproveButton: View {
             Text("Approve")
                 .font(.system(size: 13, weight: .semibold))
                 .fixedSize()
-                .foregroundStyle(Color.white)
+                .foregroundStyle(Color.vfOnBrand)
                 .padding(.horizontal, PillMetrics.primaryHPad)
                 .padding(.vertical, PillMetrics.primaryVPad)
-                .background(Color.vfSuccessGreen, in: Capsule())
+                .background(Color.vfDevAccent, in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

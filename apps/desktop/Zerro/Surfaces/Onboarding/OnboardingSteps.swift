@@ -999,17 +999,20 @@ struct OnboardingPrimaryButton: View {
     let title: String
     let systemImage: String?
     let isEnabled: Bool
+    let tint: Color
     let action: () -> Void
 
     init(
         _ title: String,
         systemImage: String? = nil,
         isEnabled: Bool = true,
+        tint: Color = .vfBrandAccent,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.systemImage = systemImage
         self.isEnabled = isEnabled
+        self.tint = tint
         self.action = action
     }
 
@@ -1026,7 +1029,7 @@ struct OnboardingPrimaryButton: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
             .background(
-                (isEnabled ? Color.vfBrandAccent : Color.white.opacity(0.08)),
+                (isEnabled ? tint : Color.white.opacity(0.08)),
                 in: RoundedRectangle(cornerRadius: VFRadius.lg)
             )
         }

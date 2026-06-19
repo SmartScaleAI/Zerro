@@ -541,6 +541,11 @@ struct AreaSelectorView: View {
     static let micMenuWidth: CGFloat = 220
     /// Height reserved above the rows for a section header ("Model" / etc.).
     static let menuSectionHeaderHeight: CGFloat = 26
+    /// Fixed height of the static credit-cost notice at the very top of the
+    /// toolbar model menu (above the "Model" header). FIXED so the row hit-test
+    /// math (`modelMenuRowIndex`) stays exact — the wrapping text + divider are
+    /// pinned into this band. Only the standard model menu carries it.
+    static let modelMenuNoticeHeight: CGFloat = 72
     /// Top/bottom inset inside the menu panel.
     static let menuVPad: CGFloat = 6
     /// Gap between the icon button and the menu panel (room for the caret).
@@ -592,7 +597,9 @@ struct AreaSelectorView: View {
 
     static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
         let icon = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        let height = menuSectionHeaderHeight + CGFloat(itemCount) * modelMenuRowHeight + menuVPad * 2
+        // The notice band sits above the "Model" header, so it adds to the panel
+        // height (and shifts the rows down — mirrored in `modelMenuRowIndex`).
+        let height = modelMenuNoticeHeight + menuSectionHeaderHeight + CGFloat(itemCount) * modelMenuRowHeight + menuVPad * 2
         return anchoredMenuFrame(under: icon, width: modelMenuWidth, height: height, in: bounds)
     }
 
@@ -606,7 +613,9 @@ struct AreaSelectorView: View {
     ) -> Int? {
         let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen, devMode: devMode)
         guard frame.contains(point) else { return nil }
-        let localY = point.y - frame.minY - menuVPad - menuSectionHeaderHeight
+        // Skip the top inset, the static notice band, AND the "Model" header to
+        // land on row 0 (the notice + header are non-interactive).
+        let localY = point.y - frame.minY - menuVPad - modelMenuNoticeHeight - menuSectionHeaderHeight
         guard localY >= 0 else { return nil }
         let idx = Int(localY / modelMenuRowHeight)
         guard idx >= 0, idx < itemCount else { return nil }
@@ -937,6 +946,33 @@ struct AreaSelectorView: View {
         .position(x: x, y: pointingUp ? edgeY - h / 2 + 0.5 : edgeY + h / 2 - 0.5)
     }
 
+    /// Static, non-interactive disclaimer at the top of the toolbar model menu:
+    /// pricier models burn credits / usage limits faster. Pinned into a FIXED
+    /// `modelMenuNoticeHeight` band (text top-aligned, a hairline divider pinned
+    /// to the bottom) so the row hit-test geometry stays exact regardless of how
+    /// the copy wraps. Muted tertiary text + smaller font, mirroring the section
+    /// header treatment so it reads as helper text, not a selectable row.
+    private var modelMenuNotice: some View {
+        VStack(spacing: 0) {
+            Text("More capable models produce more thorough responses, but use more credits and reach your usage limits faster.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+
+            Spacer(minLength: 6)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 5)
+        }
+        .frame(height: Self.modelMenuNoticeHeight)
+    }
+
     /// Gray section header ("Model" / "Microphone" / "Agent" / "Project").
     /// The bottom inset is applied BEFORE the fixed-height frame so the header's
     /// total height stays exactly `menuSectionHeaderHeight` (the row hit-test
@@ -970,6 +1006,7 @@ struct AreaSelectorView: View {
 
             menuPanel(frame: frame) {
                 VStack(spacing: 0) {
+                    modelMenuNotice
                     menuSectionHeader("Model")
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         let selected = item.id == state.selectedModelID

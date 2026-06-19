@@ -135,9 +135,11 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
         XCTAssertGreaterThan(menu.minY, model.maxY)
         XCTAssertEqual(menu.width, AreaSelectorView.modelMenuWidth)
 
-        // Rows begin BELOW the section header. Row 0's center maps to index 0;
-        // the last row to itemCount-1; a point in the header maps to nil.
-        let rowsTop = menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
+        // Rows begin BELOW the static notice band + section header. Row 0's
+        // center maps to index 0; the last row to itemCount-1; a point in the
+        // notice/header band maps to nil.
+        let rowsTop = menu.minY + AreaSelectorView.menuVPad
+            + AreaSelectorView.modelMenuNoticeHeight + AreaSelectorView.menuSectionHeaderHeight
         let row0 = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.modelMenuRowHeight / 2)
         XCTAssertEqual(
             AreaSelectorView.modelMenuRowIndex(at: row0, forSelection: selection, in: bounds, itemCount: itemCount),
@@ -151,7 +153,7 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
             AreaSelectorView.modelMenuRowIndex(at: rowLast, forSelection: selection, in: bounds, itemCount: itemCount),
             itemCount - 1
         )
-        // A point inside the section header band is not a row.
+        // A point inside the top notice/header band is not a row.
         let inHeader = CGPoint(x: menu.midX, y: menu.minY + AreaSelectorView.menuVPad + 2)
         XCTAssertNil(
             AreaSelectorView.modelMenuRowIndex(at: inHeader, forSelection: selection, in: bounds, itemCount: itemCount)

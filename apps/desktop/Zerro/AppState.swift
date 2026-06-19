@@ -916,6 +916,25 @@ final class AppState {
         state == .recording || state == .wrappingUp || state == .autoStopped
     }
 
+    /// True while the screen-edge "agent is touching your machine" ring should
+    /// pulse — the single source of truth for `DevRingWindowController`. Bound
+    /// EXACTLY to the active agent-run window: from `.devAgentDispatching`
+    /// (emitted by `applyDevPhase(.dispatching)` — the instant the agent is
+    /// allowed to edit, AFTER the confirm gate resolves and the checkpoint is
+    /// taken, for BOTH permission modes) through `.devAgentRunning`. Hidden in
+    /// every other state: `.devCheckpointing` and `.reviewingPrompt` are BEFORE
+    /// dispatch, and `.devDone`/`.devFailed`/`.devReverting`/`.idle` are the
+    /// stop side (a completion, failure, cancel, or teardown drops `state` out
+    /// of this window, so the ring can never outlive the run). Deriving it from
+    /// `state` means every existing start/stop/cancel/revert path drives it for
+    /// free — no extra wiring in `applyDevPhase`/`applyDevOutcome`/teardown.
+    var devRingActive: Bool {
+        switch state {
+        case .devAgentDispatching, .devAgentRunning: return true
+        default: return false
+        }
+    }
+
     /// Total recording budget, pre-formatted for the pill timer chip.
     /// Matches the 180s threshold handleElapsedUpdate enforces.
     var totalDisplay: String { "3:00" }

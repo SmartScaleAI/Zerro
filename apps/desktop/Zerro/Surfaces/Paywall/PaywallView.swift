@@ -192,20 +192,28 @@ struct PaywallView: View {
     // MARK: - Options
 
     /// The option stack adapts to the entitlement (the consolidation target):
-    ///   • Managed   → top-up packs lead (the only purchasable thing left) +
-    ///                 a manage link. No re-sell of a plan they already have.
+    ///   • Managed   → ONLY the two top-up pack cards (the one purchasable
+    ///                 thing left). No re-sell, no manage link, no activate
+    ///                 field — a Managed user already holds the plan and a key.
     ///   • BYOK      → a manage link only (BYOK funds locally; no credits to
-    ///                 top up, no plan to upgrade to).
-    ///   • Trial/Expired → the plan sell: Managed + BYOK side by side.
-    /// The shared activation field is always present.
+    ///                 top up, no plan to upgrade to) + the activate field.
+    ///   • Trial/Expired → the plan sell: Managed + BYOK side by side + activate.
+    @ViewBuilder
     private var optionStack: some View {
-        VStack(spacing: VFSpacing.md) {
-            // Credit packs are Managed-only (decision §6): `.byok` carries no
-            // credit balance, and trial/expired buy a plan, not a top-up.
-            if case .managed = entitlements.state {
-                TopupPacksSection()
-            }
+        // Managed is its own self-contained surface: the two top-up packs and
+        // nothing else. Return early so none of the manage/activate affordances
+        // below render for this state.
+        if case .managed = entitlements.state {
+            TopupPacksRow()
+        } else {
+            nonManagedOptions
+        }
+    }
 
+    /// Everything for the non-Managed states (trial/expired/byok): the plan sell
+    /// cards (trial/expired), a manage link (byok), and the shared activate field.
+    private var nonManagedOptions: some View {
+        VStack(spacing: VFSpacing.md) {
             if showsPlanCards {
                 // The two plans SIDE BY SIDE (website pricing parity): Managed
                 // leads left — the recommended path, accent-highlighted — BYOK
@@ -442,7 +450,7 @@ private struct SubscriptionOptionCard: View {
 
             Spacer(minLength: VFSpacing.xs)
 
-            OnboardingPrimaryButton("Subscribe to \(title)", action: openCheckout)
+            OnboardingPrimaryButton("Subscribe to \(title)", tint: .vfDevAccent, action: openCheckout)
         }
     }
 
@@ -477,69 +485,100 @@ private struct ManagedPrivacyNote: View {
 
 // MARK: - Top-up packs (Managed only)
 
-/// The two one-time top-up packs (Boost · 200 · $10, Power · 500 · $22),
-/// surfaced in the paywall for a Managed user choosing "Add Credits". These
-/// used to live only in the menu-bar panel (`topupPackRow`); the menu-bar
-/// consolidation folded that prompt into the single "Upgrade" entry, so the
-/// paywall now owns the buy surface. Managed-only by construction — the caller
-/// gates on `.managed`, and BYOK/trial never reach it. A pack whose checkout
-/// link isn't configured yet resolves to `nil` and its chip is simply absent
-/// (the BillingLinks placeholder pattern).
-private struct TopupPacksSection: View {
+/// The Managed "Add Credits" surface: the two one-time top-up packs (Boost,
+/// Power) rendered as full side-by-side cards, mirroring the trial/expired
+/// plan-cards row (Managed + BYOK). Managed-only by construction — `optionStack`
+/// gates on `.managed`, and BYOK/trial never reach it.
+private struct TopupPacksRow: View {
     var body: some View {
-        OptionCardChrome(alignment: .leading) {
-            Text("Top-up packs")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.vfTextPrimary)
-            Text("Credits attach to your subscription instantly and carry over for 12 months.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: VFSpacing.sm) {
-                TopupChip(
-                    label: "Boost \u{00B7} 200 credits \u{00B7} $10",
-                    url: BillingLinks.boostTopupCheckoutURL,
-                    product: .topupBoost
-                )
-                TopupChip(
-                    label: "Power \u{00B7} 500 credits \u{00B7} $22",
-                    url: BillingLinks.powerTopupCheckoutURL,
-                    product: .topupPower
-                )
-            }
-            .padding(.top, VFSpacing.xs)
+        // Same side-by-side, equal-height pattern as the plan cards: both packs
+        // fill the taller card's natural height (`fillsHeight`) with their CTAs
+        // bottom-aligned, and the row sizes to content (no dead space).
+        HStack(alignment: .top, spacing: VFSpacing.md) {
+            // Boost — the smaller pack. Standard white CTA.
+            TopupPackCard(
+                name: "Boost",
+                price: "$10",
+                description: "200 credits added to your balance. Carries over for 12 months.",
+                ctaLabel: "Buy Boost",
+                url: BillingLinks.boostTopupCheckoutURL,
+                product: .topupBoost
+            )
+
+            // Power — the recommended pack: a "Best value" badge + the green CTA
+            // mark it as the lift, mirroring the Managed plan card's highlight.
+            TopupPackCard(
+                name: "Power",
+                price: "$22",
+                description: "500 credits added to your balance. Carries over for 12 months.",
+                ctaLabel: "Buy Power",
+                ctaTint: .vfDevAccent,
+                showsBestValue: true,
+                url: BillingLinks.powerTopupCheckoutURL,
+                product: .topupPower
+            )
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-/// A single top-up checkout chip. Fires `checkout_opened` (with the `paywall`
-/// placement tag, Tier 3 §0) and opens the custom-data-decorated URL. Absent
-/// when its checkout link is still a placeholder. Lifted out of the menu-bar
-/// panel so the paywall and any remaining caller share one chip.
-private struct TopupChip: View {
-    let label: String
+/// One Managed top-up pack as a full plan-style card — same `OptionCardChrome`
+/// footprint and bottom-pinned CTA as `BuyOnceCard`, so the two packs sit side
+/// by side at equal height. Fires `checkout_opened` (Tier 3 §0, `paywall`
+/// placement) and opens the custom-data-decorated URL. A pack whose checkout
+/// link is still a placeholder keeps its card but renders a disabled CTA (the
+/// `isEnabled` softening) rather than vanishing, so the two-card row keeps its
+/// shape.
+private struct TopupPackCard: View {
+    let name: String
+    let price: String
+    let description: String
+    let ctaLabel: String
+    /// Defaults to the standard white fill; the recommended (Power) pack passes
+    /// the Dev-Mode green.
+    var ctaTint: Color = .vfBrandAccent
+    var showsBestValue: Bool = false
     let url: URL?
     let product: BillingLinks.CheckoutProduct
 
     var body: some View {
-        if let url {
-            Button {
-                Analytics.capture("checkout_opened", [
-                    "product": product.rawValue,
-                    "placement": "paywall"
-                ])
-                NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
-            } label: {
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
+        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true) {
+            HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+                Text(name)
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
-                    .padding(.horizontal, VFSpacing.md)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
-                    .contentShape(Capsule())
+                if showsBestValue {
+                    BestValueBadge()
+                }
+                Spacer(minLength: VFSpacing.sm)
+                Text(price)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.vfTextPrimary)
             }
-            .buttonStyle(.plain)
+
+            Text(description)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: VFSpacing.xs)
+
+            OnboardingPrimaryButton(ctaLabel, isEnabled: url != nil, tint: ctaTint, action: openCheckout)
         }
+    }
+
+    private func openCheckout() {
+        guard let url else {
+            Log.billing.notice("paywall: \(product.rawValue) top-up checkout URL not configured yet (placeholder)")
+            return
+        }
+        Log.billing.notice("paywall: opening \(product.rawValue) top-up checkout")
+        Analytics.capture("checkout_opened", [
+            "product": product.rawValue,
+            "placement": "paywall"
+        ])
+        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
     }
 }
 
@@ -741,6 +780,21 @@ private struct MostPopularBadge: View {
             .padding(.horizontal, VFSpacing.sm)
             .padding(.vertical, 3)
             .background(Capsule(style: .continuous).fill(Color.vfBrandAccent.opacity(0.16)))
+            .fixedSize()
+    }
+}
+
+/// The Power pack's "Best value" chip — mirrors `MostPopularBadge`'s capsule
+/// footprint but in Dev-Mode green (`vfDevAccent`), pairing with the green "Buy
+/// Power" CTA so the highlight reads as one cue.
+private struct BestValueBadge: View {
+    var body: some View {
+        Text("Best value")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Color.vfDevAccent)
+            .padding(.horizontal, VFSpacing.sm)
+            .padding(.vertical, 3)
+            .background(Capsule(style: .continuous).fill(Color.vfDevAccent.opacity(0.16)))
             .fixedSize()
     }
 }

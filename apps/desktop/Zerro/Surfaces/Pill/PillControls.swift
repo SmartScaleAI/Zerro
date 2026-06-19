@@ -199,10 +199,10 @@ struct DevAcceptButton: View {
             Text("Accept")
                 .font(.system(size: compact ? 12 : 13, weight: .semibold))
                 .fixedSize()
-                .foregroundStyle(Color.white)
+                .foregroundStyle(Color.vfOnBrand)
                 .padding(.horizontal, compact ? 12 : PillMetrics.primaryHPad)
                 .padding(.vertical, compact ? 5 : PillMetrics.primaryVPad)
-                .background(Color.vfSuccessGreen, in: Capsule())
+                .background(Color.vfDevAccent, in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
