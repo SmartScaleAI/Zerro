@@ -35,8 +35,6 @@ struct AppBehaviorSection: View {
             SettingsRowDivider()
             CrashReportingRow()
             SettingsRowDivider()
-            ReviewBeforeApplyRow()
-            SettingsRowDivider()
             RerunOnboardingRow()
             SettingsRowDivider()
             ResetDefaultsRow()
@@ -72,30 +70,6 @@ private struct CrashReportingRow: View {
     }
 }
 
-// MARK: - Review Prompt Before Applying (Dev Mode, Phase 4)
-
-// Opt-in (default OFF): when on, a Dev Mode recording generates its prompt and
-// then pauses to show it for approval before the agent runs — Approve dispatches,
-// Cancel aborts with nothing touched. Off keeps the auto-apply "talk → watch it
-// change" path exactly as it is. A behavior preference, so it lives here rather
-// than in the dev-settings menu.
-
-private struct ReviewBeforeApplyRow: View {
-    @Environment(PreferencesStore.self) private var preferences
-
-    var body: some View {
-        @Bindable var preferences = preferences
-        SettingsRow(
-            label: "Review prompt before applying changes",
-            description: "In Dev Mode, pause after generating to show the prompt before the agent edits any files. Approve to apply, or Cancel to discard. Off applies changes automatically."
-        ) {
-            Toggle("Review prompt before applying changes", isOn: $preferences.devReviewBeforeApply)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(Color.vfSuccessGreen)
-        }
-    }
-}
 
 // MARK: - Launch at Login
 

@@ -56,8 +56,8 @@ final class DeixisResolverTests: XCTestCase {
 
         let a = DeixisResolver.resolve(words: words, cursorTrack: cursor).first { $0.phrase == "this" }
         XCTAssertNotNil(a)
-        // A pure transit yields a weak dwell signal — exactly what M6 routes to
-        // confirmAnchors rather than confidently editing.
+        // A pure transit yields a weak dwell signal — exactly what surfaces as a
+        // low-confidence (amber) target on the review card.
         XCTAssertLessThan(a!.dwellConfidence, 0.6, "transit must not read as a confident dwell")
     }
 

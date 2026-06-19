@@ -630,11 +630,14 @@ struct AreaSelectorView: View {
     static let devMenuGitLineHeight: CGFloat = 48
     /// The Model section caps at this many visible rows; beyond it the section
     /// becomes a scrollable viewport. Cursor lists ~25–30 curated models, which
-    /// would otherwise push the menu off the bottom of the screen. Chosen so the
-    /// whole panel (Agent + capped Model viewport + Project + git line) fits
-    /// within a typical `visibleFrame`. The Agent section stays full height (it's
-    /// only ~3 rows — no need to scroll it).
-    static let maxVisibleModelRows = 7
+    /// would otherwise push the menu off the bottom of the screen. Kept compact so
+    /// the whole panel (Agent + capped Model viewport + Permissions + Project + git
+    /// line) stays well within a typical `visibleFrame`. The Agent section stays
+    /// full height (it's only ~3 rows — no need to scroll it).
+    static let maxVisibleModelRows = 5
+    /// The Permissions section's fixed row count (Ask Permission / Auto Approve) —
+    /// the dev-settings menu's permission-mode picker, between Model and Project.
+    static let devPermissionRowCount = DevPermissionMode.allCases.count
 
     // MARK: Auto-Detect Project toggle row (Project section)
     //
@@ -662,6 +665,23 @@ struct AreaSelectorView: View {
     static let autoDetectInfoTooltip =
         "Auto-matches your project folder to the localhost site you’re recording, by reading your browser’s address. Turning this on asks for browser permission once."
 
+    // MARK: Permissions section header info icon
+    //
+    // The "Permissions" header carries an info glyph after its label (the same
+    // custom-tooltip mechanism as the Auto-Detect icon) explaining both modes in
+    // one place, so the rows themselves stay label-only.
+    static let permissionsHeaderLabel = "Permissions"
+    /// Width reserved for the "Permissions" header label (measured at the section-
+    /// header font, +2pt), shared by the renderer and the info-icon hit-test so the
+    /// glyph lands on its hover sub-rect.
+    static let permissionsHeaderLabelWidth: CGFloat =
+        ((permissionsHeaderLabel as NSString)
+            .size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width).rounded(.up) + 2
+    /// Custom-tooltip copy for the Permissions info icon. Shown via `tooltipInfo`/
+    /// `toolbarTooltip` (NOT `.help`, which can't fire through the overlay).
+    static let permissionInfoTooltip =
+        "Ask Permission shows the generated prompt for you to review before the agent edits any files. Auto Approve applies changes immediately."
+
     static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, fullScreen: Bool = false) -> CGRect {
         let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         // The Model section is CAPPED at `maxVisibleModelRows` (it scrolls beyond
@@ -670,11 +690,13 @@ struct AreaSelectorView: View {
         // count — see `devSettingsProjectRowFrame` / `devSettingsModelViewportRect`.
         let visibleModelRows = min(modelCount, maxVisibleModelRows)
         let height = menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent section
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight             // Agent section
             + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model section (capped)
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight        // Model section (capped)
             + devMenuDividerBand
-            + menuSectionHeaderHeight + 2 * devMenuRowHeight                           // Project section (Auto-Detect toggle + Change…)
+            + menuSectionHeaderHeight + CGFloat(devPermissionRowCount) * devMenuRowHeight   // Permissions section
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + 2 * devMenuRowHeight                                // Project section (Auto-Detect toggle + Change…)
             + devMenuDividerBand
             + devMenuGitLineHeight
             + menuVPad
@@ -748,10 +770,64 @@ struct AreaSelectorView: View {
         return index
     }
 
+    /// Index of the Permissions row under `point` (0 = Ask Permission, 1 = Auto
+    /// Approve), or nil if `point` is outside the Permissions section. The section
+    /// sits between Model and Project: below the Agent section + divider + CAPPED
+    /// Model viewport + divider + the Permissions header.
+    static func devSettingsPermissionRowIndex(
+        at point: CGPoint,
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> Int? {
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let visibleModelRows = min(modelCount, maxVisibleModelRows)
+        let top = frame.minY + menuVPad
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
+            + devMenuDividerBand
+            + menuSectionHeaderHeight                                                  // Permissions header
+        let localY = point.y - top
+        guard localY >= 0 else { return nil }
+        let idx = Int(localY / devMenuRowHeight)
+        guard idx >= 0, idx < devPermissionRowCount else { return nil }
+        return idx
+    }
+
+    /// The info-icon hover sub-rect inside the Permissions HEADER: immediately after
+    /// the (measured) "Permissions" label. The controller hit-tests this on
+    /// mouse-move to drive the custom tooltip explaining both modes. The x uses the
+    /// SAME `permissionsHeaderLabelWidth` the renderer reserves, so the rect and the
+    /// drawn glyph stay in lockstep.
+    static func devSettingsPermissionInfoIconRect(
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        fullScreen: Bool = false
+    ) -> CGRect {
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let visibleModelRows = min(modelCount, maxVisibleModelRows)
+        // Top of the Permissions header band.
+        let headerTop = frame.minY + menuVPad
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
+            + devMenuDividerBand
+        let x = frame.minX + devMenuRowHPad + permissionsHeaderLabelWidth + autoDetectInfoGap
+        // The header label is bottom-aligned in its band (4pt bottom inset); center
+        // the icon on the label's vertical band.
+        let y = headerTop + menuSectionHeaderHeight - 4 - autoDetectInfoIconSize
+        return CGRect(x: x, y: y, width: autoDetectInfoIconSize, height: autoDetectInfoIconSize)
+    }
+
     /// Frame of the Auto-Detect Project toggle row — the FIRST row of the Project
     /// section, directly under the "Project" header (above the folder/"Change…"
     /// row). Clicking it flips `devAutoDetectProject`. Sits below the CAPPED Model
-    /// viewport (header + `min(modelCount, maxVisibleModelRows)` rows + divider).
+    /// viewport + the Permissions section (header + 2 rows) + their dividers.
     static func devSettingsAutoDetectRowFrame(
         forSelection rect: CGRect,
         in bounds: CGSize,
@@ -762,11 +838,13 @@ struct AreaSelectorView: View {
         let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
         let visibleModelRows = min(modelCount, maxVisibleModelRows)
         let y = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight             // Agent
             + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight        // Model (capped)
             + devMenuDividerBand
-            + menuSectionHeaderHeight                                                  // Project header
+            + menuSectionHeaderHeight + CGFloat(devPermissionRowCount) * devMenuRowHeight   // Permissions
+            + devMenuDividerBand
+            + menuSectionHeaderHeight                                                       // Project header
         return CGRect(x: frame.minX, y: y, width: frame.width, height: devMenuRowHeight)
     }
 
@@ -1007,6 +1085,16 @@ struct AreaSelectorView: View {
 
                     devMenuDivider
 
+                    // Permissions section: how a Dev Mode dispatch handles the
+                    // pre-edit checkpoint — Ask Permission (review the prompt first)
+                    // or Auto Approve (dispatch immediately). The SOLE pre-edit gate.
+                    // The header's info icon explains both modes (no per-row text).
+                    devPermissionsSectionHeader
+                    devPermissionRow(.askPermission, index: 0)
+                    devPermissionRow(.autoApprove, index: 1)
+
+                    devMenuDivider
+
                     // Project section: the Auto-Detect toggle (the opt-in that
                     // requests browser permission) leads, then the folder / "Change…"
                     // row beneath it.
@@ -1136,6 +1224,62 @@ struct AreaSelectorView: View {
         .background(menuRowHighlight(highlighted))
     }
 
+    /// The "Permissions" section header with a trailing info glyph. Same
+    /// fixed-height frame as `menuSectionHeader` (the row hit-test math below
+    /// depends on it), with the label pinned to `permissionsHeaderLabelWidth` so
+    /// the glyph lands on its hover sub-rect (`devSettingsPermissionInfoIconRect`).
+    /// The glyph's `.help` can't fire through the overlay, so hover drives the
+    /// custom tooltip via the controller (mirrors the Auto-Detect info icon).
+    private var devPermissionsSectionHeader: some View {
+        HStack(spacing: 0) {
+            Text(Self.permissionsHeaderLabel)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.vfTextTertiary)
+                .frame(width: Self.permissionsHeaderLabelWidth, alignment: .leading)
+            Image(systemName: "info.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .frame(width: Self.autoDetectInfoIconSize, height: Self.autoDetectInfoIconSize)
+                .padding(.leading, Self.autoDetectInfoGap)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Self.devMenuRowHPad)
+        .padding(.bottom, 4)
+        .frame(height: Self.menuSectionHeaderHeight, alignment: .bottom)
+    }
+
+    /// One Permissions-section row: green checkmark on the active mode, a mode
+    /// icon, the title. Mirrors `devAgentRow` / `devModelRow` (CleanShot style).
+    /// What each mode does is explained by the section header's info-icon tooltip
+    /// (no per-row descriptor). `index` matches the controller's
+    /// `devSettingsPermissionRowIndex` hit-test, so render == hit-test.
+    private func devPermissionRow(_ mode: DevPermissionMode, index: Int) -> some View {
+        let active = state.devPermissionMode == mode
+        let highlighted = state.highlightedDevPermissionIndex == index || active
+        return HStack(spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.vfDevAccent)   // green check on the active mode
+                .opacity(active ? 1 : 0)
+                .frame(width: 16)
+            Image(systemName: mode == .askPermission ? "hand.raised" : "bolt")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextSecondary)
+                // Fixed width so the two differently-sized glyphs (hand vs bolt)
+                // don't shift their labels — "Ask Permission"/"Auto Approve" align.
+                .frame(width: 16)
+            Text(mode == .askPermission ? "Ask Permission" : "Auto Approve")
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: Self.devMenuRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(menuRowHighlight(highlighted))
+    }
+
     /// The Auto-Detect Project toggle row: the label, an info icon (custom-tooltip
     /// only — `.help` can't fire in this overlay), and a mini switch reflecting
     /// `autoDetectProjectEnabled`. The whole row is one click target (the controller
@@ -1198,7 +1342,9 @@ struct AreaSelectorView: View {
             // localhost port, a subtle accent badge says why (overridable via
             // "Change…").
             if state.projectAutoMatchedFromPort, let port = state.detectedLocalhostPort {
-                Text("localhost:\(port)")
+                // `String(port)` so the LocalizedStringKey interpolation doesn't
+                // apply the locale's thousands separator (e.g. "localhost:5,173").
+                Text("localhost:\(String(port))")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.vfDevAccent)
                     .padding(.horizontal, 6)
@@ -1389,11 +1535,21 @@ struct AreaSelectorView: View {
         let fs = state.mode == .fullScreen
         let dev = state.isDevMode
 
-        // While the dev-settings menu is open, the ONLY tooltip is the Auto-Detect
-        // info icon's — the toolbar control tooltips are suppressed (they'd collide
-        // with the open menu).
+        // While the dev-settings menu is open, the only tooltips are the in-menu
+        // info icons' (Permissions header + Auto-Detect toggle) — the toolbar
+        // control tooltips are suppressed (they'd collide with the open menu).
         if state.isDevSettingsMenuOpen {
-            guard dev, state.isAutoDetectInfoHovered else { return nil }
+            guard dev else { return nil }
+            if state.isPermissionInfoHovered {
+                let anchor = Self.devSettingsPermissionInfoIconRect(
+                    forSelection: rect, in: bounds,
+                    agentCount: state.devAgentMenuItems.count,
+                    modelCount: state.devModelMenuItems.count,
+                    fullScreen: fs
+                )
+                return (Self.permissionInfoTooltip, anchor, 240)
+            }
+            guard state.isAutoDetectInfoHovered else { return nil }
             let anchor = Self.devSettingsAutoDetectInfoIconRect(
                 forSelection: rect, in: bounds,
                 agentCount: state.devAgentMenuItems.count,

@@ -2,10 +2,15 @@
 //  DevConfirmGateTests.swift
 //  ZerroTests
 //
-//  Dev Mode (Phase 2, Milestone 6) — the confidence combine + confirmAnchors
-//  gate logic. Pins: combined = min(client, model) WHEN a model anchor exists,
-//  else the client signal alone (never min'd against a missing value); any low
-//  combined → needs confirm; the confirm card's labels prefer the model label.
+//  Dev Mode anchor resolution — the confidence combine that drives the review
+//  card's low-confidence (amber) target flag. Pins: combined = min(client, model)
+//  WHEN a model anchor exists, else the client signal alone (never min'd against a
+//  missing value); any low combined → that target row is flagged `isLow`; the
+//  review card's labels prefer the model label, then OCR, then the spoken phrase.
+//
+//  (The low-confidence anchor-CONFIRM gate was removed — resolution no longer
+//  pauses the dispatch. The signal lives on only as the review card's amber flag
+//  + the resolution analytics, which these tests cover via `devConfirmAnchorSummaries`.)
 //
 
 import XCTest
@@ -32,27 +37,33 @@ final class DevConfirmGateTests: XCTestCase {
                   currentState: nil, modelConfidence: confidence, altCandidates: [])
     }
 
-    func testAllHighNeedsNoConfirm() {
+    /// True when ANY resolved target is low-confidence (the review card flags it
+    /// amber). Reads the same derived summary the card + analytics consume.
+    private func hasLow(_ app: AppState) -> Bool {
+        app.devConfirmAnchorSummaries.contains { $0.isLow }
+    }
+
+    func testAllHighNoLowFlag() {
         let app = AppState()
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.9), resolved(ref: 1, clientConfidence: 0.8)]
         app.devModelAnchors = [model(ref: 0, label: "Get started", confidence: 0.9), model(ref: 1, label: "Pricing", confidence: 0.8)]
-        XCTAssertFalse(app.devNeedsConfirm, "all high/medium → dispatch immediately")
+        XCTAssertFalse(hasLow(app), "all high/medium → no target flagged low")
     }
 
-    func testLowClientNeedsConfirm() {
+    func testLowClientFlagsLow() {
         let app = AppState()
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.1)] // transit/empty
         app.devModelAnchors = [model(ref: 0, label: "x", confidence: 0.95)]
-        // min(0.1, 0.95) = 0.1 < threshold → confirm.
-        XCTAssertTrue(app.devNeedsConfirm)
+        // min(0.1, 0.95) = 0.1 < threshold → flagged low.
+        XCTAssertTrue(hasLow(app))
     }
 
-    func testLowModelNeedsConfirmEvenWithHighClient() {
+    func testLowModelFlagsLowEvenWithHighClient() {
         let app = AppState()
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.9)]
         app.devModelAnchors = [model(ref: 0, label: nil, confidence: 0.2)] // model unsure
-        // min(0.9, 0.2) = 0.2 < threshold → confirm (OCR/vision disagreement).
-        XCTAssertTrue(app.devNeedsConfirm)
+        // min(0.9, 0.2) = 0.2 < threshold → flagged low (OCR/vision disagreement).
+        XCTAssertTrue(hasLow(app))
     }
 
     func testNoModelAnchorFallsBackToClientAloneNotMinAgainstMissing() {
@@ -61,11 +72,11 @@ final class DevConfirmGateTests: XCTestCase {
         // min against a missing/zero value.
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.9)]
         app.devModelAnchors = []
-        XCTAssertFalse(app.devNeedsConfirm, "absent model anchor → client confidence alone")
+        XCTAssertFalse(hasLow(app), "absent model anchor → client confidence alone")
 
-        // And a low client with no model still confirms.
+        // And a low client with no model still flags low.
         app.devResolvedAnchors = [resolved(ref: 0, clientConfidence: 0.2)]
-        XCTAssertTrue(app.devNeedsConfirm)
+        XCTAssertTrue(hasLow(app))
     }
 
     func testConfirmSummariesPreferModelLabelThenOCRThenPhrase() {

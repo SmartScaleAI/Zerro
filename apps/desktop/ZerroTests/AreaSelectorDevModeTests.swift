@@ -142,6 +142,43 @@ final class AreaSelectorDevModeTests: XCTestCase {
         )
     }
 
+    func testDevSettingsPermissionRowsSitBetweenModelAndProjectAndHitTestDisjoint() {
+        let agentCount = 3
+        let modelCount = 2
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        // The Permissions section sits after Agent + divider + Model + divider + its
+        // own header — between Model and Project.
+        let permTop = menu.minY + AreaSelectorView.menuVPad
+            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
+            + AreaSelectorView.devMenuDividerBand
+            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(modelCount) * AreaSelectorView.devMenuRowHeight
+            + AreaSelectorView.devMenuDividerBand
+            + AreaSelectorView.menuSectionHeaderHeight
+        // Both rows hit-test to their index (0 = Ask Permission, 1 = Auto Approve).
+        let row0 = CGPoint(x: menu.midX, y: permTop + AreaSelectorView.devMenuRowHeight / 2)
+        let row1 = CGPoint(x: menu.midX, y: permTop + AreaSelectorView.devMenuRowHeight * 1.5)
+        XCTAssertEqual(
+            AreaSelectorView.devSettingsPermissionRowIndex(at: row0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            0
+        )
+        XCTAssertEqual(
+            AreaSelectorView.devSettingsPermissionRowIndex(at: row1, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            1
+        )
+        // A permission row is NOT an agent/model/project row (sections are disjoint).
+        for p in [row0, row1] {
+            XCTAssertNil(AreaSelectorView.devSettingsAgentRowIndex(at: p, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+                         "a permission row must not register as an agent row")
+            XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: p, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+                         "a permission row must not register as a model row")
+        }
+        // The Project section's Auto-Detect row must sit BELOW the Permissions rows.
+        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertGreaterThanOrEqual(auto.minY, permTop + CGFloat(AreaSelectorView.devPermissionRowCount) * AreaSelectorView.devMenuRowHeight)
+        XCTAssertNil(AreaSelectorView.devSettingsPermissionRowIndex(at: CGPoint(x: auto.midX, y: auto.midY), forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+                     "the Auto-Detect row must not register as a permission row")
+    }
+
     func testDevSettingsProjectRowIsBelowModelSectionAndDisjoint() {
         let agentCount = 3
         let modelCount = 2
@@ -176,11 +213,13 @@ final class AreaSelectorDevModeTests: XCTestCase {
         let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
         let v = AreaSelectorView.self
         let expected = v.menuVPad
-            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight        // Agent
+            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight             // Agent
             + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + CGFloat(modelCount) * v.devMenuRowHeight          // Model (≤ cap)
+            + v.menuSectionHeaderHeight + CGFloat(modelCount) * v.devMenuRowHeight              // Model (≤ cap)
             + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                            // Project: toggle + Change…
+            + v.menuSectionHeaderHeight + CGFloat(v.devPermissionRowCount) * v.devMenuRowHeight // Permissions
+            + v.devMenuDividerBand
+            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                               // Project: toggle + Change…
             + v.devMenuDividerBand
             + v.devMenuGitLineHeight
             + v.menuVPad
@@ -245,6 +284,56 @@ final class AreaSelectorDevModeTests: XCTestCase {
         XCTAssertEqual(info?.anchor, expectedAnchor)
 
         state.setAutoDetectInfoHovered(false)
+        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
+                     "no tooltip while the menu is open and the icon isn't hovered")
+    }
+
+    /// The Permissions info-icon hover sub-rect sits inside the Permissions header
+    /// band (between the Model section and the first permission row), immediately
+    /// after the reserved label width.
+    func testDevSettingsPermissionInfoIconWithinHeaderAfterLabel() {
+        let agentCount = 3, modelCount = 2
+        let v = AreaSelectorView.self
+        let frame = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let visibleModelRows = min(modelCount, v.maxVisibleModelRows)
+        let headerTop = frame.minY + v.menuVPad
+            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight
+            + v.devMenuDividerBand
+            + v.menuSectionHeaderHeight + CGFloat(visibleModelRows) * v.devMenuRowHeight
+            + v.devMenuDividerBand
+        let icon = v.devSettingsPermissionInfoIconRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertEqual(icon.minX, frame.minX + v.devMenuRowHPad + v.permissionsHeaderLabelWidth + v.autoDetectInfoGap, accuracy: 0.001)
+        XCTAssertEqual(icon.width, v.autoDetectInfoIconSize, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(icon.minY, headerTop, "the icon sits within the header band")
+        XCTAssertLessThanOrEqual(icon.maxY, headerTop + v.menuSectionHeaderHeight, "…and not into the first permission row")
+        // It must NOT register as a permission row (the header is above the rows).
+        XCTAssertNil(
+            v.devSettingsPermissionRowIndex(at: CGPoint(x: icon.midX, y: icon.midY), forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
+            "the header info icon must not hit-test as a permission row"
+        )
+    }
+
+    /// Hovering the Permissions info icon while the menu is open resolves the
+    /// both-modes explanation anchored to the icon (multi-line variant); not
+    /// hovering resolves nothing.
+    func testPermissionInfoTooltipResolvesWhenHoveredInOpenMenu() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        XCTAssertTrue(state.isDevSettingsMenuOpen)
+        state.setPermissionInfoHovered(true)
+
+        let view = AreaSelectorView(state: state)
+        let info = view.tooltipInfo(forSelection: selection, in: bounds)
+        XCTAssertEqual(info?.text, AreaSelectorView.permissionInfoTooltip)
+        XCTAssertNotNil(info?.maxWidth, "the info tooltip uses the multi-line variant")
+        let expectedAnchor = AreaSelectorView.devSettingsPermissionInfoIconRect(
+            forSelection: selection, in: bounds,
+            agentCount: state.devAgentMenuItems.count, modelCount: state.devModelMenuItems.count
+        )
+        XCTAssertEqual(info?.anchor, expectedAnchor)
+
+        state.setPermissionInfoHovered(false)
         XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
                      "no tooltip while the menu is open and the icon isn't hovered")
     }

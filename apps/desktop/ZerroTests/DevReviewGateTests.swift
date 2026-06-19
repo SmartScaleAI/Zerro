@@ -2,14 +2,15 @@
 //  DevReviewGateTests.swift
 //  ZerroTests
 //
-//  Dev Mode (Phase 4) — the opt-in review-before-apply gate. Pins:
-//   • Pref defaults OFF, persists, and is resettable.
-//   • OFF ⇒ `awaitReviewApproval` returns true WITHOUT entering `.reviewingPrompt`
-//     (the auto-apply path is byte-identical to before).
-//   • ON ⇒ enters `.reviewingPrompt`; Approve → dispatch proceeds; Cancel → aborts
-//     to idle with the gate resolving false (the agent never runs).
-//   • Composition: confirmAnchors resolves FIRST, then reviewingPrompt; approving
-//     both dispatches; cancelling review aborts.
+//  Dev Mode — the Ask Permission review gate (the SOLE pre-edit checkpoint). Pins:
+//   • `devPermissionMode` defaults `.autoApprove`, persists, is resettable, and
+//     migrates the legacy `devReviewBeforeApply` Bool (true → .askPermission).
+//   • `.autoApprove` ⇒ `awaitReviewApproval` returns true WITHOUT entering
+//     `.reviewingPrompt` (the auto-apply path is byte-identical to before).
+//   • `.askPermission` ⇒ enters `.reviewingPrompt`; Approve → dispatch proceeds;
+//     Cancel → aborts to idle with the gate resolving false (the agent never runs).
+//   • No confirmAnchors: a low-confidence anchor no longer pauses — it dispatches
+//     under `.autoApprove`, or shows ONLY the review card under `.askPermission`.
 //   • Teardown: a reset/quit while `.reviewingPrompt` resolves the continuation
 //     false (no hang) and discards the checkpoint/marker.
 //   • Bridge: `.reviewingPrompt` maps to `.reviewPrompt(agent:targets:prompt:)`.
@@ -23,53 +24,74 @@ final class DevReviewGateTests: XCTestCase {
 
     // MARK: - Preference
 
-    func testReviewBeforeApplyDefaultsOffPersistsAndResets() {
+    func testPermissionModeDefaultsAutoApprovePersistsAndResets() {
         let defaults = UserDefaults.ephemeralPreview()
         let prefs = PreferencesStore(defaults: defaults)
-        // Default OFF is the whole point — the headline auto-apply path is intact.
-        XCTAssertFalse(prefs.devReviewBeforeApply, "review-before-apply defaults OFF")
-        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.devReviewBeforeApply))
+        // Default Auto Approve is the whole point — the headline auto-apply path is intact.
+        XCTAssertEqual(prefs.devPermissionMode, .autoApprove, "permission mode defaults to Auto Approve")
+        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.devPermissionMode))
 
-        prefs.devReviewBeforeApply = true
+        prefs.devPermissionMode = .askPermission
         // Persists across stores over the same defaults.
-        XCTAssertTrue(PreferencesStore(defaults: defaults).devReviewBeforeApply, "the toggle persists")
+        XCTAssertEqual(PreferencesStore(defaults: defaults).devPermissionMode, .askPermission, "the mode persists")
 
         prefs.resetToDefaults()
-        XCTAssertFalse(prefs.devReviewBeforeApply, "reset restores default OFF")
+        XCTAssertEqual(prefs.devPermissionMode, .autoApprove, "reset restores default Auto Approve")
     }
 
-    // MARK: - Gate OFF (no behavior change)
+    func testMigratesLegacyReviewBeforeApplyBool() {
+        // A store that only ever wrote the old Bool (true) migrates to Ask Permission.
+        let onDefaults = UserDefaults.ephemeralPreview()
+        onDefaults.set(true, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
+        XCTAssertEqual(PreferencesStore(defaults: onDefaults).devPermissionMode, .askPermission,
+                       "legacy true → .askPermission")
 
-    func testGateOffReturnsTrueWithoutEnteringReview() async {
+        // The old Bool false → Auto Approve (the default behavior).
+        let offDefaults = UserDefaults.ephemeralPreview()
+        offDefaults.set(false, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
+        XCTAssertEqual(PreferencesStore(defaults: offDefaults).devPermissionMode, .autoApprove,
+                       "legacy false → .autoApprove")
+
+        // The NEW key wins over a stale legacy Bool when both are present.
+        let bothDefaults = UserDefaults.ephemeralPreview()
+        bothDefaults.set(true, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
+        bothDefaults.set(DevPermissionMode.autoApprove.rawValue, forKey: PreferencesStore.Keys.devPermissionMode)
+        XCTAssertEqual(PreferencesStore(defaults: bothDefaults).devPermissionMode, .autoApprove,
+                       "the explicit new value wins over the legacy Bool")
+    }
+
+    // MARK: - Auto Approve (no behavior change)
+
+    func testAutoApproveReturnsTrueWithoutEnteringReview() async {
         let app = AppState()
-        let prefs = PreferencesStore(defaults: .ephemeralPreview()) // OFF by default
+        let prefs = PreferencesStore(defaults: .ephemeralPreview()) // .autoApprove by default
         app.preferences = prefs
 
         let proceed = await app.awaitReviewApproval(gen: 0, prompt: "do X")
-        XCTAssertTrue(proceed, "OFF ⇒ instant pass")
-        XCTAssertNotEqual(app.state, .reviewingPrompt, "OFF must never enter the review state")
-        XCTAssertTrue(app.devReviewPromptText.isEmpty, "OFF must not stash the prompt")
+        XCTAssertTrue(proceed, "Auto Approve ⇒ instant pass")
+        XCTAssertNotEqual(app.state, .reviewingPrompt, "Auto Approve must never enter the review state")
+        XCTAssertTrue(app.devReviewPromptText.isEmpty, "Auto Approve must not stash the prompt")
         _ = prefs // keep the weakly-held store alive for the call
     }
 
     func testGateWithNilPreferencesReturnsTrue() async {
-        // No preferences wired (the fail-safe path) ⇒ treated as OFF.
+        // No preferences wired (the fail-safe path) ⇒ treated as Auto Approve.
         let app = AppState()
         let proceed = await app.awaitReviewApproval(gen: 0, prompt: "do X")
         XCTAssertTrue(proceed)
         XCTAssertNotEqual(app.state, .reviewingPrompt)
     }
 
-    // MARK: - Gate ON
+    // MARK: - Ask Permission
 
-    func testGateOnEntersReviewThenApproveProceeds() async {
+    func testAskPermissionEntersReviewThenApproveProceeds() async {
         let app = AppState()
-        let prefs = onPrefs()
+        let prefs = askPrefs()
         app.preferences = prefs
 
         let task = Task { await app.awaitReviewApproval(gen: 0, prompt: "do X") }
         await settle { app.state == .reviewingPrompt }
-        XCTAssertEqual(app.state, .reviewingPrompt, "ON ⇒ pauses on the review card")
+        XCTAssertEqual(app.state, .reviewingPrompt, "Ask Permission ⇒ pauses on the review card")
         XCTAssertEqual(app.devReviewPromptText, "do X", "the exact prompt is shown")
 
         app.approveReviewAndProceed()
@@ -80,9 +102,9 @@ final class DevReviewGateTests: XCTestCase {
         _ = prefs // retain
     }
 
-    func testGateOnCancelAbortsToIdle() async {
+    func testAskPermissionCancelAbortsToIdle() async {
         let app = AppState()
-        let prefs = onPrefs()
+        let prefs = askPrefs()
         app.preferences = prefs
 
         let task = Task { await app.awaitReviewApproval(gen: 0, prompt: "do X") }
@@ -107,54 +129,38 @@ final class DevReviewGateTests: XCTestCase {
         XCTAssertEqual(app.state, .idle, "resolvers are no-ops outside .reviewingPrompt")
     }
 
-    // MARK: - Composition with confirmAnchors
+    // MARK: - No confirmAnchors (a low-confidence anchor never pauses on its own)
 
-    func testCompositionAnchorsResolveFirstThenReview() async {
+    func testLowConfidenceAnchorUnderAutoApproveDoesNotPause() async {
         let app = AppState()
-        let prefs = onPrefs()
+        let prefs = PreferencesStore(defaults: .ephemeralPreview()) // .autoApprove
         app.preferences = prefs
-        // A low-confidence anchor forces the confirmAnchors gate.
+        // A low-confidence anchor used to force a separate confirm gate; it must
+        // now resolve and dispatch with no pre-edit pause.
         app.devResolvedAnchors = [lowConfidenceAnchor()]
 
-        // Replicate the dispatch's composed confirmGate: anchors FIRST, then review.
-        let task = Task { () -> Bool in
-            guard await app.awaitAnchorConfirmation(gen: 0) else { return false }
-            return await app.awaitReviewApproval(gen: 0, prompt: "do X")
-        }
-
-        await settle { app.state == .confirmAnchors }
-        XCTAssertEqual(app.state, .confirmAnchors, "anchors resolve first")
-
-        app.confirmAnchorsAndProceed()
-        await settle { app.state == .reviewingPrompt }
-        XCTAssertEqual(app.state, .reviewingPrompt, "then the review gate")
-
-        app.approveReviewAndProceed()
-        let proceed = await task.value
-        XCTAssertTrue(proceed, "approving both ⇒ dispatch")
+        let proceed = await app.awaitReviewApproval(gen: 0, prompt: "do X")
+        XCTAssertTrue(proceed, "Auto Approve ⇒ a low-confidence anchor still dispatches immediately")
+        XCTAssertNotEqual(app.state, .reviewingPrompt, "no pre-edit pause under Auto Approve")
         _ = prefs
     }
 
-    func testCompositionCancellingReviewAborts() async {
+    func testLowConfidenceAnchorUnderAskPermissionShowsOnlyReview() async {
         let app = AppState()
-        let prefs = onPrefs()
+        let prefs = askPrefs()
         app.preferences = prefs
         app.devResolvedAnchors = [lowConfidenceAnchor()]
 
-        let task = Task { () -> Bool in
-            guard await app.awaitAnchorConfirmation(gen: 0) else { return false }
-            return await app.awaitReviewApproval(gen: 0, prompt: "do X")
-        }
-
-        await settle { app.state == .confirmAnchors }
-        app.confirmAnchorsAndProceed()
+        // The review card is the SINGLE pre-edit checkpoint — even with a low
+        // anchor, the dispatch lands directly on `.reviewingPrompt` (no separate
+        // confirm state), and approving it dispatches.
+        let task = Task { await app.awaitReviewApproval(gen: 0, prompt: "do X") }
         await settle { app.state == .reviewingPrompt }
+        XCTAssertEqual(app.state, .reviewingPrompt, "the review card is the only pre-edit gate")
 
-        app.cancelReview()
+        app.approveReviewAndProceed()
         let proceed = await task.value
-        XCTAssertFalse(proceed, "cancelling review ⇒ abort")
-        await settle { app.state == .idle }
-        XCTAssertEqual(app.state, .idle)
+        XCTAssertTrue(proceed, "approving the single review gate ⇒ dispatch")
         _ = prefs
     }
 
@@ -162,7 +168,7 @@ final class DevReviewGateTests: XCTestCase {
 
     func testResetWhileReviewingResolvesFalseAndIdles() async {
         let app = AppState()
-        let prefs = onPrefs()
+        let prefs = askPrefs()
         app.preferences = prefs
         app.recordingIsDevMode = true
 
@@ -181,8 +187,8 @@ final class DevReviewGateTests: XCTestCase {
     func testQuitAtReviewingPromptDiscardsAndLeavesNoMarker() {
         let app = AppState()
         app.devRecoveryStore = DevRecoveryStore(fileURL: makeTempFile())
-        // Even if a marker somehow existed at the gate (it can, when
-        // confirmAnchorsAndProceed ran first), the .reviewingPrompt quit branch
+        // Even if a marker somehow existed at the gate (approveReviewAndProceed
+        // persists one before the dispatch flip), the .reviewingPrompt quit branch
         // discards the snapshot and clears it — no marker may survive pointing at
         // a discarded snapshot.
         app.devRecoveryStore.save(sampleMarker())
@@ -214,9 +220,9 @@ final class DevReviewGateTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func onPrefs() -> PreferencesStore {
+    private func askPrefs() -> PreferencesStore {
         let prefs = PreferencesStore(defaults: .ephemeralPreview())
-        prefs.devReviewBeforeApply = true
+        prefs.devPermissionMode = .askPermission
         return prefs
     }
 

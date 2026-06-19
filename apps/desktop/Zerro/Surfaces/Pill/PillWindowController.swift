@@ -341,11 +341,7 @@ private struct PillHostView: View {
             // checkpoint, or re-dispatch the same prompt.
             onDevRevert: { appState.revertDevDispatch() },
             onDevRetry: { appState.retryDevDispatch() },
-            // Dev Mode (M6) confirmAnchors gate: Confirm proceeds with the
-            // dispatch; Cancel aborts before the agent runs (safe teardown).
-            onConfirmAnchors: { appState.confirmAnchorsAndProceed() },
-            onDeclineAnchors: { appState.declineAnchors() },
-            // Dev Mode (Phase 4) review-before-apply gate: Approve dispatches the
+            // Dev Mode Ask Permission review gate: Approve dispatches the
             // shown prompt; Cancel aborts before the agent runs (safe teardown).
             onApproveReview: { appState.approveReviewAndProceed() },
             onCancelReview: { appState.cancelReview() },

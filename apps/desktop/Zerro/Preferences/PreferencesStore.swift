@@ -59,12 +59,17 @@ final class PreferencesStore {
         /// One-time: the post-denial explainer has been shown.
         static let localhostDenialNoteShown = "vf.dev.localhostDenialNoteShown"
 
-        // Dev Mode (Phase 4) — review-before-apply.
-        /// Opt-in (default OFF): pause a Dev Mode dispatch on a review card showing
-        /// the generated prompt before any file change. Off → the auto-apply path
-        /// is byte-identical to today. A behavior preference (surfaced in App
-        /// Behavior settings), not agent/model/project-specific.
-        static let devReviewBeforeApply = "vf.dev.reviewBeforeApply"
+        // Dev Mode — permissions (pre-edit checkpoint).
+        /// How a Dev Mode dispatch handles the pre-edit checkpoint: `.askPermission`
+        /// pauses on a review card showing the generated prompt before any file
+        /// change; `.autoApprove` (default) dispatches immediately. The SOLE
+        /// pre-edit gate. Persisted as `DevPermissionMode.rawValue`. Surfaced in the
+        /// dev-settings menu, not agent/model/project-specific.
+        static let devPermissionMode = "vf.dev.permissionMode"
+        /// Legacy (Phase 4 v1) review-before-apply Bool, folded into
+        /// `devPermissionMode` (true → `.askPermission`). Read only by the one-time
+        /// migration in `init`; no longer written.
+        static let legacyDevReviewBeforeApply = "vf.dev.reviewBeforeApply"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -82,7 +87,8 @@ final class PreferencesStore {
             devProjectByPort,
             devAutoDetectProject,
             localhostDenialNoteShown,
-            devReviewBeforeApply,
+            devPermissionMode,
+            legacyDevReviewBeforeApply,
         ]
     }
 
@@ -212,14 +218,15 @@ final class PreferencesStore {
         didSet { defaults.set(hasShownLocalhostDenialNote, forKey: Keys.localhostDenialNoteShown) }
     }
 
-    // MARK: - Dev Mode (Phase 4) — review-before-apply
+    // MARK: - Dev Mode — permissions
 
-    /// Opt-in (default OFF): when on, a Dev Mode dispatch pauses to show the
-    /// generated prompt for approval before any file change (Approve dispatches,
-    /// Cancel aborts with nothing touched). Off → the auto-apply "talk → watch it
-    /// change" path is byte-identical to today. Read fresh at the dispatch gate.
-    var devReviewBeforeApply: Bool {
-        didSet { defaults.set(devReviewBeforeApply, forKey: Keys.devReviewBeforeApply) }
+    /// How a Dev Mode dispatch handles the pre-edit checkpoint. `.askPermission`
+    /// pauses to show the generated prompt for approval before any file change
+    /// (Approve dispatches, Cancel aborts with nothing touched); `.autoApprove`
+    /// (default) keeps the auto-apply "talk → watch it change" path byte-identical
+    /// to today. Read fresh at the dispatch gate. The SOLE pre-edit checkpoint.
+    var devPermissionMode: DevPermissionMode {
+        didSet { defaults.set(devPermissionMode.rawValue, forKey: Keys.devPermissionMode) }
     }
 
     // MARK: - Init
@@ -255,9 +262,18 @@ final class PreferencesStore {
         // browser is never read until the user opts in via the dev-settings toggle.
         self.devAutoDetectProject = defaults.bool(forKey: Keys.devAutoDetectProject)
         self.hasShownLocalhostDenialNote = defaults.bool(forKey: Keys.localhostDenialNoteShown)
-        // Default OFF: the auto-apply path stays the headline experience until the
-        // user opts into a look-before-apply via the App Behavior toggle.
-        self.devReviewBeforeApply = defaults.bool(forKey: Keys.devReviewBeforeApply)
+        // Default `.autoApprove`: the auto-apply path stays the headline experience
+        // until the user opts into Ask Permission in the dev-settings menu. Migrate
+        // the old `devReviewBeforeApply` Bool once if present (true → .askPermission).
+        if let raw = defaults.string(forKey: Keys.devPermissionMode),
+           let mode = DevPermissionMode(rawValue: raw) {
+            self.devPermissionMode = mode
+        } else if defaults.object(forKey: Keys.legacyDevReviewBeforeApply) != nil {
+            self.devPermissionMode = defaults.bool(forKey: Keys.legacyDevReviewBeforeApply)
+                ? .askPermission : .autoApprove
+        } else {
+            self.devPermissionMode = .autoApprove
+        }
     }
 
     // MARK: - Reset
@@ -283,6 +299,18 @@ final class PreferencesStore {
         devProjectByPort = [:]
         devAutoDetectProject = false
         hasShownLocalhostDenialNote = false
-        devReviewBeforeApply = false
+        devPermissionMode = .autoApprove
     }
+}
+
+/// How Dev Mode handles the pre-edit checkpoint — the SOLE pre-edit gate (the
+/// low-confidence anchor-confirm gate was removed; under `.autoApprove` a wrong
+/// target is caught only by Undo). Persisted as `rawValue`. `allCases` order is
+/// the dev-settings menu's row order.
+enum DevPermissionMode: String, CaseIterable {
+    /// Show the generated prompt on a review card before dispatch; the user reads
+    /// exactly what will be sent and approves (or cancels) it.
+    case askPermission
+    /// Dispatch immediately, no pre-edit pill. Today's default — Undo is the net.
+    case autoApprove
 }

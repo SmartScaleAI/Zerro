@@ -85,11 +85,7 @@ enum PillState: Equatable {
     /// the Revert button (a failure before the checkpoint has nothing to undo).
     /// Renders [Revert] + Retry (M7).
     case devFailed(detail: String, canRevert: Bool)
-    /// Phase 2 (M6) — the low-confidence anchor confirm gate (§7/§8). Shows the
-    /// resolved label(s) the agent will act on (low-confidence ones flagged) so a
-    /// wrong anchor is catchable before any edit, with Confirm / Cancel.
-    case confirmAnchors(anchors: [ConfirmAnchorRow])
-    /// Phase 4 — the opt-in review-before-apply gate. Shows the target `agent`, the
+    /// Ask Permission — the SOLE pre-edit gate. Shows the target `agent`, the
     /// resolved `targets` the agent will act on, and the exact `prompt` that will
     /// be dispatched, in a scrollable monospace well, with Approve / Cancel. Lets
     /// the user see precisely what will be sent before any file change.
@@ -102,8 +98,8 @@ enum PillState: Equatable {
     case confirmDevRecovery(detail: String)
 }
 
-/// One resolved-anchor row in the confirmAnchors card: the label the agent will
-/// act on, and whether it's the low-confidence one the user most needs to check.
+/// One resolved-target row in the review card: the label the agent will act on,
+/// and whether it's the low-confidence one the user most needs to check.
 struct ConfirmAnchorRow: Equatable {
     let label: String
     let isLow: Bool
@@ -186,13 +182,8 @@ struct PillView: View {
     var onDevRevert: () -> Void = {}
     var onDevRetry: () -> Void = {}
 
-    /// Dev Mode (M6) confirmAnchors actions: Confirm proceeds with the dispatch;
-    /// Cancel aborts before the agent runs (safe teardown). Default no-ops.
-    var onConfirmAnchors: () -> Void = {}
-    var onDeclineAnchors: () -> Void = {}
-
-    /// Dev Mode (Phase 4) review-before-apply actions: Approve dispatches the
-    /// shown prompt; Cancel aborts before the agent runs (safe teardown). Default
+    /// Dev Mode Ask Permission review actions: Approve dispatches the shown
+    /// prompt; Cancel aborts before the agent runs (safe teardown). Default
     /// no-ops so `#Preview` blocks can pass literal `.reviewPrompt` states.
     var onApproveReview: () -> Void = {}
     var onCancelReview: () -> Void = {}
@@ -284,7 +275,7 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the 760-wide failure card
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .error, .paidBlockResume, .devDone, .devFailed, .confirmAnchors,
+             .error, .paidBlockResume, .devDone, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         }
@@ -298,7 +289,7 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the failure card: the title +
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .confirmAnchors,
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
@@ -520,12 +511,6 @@ struct PillView: View {
                 // Keep the partial edits and close (no auto-revert, §8).
                 onDismiss: onDismissResult
             )
-        case .confirmAnchors(let anchors):
-            ConfirmAnchorsPillContent(
-                anchors: anchors,
-                onConfirm: onConfirmAnchors,
-                onCancel: onDeclineAnchors
-            )
         case .reviewPrompt(let agent, let targets, let prompt):
             ReviewPromptPillContent(
                 agent: agent,
@@ -695,66 +680,15 @@ private struct DevResultSummaryPill: View {
     }
 }
 
-// MARK: - ConfirmAnchorsPillContent (Dev Mode, Phase 2 — Milestone 6)
+// MARK: - ReviewPromptPillContent (Dev Mode Ask Permission review gate)
 //
-// The low-confidence anchor confirm gate (§7/§8). A checkpoint is already taken;
-// the agent runs ONLY on Confirm. Shows the resolved label(s) the agent will act
-// on so a wrong low-confidence anchor is catchable before any edit. Low-
-// confidence rows are flagged amber (those are the ones to double-check).
-
-private struct ConfirmAnchorsPillContent: View {
-    let anchors: [ConfirmAnchorRow]
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.sm) {
-            HStack(spacing: VFSpacing.sm) {
-                PillLeadingIconBadge(systemImage: "scope", tint: .vfWarningAmber)
-                Text("Edit these?")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.vfTextPrimary)
-            }
-
-            // The resolved labels — low-confidence ones flagged so the user knows
-            // which to scrutinize.
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(anchors.enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: 6) {
-                        Image(systemName: row.isLow ? "questionmark.circle.fill" : "checkmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(row.isLow ? Color.vfWarningAmber : Color.vfTextSecondary)
-                        Text(row.label)
-                            .font(.system(size: 12))
-                            .foregroundStyle(row.isLow ? Color.vfTextPrimary : Color.vfTextSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-            }
-
-            HStack(spacing: VFSpacing.sm) {
-                Spacer(minLength: 0)
-                PillSecondaryButton(title: "Cancel", action: onCancel)
-                PillPrimaryButton(title: "Confirm", role: .positive, action: onConfirm)
-            }
-        }
-        .padding(.horizontal, VFSpacing.lg)
-        .padding(.vertical, VFSpacing.md)
-        .frame(maxWidth: PillView.capsuleWidth, minHeight: PillView.capsuleHeight)
-    }
-}
-
-// MARK: - ReviewPromptPillContent (Dev Mode review-before-apply — Phase 4)
-//
-// The opt-in review card: shown after generation (and after the confirmAnchors
-// gate) when "Review prompt before applying changes" is on, so the user sees the
-// exact prompt the agent will receive before any file change. A header naming the
-// target agent, the resolved target label(s) (reusing the confirmAnchors row
-// vocabulary), the prompt in the same dark monospace well the artifact card uses
-// (scrolls/caps a long prompt), and two terminal actions: Approve (green — apply)
-// and Cancel (quiet — abort, nothing touched). v1 is show-and-approve only: no
-// in-pill editing (the dispatched body is captured before the gate runs).
+// The review card — the SOLE pre-edit checkpoint, shown after generation under
+// the Ask Permission mode, so the user sees the exact prompt the agent will
+// receive before any file change. A header naming the target agent, the resolved
+// target label(s), the prompt in the same dark monospace well the artifact card
+// uses (scrolls/caps a long prompt), and two terminal actions: Approve (green —
+// apply) and Cancel (quiet — abort, nothing touched). v1 is show-and-approve
+// only: no in-pill editing (the dispatched body is captured before the gate runs).
 
 private struct ReviewPromptPillContent: View {
     let agent: String
@@ -773,7 +707,7 @@ private struct ReviewPromptPillContent: View {
             }
 
             // The resolved target label(s) the agent will act on — low-confidence
-            // ones flagged, matching the confirmAnchors card's row vocabulary.
+            // ones flagged amber so the user knows which target to scrutinize.
             if !targets.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(Array(targets.enumerated()), id: \.offset) { _, row in

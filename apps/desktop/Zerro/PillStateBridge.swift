@@ -120,16 +120,10 @@ extension AppState {
             // Restoring the tree — not cancellable (interrupting a revert is the
             // dangerous case we're guarding against).
             return .devProgress(label: "Reverting\u{2026}", cancellable: false)
-        case .confirmAnchors:
-            // M6 — the low-confidence anchor confirm gate. Show the resolved
-            // labels (low ones flagged) so a wrong anchor is catchable.
-            return .confirmAnchors(anchors: devConfirmAnchorSummaries.map {
-                ConfirmAnchorRow(label: $0.label, isLow: $0.isLow)
-            })
         case .reviewingPrompt:
-            // Phase 4 — the opt-in review-before-apply gate. Show the target
-            // agent, the resolved target label(s), and the exact prompt so the
-            // user can approve precisely what will be sent before any file change.
+            // Ask Permission — the SOLE pre-edit gate. Show the target agent, the
+            // resolved target label(s), and the exact prompt so the user can
+            // approve precisely what will be sent before any file change.
             return .reviewPrompt(
                 agent: devReviewAgentName,
                 targets: devConfirmAnchorSummaries.map {

@@ -420,7 +420,9 @@ final class AreaSelectorState {
         } else {
             highlightedDevAgentIndex = nil
             highlightedDevModelIndex = nil
+            highlightedDevPermissionIndex = nil
             isAutoDetectInfoHovered = false
+            isPermissionInfoHovered = false
             localhostNotice = nil
         }
     }
@@ -429,12 +431,32 @@ final class AreaSelectorState {
         isDevSettingsMenuOpen = false
         highlightedDevAgentIndex = nil
         highlightedDevModelIndex = nil
+        highlightedDevPermissionIndex = nil
         isAutoDetectInfoHovered = false
+        isPermissionInfoHovered = false
         localhostNotice = nil
     }
 
     func setHighlightedDevAgentIndex(_ index: Int?) {
         if highlightedDevAgentIndex != index { highlightedDevAgentIndex = index }
+    }
+
+    // MARK: - Permissions section
+
+    /// The checkmarked permission mode in the Permissions section — mirrors
+    /// `PreferencesStore.devPermissionMode`. Seeded from prefs when the overlay is
+    /// built; updated when a Permissions row is selected.
+    private(set) var devPermissionMode: DevPermissionMode = .autoApprove
+
+    func setDevPermissionMode(_ mode: DevPermissionMode) {
+        if devPermissionMode != mode { devPermissionMode = mode }
+    }
+
+    /// Row under the cursor while the Permissions section is hovered; nil otherwise.
+    private(set) var highlightedDevPermissionIndex: Int?
+
+    func setHighlightedDevPermissionIndex(_ index: Int?) {
+        if highlightedDevPermissionIndex != index { highlightedDevPermissionIndex = index }
     }
 
     // MARK: - Model section (Phase 2)
@@ -678,6 +700,15 @@ final class AreaSelectorState {
 
     func setAutoDetectInfoHovered(_ hovered: Bool) {
         if isAutoDetectInfoHovered != hovered { isAutoDetectInfoHovered = hovered }
+    }
+
+    /// Hover state for the Permissions header's info icon, driving its custom
+    /// tooltip (the overlay is hit-test-disabled, so `.help` never fires). Set by
+    /// the controller's mouse-move hit-test; cleared when the menu closes.
+    private(set) var isPermissionInfoHovered: Bool = false
+
+    func setPermissionInfoHovered(_ hovered: Bool) {
+        if isPermissionInfoHovered != hovered { isPermissionInfoHovered = hovered }
     }
 
     /// A one-time, non-blocking `.denied` note (after the user denies the

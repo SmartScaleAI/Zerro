@@ -16,7 +16,7 @@
 //      `resolveDevRecovery(undo:true)` reverts + clears + idle; `undo:false` keeps
 //      (no revert) + clears + idle.
 //    • The Part 2 marker-lifetime guards on `prepareForTermination`: a mid-dispatch
-//      quit KEEPS the marker (recoverable); a `.confirmAnchors` quit leaves NONE;
+//      quit KEEPS the marker (recoverable); a `.reviewingPrompt` quit leaves NONE;
 //      the offer state keeps it (re-offer next launch); teardown clears it.
 //
 //  The real marker WRITE at dispatch start (applyDevPhase(.dispatching), after the
@@ -259,16 +259,16 @@ final class DevRecoveryTests: XCTestCase {
         }
     }
 
-    func testQuitAtConfirmAnchorsLeavesNoMarker() {
+    func testQuitAtReviewingPromptLeavesNoMarker() {
         let app = AppState()
         app.devRecoveryStore = DevRecoveryStore(fileURL: makeTempFile())
-        // Belt-and-suspenders: even if a marker somehow existed at the gate, the
-        // .confirmAnchors quit branch discards the snapshot and clears it — no
-        // marker may survive pointing at a discarded snapshot.
+        // The Ask Permission review gate is the SOLE pre-edit pause: the agent
+        // never ran, so the .reviewingPrompt quit branch discards the snapshot and
+        // clears the marker — no marker may survive pointing at a discarded snapshot.
         app.devRecoveryStore.save(sampleMarker(projectPath: "/tmp/p"))
-        app.state = .confirmAnchors
+        app.state = .reviewingPrompt
         app.prepareForTermination()
-        XCTAssertNil(app.devRecoveryStore.load(), "a .confirmAnchors quit must leave no marker")
+        XCTAssertNil(app.devRecoveryStore.load(), "a .reviewingPrompt quit must leave no marker")
     }
 
     func testQuitAtDevDoneKeepsMarker() {

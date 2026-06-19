@@ -142,6 +142,8 @@ final class AreaSelectorWindowController {
         // Seed the dev-settings "Auto-Detect Project" toggle (default OFF) so the
         // menu's switch reflects the persisted opt-in.
         state.setAutoDetectProjectEnabled(preferences.devAutoDetectProject)
+        // Seed the Permissions section's checkmark from the persisted mode.
+        state.setDevPermissionMode(preferences.devPermissionMode)
         if preferences.devModeEnabled {
             beginAgentDetection(for: state)
             // Verify the remembered folder is still a git repo (Milestone 7).
@@ -431,6 +433,10 @@ final class AreaSelectorWindowController {
                         agentCount: agentCount, modelCount: modelCount,
                         scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
                     ))
+                    state.setHighlightedDevPermissionIndex(AreaSelectorView.devSettingsPermissionRowIndex(
+                        at: point, forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    ))
                     // Auto-Detect info-icon hover → drives the custom tooltip (the
                     // glyph's `.help` can't fire through the hit-test-disabled tree).
                     let infoIcon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(
@@ -438,6 +444,12 @@ final class AreaSelectorWindowController {
                         agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
                     )
                     state.setAutoDetectInfoHovered(infoIcon.contains(point))
+                    // Permissions header info-icon hover → its custom tooltip.
+                    let permInfoIcon = AreaSelectorView.devSettingsPermissionInfoIconRect(
+                        forSelection: rect, in: size,
+                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                    )
+                    state.setPermissionInfoHovered(permInfoIcon.contains(point))
                 }
             }
 
@@ -551,6 +563,13 @@ final class AreaSelectorWindowController {
                             scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
                         ) {
                             self?.selectDevModel(at: idx, state: state)
+                            return nil
+                        }
+                        if let idx = AreaSelectorView.devSettingsPermissionRowIndex(
+                            at: point, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        ) {
+                            self?.selectDevPermission(at: idx, state: state)
                             return nil
                         }
                         // Auto-Detect Project toggle row (Project section, above
@@ -817,6 +836,19 @@ final class AreaSelectorWindowController {
         let item = state.devModelMenuItems[index]
         preferences?.selectedModelByAgent[agentID] = item.id
         state.setSelectedDevModelID(item.id)
+    }
+
+    /// Act on a dev-settings menu Permissions row: persist the chosen mode and
+    /// checkmark it. Row order matches `DevPermissionMode.allCases` (0 = Ask
+    /// Permission, 1 = Auto Approve), the same order the view renders + the
+    /// hit-test indexes. The menu stays open after the pick.
+    private func selectDevPermission(at index: Int, state: AreaSelectorState) {
+        let modes = DevPermissionMode.allCases
+        guard index >= 0, index < modes.count else { return }
+        let mode = modes[index]
+        preferences?.devPermissionMode = mode
+        state.setDevPermissionMode(mode)
+        Analytics.capture("dev_permission_mode_selected", ["mode": mode.rawValue])
     }
 
     /// Flip the dev-settings "Auto-Detect Project" toggle (Project section). The

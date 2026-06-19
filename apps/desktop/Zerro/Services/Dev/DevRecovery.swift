@@ -23,8 +23,8 @@
 //
 //  Lifetime: the marker mirrors `AppState.devCheckpoint`'s lifetime, but
 //  survives process death. It is written the instant the agent is first allowed
-//  to edit (AFTER the confirmAnchors gate resolves to proceed) and cleared the
-//  moment the checkpoint is torn down (accept / dismiss / cancel / revert).
+//  to edit (AFTER the Ask Permission review gate resolves to proceed) and cleared
+//  the moment the checkpoint is torn down (accept / dismiss / cancel / revert).
 //
 
 import Foundation

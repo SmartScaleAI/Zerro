@@ -44,8 +44,9 @@ enum DevDispatchFailure: Equatable, Sendable {
     /// (a git op threw, or a residual diff remained). The checkpoint is kept
     /// so the user can try Revert again. (Milestone 7.)
     case revertFailed
-    /// The user declined at the confirmAnchors gate (M6) — the agent never ran,
-    /// so the caller discards the checkpoint (nothing to revert). Never rendered.
+    /// The user cancelled at the pre-edit confirm gate (Ask Permission review) —
+    /// the agent never ran, so the caller discards the checkpoint (nothing to
+    /// revert). Never rendered.
     case confirmDeclined
     /// The agent process itself failed (non-zero exit, timeout, …).
     case agent(DevRunFailureReason)
@@ -141,10 +142,10 @@ final class DevDispatchCoordinator {
         // when non-nil AND the agent declares a model flag.
         model: String? = nil,
         onCheckpoint: @escaping @MainActor (GitCheckpoint, GitCheckpointService) -> Void = { _, _ in },
-        // M6 (§8): the confirmAnchors gate, run AFTER the checkpoint and BEFORE
-        // the agent. Returns true to proceed, false to abort (low-confidence
-        // anchor declined / cancelled). Defaults to "proceed" so non-dev callers
-        // and the no-low-confidence path are unaffected.
+        // The pre-edit confirm gate (Ask Permission review), run AFTER the
+        // checkpoint and BEFORE the agent. Returns true to proceed, false to abort
+        // (cancelled). Defaults to "proceed" so non-dev callers and the Auto
+        // Approve path are unaffected.
         confirmGate: @escaping @MainActor () async -> Bool = { true },
         // Phase 4: the live activity feed + the (non-terminating) stall notifier.
         // Defaulted to no-ops so the legacy single-line callers (and tests) that
@@ -187,9 +188,9 @@ final class DevDispatchCoordinator {
             return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
         }
 
-        // M6 confirmAnchors gate (§8): checkpoint taken, agent NOT yet run. A
-        // declined/cancelled gate aborts here; the checkpoint rides back so the
-        // caller discards it (the tree is untouched — nothing to revert).
+        // The pre-edit confirm gate: checkpoint taken, agent NOT yet run. A
+        // cancelled gate aborts here; the checkpoint rides back so the caller
+        // discards it (the tree is untouched — nothing to revert).
         let proceed = await confirmGate()
         if !proceed {
             return .failed(.confirmDeclined, checkpoint: checkpoint, service: service, diff: nil)

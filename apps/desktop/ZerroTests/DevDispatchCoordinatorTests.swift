@@ -198,7 +198,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.runCount, 0, "agent must NOT run after a pre-dispatch cancel")
     }
 
-    // MARK: - confirmAnchors gate (Milestone 6, §8)
+    // MARK: - Pre-edit confirm gate (Ask Permission review)
 
     func testConfirmGateDeclineSkipsTheAgentAfterCheckpoint() async throws {
         initRepo()
