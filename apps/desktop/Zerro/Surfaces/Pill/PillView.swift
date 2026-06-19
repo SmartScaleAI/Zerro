@@ -792,43 +792,44 @@ struct PulsingDot: View {
 
 // MARK: - LoadingDots
 //
-// Three-dot "typing" indicator that replaces the processing spinner. Each
-// dot runs the same opacity+scale pulse (0.3 ↔ 1.0) on a repeating
-// autoreversing loop, staggered by a per-dot phase delay so they read as
-// "···" cycling left-to-right. Mirrors PulsingDot's API (color + size +
-// self-contained .onAppear animation) — no external state, no manual Timer.
+// Three-dot "typing" indicator that replaces the processing spinner. A
+// continuous sine wave drives each dot's brightness/scale (0.3 ↔ 1.0 opacity,
+// 0.7 ↔ 1.0 scale); each dot holds a fixed phase offset, so the bright crest
+// travels left→right indefinitely as one rolling wave rather than a unison
+// pulse. TimelineView(.animation) drives the redraws itself — no shared
+// boolean, no .delay() (which only offsets the first half-cycle under
+// autoreverse), and no manual Timer.
 //
-// `.fixedSize()` pins the intrinsic footprint (~16pt wide) so a long phrase,
+// `.fixedSize()` pins the intrinsic footprint (~14pt wide) so a long phrase,
 // the elapsed timer, or the Cancel button never get shoved inside the locked
 // processing capsule.
 
 struct LoadingDots: View {
     var color: Color = .vfTextSecondary
-    var size: CGFloat = 5
-
-    @State private var animating = false
+    var size: CGFloat = 4
 
     private let dotCount = 3
-    private let perDotDelay: Double = 0.2
+    private let period: Double = 1.1      // seconds for one full wave cycle
+    private let phaseStep: Double = 0.18  // fraction-of-cycle offset between adjacent dots
 
     var body: some View {
-        HStack(spacing: VFSpacing.xs) {
-            ForEach(0..<dotCount, id: \.self) { index in
-                Circle()
-                    .fill(color)
-                    .frame(width: size, height: size)
-                    .opacity(animating ? 1.0 : 0.3)
-                    .scaleEffect(animating ? 1.0 : 0.7)
-                    .animation(
-                        .easeInOut(duration: 0.6)
-                            .repeatForever(autoreverses: true)
-                            .delay(perDotDelay * Double(index)),
-                        value: animating
-                    )
+        TimelineView(.animation) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: VFSpacing.xs) {
+                ForEach(0..<dotCount, id: \.self) { index in
+                    // Each dot is the same sine wave shifted by a fixed phase, so the
+                    // bright crest travels left→right and never converges.
+                    let phase = (t / period) - (Double(index) * phaseStep)
+                    let wave = (sin(phase * 2 * .pi) + 1) / 2   // 0…1
+                    Circle()
+                        .fill(color)
+                        .frame(width: size, height: size)
+                        .opacity(0.3 + 0.7 * wave)      // 0.3 ↔ 1.0
+                        .scaleEffect(0.7 + 0.3 * wave)  // 0.7 ↔ 1.0
+                }
             }
         }
         .fixedSize()
-        .onAppear { animating = true }
     }
 }
 
