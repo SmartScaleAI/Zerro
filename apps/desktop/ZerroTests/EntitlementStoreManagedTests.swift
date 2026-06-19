@@ -160,4 +160,46 @@ final class EntitlementStoreManagedTests: XCTestCase {
         XCTAssertFalse(byok.routesThroughManagedProxy)      // → direct OpenAI
         XCTAssertFalse(trial.routesThroughManagedProxy)     // → direct OpenAI
     }
+
+    // MARK: - Conversion link (trial_grant_id → checkout custom_data)
+
+    func testTrialGrantIdForCheckoutPassesThroughFromTrialLayer() async throws {
+        // After a trial verify, the cached grant id surfaces through the store so
+        // the conversion checkout can carry it in custom_data (exact link).
+        let transport = StubManagedTransport()
+        transport.enqueue(
+            #"{"token":"T","expires_at":"2030-01-01T00:00:00.000Z","trial_credits_remaining":15,"trial_grant_id":"grant-uuid-9"}"#,
+            status: 200,
+        )
+        let mgr = TrialCreditsManager(
+            emailSlot: InMemoryKeychainSlot(nil),
+            tokenSlot: InMemoryKeychainSlot(nil),
+            transport: transport,
+            defaults: .ephemeralPreview()
+        )
+        _ = try await mgr.verifyCode(email: "a@b.com", code: "123456")
+
+        let store = makeStore(license: makeLicense(present: false), productKind: nil, trialCredits: mgr)
+        XCTAssertEqual(store.trialGrantIdForCheckout, "grant-uuid-9")
+    }
+
+    func testTrialGrantIdForCheckoutNilWithoutTrialLayer() {
+        let store = makeStore(license: makeLicense(present: false), productKind: nil)
+        XCTAssertNil(store.trialGrantIdForCheckout)
+    }
+
+    func testCheckoutURLCarriesTrialGrantIdWhenProvided() {
+        let base = URL(string: "https://store.example.com/checkout/buy/abc")!
+        let url = BillingLinks.checkoutURL(base, product: .subscriptionPro, trialGrantId: "grant-uuid-9")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(items.contains { $0.name == "checkout[custom][trial_grant_id]" && $0.value == "grant-uuid-9" })
+        XCTAssertTrue(items.contains { $0.name == "checkout[custom][product]" && $0.value == "subscription_pro" })
+    }
+
+    func testCheckoutURLOmitsTrialGrantIdWhenNil() {
+        let base = URL(string: "https://store.example.com/checkout/buy/abc")!
+        let url = BillingLinks.checkoutURL(base, product: .byok) // no grant id
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertFalse(items.contains { $0.name == "checkout[custom][trial_grant_id]" })
+    }
 }

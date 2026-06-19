@@ -18,6 +18,21 @@ export interface SubRow {
   tier: Tier;
   status: "active" | "past_due" | "cancelled" | "expired";
   credits_limit: number;
+  /** The trial_grants row this subscriber converted from, or null. Set once at
+   *  conversion by the lemonsqueezy-webhook. When present (and the grant still
+   *  has a verified remainder) /generate spends the trial remainder FIRST via
+   *  consume_combined_credit, so converting never strands leftover trial credits. */
+  trial_grant_id: string | null;
+}
+
+/** The split a combined (trial + subscription) spend returns — combined balance
+ *  remaining after the spend, plus how much came from each bucket (the latter is
+ *  observability/attribution; the handler only needs `remaining`). */
+export interface CombinedSpendResult {
+  remaining: number;
+  trialSpent: number;
+  planSpent: number;
+  topupSpent: number;
 }
 
 /** The subset of a trial_grants row the trial generate branch reads (Phase F). */
@@ -73,6 +88,16 @@ export interface BillingStore {
    *  remaining after the spend, or null with NOTHING spent if the combined
    *  balance can't cover it. */
   consumeCredit(subId: string, credits: number): Promise<number | null>;
+  /** CROSS-LEDGER atomic spend for a converted user (trial grant + subscription):
+   *  trial remainder first, then plan, then top-ups FIFO. All-or-nothing across
+   *  BOTH ledgers — the combined split (and remaining) after the spend, or null
+   *  with NOTHING spent if the combined balance can't cover it. Backed by the
+   *  consume_combined_credit RPC, the single transaction that makes this safe. */
+  consumeCombinedCredit(
+    grantId: string,
+    subId: string,
+    credits: number,
+  ): Promise<CombinedSpendResult | null>;
   acquireSlot(subId: string, staleSeconds: number): Promise<boolean>;
   releaseSlot(subId: string): Promise<void>;
   /** TRUE if within the limit for the current window (fail-open on infra error). */
@@ -118,7 +143,7 @@ export class SupabaseBillingStore implements BillingStore {
   async loadSubscription(id: string): Promise<SubRow | null> {
     const { data, error } = await this.db
       .from("subscriptions")
-      .select("id, tier, status, credits_limit")
+      .select("id, tier, status, credits_limit, trial_grant_id")
       .eq("id", id)
       .maybeSingle();
     if (error) {
@@ -172,6 +197,33 @@ export class SupabaseBillingStore implements BillingStore {
       throw error;
     }
     return data === null || data === undefined ? null : Number(data);
+  }
+
+  async consumeCombinedCredit(
+    grantId: string,
+    subId: string,
+    credits: number,
+  ): Promise<CombinedSpendResult | null> {
+    // The cross-ledger RPC (trial → plan → top-ups, all-or-nothing). Returns a
+    // jsonb object on a spend, or NULL (insufficient combined balance) → nothing
+    // spent.
+    const { data, error } = await this.db.rpc("consume_combined_credit", {
+      p_grant_id: grantId,
+      p_subscription_id: subId,
+      p_credits: credits,
+    });
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "consumeCombinedCredit", error: error.message }));
+      throw error;
+    }
+    if (data === null || data === undefined) return null;
+    const row = data as { remaining: number; trial_spent: number; plan_spent: number; topup_spent: number };
+    return {
+      remaining: Number(row.remaining),
+      trialSpent: Number(row.trial_spent),
+      planSpent: Number(row.plan_spent),
+      topupSpent: Number(row.topup_spent),
+    };
   }
 
   async acquireSlot(subId: string, staleSeconds: number): Promise<boolean> {

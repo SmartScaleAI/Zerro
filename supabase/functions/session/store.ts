@@ -25,6 +25,8 @@ export interface SessionSubRow {
   /** Phase 5 metadata; NULL on pre-Phase-5 rows (treated as monthly). E8: the
    *  snapshot shows a yearly sub its NEXT MONTHLY refresh date, not year end. */
   billing_interval?: "monthly" | "yearly" | null;
+  /** Conversion link → the trial remainder folded into the combined balance. */
+  trial_grant_id?: string | null;
   /** Mirror freshness anchor: last webhook write OR live re-check reconcile. */
   updated_at: string | null;
 }
@@ -65,7 +67,7 @@ export class SupabaseSessionStore implements SessionStore {
   async findByKeyHash(keyHash: string): Promise<SessionSubRow | null> {
     const { data, error } = await this.db
       .from("subscriptions")
-      .select("id, ls_subscription_id, tier, status, credits_limit, current_period_end, billing_interval, updated_at")
+      .select("id, ls_subscription_id, tier, status, credits_limit, current_period_end, billing_interval, trial_grant_id, updated_at")
       .eq("license_key_hash", keyHash)
       .maybeSingle();
     if (error) {

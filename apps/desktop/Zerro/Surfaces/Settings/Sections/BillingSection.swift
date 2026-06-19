@@ -504,7 +504,8 @@ private struct ManageRow: View {
                 if isManaged {
                     openBillingLink(BillingLinks.customerPortalURL)
                 } else {
-                    openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro)
+                    openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro,
+                                 trialGrantId: entitlements.trialGrantIdForCheckout)
                 }
             }
             .buttonStyle(SettingsSecondaryButtonStyle())
@@ -542,7 +543,7 @@ private func openBillingLink(_ url: URL?) {
 /// (ph_distinct_id + product → webhook stitching, Tier 3 §0). Portal/manage
 /// opens stay on `openBillingLink` — they are not checkouts. Same nil-placeholder
 /// early-return: an unconfigured product fires nothing.
-private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
+private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct, trialGrantId: String? = nil) {
     guard let url else {
         Log.billing.notice("settings: checkout link not configured yet (placeholder)")
         return
@@ -550,7 +551,9 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct) {
     // Tier 3 §0: tag the placement so the monetization funnel can tell the
     // Settings checkouts apart from the paywall's (`placement: "paywall"`).
     Analytics.capture("checkout_opened", ["product": product.rawValue, "placement": "settings"])
-    NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
+    // A converting trial user carries their grant id (custom_data) so the webhook
+    // links this subscription to that exact trial grant — see BillingLinks.
+    NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product, trialGrantId: trialGrantId))
 }
 
 // MARK: - Usage meter (multi-model 6F)
@@ -653,8 +656,11 @@ private struct UsageMeterRow: View {
                 Text("Running low \u{2014} upgrade to keep going")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.vfWarningAmber)
-                Button("Upgrade to Managed") { openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro) }
-                    .buttonStyle(SettingsSecondaryButtonStyle())
+                Button("Upgrade to Managed") {
+                    openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro,
+                                 trialGrantId: entitlements.trialGrantIdForCheckout)
+                }
+                .buttonStyle(SettingsSecondaryButtonStyle())
             }
         }
     }

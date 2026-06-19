@@ -114,6 +114,27 @@ final class PreflightGateTests: XCTestCase {
         XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // records normally
     }
 
+    func testManagedTrialFundedCombinedBalanceDoesNotBlock() {
+        // Cross-ledger fix: a converted user whose PLAN is exhausted but who still
+        // has linked trial credits has a positive COMBINED creditsRemaining (the
+        // server folds the trial remainder in). The preflight gate reads that
+        // combined number, so it must NOT block — the recording proceeds and the
+        // server drains the trial remainder via consume_combined_credit. Modeled
+        // as a snapshot whose combined balance is entirely trial-funded.
+        let combined = ManagedEntitlementSnapshot(
+            status: .active,
+            creditsRemaining: 5,            // == trial remainder; plan is spent
+            creditsLimit: 100,
+            resetDate: nil,
+            planCreditsUsed: 100,
+            planCreditsLimit: 100,
+            topupCreditsRemaining: 0,
+            trialCreditsRemaining: 5
+        )
+        let store = managedStore(snapshot: combined)
+        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // proceeds, charged across ledgers
+    }
+
     func testManagedNoSnapshotFailsOpen() {
         // Snapshot hasn't been fetched yet (launch refresh not landed) → records.
         let store = managedStore(snapshot: nil)

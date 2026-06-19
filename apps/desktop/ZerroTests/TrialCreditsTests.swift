@@ -37,10 +37,12 @@ private enum TrialFixtures {
         token: String = "TRIAL-TOK",
         remaining: Int = 15,
         limit: Int? = nil,
+        grantId: String? = nil,
         expiresAt: String = "2030-01-01T00:00:00.000Z"
     ) -> String {
         let limitField = limit.map { #","trial_credits_limit":\#($0)"# } ?? ""
-        return #"{"token":"\#(token)","expires_at":"\#(expiresAt)","trial_credits_remaining":\#(remaining)\#(limitField)}"#
+        let grantField = grantId.map { #","trial_grant_id":"\#($0)""# } ?? ""
+        return #"{"token":"\#(token)","expires_at":"\#(expiresAt)","trial_credits_remaining":\#(remaining)\#(limitField)\#(grantField)}"#
     }
     /// The resume "first-time user" signal — no token, route to email+code.
     static func needsVerification() -> String { #"{"status":"needs_verification"}"# }
@@ -181,6 +183,40 @@ final class TrialCreditsManagerTests: XCTestCase {
         _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
         XCTAssertEqual(mgr.creditsRemaining, 34)
         XCTAssertEqual(mgr.creditsLimit, 40)
+    }
+
+    func testVerifyCachesTrialGrantIdForCheckout() async throws {
+        // The grant id is returned by verify and cached so the conversion checkout
+        // can pass it through custom_data (exact trial↔subscription link).
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(grantId: "grant-uuid-1"), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        XCTAssertNil(mgr.trialGrantId)
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+        XCTAssertEqual(mgr.trialGrantId, "grant-uuid-1")
+    }
+
+    func testVerifyWithoutGrantIdLeavesItNil() async throws {
+        // Backward-compat: an older server omits trial_grant_id; conversion then
+        // falls back to the server-side email-normalization match.
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(), status: 200) // no grantId
+        let mgr = makeTrialManager(transport)
+
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+        XCTAssertNil(mgr.trialGrantId)
+    }
+
+    func testClearRemovesCachedTrialGrantId() async throws {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(grantId: "grant-uuid-1"), status: 200)
+        let mgr = makeTrialManager(transport)
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+        XCTAssertEqual(mgr.trialGrantId, "grant-uuid-1")
+
+        mgr.clear()
+        XCTAssertNil(mgr.trialGrantId)
     }
 
     func testVerifyWithoutCreditsLimitStaysBarless() async throws {

@@ -45,7 +45,13 @@ enum BillingLinks {
     /// construction (callers fire `checkout_opened` + open the result); brackets
     /// are URL-encoded by `URLComponents`, which LemonSqueezy decodes back to
     /// `checkout[custom][…]`.
-    static func checkoutURL(_ base: URL, product: CheckoutProduct) -> URL {
+    /// `trialGrantId`, when supplied (a converting trial user — see
+    /// `EntitlementStore.trialGrantIdForCheckout`), rides along as
+    /// `custom_data.trial_grant_id` so the lemonsqueezy-webhook links the new
+    /// subscription to that EXACT trial grant and `/generate` can drain the trial
+    /// remainder before billing the paid plan. Omitted when nil (BYOK / top-ups /
+    /// a never-trialed buyer) → byte-identical to the pre-existing URL.
+    static func checkoutURL(_ base: URL, product: CheckoutProduct, trialGrantId: String? = nil) -> URL {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return base
         }
@@ -54,6 +60,9 @@ enum BillingLinks {
             items.append(URLQueryItem(name: "checkout[custom][ph_distinct_id]", value: distinctId))
         }
         items.append(URLQueryItem(name: "checkout[custom][product]", value: product.rawValue))
+        if let trialGrantId, !trialGrantId.isEmpty {
+            items.append(URLQueryItem(name: "checkout[custom][trial_grant_id]", value: trialGrantId))
+        }
         components.queryItems = items
         return components.url ?? base
     }

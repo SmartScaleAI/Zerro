@@ -346,6 +346,12 @@ async function mintTokenResponse(
       // E4: the grant total, so the trial usage meter can draw a proportional
       // bar instead of a bare count (the app must not hardcode 40).
       trial_credits_limit: creditsLimit,
+      // The opaque grant id (same value as the token's `sub`). The app caches it
+      // and passes it through checkout custom_data on conversion, so the
+      // lemonsqueezy-webhook can link this grant to the new subscription EXACTLY
+      // (the email-normalization fallback then covers older/absent clients). Not
+      // a secret — it already travels inside the token's `sub` claim.
+      trial_grant_id: grantId,
     },
     200,
   );

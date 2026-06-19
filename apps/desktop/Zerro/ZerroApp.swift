@@ -122,7 +122,7 @@ struct ZerroApp: App {
         _pillController = State(initialValue: pillCtrl)
         _recordingFocusController = State(initialValue: RecordingFocusWindowController(appState: state))
         _areaSelectorController = State(initialValue: selectorCtrl)
-        _devRingController = State(initialValue: DevRingWindowController(appState: state))
+        _devRingController = State(initialValue: DevRingWindowController(appState: state, preferences: prefs))
 
         // Tell the AppDelegate whether to bring the onboarding window
         // forward post-launch. `.defaultLaunchBehavior(.presented)`

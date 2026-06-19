@@ -55,6 +55,7 @@ class InMemoryStore implements SessionStore {
       plan_credits_used: sub.credits_limit - this.creditsRemaining,
       plan_credits_limit: sub.credits_limit,
       topup_credits_remaining: 0,
+      trial_credits_remaining: 0,
     });
   }
 }

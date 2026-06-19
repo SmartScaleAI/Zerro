@@ -207,6 +207,12 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
     /// Non-expired top-up balance (survives the monthly reset). 0 when the
     /// user never bought a pack.
     let topupCreditsRemaining: Int?
+    /// Remaining credits on the trial grant this subscriber converted from,
+    /// spent FIRST by the server's combined spend path (consume_combined_credit)
+    /// and already FOLDED INTO `creditsRemaining`. Broken out for display only.
+    /// Optional — absent from a pre-combined-spend backend / older cached
+    /// snapshot; 0 when the user never trialed or the trial is exhausted.
+    let trialCreditsRemaining: Int?
 
     /// True while the subscription is in LemonSqueezy's dunning window — drives
     /// the non-blocking "Payment issue — update your card" nudge (§9.1).
@@ -226,6 +232,7 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
         self.planCreditsUsed = dto.planCreditsUsed
         self.planCreditsLimit = dto.planCreditsLimit
         self.topupCreditsRemaining = dto.topupCreditsRemaining
+        self.trialCreditsRemaining = dto.trialCreditsRemaining
     }
 
     /// Returns a copy with `creditsRemaining` replaced — used to reflect a
@@ -242,7 +249,8 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
             resetDate: resetDate,
             planCreditsUsed: planCreditsUsed,
             planCreditsLimit: planCreditsLimit,
-            topupCreditsRemaining: topupCreditsRemaining
+            topupCreditsRemaining: topupCreditsRemaining,
+            trialCreditsRemaining: trialCreditsRemaining
         )
     }
 
@@ -257,7 +265,8 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
         resetDate: Date?,
         planCreditsUsed: Int? = nil,
         planCreditsLimit: Int? = nil,
-        topupCreditsRemaining: Int? = nil
+        topupCreditsRemaining: Int? = nil,
+        trialCreditsRemaining: Int? = nil
     ) {
         self.status = status
         self.creditsRemaining = creditsRemaining
@@ -266,6 +275,7 @@ struct ManagedEntitlementSnapshot: Codable, Equatable {
         self.planCreditsUsed = planCreditsUsed
         self.planCreditsLimit = planCreditsLimit
         self.topupCreditsRemaining = topupCreditsRemaining
+        self.trialCreditsRemaining = trialCreditsRemaining
     }
 }
 
@@ -289,6 +299,7 @@ struct EntitlementSnapshotDTO: Decodable, Equatable {
     let planCreditsUsed: Int?
     let planCreditsLimit: Int?
     let topupCreditsRemaining: Int?
+    let trialCreditsRemaining: Int?
 
     enum CodingKeys: String, CodingKey {
         case status
@@ -298,6 +309,7 @@ struct EntitlementSnapshotDTO: Decodable, Equatable {
         case planCreditsUsed = "plan_credits_used"
         case planCreditsLimit = "plan_credits_limit"
         case topupCreditsRemaining = "topup_credits_remaining"
+        case trialCreditsRemaining = "trial_credits_remaining"
     }
 }
 
@@ -403,6 +415,11 @@ struct TrialStartResponseDTO: Decodable {
     let expiresAt: String?
     let trialCreditsRemaining: Int?
     let trialCreditsLimit: Int?
+    /// The opaque trial grant id (== the token's `sub`). Cached so it can be
+    /// passed through checkout custom_data on conversion, letting the webhook
+    /// link this grant to the new subscription exactly. Optional: an older
+    /// server omits it and conversion falls back to the email match.
+    let trialGrantId: String?
     let status: String?
     let error: String?
 
@@ -411,6 +428,7 @@ struct TrialStartResponseDTO: Decodable {
         case expiresAt = "expires_at"
         case trialCreditsRemaining = "trial_credits_remaining"
         case trialCreditsLimit = "trial_credits_limit"
+        case trialGrantId = "trial_grant_id"
     }
 }
 

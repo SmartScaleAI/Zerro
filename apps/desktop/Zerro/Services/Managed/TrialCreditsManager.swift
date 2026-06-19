@@ -154,6 +154,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
 
     private static let creditsKey = "trial_credits_remaining_v1"
     private static let limitKey = "trial_credits_limit_v1"
+    private static let grantIdKey = "trial_grant_id_v1"
 
     // MARK: - Init
 
@@ -188,6 +189,15 @@ final class TrialCreditsManager: ProxyTokenProviding {
     /// `trial_credits_limit` (the meter then stays bar-less). Display only.
     var creditsLimit: Int? {
         defaults.object(forKey: Self.limitKey) as? Int
+    }
+
+    /// The opaque trial grant id from the last verify/resume, or `nil`. Passed
+    /// through checkout custom_data on conversion so the lemonsqueezy-webhook
+    /// links this exact grant to the new subscription (the email-normalization
+    /// match is the fallback). Cached in UserDefaults so it survives a relaunch
+    /// before any resume. Display/handoff only — never a spend credential.
+    var trialGrantId: String? {
+        defaults.string(forKey: Self.grantIdKey)
     }
 
     /// The last verified email, for pre-filling the capture sheet. Never used as
@@ -249,6 +259,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         emailSlot.write(email)
         setCreditsRemaining(remaining)
         setCreditsLimit(dto.trialCreditsLimit)
+        setGrantId(dto.trialGrantId)
         Log.billing.notice("trial verified — credits=\(remaining, privacy: .public)")
         return remaining
     }
@@ -318,6 +329,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
             persistToken(token0) // survive a relaunch
             setCreditsRemaining(remaining)
             setCreditsLimit(dto.trialCreditsLimit)
+            setGrantId(dto.trialGrantId)
             Log.billing.notice("trial token resumed silently — credits=\(remaining, privacy: .public)")
             return token0.token
         }
@@ -350,6 +362,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         tokenSlot.delete()
         defaults.removeObject(forKey: Self.creditsKey)
         defaults.removeObject(forKey: Self.limitKey)
+        defaults.removeObject(forKey: Self.grantIdKey)
     }
 
     /// FULL reset of all locally-cached verification state — the token (memory +
@@ -362,6 +375,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         tokenSlot.delete()
         defaults.removeObject(forKey: Self.creditsKey)
         defaults.removeObject(forKey: Self.limitKey)
+        defaults.removeObject(forKey: Self.grantIdKey)
         emailSlot.delete()
     }
 
@@ -374,6 +388,13 @@ final class TrialCreditsManager: ProxyTokenProviding {
     private func setCreditsLimit(_ limit: Int?) {
         guard let limit else { return }
         defaults.set(limit, forKey: Self.limitKey)
+    }
+
+    /// Persist the grant id when the server sends one; a `nil` (older server)
+    /// keeps any previously-cached id rather than erasing it.
+    private func setGrantId(_ grantId: String?) {
+        guard let grantId, !grantId.isEmpty else { return }
+        defaults.set(grantId, forKey: Self.grantIdKey)
     }
 
     // MARK: - Token persistence

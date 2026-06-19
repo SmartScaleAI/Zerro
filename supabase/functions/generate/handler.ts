@@ -502,12 +502,43 @@ async function resolveSubscription(deps: GenerateDeps, subId: string): Promise<R
   if (sub.status !== "active" && sub.status !== "past_due") {
     return { error: "not_entitled", status: 403 };
   }
+
+  // CROSS-LEDGER (combined) spend: a converted user (linked trial grant) with a
+  // verified trial remainder spends the trial credits FIRST, then bills only the
+  // difference to plan + top-ups — atomically, via consume_combined_credit. This
+  // un-strands trial credits that the subscription path would otherwise never
+  // touch. When there's no link (or the grant is exhausted/unverified) we keep
+  // the byte-for-byte original subscription-only path.
+  let combinedGrantId: string | null = null;
+  if (sub.trial_grant_id) {
+    const grant = await deps.store.loadTrialGrant(sub.trial_grant_id);
+    const trialRemaining = grant && grant.verified_at
+      ? Math.max(0, grant.trial_credits_limit - grant.trial_credits_used)
+      : 0;
+    if (grant && grant.verified_at && trialRemaining > 0) combinedGrantId = grant.id;
+  }
+
+  // The slot, rate-limit key, and logging identity are ALWAYS the subscription's
+  // — the converted user only ever drives /generate with the subscription token,
+  // so cap-1 holds, and a stale trial slot must never block a paying subscriber.
+  // The combined RPC's grant-row lock is the hard double-spend guard for the
+  // trial portion regardless (consume_* are the guards; the slot is the
+  // check-then-consume optimization — same posture as the single-ledger paths).
   return {
     account: {
       key: `generate:sub:${sub.id}`,
       logSubscriptionId: sub.id,
-      creditsRemaining: () => deps.store.creditsRemaining(sub.id, sub.credits_limit),
-      consume: (credits) => deps.store.consumeCredit(sub.id, credits),
+      creditsRemaining: combinedGrantId
+        ? async () =>
+          (await deps.store.creditsRemaining(sub.id, sub.credits_limit)) +
+          (await deps.store.trialCreditsRemaining(combinedGrantId!))
+        : () => deps.store.creditsRemaining(sub.id, sub.credits_limit),
+      consume: combinedGrantId
+        ? async (credits) => {
+          const r = await deps.store.consumeCombinedCredit(combinedGrantId!, sub.id, credits);
+          return r === null ? null : r.remaining;
+        }
+        : (credits) => deps.store.consumeCredit(sub.id, credits),
       acquireSlot: () => deps.store.acquireSlot(sub.id, GENERATE_SLOT_STALE_SECONDS),
       releaseSlot: () => deps.store.releaseSlot(sub.id),
     },

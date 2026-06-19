@@ -20,6 +20,7 @@
 
 import { verifyLemonSqueezySignature } from "../_shared/ls-signature.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
+import { normalizeTrialEmail } from "../_shared/email-normalize.ts";
 import {
   CREDITS_MANAGED,
   LS_VARIANT_TOPUP_BOOST,
@@ -250,6 +251,14 @@ async function handleSubscriptionUpsert(
   }
 
   await adoptPendingLicenseKey(deps, subscriptionId, ls_order_id);
+
+  // CONVERSION LINK: bind this subscriber to the trial grant they came from, so
+  // /generate can drain the trial remainder before billing the paid plan
+  // (consume_combined_credit). Set once (linkTrialGrant only writes when null),
+  // so a redelivery is a harmless no-op. Best-effort: a miss just leaves the
+  // link null and a later subscription event can fill it in.
+  await linkTrialGrantOnConversion(deps, subscriptionId, payload, attrs);
+
   logAction("subscription_created", subscriptionId, "upserted+period_opened");
 
   // Tier 3 analytics: a newly-mirrored active subscription. Only on this
@@ -528,6 +537,46 @@ async function handleLicenseKeyCreated(deps: WebhookDeps, payload: LsWebhook<LsL
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Link a converting subscriber to their trial grant (subscriptions.trial_grant_id).
+ * Two resolution paths, in priority order:
+ *   1. An explicit `meta.custom_data.trial_grant_id` plumbed through checkout —
+ *      normalization-free and exact. Validated against the DB first, because an
+ *      unknown id would violate the FK and 500 the webhook (LS would then retry
+ *      forever); an invalid/unknown id silently falls through to (2).
+ *   2. The buyer email, re-normalized to the AGGRESSIVE trial form (Gmail
+ *      dots/+tags collapsed — subscriptions store only the lowercased form), and
+ *      matched against a verified trial_grants row.
+ * Throws are swallowed by the caller's try/catch as a 500→retry only for genuine
+ * store errors; a clean "no grant found" just leaves the link null.
+ */
+async function linkTrialGrantOnConversion(
+  deps: WebhookDeps,
+  subscriptionId: string,
+  payload: LsWebhook,
+  attrs: LsSubscriptionAttributes,
+): Promise<void> {
+  let grantId: string | null = null;
+
+  const custom = payload.meta?.custom_data as { trial_grant_id?: unknown } | null | undefined;
+  const explicit = typeof custom?.trial_grant_id === "string" ? custom.trial_grant_id.trim().toLowerCase() : "";
+  if (UUID_RE.test(explicit)) {
+    grantId = await deps.store.getVerifiedTrialGrantIdById(explicit);
+  }
+
+  if (!grantId) {
+    const norm = attrs.user_email ? normalizeTrialEmail(String(attrs.user_email)) : null;
+    if (norm) grantId = await deps.store.getVerifiedTrialGrantIdByEmail(norm);
+  }
+
+  if (grantId) {
+    await deps.store.linkTrialGrant(subscriptionId, grantId);
+    logAction("subscription_created", subscriptionId, "trial_grant_linked");
+  }
+}
 
 async function adoptPendingLicenseKey(deps: WebhookDeps, subscriptionId: string, orderId: string | null) {
   if (!orderId) return;

@@ -24,6 +24,10 @@ export interface SubscriptionRow {
   current_period_end: string | null;
   /** Phase 5 metadata; NULL on pre-Phase-5 rows (treated as monthly). */
   billing_interval?: "monthly" | "yearly" | null;
+  /** The trial_grants row this subscriber converted from, or null. When set, the
+   *  grant's remaining credits are spendable FIRST (consume_combined_credit), so
+   *  the displayed combined balance must include them — see below. */
+  trial_grant_id?: string | null;
 }
 
 /**
@@ -75,6 +79,27 @@ export async function buildEntitlementSnapshot(
     0,
   );
 
+  // Linked trial remainder (the conversion link). A converted user spends the
+  // trial remainder FIRST (consume_combined_credit), so the headline combined
+  // balance MUST include it or the displayed number would understate what the
+  // spend path allows — the contract this file's header promises. Only a
+  // VERIFIED grant contributes; a read error counts as 0 (fail-SAFE: the display
+  // may briefly undercount, never overstate). Broken out as
+  // trial_credits_remaining for transparency.
+  let trialRemaining = 0;
+  if (sub.trial_grant_id) {
+    const { data: grant, error: grantError } = await db
+      .from("trial_grants")
+      .select("trial_credits_limit, trial_credits_used, verified_at")
+      .eq("id", sub.trial_grant_id)
+      .maybeSingle();
+    if (grantError) {
+      console.error(JSON.stringify({ fn: "entitlement", op: "trialRemaining", error: grantError.message }));
+    } else if (grant && grant.verified_at) {
+      trialRemaining = Math.max(0, Number(grant.trial_credits_limit) - Number(grant.trial_credits_used));
+    }
+  }
+
   // reset_date (E8): for a MONTHLY sub, credits reset at the period end LS
   // renews on — current_period_end. For a YEARLY sub, current_period_end is the
   // ANNUAL renewal, but credits actually refresh monthly via the
@@ -93,11 +118,12 @@ export async function buildEntitlementSnapshot(
   return {
     tier: sub.tier,
     status: sub.status,
-    credits_remaining: planRemaining + topupRemaining,
+    credits_remaining: planRemaining + topupRemaining + trialRemaining,
     credits_limit: sub.credits_limit,
     reset_date: resetDate,
     plan_credits_used: Math.min(used, sub.credits_limit),
     plan_credits_limit: sub.credits_limit,
     topup_credits_remaining: topupRemaining,
+    trial_credits_remaining: trialRemaining,
   };
 }

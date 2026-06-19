@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: sub, error } = await db
     .from("subscriptions")
-    .select("id, tier, status, credits_limit, current_period_end, billing_interval")
+    .select("id, tier, status, credits_limit, current_period_end, billing_interval, trial_grant_id")
     .eq("id", claims.sub)
     .maybeSingle();
   if (error) {

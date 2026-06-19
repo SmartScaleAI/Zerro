@@ -35,6 +35,7 @@ final class PreferencesStore {
         static let microphoneDeviceID = "vf.microphone.deviceID"
         static let redactSecrets = "redactSecrets"
         static let selectedModelID = "selectedModelID"
+        static let pulsingRingEnabled = "pulsingRingEnabled"
 
         // Dev Mode (Phase 1) — the mode switch + its two remembered
         // selections. Non-sandboxed, so the project folder is persisted as a
@@ -80,6 +81,7 @@ final class PreferencesStore {
             microphoneDeviceID,
             redactSecrets,
             selectedModelID,
+            pulsingRingEnabled,
             devModeEnabled,
             devProjectPath,
             devAgentID,
@@ -124,6 +126,16 @@ final class PreferencesStore {
     /// server would 400.
     var selectedModelID: String {
         didSet { defaults.set(selectedModelID, forKey: Keys.selectedModelID) }
+    }
+
+    /// Whether the pulsing green screen-edge ring is drawn while a Dev Mode
+    /// coding-agent run is in progress. Default ON; surfaced as the Developer
+    /// settings page's only toggle. Read live by `DevRingWindowController`'s
+    /// observation loop (alongside `AppState.devRingActive`) so flipping it OFF
+    /// fades the ring out immediately and flipping it back ON re-shows it while
+    /// the agent is still active.
+    var pulsingRingEnabled: Bool {
+        didSet { defaults.set(pulsingRingEnabled, forKey: Keys.pulsingRingEnabled) }
     }
 
     // MARK: - Dev Mode (Phase 1)
@@ -247,6 +259,9 @@ final class PreferencesStore {
         } else {
             self.selectedModelID = ModelRegistry.defaultModelID
         }
+        // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
+        // the ON default instead of UserDefaults' false-for-missing.
+        self.pulsingRingEnabled = defaults.object(forKey: Keys.pulsingRingEnabled) as? Bool ?? true
         self.devModeEnabled = defaults.bool(forKey: Keys.devModeEnabled)
         if let path = defaults.string(forKey: Keys.devProjectPath), !path.isEmpty {
             self.devProjectURL = URL(fileURLWithPath: path, isDirectory: true)
@@ -292,6 +307,7 @@ final class PreferencesStore {
         microphoneDeviceID = ""
         redactSecrets = ProcessingConfig.redactSecretsDefault
         selectedModelID = ModelRegistry.defaultModelID
+        pulsingRingEnabled = true
         devModeEnabled = false
         devProjectURL = nil
         selectedAgentID = nil

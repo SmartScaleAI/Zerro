@@ -13,7 +13,7 @@ import {
 import { composedSystemPrompt } from "./prompt.ts";
 import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { MODEL_REGISTRY } from "./models.ts";
-import type { BillingStore, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
+import type { BillingStore, CombinedSpendResult, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
 const SECRET = "test_session_jwt_secret";
 const NOW = 1_000_000;
@@ -42,14 +42,24 @@ class InMemoryStore implements BillingStore {
   trialGrants = new Map<string, TrialGrant>();
   trialSlots = new Set<string>();
   forceTrialConsumeNull = false;
+  /** D2: force the cross-ledger combined spend to report NULL (nothing spent),
+   *  to exercise the handler's uncharged-result race branch for a converted user. */
+  forceCombinedConsumeNull = false;
 
   // Idempotency cache (M1). Keyed "<identityKey>::<idemKey>". The fake ignores
   // the TTL (clock control isn't needed to exercise the dedup logic).
   idempotent = new Map<string, IdempotentResult>();
 
-  seed(sub: SubRow, usedCredits = 0) {
-    this.subs.set(sub.id, sub);
+  seed(sub: Omit<SubRow, "trial_grant_id"> & { trial_grant_id?: string | null }, usedCredits = 0) {
+    this.subs.set(sub.id, { trial_grant_id: null, ...sub });
     this.used.set(sub.id, usedCredits);
+  }
+
+  /** Link a seeded subscription to a (seeded) trial grant — the conversion link
+   *  the lemonsqueezy-webhook sets. Drives the combined-spend path. */
+  linkTrialGrant(subId: string, grantId: string) {
+    const sub = this.subs.get(subId);
+    if (sub) sub.trial_grant_id = grantId;
   }
 
   seedTopup(subId: string, credits: number) {
@@ -84,6 +94,33 @@ class InMemoryStore implements BillingStore {
     this.used.set(subId, used + planSpend);
     this.topup.set(subId, topupAvail - (credits - planSpend));
     return Promise.resolve(planAvail + topupAvail - credits);
+  }
+  consumeCombinedCredit(grantId: string, subId: string, credits: number): Promise<CombinedSpendResult | null> {
+    // Mirrors the consume_combined_credit RPC: all-or-nothing across BOTH
+    // ledgers, spent trial → plan → top-up.
+    if (this.forceCombinedConsumeNull) return Promise.resolve(null);
+    const g = this.trialGrants.get(grantId);
+    const trialAvail = g && g.verified ? Math.max(0, g.limit - g.used) : 0;
+    const sub = this.subs.get(subId);
+    if (!sub || (sub.status !== "active" && sub.status !== "past_due")) return Promise.resolve(null);
+    const used = this.used.get(subId) ?? sub.credits_limit;
+    const planAvail = Math.max(0, sub.credits_limit - used);
+    const topupAvail = this.topup.get(subId) ?? 0;
+    if (trialAvail + planAvail + topupAvail < credits) return Promise.resolve(null); // nothing spent
+    const trialSpent = Math.min(credits, trialAvail);
+    if (trialSpent > 0 && g) g.used += trialSpent;
+    let needed = credits - trialSpent;
+    const planSpent = Math.min(needed, planAvail);
+    if (planSpent > 0) this.used.set(subId, used + planSpent);
+    needed -= planSpent;
+    const topupSpent = needed;
+    if (topupSpent > 0) this.topup.set(subId, topupAvail - topupSpent);
+    return Promise.resolve({
+      remaining: trialAvail + planAvail + topupAvail - credits,
+      trialSpent,
+      planSpent,
+      topupSpent,
+    });
   }
   acquireSlot(subId: string) {
     this.acquireSlotCalls++;
@@ -1530,4 +1567,177 @@ Deno.test("dev call 2: a malformed transcript is rejected (400, no STT, no chat,
   assertEquals(openai.transcribeCalls, 0);
   assertEquals(openai.chatCalls, 0);
   assertEquals(store.used.get("sub-1") ?? 0, 0);
+});
+
+// =============================================================================
+// Cross-ledger combined spend — a converted user (subscription token + a linked
+// trial grant) drains the trial remainder FIRST, then bills the difference to
+// plan + top-ups, atomically (consume_combined_credit). Fixes stranded trial
+// credits. The subscription token (mintToken) is used throughout — the converted
+// user never drives /generate with the trial token.
+// =============================================================================
+
+/** A subscription linked to a trial grant (the conversion link). Defaults make
+ *  the default-model 4-credit charge straddle the two ledgers. */
+function combinedStore(opts: {
+  planUsed?: number;
+  planLimit?: number;
+  trialUsed?: number;
+  trialLimit?: number;
+  topup?: number;
+} = {}): InMemoryStore {
+  const s = new InMemoryStore();
+  s.seed(
+    { id: "sub-1", tier: "managed", status: "active", credits_limit: opts.planLimit ?? 100 },
+    opts.planUsed ?? 0,
+  );
+  s.seedTrial("grant-1", { verified: true, limit: opts.trialLimit ?? 15, used: opts.trialUsed ?? 0 });
+  s.linkTrialGrant("sub-1", "grant-1");
+  if (opts.topup) s.seedTopup("sub-1", opts.topup);
+  return s;
+}
+
+Deno.test("combined: drains the trial remainder FIRST, then bills the difference to plan", async () => {
+  // 3 trial credits left (12/15 used), plan untouched. Default-model charge is 4
+  // → spend 3 trial + 1 plan. Combined remaining = (3 + 100) − 4 = 99.
+  const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.credits_charged, 4);
+  assertEquals(json.credits_remaining, 99); // COMBINED balance after the spend
+  // Trial bucket fully drained FIRST; plan billed only the 1-credit difference.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15);
+  assertEquals(store.used.get("sub-1"), 1);
+  // Attribution is the subscription's (trial generations have no FK, but a
+  // converted user's generation is a subscription generation).
+  assertEquals(store.log[0].subscriptionId, "sub-1");
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("combined: trial remainder alone covers the charge → plan untouched", async () => {
+  // 10 trial credits left; a 4-credit charge comes entirely from trial.
+  const store = combinedStore({ trialUsed: 5, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.credits_charged, 4);
+  assertEquals(json.credits_remaining, 106); // (10 + 100) − 4
+  assertEquals(store.trialGrants.get("grant-1")?.used, 9); // 5 → 9
+  assertEquals(store.used.get("sub-1"), 0); // plan never touched
+});
+
+Deno.test("combined: trial + plan + top-up all contribute, drained in order", async () => {
+  // trial 1 (14/15), plan 1 (99/100), top-up 10 → combined 12. Opus meters this
+  // workload to 10: 1 trial + 1 plan + 8 top-up. Combined remaining = 12 − 10 = 2.
+  const store = combinedStore({ trialUsed: 14, trialLimit: 15, planUsed: 99, planLimit: 100, topup: 10 });
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.credits_charged, 10);
+  assertEquals(json.credits_remaining, 2);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15); // trial drained first
+  assertEquals(store.used.get("sub-1"), 100); // then plan
+  assertEquals(store.topup.get("sub-1"), 2); // then top-up (10 − 8)
+});
+
+Deno.test("combined: insufficient combined balance → 402 at the estimate gate, NOTHING spent", async () => {
+  // Opus estimate 11, headroom 5 → blocks when combined < 6. trial 2 + plan 3 = 5.
+  const store = combinedStore({ trialUsed: 13, trialLimit: 15, planUsed: 97, planLimit: 100 });
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 402);
+  const json = await res.json();
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.credits_remaining, 5); // the COMBINED balance
+  assertEquals(json.estimate, 11);
+  assertEquals(openai.chatCalls, 0); // never paid for chat
+  // All-or-nothing: neither ledger moved.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 13);
+  assertEquals(store.used.get("sub-1"), 97);
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("combined: a linked grant with ZERO trial remainder falls back to the plain plan spend", async () => {
+  // Exhausted trial grant (15/15): the handler must NOT use the combined path —
+  // it spends plan-only via consume_credit, exactly as an unconverted sub does.
+  const store = combinedStore({ trialUsed: 15, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).credits_remaining, 96); // plain plan spend (100 → 96)
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15); // untouched
+  assertEquals(store.used.get("sub-1"), 4);
+});
+
+Deno.test("combined: idempotent replay of a combined charge re-bills nothing across both ledgers", async () => {
+  const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const openai = new StubProvider();
+  const KEY = "combined-rec-1";
+
+  const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  const firstJson = await first.json();
+  assertEquals(firstJson.credits_charged, 4);
+  assertEquals(firstJson.credits_remaining, 99);
+
+  const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  const retryJson = await retry.json();
+  assertEquals(retryJson.credits_remaining, 99); // replayed combined remaining
+  assertEquals(retryJson.credits_charged, 4);
+  // Exactly ONE spend across BOTH ledgers; the retry did no provider work.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15);
+  assertEquals(store.used.get("sub-1"), 1);
+  assertEquals(openai.chatCalls, 1);
+  assertEquals(store.log.length, 1);
+});
+
+Deno.test("combined: concurrency cap holds — two in-flight requests can't double-spend the shared remainder", async () => {
+  // Combined balance covers exactly one 4-credit charge: trial 3 + plan 1.
+  const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 99, planLimit: 100 });
+  const openai = new StubProvider();
+  openai.hang = true; // first parks inside transcribe holding the (subscription) slot
+
+  const p1 = handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  await new Promise((r) => setTimeout(r, 0));
+
+  const r2 = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(r2.status, 429);
+  assertEquals((await r2.json()).error, "generation_in_progress");
+
+  openai.releaseHang();
+  const r1 = await p1;
+  assertEquals(r1.status, 200);
+  assertEquals((await r1.json()).credits_remaining, 0); // combined drained exactly once
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15);
+  assertEquals(store.used.get("sub-1"), 100);
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("combined: spend returning null at consume (race) → result returned once, charged 0", async () => {
+  const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  store.forceCombinedConsumeNull = true; // the grant/plan became unspendable mid-flight
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200); // OpenAI already paid → return once
+  const json = await res.json();
+  assertEquals(json.credits_charged, 0);
+  assertEquals(json.credits_remaining, 0);
+  // Nothing was charged on this path.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 12);
+  assertEquals(store.used.get("sub-1"), 0);
+  assertEquals(store.log[0].success, true);
+  assertEquals(store.slots.size, 0);
 });

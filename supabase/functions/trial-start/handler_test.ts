@@ -196,6 +196,10 @@ Deno.test("verify: correct code creates a grant ONCE and mints a trial token", a
   assertEquals(claims!.tier, undefined); // trial tokens carry no tier
   assertEquals(claims!.sub, store.grants.get("a@b.com")!.id);
 
+  // The grant id is ALSO returned in the body (for checkout custom_data on
+  // conversion → exact trial↔subscription link), matching the token's sub.
+  assertEquals(json.trial_grant_id, store.grants.get("a@b.com")!.id);
+
   // The code is single-use (deleted on success).
   assertEquals(store.codes.has("a@b.com"), false);
 });

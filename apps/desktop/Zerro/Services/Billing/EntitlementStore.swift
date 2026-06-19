@@ -135,6 +135,15 @@ final class EntitlementStore {
         trialCredits?.creditsLimit
     }
 
+    /// The trial grant id to thread through checkout `custom_data` when a trial
+    /// user converts, so the lemonsqueezy-webhook links this EXACT grant to the
+    /// new subscription (the server's email-normalization match is the fallback
+    /// for older/absent clients). `nil` when the user never verified a trial.
+    /// Handoff value only — never a spend credential.
+    var trialGrantIdForCheckout: String? {
+        trialCredits?.trialGrantId
+    }
+
     // MARK: - Init
 
     /// `nil` constructs the default real-Keychain dependencies inside the

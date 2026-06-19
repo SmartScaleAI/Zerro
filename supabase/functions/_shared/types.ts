@@ -126,6 +126,11 @@ export interface EntitlementSnapshot {
   /** Non-expired top-up balance (survives the monthly reset; expires 12 months
    *  from purchase). 0 when the user has never bought a pack. */
   topup_credits_remaining: number;
+  /** Remaining credits on the trial grant this subscriber converted from, spent
+   *  FIRST by the combined spend path (consume_combined_credit). Folded into
+   *  credits_remaining above; broken out here for display transparency. 0 when
+   *  the user never trialed (or the trial is exhausted). */
+  trial_credits_remaining: number;
 }
 
 export interface SessionResponse {

@@ -108,6 +108,21 @@ export interface WebhookStore {
   getPendingKey(orderId: string): Promise<{ license_key_hash: string } | null>;
   upsertPendingKey(row: { orderId: string; keyHash: string; customerId: string | null }): Promise<void>;
   deletePendingKey(orderId: string): Promise<void>;
+
+  // ---- Trial↔subscription link (conversion) ---------------------------------
+  /** The id of a VERIFIED trial grant with this id, or null. Used to validate an
+   *  explicit checkout `custom_data.trial_grant_id` exists before we link to it
+   *  (an unconfirmed id would violate the FK and 500 the webhook). */
+  getVerifiedTrialGrantIdById(grantId: string): Promise<string | null>;
+  /** The id of a VERIFIED trial grant whose email_normalized matches, or null.
+   *  `normalizedEmail` MUST be the AGGRESSIVE trial form (see
+   *  _shared/email-normalize.ts) — the subscription's lowercased-only email is
+   *  re-normalized before this call. */
+  getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null>;
+  /** Set subscriptions.trial_grant_id ONLY when it is currently null (so a
+   *  redelivered subscription_created can't churn or relink an existing link).
+   *  The grant id MUST already be confirmed to exist (FK safety). */
+  linkTrialGrant(subscriptionId: string, grantId: string): Promise<void>;
 }
 
 const FAR_FUTURE = "9999-12-31T00:00:00Z";
@@ -254,5 +269,40 @@ export class SupabaseWebhookStore implements WebhookStore {
 
   async deletePendingKey(orderId: string): Promise<void> {
     await this.db.from("pending_license_keys").delete().eq("ls_order_id", orderId);
+  }
+
+  // ---- Trial↔subscription link (conversion) ---------------------------------
+
+  async getVerifiedTrialGrantIdById(grantId: string): Promise<string | null> {
+    const { data, error } = await this.db
+      .from("trial_grants")
+      .select("id")
+      .eq("id", grantId)
+      .not("verified_at", "is", null)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { id: string } | null)?.id ?? null;
+  }
+
+  async getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null> {
+    const { data, error } = await this.db
+      .from("trial_grants")
+      .select("id")
+      .eq("email_normalized", normalizedEmail)
+      .not("verified_at", "is", null)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { id: string } | null)?.id ?? null;
+  }
+
+  async linkTrialGrant(subscriptionId: string, grantId: string): Promise<void> {
+    // Only set when currently null: a redelivered subscription_created (or the
+    // updated→upsert fallback) must not relink or churn an existing link.
+    const { error } = await this.db
+      .from("subscriptions")
+      .update({ trial_grant_id: grantId })
+      .eq("id", subscriptionId)
+      .is("trial_grant_id", null);
+    if (error) throw error;
   }
 }

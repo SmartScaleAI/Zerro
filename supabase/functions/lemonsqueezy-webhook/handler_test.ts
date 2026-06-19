@@ -29,6 +29,7 @@ interface Sub {
   billing_interval: string | null;
   ls_updated_at: string | null;
   license_key_hash: string | null;
+  trial_grant_id?: string | null;
 }
 interface Topup {
   subscription_id: string;
@@ -50,6 +51,8 @@ class InMemoryWebhookStore implements WebhookStore {
   periods: Period[] = [];
   topups: Topup[] = [];
   pending = new Map<string, { license_key_hash: string; ls_customer_id: string | null }>();
+  /** Verified trial grants keyed by id, with their aggressive email_normalized. */
+  trialGrants: { id: string; email_normalized: string; verified: boolean }[] = [];
   private nextId = 1;
 
   // Test knobs.
@@ -150,7 +153,24 @@ class InMemoryWebhookStore implements WebhookStore {
     return Promise.resolve();
   }
 
+  getVerifiedTrialGrantIdById(grantId: string): Promise<string | null> {
+    const g = this.trialGrants.find((x) => x.id === grantId && x.verified);
+    return Promise.resolve(g ? g.id : null);
+  }
+  getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null> {
+    const g = this.trialGrants.find((x) => x.email_normalized === normalizedEmail && x.verified);
+    return Promise.resolve(g ? g.id : null);
+  }
+  linkTrialGrant(subscriptionId: string, grantId: string): Promise<void> {
+    const s = this.subs.find((x) => x.id === subscriptionId);
+    if (s && s.trial_grant_id == null) s.trial_grant_id = grantId; // only when null
+    return Promise.resolve();
+  }
+
   // ---- test inspection helpers ----
+  seedTrialGrant(id: string, emailNormalized: string, verified = true) {
+    this.trialGrants.push({ id, email_normalized: emailNormalized, verified });
+  }
   sub(lsId: string): Sub | undefined {
     return this.subs.find((x) => x.ls_subscription_id === lsId);
   }
@@ -190,9 +210,16 @@ function subPayload(over: {
   created_at?: string;
   custom_tier?: string;
   user_email?: string | null;
+  trial_grant_id?: string;
 } = {}) {
+  const customData = over.custom_tier || over.trial_grant_id
+    ? {
+      ...(over.custom_tier ? { tier: over.custom_tier } : {}),
+      ...(over.trial_grant_id ? { trial_grant_id: over.trial_grant_id } : {}),
+    }
+    : undefined;
   return {
-    meta: { event_name: "placeholder", custom_data: over.custom_tier ? { tier: over.custom_tier } : undefined },
+    meta: { event_name: "placeholder", custom_data: customData },
     data: {
       type: "subscriptions",
       id: over.id ?? "ls_1",
@@ -298,6 +325,57 @@ Deno.test("subscription_updated refreshes a changed email; an event without one 
     subPayload({ user_email: null, updated_at: "2026-06-04T00:00:00.000Z" }),
   );
   assertEquals(store.sub("ls_1")!.email_normalized, "new@example.com");
+});
+
+// ===========================================================================
+// §2b — trial↔subscription conversion link (consume_combined_credit groundwork)
+// ===========================================================================
+Deno.test("conversion link: explicit custom_data.trial_grant_id wins (validated, set once)", async () => {
+  const store = new InMemoryWebhookStore();
+  const GRANT = "11111111-1111-4111-8111-111111111111";
+  store.seedTrialGrant(GRANT, "someone-else@example.com"); // email does NOT match the buyer
+  await deliver(store, "subscription_created", subPayload({ trial_grant_id: GRANT }));
+  // Linked by the explicit id even though the email wouldn't match.
+  assertEquals(store.sub("ls_1")!.trial_grant_id, GRANT);
+});
+
+Deno.test("conversion link: unknown explicit id is ignored, email fallback links", async () => {
+  const store = new InMemoryWebhookStore();
+  const GRANT = "22222222-2222-4222-8222-222222222222";
+  // Default buyer email is Buyer@Example.com → aggressive form buyer@example.com.
+  store.seedTrialGrant(GRANT, "buyer@example.com");
+  await deliver(
+    store,
+    "subscription_created",
+    subPayload({ trial_grant_id: "00000000-0000-4000-8000-000000000000" }), // not in the DB
+  );
+  assertEquals(store.sub("ls_1")!.trial_grant_id, GRANT);
+});
+
+Deno.test("conversion link: email fallback collapses Gmail dots/+tags to match the grant", async () => {
+  const store = new InMemoryWebhookStore();
+  const GRANT = "33333333-3333-4333-8333-333333333333";
+  store.seedTrialGrant(GRANT, "buyer@gmail.com"); // the aggressive trial form
+  await deliver(
+    store,
+    "subscription_created",
+    subPayload({ user_email: "B.u.Yer+promo@Googlemail.com" }),
+  );
+  assertEquals(store.sub("ls_1")!.trial_grant_id, GRANT);
+});
+
+Deno.test("conversion link: no matching grant → trial_grant_id stays null (no false link)", async () => {
+  const store = new InMemoryWebhookStore();
+  store.seedTrialGrant("44444444-4444-4444-8444-444444444444", "nobody@example.com");
+  await deliver(store, "subscription_created", subPayload({ user_email: "buyer@example.com" }));
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
+});
+
+Deno.test("conversion link: an unverified grant is never linked", async () => {
+  const store = new InMemoryWebhookStore();
+  store.seedTrialGrant("55555555-5555-4555-8555-555555555555", "buyer@example.com", false);
+  await deliver(store, "subscription_created", subPayload({ user_email: "buyer@example.com" }));
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
 });
 
 // ===========================================================================

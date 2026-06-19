@@ -58,6 +58,7 @@ final class DevRingViewModel {
 final class DevRingWindowController {
 
     private let appState: AppState
+    private let preferences: PreferencesStore
     private let viewModel = DevRingViewModel()
     private var windows: [NSWindow] = []
     private var observationTask: Task<Void, Never>?
@@ -66,8 +67,17 @@ final class DevRingWindowController {
     /// Enter/exit fade duration for the whole ring (window alpha), per spec.
     private static let fadeDuration: TimeInterval = 0.25
 
-    init(appState: AppState) {
+    /// Whether the ring should currently be on screen: the run window AND the
+    /// user's opt-in. Gating here (rather than in `AppState.devRingActive`)
+    /// keeps that property's "a dev agent is editing" meaning intact for any
+    /// other reader while letting the toggle hide the decoration immediately.
+    private var shouldShowRing: Bool {
+        appState.devRingActive && preferences.pulsingRingEnabled
+    }
+
+    init(appState: AppState, preferences: PreferencesStore) {
         self.appState = appState
+        self.preferences = preferences
         startObservingAppState()
     }
 
@@ -75,20 +85,25 @@ final class DevRingWindowController {
         observationTask?.cancel()
     }
 
-    /// Drives `setActive(_:)` from `AppState.devRingActive` for the controller's
-    /// full lifetime. Lives here rather than in a view's `.task` for the same
-    /// reason as the pill/focus controllers: the ring must track the run even
-    /// while the menu-bar dropdown (the only always-available SwiftUI content)
-    /// is closed.
+    /// Drives `setActive(_:)` from `shouldShowRing` for the controller's full
+    /// lifetime. Lives here rather than in a view's `.task` for the same reason
+    /// as the pill/focus controllers: the ring must track the run even while the
+    /// menu-bar dropdown (the only always-available SwiftUI content) is closed.
+    ///
+    /// The tracked closure reads BOTH `devRingActive` and `pulsingRingEnabled`
+    /// (both `@Observable`), so the loop re-evaluates when EITHER changes —
+    /// toggling the pref off mid-run fades the ring out immediately, and back on
+    /// while still active re-shows it, through the existing show/hide fade paths.
     private func startObservingAppState() {
         observationTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.setActive(self.appState.devRingActive)
+                self.setActive(self.shouldShowRing)
 
                 await withCheckedContinuation { continuation in
                     withObservationTracking {
                         _ = self.appState.devRingActive
+                        _ = self.preferences.pulsingRingEnabled
                     } onChange: {
                         continuation.resume()
                     }

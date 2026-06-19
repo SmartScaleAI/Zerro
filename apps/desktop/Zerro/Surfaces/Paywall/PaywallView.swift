@@ -438,6 +438,7 @@ private struct BuyOnceCard: View {
 /// monthly vs yearly is chosen on the checkout page. The user activates the
 /// issued key afterward via the shared `ActivateLicenseCard`.
 private struct SubscriptionOptionCard: View {
+    @Environment(EntitlementStore.self) private var entitlements
     let title: String
     let subtitle: String
 
@@ -477,7 +478,11 @@ private struct SubscriptionOptionCard: View {
             "product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue,
             "placement": "paywall"
         ])
-        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .subscriptionPro))
+        // A converting trial user carries their grant id so the webhook links
+        // this subscription to that exact trial grant (combined-spend un-stranding).
+        NSWorkspace.shared.open(
+            BillingLinks.checkoutURL(url, product: .subscriptionPro, trialGrantId: entitlements.trialGrantIdForCheckout)
+        )
     }
 }
 
