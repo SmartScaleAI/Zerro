@@ -60,6 +60,22 @@ struct GitCheckpoint: Equatable, Sendable {
     /// when the working tree was clean OR the repo has no initial commit (stash
     /// create needs a HEAD, so it's skipped on an empty repo).
     let stashSha: String?
+    /// A tree object capturing the ENTIRE pre-run working tree — tracked, dirty
+    /// AND untracked (ignored files excluded) — written via a throwaway index at
+    /// checkpoint time. This is the base the per-run DIFF is computed against.
+    ///
+    /// `stashSha` is unsuitable as the diff base because `git stash create` NEVER
+    /// captures untracked files: a file an earlier accepted-but-uncommitted run
+    /// left behind (or any of the user's own uncommitted work) would be diffed
+    /// against a base that lacks it and re-counted as a brand-new addition on
+    /// every subsequent run — the "+N −0" accumulation bug. Diffing against this
+    /// full-tree snapshot makes all pre-existing work the base, so the pill shows
+    /// ONLY the current run's edits.
+    ///
+    /// nil only when the snapshot couldn't be written (the diff then degrades to
+    /// `restoreRef`, i.e. the old behavior). `stashSha` is still captured for
+    /// REVERT (see `restoreRef`) — that path is unchanged.
+    let diffBaseSha: String?
     /// Directory holding copies of the untracked files that existed at
     /// checkpoint time (stash-create omits untracked). nil when there were
     /// none.
@@ -79,9 +95,16 @@ struct GitCheckpoint: Equatable, Sendable {
     /// against a path-less empty base).
     var hasBaseCommit: Bool { !baseSha.isEmpty }
 
-    /// The ref Revert/diff restore tracked files from: the stash snapshot if one
+    /// The ref REVERT restores tracked files from: the stash snapshot if one
     /// was taken, else HEAD — or the empty tree when the repo has no commits yet.
+    /// (Untracked files are restored separately from the on-disk snapshot.)
     var restoreRef: String { stashSha ?? (hasBaseCommit ? baseSha : Self.emptyTreeSha) }
+
+    /// The base the per-run DIFF is computed against: the full-tree snapshot when
+    /// it was written, else `restoreRef`. Distinct from `restoreRef` because the
+    /// diff base must include pre-existing UNTRACKED work (which `stashSha`/HEAD
+    /// omit) so it isn't recounted as this run's edits — see `diffBaseSha`.
+    var diffBaseRef: String { diffBaseSha ?? restoreRef }
 }
 
 // MARK: - Diff stat
@@ -143,29 +166,92 @@ struct GitCheckpointService: Sendable {
         try run(["update-index", "-q", "--refresh"], allowFailure: true)
 
         // `git stash create` snapshots tracked + index state into a commit
-        // WITHOUT mutating the work tree or stash list. Empty output ⇒ the tree
-        // was clean, so the restore base is HEAD. SKIPPED on a repo with no
-        // initial commit: stash-create requires a HEAD ("you do not have the
-        // initial commit yet") — there, every file is untracked and captured by
-        // the snapshot below instead.
+        // WITHOUT mutating the work tree or stash list — the REVERT base for
+        // tracked files. Empty output ⇒ the tree was clean, so the restore base
+        // is HEAD. SKIPPED on a repo with no initial commit: stash-create
+        // requires a HEAD ("you do not have the initial commit yet") — there,
+        // every file is untracked and captured by the snapshot below instead.
+        //
+        // A hard `stash create` failure (e.g. a stale `.git/index.lock`) throws —
+        // `run` maps the lock signature to `.indexLocked`, so the user gets the
+        // actionable fix rather than a silently-wrong base. The empty-output case
+        // is hardened below: empty is only "clean" when the tree REALLY has no
+        // tracked changes; otherwise it's an anomaly and we must NOT degrade to
+        // HEAD (which would recount the pre-existing tracked work on revert).
         let stashSha: String?
         if hasHead {
             let stashOut = try run(["stash", "create"]).stdout
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if stashOut.isEmpty, hasTrackedChanges() {
+                // stash create produced no snapshot yet the tree has tracked
+                // changes — the snapshot we'd revert to would be wrong. The
+                // realistic cause is a lock that slipped past the hard-failure
+                // path, so surface the actionable lock error rather than a base
+                // that silently collapses to HEAD.
+                Log.dev.error("Dev checkpoint anomaly: stash create empty on a dirty tree")
+                throw GitCheckpointError.indexLocked
+            }
             stashSha = stashOut.isEmpty ? nil : stashOut
         } else {
             stashSha = nil
         }
 
+        // The per-run DIFF base: a tree of the ENTIRE pre-run working tree
+        // (tracked + dirty + untracked, ignored excluded). Unlike `stashSha` this
+        // includes untracked files, so prior accepted-but-uncommitted work forms
+        // the base instead of being recounted every run (the "+N −0" bug). Written
+        // via a throwaway index so the real `.git/index` (and its lock) is never
+        // touched — best-effort: nil falls the diff back to `restoreRef`.
+        let diffBaseSha = writeWorkingTreeSnapshot()
+
         let (snapshotDir, relPaths) = try snapshotUntracked()
 
-        Log.dev.notice("Dev checkpoint taken — stash: \(stashSha != nil, privacy: .public), untracked: \(relPaths.count, privacy: .public)")
+        Log.dev.notice("Dev checkpoint taken — stash: \(stashSha != nil, privacy: .public), diffBase: \(diffBaseSha != nil, privacy: .public), untracked: \(relPaths.count, privacy: .public)")
         return GitCheckpoint(
             baseSha: baseSha,
             stashSha: stashSha,
+            diffBaseSha: diffBaseSha,
             untrackedSnapshotDir: snapshotDir,
             untrackedRelativePaths: relPaths
         )
+    }
+
+    /// Whether the tree has any tracked changes (unstaged OR staged) right now —
+    /// the cross-check that a stash-create empty output is genuinely "clean".
+    /// `diff --quiet` exits 1 when there ARE differences (allowed; we read the
+    /// status), 0 when none. Any other failure is treated as "no changes" so a
+    /// transient git error can't spuriously block a checkpoint.
+    nonisolated private func hasTrackedChanges() -> Bool {
+        let unstaged = (try? run(["diff", "--quiet"], allowFailure: true).status) ?? 0
+        let staged = (try? run(["diff", "--cached", "--quiet"], allowFailure: true).status) ?? 0
+        return unstaged != 0 || staged != 0
+    }
+
+    /// Snapshot the ENTIRE current working tree (tracked + dirty + untracked,
+    /// `.gitignore`'d files excluded) into a tree object and return its SHA. Uses
+    /// a throwaway `GIT_INDEX_FILE` so neither the real index nor `.git/index.lock`
+    /// is involved — which also makes the diff robust to a stale lock. `git add
+    /// --all` from a fresh (empty) temp index stages every present, non-ignored
+    /// file; `write-tree` then records them. Returns nil on any failure (caller
+    /// falls back to `restoreRef`).
+    nonisolated private func writeWorkingTreeSnapshot() -> String? {
+        let indexFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dev-ckpt-index-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: indexFile)
+            try? FileManager.default.removeItem(
+                at: indexFile.appendingPathExtension("lock")
+            )
+        }
+        do {
+            try run(["add", "--all"], indexFile: indexFile)
+            let tree = try run(["write-tree"], indexFile: indexFile).stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return tree.isEmpty ? nil : tree
+        } catch {
+            Log.dev.error("Dev checkpoint working-tree snapshot failed: \(String(describing: error), privacy: .private)")
+            return nil
+        }
     }
 
     // MARK: Revert
@@ -247,14 +333,15 @@ struct GitCheckpointService: Sendable {
     // MARK: Diff stat
 
     /// File changes between the checkpoint and the current working tree
-    /// (design §4: `N files changed (+x −y)`). Counts the agent's edits to
-    /// tracked files AND files it CREATED (untracked) — the latter via a scoped
-    /// intent-to-add so `git diff` sees them as new-file additions (see
-    /// `diffArgsIncludingUntracked`). Critical for a no-commit repo, where the
-    /// agent's entire output is untracked and would otherwise read as
-    /// "0 files changed".
+    /// (design §4: `N files changed (+x −y)`) — ONLY the edits THIS run made.
+    /// Counts the agent's edits to tracked files AND files it CREATED (untracked).
+    /// Pre-existing uncommitted work (a prior accepted-but-uncommitted run, or the
+    /// user's own edits) is the base and is NOT counted: the diff is computed
+    /// against `diffBaseSha`, a full-tree snapshot that already includes it (see
+    /// `runDiff`). Critical for a no-commit repo, where the agent's entire output
+    /// is untracked and would otherwise read as "0 files changed".
     nonisolated func diffStat(since checkpoint: GitCheckpoint) throws -> GitDiffStat {
-        let out = try diffIncludingUntracked(["diff", "--numstat", checkpoint.restoreRef])
+        let out = try runDiff(["--numstat"], since: checkpoint)
         var files = 0, added = 0, removed = 0
         for line in out.split(whereSeparator: \.isNewline) {
             // numstat: "<added>\t<removed>\t<path>"; binary files show "-\t-".
@@ -267,13 +354,41 @@ struct GitCheckpointService: Sendable {
         return GitDiffStat(filesChanged: files, added: added, removed: removed)
     }
 
-    /// Run a `git diff …` invocation so that agent-CREATED untracked files are
-    /// included as new-file additions. `git diff` ignores untracked files, so we
-    /// briefly `git add --intent-to-add` (`-N`) ONLY the currently-untracked
+    /// The per-run diff output for the given `git diff` flags — base → current
+    /// working tree — counting ONLY the edits this run made.
+    ///
+    /// Preferred path: a TREE-vs-TREE diff. The base is the checkpoint's full
+    /// pre-run snapshot (`diffBaseSha`, which includes untracked work); the
+    /// "current" side is a fresh snapshot of the working tree taken the same way.
+    /// Both sides include untracked files and neither touches the real index — so
+    /// pre-existing untracked work cancels out (it's in both trees) and a stale
+    /// `.git/index.lock` can't corrupt the result.
+    ///
+    /// Fallback (only when no snapshot could be written at checkpoint OR now):
+    /// the legacy `git diff <restoreRef>` with a scoped intent-to-add for
+    /// untracked files. This preserves prior behavior when the tree snapshot is
+    /// unavailable.
+    nonisolated private func runDiff(_ flags: [String], since checkpoint: GitCheckpoint) throws -> String {
+        if let baseTree = checkpoint.diffBaseSha, let currentTree = writeWorkingTreeSnapshot() {
+            return try run(["diff"] + flags + [baseTree, currentTree]).stdout
+        }
+        return try diffIncludingUntracked(["diff"] + flags + [checkpoint.restoreRef])
+    }
+
+    /// FALLBACK diff path (used by `runDiff` only when no full-tree snapshot is
+    /// available). Runs a `git diff <ref>` so that agent-CREATED untracked files
+    /// are included as new-file additions. `git diff` ignores untracked files, so
+    /// we briefly `git add --intent-to-add` (`-N`) ONLY the currently-untracked
     /// paths (content is NOT staged — `-N` records just their existence), run the
     /// diff, then `git reset` exactly those paths back to untracked. Scoping the
     /// reset to the `-N`'d paths leaves any work the USER had staged before the
     /// run untouched. The reset runs even if the diff throws.
+    ///
+    /// NOTE: against a `restoreRef` base (stash/HEAD) this CANNOT distinguish a
+    /// pre-existing untracked file from one the agent just made — both read as
+    /// additions. That accumulation is exactly why the preferred `runDiff` path
+    /// diffs against the untracked-inclusive `diffBaseSha` instead; this remains
+    /// only as a graceful degradation when that snapshot couldn't be written.
     nonisolated private func diffIncludingUntracked(_ diffArgs: [String]) throws -> String {
         // The untracked, non-ignored paths at diff time (NUL-separated for paths
         // with spaces/newlines). Empty ⇒ nothing to mark; just run the diff.
@@ -309,7 +424,7 @@ struct GitCheckpointService: Sendable {
     /// the scoped intent-to-add in `diffIncludingUntracked` — so a no-commit
     /// repo's all-untracked output still renders in the result card.
     nonisolated func diff(since checkpoint: GitCheckpoint, maxLines: Int = 400, maxBytes: Int = 24_000) throws -> String {
-        let raw = try diffIncludingUntracked(["diff", "--no-color", checkpoint.restoreRef])
+        let raw = try runDiff(["--no-color"], since: checkpoint)
         return Self.cappedDiff(raw, maxLines: maxLines, maxBytes: maxBytes)
     }
 
@@ -421,7 +536,7 @@ struct GitCheckpointService: Sendable {
     }
 
     @discardableResult
-    nonisolated private func run(_ arguments: [String], allowFailure: Bool = false) throws -> (status: Int32, stdout: String, stderr: String) {
+    nonisolated private func run(_ arguments: [String], allowFailure: Bool = false, indexFile: URL? = nil) throws -> (status: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = gitURL
         process.arguments = arguments
@@ -432,6 +547,9 @@ struct GitCheckpointService: Sendable {
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_PAGER"] = "cat"
         env["GIT_OPTIONAL_LOCKS"] = "0"
+        // Point git at a THROWAWAY index (working-tree snapshot path) so the real
+        // `.git/index` — and its lock — are never touched.
+        if let indexFile { env["GIT_INDEX_FILE"] = indexFile.path }
         process.environment = env
 
         let outPipe = Pipe(), errPipe = Pipe()

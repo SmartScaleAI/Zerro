@@ -62,6 +62,11 @@ struct DevRecoveryMarker: Codable, Equatable {
         GitCheckpoint(
             baseSha: baseSha,
             stashSha: stashSha,
+            // Not persisted: the recovery diff (an informational count on the
+            // Undo pill) falls back to `restoreRef`. REVERT — the load-bearing
+            // recovery action — uses `restoreRef`/the untracked snapshot, neither
+            // of which needs `diffBaseSha`.
+            diffBaseSha: nil,
             untrackedSnapshotDir: untrackedSnapshotPath.map { URL(fileURLWithPath: $0) },
             untrackedRelativePaths: untrackedRelativePaths
         )

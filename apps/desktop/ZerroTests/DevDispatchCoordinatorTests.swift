@@ -117,6 +117,36 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.lastModel, "claude-opus-4-8")
     }
 
+    // MARK: - Stale index lock maps to the actionable failure
+
+    func testStaleIndexLockFailsAsIndexLockedWithoutDispatching() async throws {
+        initRepo()
+        write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b")
+        write("a.txt", "x\ndirty\n") // dirty so the checkpoint must write the index
+
+        // An interrupted-run leftover lock blocks the checkpoint's snapshot.
+        let lock = repo.appendingPathComponent(".git/index.lock")
+        FileManager.default.createFile(atPath: lock.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: lock) }
+
+        let runner = FakeRunner(result: .succeeded(summary: nil))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            onPhase: { _ in }
+        )
+
+        guard case .failed(let failure, let checkpoint, _, _) = outcome else {
+            return XCTFail("expected failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .indexLocked, "a stale lock surfaces the actionable lock failure")
+        XCTAssertNil(checkpoint, "no checkpoint when the snapshot couldn't be taken")
+        XCTAssertEqual(runner.runCount, 0, "the agent must NOT run without a checkpoint")
+        // The user-facing message carries the one-line fix.
+        XCTAssertTrue(failure.userMessage.contains("rm -f .git/index.lock"),
+                      "the lock failure must give the fix: \(failure.userMessage)")
+    }
+
     // MARK: - Failure keeps the checkpoint, no auto-revert
 
     func testAgentFailureKeepsCheckpointAndLeavesEdits() async throws {

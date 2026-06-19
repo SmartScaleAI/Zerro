@@ -3307,6 +3307,22 @@ final class AppState {
         isDevDispatchActive || state == .devReverting
     }
 
+    /// True while a terminal "resting pill" is on screen waiting for the user to
+    /// resolve it: a finished result (`.done`), any error (`.failed`), or a Dev
+    /// Mode result/failure card (`.devDone`/`.devFailed`). The record hotkey
+    /// reads this to flash-and-ignore (like `.processing`/`isDevBusy`) instead
+    /// of starting a new session — starting one would silently tear the pill
+    /// down (via `resetToIdle`/`dismissFailure`) before the user accepted,
+    /// dismissed, or undid it. The user resolves the pill via its own controls
+    /// (the result's "x", the error's dismiss/retry, the dev card's Undo/keep)
+    /// first; only then (back at `.idle`) does the hotkey open a new overlay.
+    var isShowingRestingPill: Bool {
+        switch state {
+        case .done, .failed, .devDone, .devFailed: return true
+        default: return false
+        }
+    }
+
     /// Restore the working tree to `checkpoint` off-main and confirm it fully
     /// restored (zero residual diff vs. the checkpoint). Shared by explicit
     /// Revert and revert-then-retry. Returns false if a git op threw or a

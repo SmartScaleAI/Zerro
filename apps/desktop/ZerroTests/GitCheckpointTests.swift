@@ -173,11 +173,11 @@ final class GitCheckpointTests: XCTestCase {
 
     /// The exact bug a user hit: run 1 was accepted but NOT committed (so its
     /// files sit untracked), run 2 edited them, and Undo reported "Couldn't
-    /// restore your files" even though the tree WAS restored. Cause: the success
-    /// check used `diffStat == 0`, but `diffStat` counts untracked files, so the
-    /// correctly-restored untracked files read as a residual change. `isRestored`
-    /// must return TRUE here (tree matches the checkpoint), even though `diffStat`
-    /// is non-zero (those untracked files differ from the empty-tree base).
+    /// restore your files" even though the tree WAS restored. `isRestored` checks
+    /// tracked + untracked PARITY against the checkpoint directly — it must NOT be
+    /// derived from `diffStat`, whose diff base is best-effort (`diffBaseSha` may
+    /// be nil, e.g. on a recovery-reconstructed checkpoint, falling back to a base
+    /// that omits untracked files). This independence is the invariant under test.
     func testIsRestoredTrueAfterRevertingUntrackedCheckpoint() throws {
         git("init", "-q") // no commit — run-1 files are untracked
 
@@ -193,12 +193,14 @@ final class GitCheckpointTests: XCTestCase {
         write("src/extra.ts", "const x = 2\n")
         try service.revert(checkpoint)
 
-        // The tree matches the checkpoint → revert succeeded…
+        // The tree matches the checkpoint → revert succeeded.
         XCTAssertTrue(service.isRestored(to: checkpoint),
                       "a correctly-restored untracked checkpoint must verify as restored")
-        // …even though diffStat (untracked-inclusive, for the result card) is non-zero.
-        XCTAssertGreaterThan(try service.diffStat(since: checkpoint).filesChanged, 0,
-                             "sanity: diffStat counts the restored untracked files")
+        // And the per-run diff is back to zero: with the full-tree diff base, the
+        // restored pre-existing untracked files are the base, not a residual change
+        // (the accumulation fix — previously this miscounted them as additions).
+        XCTAssertEqual(try service.diffStat(since: checkpoint), .zero,
+                       "a fully restored tree has no per-run changes")
     }
 
     /// `isRestored` must return FALSE when revert genuinely left the tree dirty —
@@ -332,6 +334,179 @@ final class GitCheckpointTests: XCTestCase {
     func testCappedDiffLeavesSmallDiffIntact() {
         let raw = "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new"
         XCTAssertEqual(GitCheckpointService.cappedDiff(raw, maxLines: 400, maxBytes: 24_000), raw)
+    }
+
+    // MARK: - Per-run diff base: no accumulation across uncommitted runs
+
+    /// THE CORE BUG. A prior run modified a TRACKED file and was accepted but NOT
+    /// committed; the current run makes a further small edit. The pill must count
+    /// ONLY the current run's lines — the pre-existing modification is the base.
+    /// (Before the fix, a nil `stashSha` would diff against HEAD and recount the
+    /// prior edit.)
+    func testDiffStatExcludesPriorUncommittedTrackedEdit() throws {
+        try initRepo()
+        write("tracked.txt", "l1\nl2\nl3\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        // Prior accepted-but-uncommitted run: a tracked-file modification.
+        write("tracked.txt", "l1\nPRIOR\nl3\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // Current run: one further changed line.
+        write("tracked.txt", "l1\nPRIOR\nl3-NOW\n")
+
+        let stat = try service.diffStat(since: checkpoint)
+        XCTAssertEqual(stat.filesChanged, 1)
+        XCTAssertEqual(stat.added, 1, "only the current run's added line, not the prior edit")
+        XCTAssertEqual(stat.removed, 1)
+    }
+
+    /// THE CORE BUG, untracked variant — the dominant real-world cause (an agent
+    /// CREATING files across runs). A prior run left an untracked file; the
+    /// current run edits it and creates one new file. `git stash create` NEVER
+    /// captures untracked files, so before the fix the prior file's whole content
+    /// was recounted as additions every run ("+N −0" accumulation). The full-tree
+    /// `diffBaseSha` makes it the base instead.
+    func testDiffStatExcludesPriorUncommittedUntrackedFiles() throws {
+        try initRepo()
+        write("committed.txt", "base\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        // Prior accepted-but-uncommitted run: an agent-created (untracked) file.
+        write("prior_new.txt", "p1\np2\np3\np4\np5\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        // The pre-run untracked file is the base, captured in the diff snapshot.
+        XCTAssertNotNil(checkpoint.diffBaseSha, "a dirty/untracked tree must snapshot a diff base")
+
+        // Current run: append one line to the prior file + create a new file.
+        write("prior_new.txt", "p1\np2\np3\np4\np5\np6\n")
+        write("run_now.txt", "n1\nn2\n")
+
+        let stat = try service.diffStat(since: checkpoint)
+        // prior_new.txt: +1 (the appended line only), run_now.txt: +2 (new file).
+        XCTAssertEqual(stat.filesChanged, 2)
+        XCTAssertEqual(stat.added, 3, "only this run's lines (1 appended + 2 new), not the 5 pre-existing")
+        XCTAssertEqual(stat.removed, 0)
+    }
+
+    /// The repeated-run accumulation the user reported: take a checkpoint, make an
+    /// edit, take ANOTHER checkpoint (simulating a second uncommitted run), make a
+    /// further edit. The second run's diff must reflect only the second edit — the
+    /// count must NOT grow with the uncommitted backlog.
+    func testDiffStatDoesNotAccumulateAcrossSuccessiveCheckpoints() throws {
+        try initRepo()
+        write("file.txt", "0\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+
+        let service = try GitCheckpointService(projectURL: repo)
+
+        // Run 1: add 3 lines, accept (NO commit).
+        _ = try service.checkpoint()
+        write("file.txt", "0\n1\n2\n3\n")
+
+        // Run 2: checkpoint over the uncommitted run-1 state, add 1 more line.
+        let checkpoint2 = try service.checkpoint()
+        write("file.txt", "0\n1\n2\n3\n4\n")
+
+        let stat = try service.diffStat(since: checkpoint2)
+        XCTAssertEqual(stat.added, 1, "run 2 counts only its own line, not run 1's three")
+        XCTAssertEqual(stat.removed, 0)
+    }
+
+    /// On a dirty tree the diff base must be the full-tree snapshot, and the
+    /// REVERT base (`restoreRef`) must be the stash snapshot — never HEAD (the
+    /// `−0` accumulation tell came from restoreRef collapsing to HEAD).
+    func testDirtyTreeHasSnapshotBaseAndStashRestoreRef() throws {
+        try initRepo()
+        write("a.txt", "l1\nl2\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        write("a.txt", "l1\nDIRTY\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        XCTAssertNotNil(checkpoint.stashSha, "a dirty tree produces a stash snapshot")
+        XCTAssertNotNil(checkpoint.diffBaseSha, "a dirty tree produces a full-tree diff base")
+        XCTAssertEqual(checkpoint.restoreRef, checkpoint.stashSha,
+                       "revert base is the stash snapshot, not HEAD")
+        XCTAssertEqual(checkpoint.diffBaseRef, checkpoint.diffBaseSha,
+                       "diff base is the full-tree snapshot")
+        let head = git("rev-parse", "HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertNotEqual(checkpoint.restoreRef, head, "restore base must NOT be HEAD on a dirty tree")
+    }
+
+    // MARK: - Stale index lock
+
+    /// A stale `.git/index.lock` (left by an interrupted git/agent run) must
+    /// surface as `.indexLocked` — NOT silently degrade to a HEAD-based diff that
+    /// would accumulate every uncommitted change. (`stash create` can't write its
+    /// snapshot while the lock is held.)
+    func testCheckpointThrowsIndexLockedOnStaleLock() throws {
+        try initRepo()
+        write("a.txt", "l1\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        write("a.txt", "l1\ndirty\n") // dirty so stash create must write the index
+
+        // Simulate the interrupted-run leftover lock.
+        let lock = repo.appendingPathComponent(".git/index.lock")
+        FileManager.default.createFile(atPath: lock.path, contents: Data())
+
+        let service = try GitCheckpointService(projectURL: repo)
+        XCTAssertThrowsError(try service.checkpoint()) { error in
+            XCTAssertEqual(error as? GitCheckpointError, .indexLocked,
+                           "a stale index lock must surface as .indexLocked")
+        }
+        try? FileManager.default.removeItem(at: lock)
+    }
+
+    // MARK: - Clean tree (no regression)
+
+    /// A genuinely clean tree must still resolve the restore base to HEAD with no
+    /// stash, and report a zero diff — the fix must not perturb the clean path.
+    func testCleanTreeHasNoStashRestoresToHeadAndZeroDiff() throws {
+        try initRepo()
+        write("a.txt", "x\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        backdate("a.txt") // defeat racy-clean so stash create stays empty
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        XCTAssertNil(checkpoint.stashSha, "clean tree → no stash snapshot")
+        let head = git("rev-parse", "HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(checkpoint.restoreRef, head, "clean tree restores to HEAD")
+        XCTAssertEqual(try service.diffStat(since: checkpoint), .zero)
+    }
+
+    /// The no-initial-commit (empty-tree) path: the diff must still count the
+    /// CURRENT run's edits only, not the pre-existing untracked files (which on a
+    /// fresh `git init` are the entire pre-run state).
+    func testNoCommitRepoDiffExcludesPreExistingUntracked() throws {
+        git("init", "-q") // no commit — everything is untracked
+
+        // Pre-run untracked state (a prior accepted-but-uncommitted run).
+        write("index.html", "<h1>v1</h1>\n")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        XCTAssertEqual(checkpoint.restoreRef, GitCheckpoint.emptyTreeSha)
+
+        // Current run: one new file only.
+        write("new.txt", "added\n")
+
+        let stat = try service.diffStat(since: checkpoint)
+        XCTAssertEqual(stat.filesChanged, 1, "only the new file, not the pre-existing index.html")
+        XCTAssertEqual(stat.added, 1)
     }
 
     // MARK: - Git helpers

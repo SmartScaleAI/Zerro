@@ -554,6 +554,18 @@ struct ZerroApp: App {
             pillController?.flashBusy()
             return
         }
+        // Terminal "resting pill" states — a finished result (.done), an error
+        // (.failed), or a Dev Mode result/failure card (.devDone/.devFailed) is
+        // still on screen and the user hasn't resolved it. The record hotkey
+        // must NOT silently tear it down (via resetToIdle / dismissFailure) and
+        // start a new session; the user accepts/dismisses/undoes the pill via
+        // its own controls first. Flash like .processing to signal
+        // "registered — clear the pill first".
+        if state.isShowingRestingPill {
+            Log.hotkey.notice("resting pill showing (\(String(describing: state.state), privacy: .public)) — flashing instead of starting")
+            pillController?.flashBusy()
+            return
+        }
 
         if !onboarding.hasCompletedOnboarding {
             Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
