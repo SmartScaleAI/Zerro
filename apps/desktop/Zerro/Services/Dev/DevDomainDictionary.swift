@@ -20,6 +20,7 @@
 //  Dev-Mode-only; never runs for a normal recording.
 //
 
+import AppKit
 import Foundation
 
 struct DevDomainDictionary: Sendable {
@@ -28,15 +29,26 @@ struct DevDomainDictionary: Sendable {
     let terms: [String]
     /// Lowercased term → canonical, for the exact-match short-circuit.
     private let lowerToCanonical: [String: String]
+    /// "Is this an ordinary English word?" — drives both guards (drop common-word
+    /// seeds; never snap from a common word). Injectable so tests stay
+    /// deterministic instead of depending on the OS dictionary.
+    private let isCommon: @Sendable (String) -> Bool
 
-    /// Build from raw terms (de-duped; short terms dropped as collision-prone).
-    init(terms rawTerms: [String]) {
+    /// Build from raw terms (de-duped; short terms dropped as collision-prone;
+    /// common English words dropped so ordinary speech is never snapped toward a
+    /// plain-word component name like "Hero"/"Card"/"Page").
+    init(
+        terms rawTerms: [String],
+        isCommon: @escaping @Sendable (String) -> Bool = DevDomainDictionary.isCommonEnglishWord
+    ) {
+        self.isCommon = isCommon
         var seen = Set<String>()
         var kept: [String] = []
         for raw in rawTerms {
             let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard t.count >= 4 else { continue }
             let key = t.lowercased()
+            if isCommon(key) { continue } // Guard 1: never seed a real English word.
             if seen.insert(key).inserted { kept.append(t) }
         }
         self.terms = kept
@@ -52,7 +64,11 @@ struct DevDomainDictionary: Sendable {
     /// path segment (e.g. `@tanstack/react-query` → `react-query`); component
     /// filenames contribute their basename (extension stripped). Pure + testable;
     /// the filesystem scan lives in `seed(projectURL:)`.
-    static func build(packageJSON: Data?, componentFilenames: [String]) -> DevDomainDictionary {
+    static func build(
+        packageJSON: Data?,
+        componentFilenames: [String],
+        isCommon: @escaping @Sendable (String) -> Bool = DevDomainDictionary.isCommonEnglishWord
+    ) -> DevDomainDictionary {
         var terms: [String] = []
 
         for name in componentFilenames {
@@ -75,7 +91,7 @@ struct DevDomainDictionary: Sendable {
                 }
             }
         }
-        return DevDomainDictionary(terms: terms)
+        return DevDomainDictionary(terms: terms, isCommon: isCommon)
     }
 
     /// Best-effort filesystem seed for a Dev Mode project folder: reads
@@ -158,6 +174,9 @@ struct DevDomainDictionary: Sendable {
         let lower = token.lowercased()
         // Already a known term (any casing) → leave exactly as written.
         if lowerToCanonical[lower] != nil { return token }
+        // Guard 2: a real English word the user actually said is never snapped
+        // (so "here"/"note"/"text"/"reach" survive even against an unusual term).
+        if isCommon(lower) { return token }
         guard token.count >= 4 else { return token }
 
         var best: (term: String, dist: Int)?
@@ -193,5 +212,33 @@ struct DevDomainDictionary: Sendable {
             swap(&prev, &curr)
         }
         return prev[t.count]
+    }
+
+    // MARK: - English-word check
+
+    /// True when `lowercased` is an ordinary English word (so neither guard lets
+    /// the dictionary touch it). Backed by the OS spell-checker — no new
+    /// dependency, catches the whole class of UI-noun collisions (hero, card,
+    /// page, tear, lotion, …) rather than a hand-maintained stoplist. Words ≤3
+    /// chars are treated as common (already excluded by the ≥4 gate, but a cheap
+    /// short-circuit). Callers pass a lowercased token.
+    ///
+    /// `NSSpellChecker.shared` is main-thread-preferred by convention, but
+    /// `checkSpelling` is read-only and safe off-main; the seed path runs it in a
+    /// `Task.detached`. The predicate is injectable on the dictionary, so this is
+    /// only the default — tests supply a deterministic fake.
+    static func isCommonEnglishWord(_ lowercased: String) -> Bool {
+        guard lowercased.count >= 4 else { return true }
+        let checker = NSSpellChecker.shared
+        let range = checker.checkSpelling(
+            of: lowercased,
+            startingAt: 0,
+            language: "en",
+            wrap: false,
+            inSpellDocumentWithTag: 0,
+            wordCount: nil
+        )
+        // location == NSNotFound ⇒ no misspelling found ⇒ it IS a real word.
+        return range.location == NSNotFound
     }
 }

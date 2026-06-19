@@ -61,7 +61,14 @@ final class DevWordTimingTests: XCTestCase {
     // MARK: - Domain dictionary
 
     func testDictionarySnapsNearMissTermsToCanonical() {
-        let dict = DevDomainDictionary(terms: ["Vercel", "Supabase", "Tailwind", "Zustand"])
+        // Pure snapping behavior: inject "nothing is a common word" so the test
+        // is independent of the OS dictionary (e.g. "tailwind" is a real word and
+        // would otherwise be dropped by Guard 1). The English-word guards have
+        // their own dedicated tests.
+        let dict = DevDomainDictionary(
+            terms: ["Vercel", "Supabase", "Tailwind", "Zustand"],
+            isCommon: { _ in false }
+        )
         // Mangled library names snap back; ordinary words + punctuation survive.
         XCTAssertEqual(
             dict.corrected("I deployed to Versel using Superbase, Tailwynd, and Zustund."),
