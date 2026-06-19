@@ -90,6 +90,25 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
         }
     }
 
+    // MARK: - Toolbar scale knob
+
+    /// The whole toolbar is driven by one zoom factor: every metric is
+    /// `base * toolbarScale`. We don't pin absolute pixels (those move with the
+    /// factor by design); we pin that the factor is actually wired through the
+    /// representative width/height constants, so a future revert can't silently
+    /// drop the scaling.
+    func testToolbarScaleIsAppliedToMetrics() {
+        let s = AreaSelectorView.toolbarScale
+        XCTAssertGreaterThanOrEqual(s, 1.0, "scale only ever zooms up from the base design")
+        XCTAssertEqual(AreaSelectorView.toolbarHeight, 40 * s, accuracy: 0.001)
+        XCTAssertEqual(AreaSelectorView.recordButtonWidth, 118 * s, accuracy: 0.001)
+        XCTAssertEqual(AreaSelectorView.modeSegmentWidth, 34 * s, accuracy: 0.001)
+        XCTAssertEqual(AreaSelectorView.iconButtonWidth, 46 * s, accuracy: 0.001)
+        // The scaled() helper used by the inline font/radius/padding literals
+        // must apply the same factor the metrics use.
+        XCTAssertEqual(AreaSelectorView.scaled(14), 14 * s, accuracy: 0.001)
+    }
+
     // MARK: - Area-mode positioning
 
     func testToolbarCentersInComfortablyLargeSelection() {

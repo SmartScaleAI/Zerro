@@ -127,7 +127,7 @@ struct ProcessingPipeline {
     /// How often the pill swaps to a fresh continuation phrase: a random
     /// interval drawn from this range (in seconds) before each swap, so the
     /// cadence feels organic rather than metronomic.
-    static let thinkingRotationIntervalRange: ClosedRange<TimeInterval> = 5.0...10.0
+    static let thinkingRotationIntervalRange: ClosedRange<TimeInterval> = 10.0...30.0
 
     /// Top-level orchestration: creates the working directory, loads
     /// the asset's duration, isolates audio, extracts frames, writes

@@ -306,8 +306,27 @@ struct AreaSelectorView: View {
     // mouse monitor can hit-test the exact same rects for clicks and
     // hover (the SwiftUI tree is hit-test-disabled).
 
-    static let toolbarHeight: CGFloat = 40
-    static let recordButtonWidth: CGFloat = 118
+    /// Single knob for the whole capture toolbar's size. The toolbar is a
+    /// custom-laid-out cluster (not a SwiftUI HStack): every metric below is
+    /// `base * toolbarScale`, and every inline font/radius/padding in the
+    /// control bodies is routed through `scaled(_:)`. Both the SwiftUI render
+    /// AND the AppKit hit-test read these same statics, so bumping this factor
+    /// uniformly zooms render and hit-test together. Tune here only.
+    static let toolbarScale: CGFloat = 1.15
+
+    /// Scale an inline literal (corner radius, padding, box dimension) by the
+    /// toolbar zoom factor so the container chrome and insets grow together.
+    static func scaled(_ base: CGFloat) -> CGFloat { base * toolbarScale }
+
+    /// Glyphs and text render a touch smaller than a pure box zoom would make
+    /// them, so the SF Symbols and labels sit lighter inside the (box-scaled)
+    /// controls. A <1 trim on top of `toolbarScale`; tune this independently of
+    /// the box scale. Applies ONLY to icon/text point sizes, never to boxes.
+    static let toolbarGlyphTrim: CGFloat = 0.92
+    static func scaledGlyph(_ base: CGFloat) -> CGFloat { base * toolbarScale * toolbarGlyphTrim }
+
+    static let toolbarHeight: CGFloat = 40 * toolbarScale
+    static let recordButtonWidth: CGFloat = 118 * toolbarScale
 
     // MARK: Compact icon-toolbar metrics
     //
@@ -316,32 +335,32 @@ struct AreaSelectorView: View {
     // vertical hairline divider, the model/mic/(dev-settings) icon buttons, then
     // the Record pill. Icons are far narrower than the old labeled chips, which
     // also resolves the narrow-selection overflow we'd deferred.
-    static let modeSegmentWidth: CGFloat = 34         // each mode-switch segment
-    static let modeSwitchWidth: CGFloat = modeSegmentWidth * 2   // 68
-    static let iconButtonWidth: CGFloat = 46          // icon + chevron control
+    static let modeSegmentWidth: CGFloat = 34 * toolbarScale   // each mode-switch segment
+    static let modeSwitchWidth: CGFloat = modeSegmentWidth * 2   // 68 (pre-scale)
+    static let iconButtonWidth: CGFloat = 46 * toolbarScale     // icon + chevron control
     // The MODEL control is NOT a bare icon button — it shows the selected model
     // name between the sparkles icon and the chevron, so its width is dynamic.
-    static let modelLabelFont = NSFont.systemFont(ofSize: 12, weight: .medium)
-    private static let modelButtonHPad: CGFloat = 9   // each side of the button
-    private static let modelLabelGap: CGFloat = 5     // icon→label and label→chevron
-    private static let modelIconWidth: CGFloat = 14   // sparkles glyph
-    private static let modelChevronWidth: CGFloat = 8 // chevron glyph
+    static let modelLabelFont = NSFont.systemFont(ofSize: scaledGlyph(12), weight: .medium)
+    private static let modelButtonHPad: CGFloat = 9 * toolbarScale   // each side of the button
+    private static let modelLabelGap: CGFloat = 5 * toolbarScale     // icon→label and label→chevron
+    private static let modelIconWidth: CGFloat = 14 * toolbarScale   // sparkles glyph
+    private static let modelChevronWidth: CGFloat = 8 * toolbarScale // chevron glyph
     /// Fixed chrome around the model label (pads + icon + two gaps + chevron);
     /// the measured label width is added to this to size the model button.
     private static let modelButtonChromeWidth: CGFloat =
         modelButtonHPad * 2 + modelIconWidth + modelLabelGap * 2 + modelChevronWidth
-    private static let containerHPad: CGFloat = 6     // container edge → first control
-    private static let dividerGap: CGFloat = 8        // breathing room each side of the divider
-    private static let dividerWidth: CGFloat = 1
-    private static let controlGap: CGFloat = 4        // gap between adjacent icon buttons
-    private static let recordGap: CGFloat = 8         // gap before the Record pill
-    private static let toolbarGap: CGFloat = 14       // vertical gap, selection → toolbar
-    private static let toolbarMargin: CGFloat = 8
+    private static let containerHPad: CGFloat = 6 * toolbarScale     // container edge → first control
+    private static let dividerGap: CGFloat = 8 * toolbarScale        // breathing room each side of the divider
+    private static let dividerWidth: CGFloat = 1 * toolbarScale
+    private static let controlGap: CGFloat = 4 * toolbarScale        // gap between adjacent icon buttons
+    private static let recordGap: CGFloat = 8 * toolbarScale         // gap before the Record pill
+    private static let toolbarGap: CGFloat = 14 * toolbarScale       // vertical gap, selection → toolbar
+    private static let toolbarMargin: CGFloat = 8 * toolbarScale
     /// Comfort margin used to decide whether the toolbar fits centered inside an
     /// area selection (each side), and the breathing room the full-screen toolbar
     /// floats above the Dock.
-    private static let areaCenterPad: CGFloat = 24
-    static let fullScreenDockGap: CGFloat = 12
+    private static let areaCenterPad: CGFloat = 24 * toolbarScale
+    static let fullScreenDockGap: CGFloat = 12 * toolbarScale
 
     /// Bottom Dock inset (points) of the screen the overlay is presenting on,
     /// stashed by `AreaSelectorWindowController` at present() so the full-screen
@@ -374,7 +393,7 @@ struct AreaSelectorView: View {
 
     /// Hard cap on the rendered model label so an unexpectedly long name
     /// truncates rather than growing the toolbar past the overlay.
-    private static let modelLabelMaxWidth: CGFloat = 150
+    private static let modelLabelMaxWidth: CGFloat = 150 * toolbarScale
 
     /// X-offsets (relative to the container's leading edge) of every control in
     /// the compact toolbar, computed once so the frame helpers and the renderer
@@ -1534,7 +1553,7 @@ struct AreaSelectorView: View {
             // bottom) so nothing spans the full container height.
             Rectangle()
                 .fill(Color.white.opacity(0.12))
-                .frame(width: 1, height: container.height - 8)
+                .frame(width: Self.dividerWidth, height: container.height - Self.scaled(8))
                 .position(x: dividerLineX, y: container.midY)
 
             // Model button (sparkles + model name + chevron) + mic icon button.
@@ -1712,13 +1731,13 @@ struct AreaSelectorView: View {
     /// instruction pill, with a soft drop shadow for legibility over arbitrary
     /// captured content.
     private var toolbarContainerChrome: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: Self.scaled(16), style: .continuous)
             .fill(Color.vfPillBackground)
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: Self.scaled(16), style: .continuous)
                     .strokeBorder(Color.vfHairline, lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+            .shadow(color: .black.opacity(0.35), radius: Self.scaled(18), y: Self.scaled(6))
     }
 
     // MARK: Mode switch
@@ -1729,7 +1748,7 @@ struct AreaSelectorView: View {
     /// segment's icon is dimmed. Clicking maps to the mode (Part 5 hit-tests the
     /// two halves separately).
     private var modeSwitchControl: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Self.scaled(2)) {
             modeSegment(
                 system: "wand.and.stars",
                 active: !state.isDevMode, isDev: false,
@@ -1741,16 +1760,16 @@ struct AreaSelectorView: View {
                 hovered: state.isModeDevHovered
             )
         }
-        .padding(3)
+        .padding(Self.scaled(3))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
                 .fill(Color.black.opacity(0.18))
         )
         // Match the icon buttons' vertical inset so the recessed well doesn't
         // touch the container's top/bottom — equal breathing room on every
         // component. The hit-test frame stays full-height (rendering only).
-        .padding(.vertical, 4)
+        .padding(.vertical, Self.scaled(4))
     }
 
     private func modeSegment(system: String, active: Bool, isDev: Bool, hovered: Bool) -> some View {
@@ -1762,11 +1781,11 @@ struct AreaSelectorView: View {
             : Color.vfTextTertiary
         // With the well inset, each segment reads as a rounded square (~30×26).
         return Image(systemName: system)
-            .font(.system(size: 14, weight: .medium))
+            .font(.system(size: Self.scaledGlyph(14), weight: .medium))
             .foregroundStyle(iconColor)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(fill)
+                RoundedRectangle(cornerRadius: Self.scaled(7), style: .continuous).fill(fill)
             )
     }
 
@@ -1775,12 +1794,12 @@ struct AreaSelectorView: View {
     /// A neutral icon + chevron button (model / mic). The chevron flips when its
     /// dropdown is open; a subtle rounded fill brightens on hover/open.
     private func iconButton(system: String, menuOpen: Bool, hovered: Bool) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: Self.scaled(3)) {
             Image(systemName: system)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: Self.scaledGlyph(14), weight: .medium))
                 .foregroundStyle(Color.vfTextSecondary)
             Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .semibold))
+                .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
                 .foregroundStyle(Color.vfTextTertiary)
                 .rotationEffect(.degrees(menuOpen ? 180 : 0))
         }
@@ -1796,7 +1815,7 @@ struct AreaSelectorView: View {
     private var modelButton: some View {
         HStack(spacing: Self.modelLabelGap) {
             Image(systemName: "sparkles")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: Self.scaledGlyph(14), weight: .medium))
                 .foregroundStyle(Color.vfTextSecondary)
             Text(state.selectedModelName)
                 .font(Font(Self.modelLabelFont))
@@ -1810,11 +1829,11 @@ struct AreaSelectorView: View {
             // is unchanged.
             if state.isModelPickerLocked {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
                     .foregroundStyle(Color.vfTextTertiary)
             } else {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
                     .foregroundStyle(Color.vfTextTertiary)
                     .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
             }
@@ -1828,12 +1847,12 @@ struct AreaSelectorView: View {
     /// dot at the corner — green when an agent + folder are set, amber otherwise.
     private var devSettingsIconButton: some View {
         ZStack(alignment: .topTrailing) {
-            HStack(spacing: 3) {
+            HStack(spacing: Self.scaled(3)) {
                 Image(systemName: "terminal")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: Self.scaledGlyph(14), weight: .medium))
                     .foregroundStyle(Color.vfTextSecondary)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
                     .foregroundStyle(Color.vfTextTertiary)
                     .rotationEffect(.degrees(state.isDevSettingsMenuOpen ? 180 : 0))
             }
@@ -1842,22 +1861,22 @@ struct AreaSelectorView: View {
 
             Circle()
                 .fill(state.isDevReady ? Color.vfDevAccent : Color.vfWarningAmber)
-                .frame(width: 7, height: 7)
+                .frame(width: Self.scaled(7), height: Self.scaled(7))
                 // Ring in the container color punches a gap so the dot reads as
                 // separate from the now-opaque bar.
                 .overlay(Circle().stroke(Color.vfPillBackground, lineWidth: 1.5))
-                .padding(.top, 5)
-                .padding(.trailing, 3)
+                .padding(.top, Self.scaled(5))
+                .padding(.trailing, Self.scaled(3))
         }
     }
 
     private func iconButtonFill(active: Bool, hovered: Bool) -> some View {
         // Slightly stronger than on the old solid fill — the frosted material is
         // lighter, so a white tint needs a touch more to register as a button.
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
+        RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
             .fill(Color.white.opacity(active ? 0.14 : (hovered ? 0.10 : 0.06)))
-            .padding(.vertical, 4)
-            .padding(.horizontal, 1)
+            .padding(.vertical, Self.scaled(4))
+            .padding(.horizontal, Self.scaled(1))
     }
 
     // MARK: Record pill
@@ -1869,16 +1888,16 @@ struct AreaSelectorView: View {
         ZStack {
             Capsule(style: .continuous).fill(Color.vfRecordingRed)
             Capsule(style: .continuous).fill(Color.white.opacity(state.isRecordButtonHovered ? 0.12 : 0))
-            HStack(spacing: VFSpacing.sm) {
+            HStack(spacing: Self.scaled(8)) {
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 10, height: 10)
+                    .frame(width: Self.scaledGlyph(10), height: Self.scaledGlyph(10))
                 Text("Record")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: Self.scaledGlyph(13), weight: .semibold))
                     .foregroundStyle(.white)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, Self.scaled(3))
     }
 
     /// Inline record-time validation message (e.g. "Pick a folder…"),

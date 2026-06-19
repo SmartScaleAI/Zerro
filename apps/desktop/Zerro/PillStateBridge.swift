@@ -111,11 +111,11 @@ extension AppState {
         // Dev Mode (Phase 1) — the dispatch tail. Reached only for a Dev Mode
         // recording; normal mode never produces these.
         case .devCheckpointing:
-            return .devProgress(label: "Checkpointing\u{2026}", cancellable: true)
+            return .devProgress(label: devProgressLabel("Checkpointing\u{2026}"), cancellable: true)
         case .devAgentDispatching:
-            return .devProgress(label: "Dispatching to the agent\u{2026}", cancellable: true)
+            return .devProgress(label: devProgressLabel("Dispatching to the agent\u{2026}"), cancellable: true)
         case .devAgentRunning:
-            return .devProgress(label: devRunSubstatus?.label ?? "Working\u{2026}", cancellable: true)
+            return .devProgress(label: devProgressLabel(devRunSubstatus?.label ?? "Working\u{2026}"), cancellable: true)
         case .devReverting:
             // Restoring the tree — not cancellable (interrupting a revert is the
             // dangerous case we're guarding against).
@@ -145,6 +145,18 @@ extension AppState {
                               detail: devFailure?.userMessage ?? "Dev Mode run failed.",
                               canRevert: devCanRevert)
         }
+    }
+
+    /// Appends the live "· Xs" elapsed suffix to a Dev Mode progress phrase so
+    /// the timer renders on every dev step — continuous from generation start,
+    /// through the agent handoff, to the "Changes applied" card — matching
+    /// artifact mode. `ProcessingPillContent` (which `.devProgress` renders
+    /// through) splits on the " · " separator, so the seconds stay pinned while
+    /// the phrase truncates. `processingElapsedSuffix` is nil only outside the
+    /// elapsed-clock window, where the bare phrase shows.
+    private func devProgressLabel(_ phrase: String) -> String {
+        guard let suffix = processingElapsedSuffix else { return phrase }
+        return "\(phrase) \(suffix)"
     }
 
     /// The cross-launch dev-recovery pill's one-line body: the diff stat the

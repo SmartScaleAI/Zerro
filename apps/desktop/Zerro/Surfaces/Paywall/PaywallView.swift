@@ -783,15 +783,17 @@ private struct OptionCardChrome<Content: View>: View {
 // MARK: - Most-popular badge
 
 /// The Managed card's "Most popular" chip — the same hierarchy cue the
-/// website pricing section puts on its highlighted card.
+/// website pricing section puts on its highlighted card. Rendered in Dev-Mode
+/// green (`vfDevAccent`) to match the "Best value" badge on the Add Credits
+/// surface, so the two paywall highlights read as one cue.
 private struct MostPopularBadge: View {
     var body: some View {
         Text("Most popular")
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.vfBrandAccent)
+            .foregroundStyle(Color.vfDevAccent)
             .padding(.horizontal, VFSpacing.sm)
             .padding(.vertical, 3)
-            .background(Capsule(style: .continuous).fill(Color.vfBrandAccent.opacity(0.16)))
+            .background(Capsule(style: .continuous).fill(Color.vfDevAccent.opacity(0.16)))
             .fixedSize()
     }
 }

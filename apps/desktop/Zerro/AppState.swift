@@ -102,6 +102,30 @@ public enum RecordingState: Equatable {
     case confirmingDevRecovery
 }
 
+extension RecordingState {
+    /// True for the states that share ONE continuous elapsed clock: the
+    /// `.processing` generation step AND — for a Dev Mode recording — the
+    /// dispatch tail it hands off to (`.devCheckpointing` → `.reviewingPrompt`
+    /// → `.devAgentDispatching` → `.devAgentRunning`). The clock is started on
+    /// entry to this set and stopped on exit (driven from `state`'s `didSet`),
+    /// so the pill's "· Xs" counter runs unbroken from generation start through
+    /// the agent run — never resetting at the handoff — and disappears exactly
+    /// when the `.devDone`/`.devFailed` card replaces the progress pill.
+    /// `.reviewingPrompt` is included so the count stays continuous across the
+    /// Ask-Permission pause (its pill shows no timer, but re-entering the tail
+    /// must not restart the clock). `.devReverting` and the terminal dev states
+    /// are excluded — the run is over by then.
+    var keepsElapsedTimer: Bool {
+        switch self {
+        case .processing, .devCheckpointing, .devAgentDispatching,
+             .devAgentRunning, .reviewingPrompt:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 // MARK: - DevModeSelection
 
 /// The Dev Mode choices carried from the capture toolbar into a recording: the
@@ -459,16 +483,21 @@ final class AppState {
             // lifecycle centrally here so every entry and every exit (success,
             // failure, cancel, reset) is covered without threading start/stop
             // through each call site.
-            switch (oldValue, state) {
-            case (.processing, .processing):
-                break
-            case (_, .processing):
+            // ONE continuous elapsed clock spans `.processing` AND the Dev Mode
+            // dispatch tail it hands off to (see `RecordingState.keepsElapsedTimer`),
+            // so the pill's "· Xs" counter never resets or disappears at the
+            // handoff. Start on entry to that set, stop on exit.
+            if state.keepsElapsedTimer && !oldValue.keepsElapsedTimer {
                 startProcessingTimer()
-            case (.processing, _):
+            } else if oldValue.keepsElapsedTimer && !state.keepsElapsedTimer {
                 stopProcessingTimer()
+            }
+            // The artifact-mode phrase rotation lives ONLY during `.processing`
+            // (the dev tail renders its own substatus); end it the moment
+            // processing exits, even when the elapsed clock continues into the
+            // dev tail.
+            if case .processing = oldValue, state != .processing {
                 stopThinkingRotation()
-            default:
-                break
             }
             // M5: a delivered result (including a resumed paid generation that
             // succeeded) no longer needs the held-recording pointer. Clearing on
@@ -832,8 +861,18 @@ final class AppState {
     /// `didSet`. Nil when not processing.
     private var processingTimerTask: Task<Void, Never>?
 
-    /// When the current `.processing` run began, for the elapsed counter.
+    /// When the current elapsed-clock window began, for the "· Xs" counter.
+    /// Anchors the WHOLE window — `.processing` and, for a Dev Mode recording,
+    /// the dispatch tail it hands off to (see `RecordingState.keepsElapsedTimer`)
+    /// — so the counter never resets at the handoff.
     private var processingElapsedStart: ContinuousClock.Instant?
+
+    /// Whole elapsed seconds since `processingElapsedStart`, advanced once per
+    /// second by the processing ticker (via `setProcessingLabel`). Observed so
+    /// BOTH the artifact-mode `processingStageLabel` and the Dev Mode progress
+    /// label (composed in PillStateBridge off `processingElapsedSuffix`)
+    /// re-render on every tick. 0 while no clock is running.
+    private(set) var processingElapsedSeconds: Int = 0
 
     /// Tier 1 analytics: when the current generation request was dispatched,
     /// set in `runPromptGeneration` alongside `generation_started`. Read by the
@@ -2049,6 +2088,7 @@ final class AppState {
         processingTimerTask?.cancel()
         processingTimerTask = nil
         processingElapsedStart = nil
+        processingElapsedSeconds = 0
     }
 
     /// Sets the pill's phrase and immediately composes the visible label with
@@ -2058,7 +2098,25 @@ final class AppState {
         processingBaseLabel = phrase
         let elapsed = processingElapsedStart
             .map { Int((ContinuousClock.now - $0).components.seconds) } ?? 0
+        // Single source for the elapsed seconds: the artifact pill reads it
+        // baked into `processingStageLabel`, the Dev Mode pill reads it live via
+        // `processingElapsedSuffix`. The ticker recomposes through here, so both
+        // advance together.
+        processingElapsedSeconds = elapsed
         processingStageLabel = "\(phrase) \u{00B7} \(Self.thinkingElapsedText(elapsed))"
+    }
+
+    /// The live "· Xs" elapsed suffix for the current request, or nil when no
+    /// elapsed clock is running. The artifact path bakes this same value into
+    /// `processingStageLabel`; the Dev Mode dispatch tail has its own substatus
+    /// labels, so PillStateBridge appends this suffix to them — keeping the
+    /// counter visible and continuous from generation start through the agent
+    /// run. Reads the observed `processingElapsedSeconds` so the dev pill
+    /// re-renders on every tick; goes nil the instant the clock stops (the
+    /// progress pill is replaced by the result/failure card at that point).
+    var processingElapsedSuffix: String? {
+        guard processingElapsedStart != nil else { return nil }
+        return "\u{00B7} \(Self.thinkingElapsedText(processingElapsedSeconds))"
     }
 
     /// Begins the generation rotation: an immediate random Category-1 starter,
