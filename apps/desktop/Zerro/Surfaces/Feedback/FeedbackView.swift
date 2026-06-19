@@ -338,14 +338,16 @@ struct FeedbackView: View {
                 Text(sendButtonLabel)
                     .font(.system(size: 13, weight: .semibold))
             }
-            .foregroundStyle(Color.vfOnBrand)
+            // Disabled keeps its own legible treatment instead of dimming the
+            // whole button: a faint tinted chip with secondary-text label, so
+            // "Send message" stays readable until there's something to send.
+            .foregroundStyle(model.canSend ? Color.vfOnBrand : Color.vfTextSecondary)
             .padding(.horizontal, VFSpacing.lg)
             .padding(.vertical, VFSpacing.sm)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                    .fill(Color.vfBrandAccent)
+                    .fill(model.canSend ? Color.vfBrandAccent : Color.vfBrandAccent.opacity(0.18))
             )
-            .opacity(model.canSend ? 1 : 0.4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

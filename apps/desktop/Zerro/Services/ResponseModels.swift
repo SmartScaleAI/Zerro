@@ -106,11 +106,11 @@ struct ParsedResponse: Equatable, Sendable {
     /// fired, over-long title, …) — for logging, never for UI.
     let warnings: [String]
     /// False ONLY when the generation step signalled the empty case via the
-    /// `<<<ZERRO_NO_REQUEST>>>` sentinel — there was no request to convert.
-    /// Defaults true so every other path (valid artifact, category-2
-    /// explain/advice, and the malformed-response fail-safe) keeps the
-    /// "Write agent prompt" affordance; the gate suppresses the button only
-    /// when this is explicitly false. See `AppState.canConvertToAgentPrompt`.
+    /// `<<<ZERRO_NO_REQUEST>>>` sentinel — the recording held no request of
+    /// any kind. Defaults true for every other path (valid artifact,
+    /// category-2 explain/advice, and the malformed-response fail-safe). Parsed
+    /// and retained for logging/diagnostics; no behaviour currently keys off it
+    /// since the "Write agent prompt" affordance was removed.
     let requestPresent: Bool
 
     /// Mirrors the synthesized memberwise init but defaults `requestPresent`

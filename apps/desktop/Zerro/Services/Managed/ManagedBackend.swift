@@ -109,9 +109,6 @@ enum ManagedBackend {
     static var entitlementURL: URL { baseURL.appendingPathComponent("entitlement") }
     /// Phase F — the email-gated trial-credits endpoint (request + verify code).
     static var trialStartURL: URL { baseURL.appendingPathComponent("trial-start") }
-    /// Phase 6 (typed-artifact refactor) — the free "Write agent prompt"
-    /// conversion endpoint.
-    static var convertURL: URL { baseURL.appendingPathComponent("convert") }
     /// In-app feedback / issue report relay → Slack. Unauthenticated (the
     /// dialog works signed-out); shares this same base URL resolution so a
     /// DEBUG backend override points feedback at the local stack too.

@@ -167,8 +167,7 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
             case .click(_, let label):
                 content.append(.text("\n\(item.timestampTag) clicked \"\(label)\""))
             case .rawText(let text):
-                // Phase 6: verbatim — matches the Managed convert function's
-                // single text block (no tag, no quoting).
+                // Verbatim single text block — no tag, no quoting.
                 content.append(.text(text))
             }
         }

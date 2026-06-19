@@ -15,16 +15,6 @@ import SwiftUI
 
 // MARK: - PillState
 
-/// Phase 6 — the "Write agent prompt" conversion affordance on artifact-less
-/// results, as the pill renders it. `.hidden` (a card is present, or the
-/// feature doesn't apply), `.available` (ghost button), `.running` (inline
-/// spinner), `.failed` (quiet retry note + the button again). Mapped from
-/// `AppState.conversionStatus` by PillHostView so the pill stays a pure
-/// renderer.
-enum ConversionAffordance: Equatable {
-    case hidden, available, running, failed
-}
-
 enum PillState: Equatable {
     case recording(elapsed: String, totalDisplay: String)
     case wrappingUp(elapsed: String, totalDisplay: String)
@@ -209,12 +199,6 @@ struct PillView: View {
     /// explicitly via `result: ResultPillContent.placeholderResult`.
     var result: ResultPresentation? = nil
 
-    /// Phase 6 — the conversion ghost-button state for artifact-less results.
-    /// Defaults `.hidden` so previews/legacy call sites render no affordance.
-    var conversion: ConversionAffordance = .hidden
-    /// Kicks off the conversion (wired to `AppState.convertToAgentPrompt`).
-    var onConvert: () -> Void = {}
-
     /// True when the result was generated from the screen alone (no
     /// usable narration). Drives the amber "no narration detected" note
     /// in the result pill. Threaded from AppState.resultHadNoNarration
@@ -356,11 +340,9 @@ struct PillView: View {
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
-                conversion: conversion,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
-                onDismiss: onDismissResult,
-                onConvert: onConvert
+                onDismiss: onDismissResult
             )
         case .resultExpanded:
             ResultPillContent(
@@ -369,11 +351,9 @@ struct PillView: View {
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
-                conversion: conversion,
                 onCopy: onCopy,
                 onToggleExpand: onToggleExpand,
-                onDismiss: onDismissResult,
-                onConvert: onConvert
+                onDismiss: onDismissResult
             )
         case .error(let headline, let detail, let retryable):
             // Same failure card as `.failureExpanded`, now with a Cancel + Retry
@@ -386,11 +366,9 @@ struct PillView: View {
                 chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
-                conversion: .hidden,
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                onConvert: {},
                 failure: ArtifactCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
@@ -417,11 +395,9 @@ struct PillView: View {
                 chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
-                conversion: .hidden,
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                onConvert: {},
                 failure: ArtifactCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
@@ -448,11 +424,9 @@ struct PillView: View {
                 chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
-                conversion: .hidden,
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                onConvert: {},
                 failure: ArtifactCardView.FailureConfig(headline: headline, detail: detail),
                 onRetry: onRetryError
             )
@@ -485,11 +459,9 @@ struct PillView: View {
                     chargeLine: card.chargeLine,
                     noNarration: false,
                     stoppedBySleep: false,
-                    conversion: .hidden,
                     onCopy: {},
                     onCollapse: onToggleExpand,
                     onDismiss: onDismissResult,
-                    onConvert: {},
                     devResult: ArtifactCardView.DevResultConfig(
                         title: card.title, summary: card.summary, diffText: card.diffText
                     ),
@@ -527,11 +499,9 @@ struct PillView: View {
                 chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
-                conversion: .hidden,
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissResult,
-                onConvert: {},
                 failure: ArtifactCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
@@ -1053,17 +1023,12 @@ private struct ResultPillContent: View {
     /// secondary line under "Prompt ready". `nil` (BYOK/local) keeps the
     /// single-line header exactly as before.
     let chargeLine: String?
-    /// Phase 6 — the "Write agent prompt" affordance state. Rendered only in
-    /// the expanded artifact-less layout.
-    let conversion: ConversionAffordance
     let onCopy: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
     /// as a circular close badge after the Hide/View toggle in the header
     /// strip, separated by a thin vertical hairline divider.
     let onDismiss: () -> Void
-    /// Phase 6 — starts (or retries) the conversion.
-    let onConvert: () -> Void
 
     var body: some View {
         Group {
@@ -1078,17 +1043,10 @@ private struct ResultPillContent: View {
                     chargeLine: chargeLine,
                     noNarration: noNarration,
                     stoppedBySleep: stoppedBySleep,
-                    conversion: conversion,
                     onCopy: onCopy,
                     onCollapse: onToggleExpand,
-                    onDismiss: onDismiss,
-                    onConvert: onConvert
+                    onDismiss: onDismiss
                 )
-                // Phase 6: a converted artifact arrives AFTER the response
-                // is already on screen — animate the body well in rather
-                // than popping. (For a normal generation the card renders
-                // complete from the first frame, so this is inert.)
-                .animation(.spring(response: 0.30, dampingFraction: 0.85), value: result)
             } else {
                 headerStrip
                     // The hosting view needs a DETERMINATE width: fixedSize
@@ -1298,32 +1256,6 @@ private struct ResultPillContent: View {
     )
         .padding(40)
         .background(Color.vfPanelBackground)
-}
-
-#Preview("Result \u{00B7} Convert button") {
-    PillView(
-        state: .resultExpanded,
-        result: ResultPresentation(
-            chatText: "That hydration error comes from rendering `Date.now()` during SSR \u{2014} the server and client markup disagree.",
-            artifact: nil
-        ),
-        conversion: .available
-    )
-    .padding(40)
-    .background(Color.vfPanelBackground)
-}
-
-#Preview("Result \u{00B7} Convert failed") {
-    PillView(
-        state: .resultExpanded,
-        result: ResultPresentation(
-            chatText: "That hydration error comes from rendering `Date.now()` during SSR.",
-            artifact: nil
-        ),
-        conversion: .failed
-    )
-    .padding(40)
-    .background(Color.vfPanelBackground)
 }
 
 #Preview("Error \u{00B7} Short") {

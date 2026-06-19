@@ -198,8 +198,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
                 userContent.append(.text("\n\(item.timestampTag) clicked \"\(label)\""))
 
             case .rawText(let text):
-                // Phase 6: verbatim — no tag, no newline prefix, no quoting,
-                // matching the Managed convert function's single text block.
+                // Verbatim single text block — no tag, no newline prefix, no quoting.
                 userContent.append(.text(text))
             }
         }

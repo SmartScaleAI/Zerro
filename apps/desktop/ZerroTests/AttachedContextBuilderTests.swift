@@ -138,8 +138,8 @@ final class AttachedContextBuilderTests: XCTestCase {
 
     func testWhitespaceOnlyInputsReturnNil() {
         // Blank OCR lines and whitespace-only click labels count for
-        // nothing — both sections empty → nil, so the convert request
-        // never carries an empty context block.
+        // nothing — both sections empty → nil, so the context block is
+        // never assembled as empty.
         XCTAssertNil(AttachedContextBuilder.build(
             frames: [frame(0, ocr: "   \n  ")],
             clicks: [ResolvedClick(seconds: 1.0, label: "  ")]

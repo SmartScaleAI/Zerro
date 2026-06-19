@@ -19,8 +19,7 @@
 //    3. body well — the dark inner prompt container (artifact only):
 //       monospace for `snippet`, markdown otherwise.
 //    4. footer — credits charge line bottom-left; the per-type copy capsule
-//       (artifact) or the ghost "✎ Write agent prompt" button (chat-only)
-//       bottom-right.
+//       (artifact) bottom-right. A chat-only result has no footer action.
 //
 //  Pure renderer: everything it shows arrives via props, every effect
 //  leaves via a closure. Copy payloads live upstream in
@@ -30,8 +29,7 @@
 import SwiftUI
 
 struct ArtifactCardView: View {
-    /// nil → the chat-only layout (no body well, ghost convert button in
-    /// the footer).
+    /// nil → the chat-only layout (no body well, no footer action).
     let artifact: Artifact?
     /// Conversational summary above the prompt box. May be empty when the
     /// model led straight into the artifact.
@@ -43,8 +41,6 @@ struct ArtifactCardView: View {
     let noNarration: Bool
     /// Neutral heads-up: recovered from a sleep-interrupted recording.
     let stoppedBySleep: Bool
-    /// Phase 6 — the "Write agent prompt" affordance state (chat-only).
-    let conversion: ConversionAffordance
     /// Writes the per-type payload to the clipboard (wired to
     /// `AppState.resultCopyPayload` via the pill's onCopy).
     let onCopy: () -> Void
@@ -52,15 +48,13 @@ struct ArtifactCardView: View {
     let onCollapse: () -> Void
     /// The header's close X — dismisses the result (AppState.resetToIdle).
     let onDismiss: () -> Void
-    /// Phase 6 — starts (or retries) the conversion.
-    let onConvert: () -> Void
 
     /// When non-nil, the card renders in its FAILURE configuration (the
     /// "show generation failures in the expanded response card" handoff): the
     /// green check badge becomes the amber caution icon, the title reads
     /// "Generation failed", the body shows the underlying error as prose, and
     /// the footer Copy button is replaced with Retry. All success-only chrome
-    /// (chat text, body well, conversion affordance, charge line, notes) is
+    /// (chat text, body well, charge line, notes) is
     /// suppressed. nil → the normal success card. Defaulted so the success
     /// call site (ResultPillContent) is unchanged.
     var failure: FailureConfig? = nil
@@ -74,7 +68,7 @@ struct ArtifactCardView: View {
     /// agent's human-readable summary in the text region, the readable git diff
     /// in the body well (monospace), and a destructive "Undo" + green "Accept"
     /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
-    /// kept; the success-only chat text, conversion affordance, and copy are
+    /// kept; the success-only chat text and copy are
     /// suppressed — exactly as `failure` suppresses them. The charge line is NOT
     /// suppressed (managed Dev Mode meters its prompt generation like artifact
     /// mode), so it still renders bottom-left from the shared `chargeLine`. nil → the normal card.
@@ -156,9 +150,6 @@ struct ArtifactCardView: View {
                 }
                 if let artifact {
                     bodyWell(for: artifact)
-                }
-                if artifact == nil, conversion == .failed {
-                    conversionFailureNote
                 }
             }
             footer
@@ -322,8 +313,6 @@ struct ArtifactCardView: View {
                 acceptButton
             } else if artifact != nil {
                 copyButton
-            } else if conversion != .hidden {
-                conversionButton
             }
         }
     }
@@ -486,54 +475,6 @@ struct ArtifactCardView: View {
         }
     }
 
-    // MARK: Conversion (chat-only footer)
-
-    /// Phase 6 — the ghost "✎ Write agent prompt" affordance: a quiet
-    /// stroked capsule (deliberately NOT the hero copy style) with an
-    /// inline spinner while the conversion runs. The failure note renders
-    /// above the footer; the existing chat text is never touched.
-    private var conversionButton: some View {
-        Button(action: onConvert) {
-            HStack(spacing: 6) {
-                if conversion == .running {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(Color.vfTextSecondary)
-                    Text("Writing prompt\u{2026}")
-                        .fixedSize()
-                } else {
-                    Image(systemName: "pencil.line")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Write agent prompt")
-                        .fixedSize()
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Color.vfTextSecondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1)
-            )
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .disabled(conversion == .running)
-    }
-
-    private var conversionFailureNote: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfWarningAmber)
-            Text("Couldn\u{2019}t write the prompt \u{2014} try again")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize()
-        }
-    }
-
     // MARK: Notes
 
     /// Amber heads-up shown above the chat text when no usable narration
@@ -688,11 +629,9 @@ struct ChatProseText: View {
         chargeLine: nil,
         noNarration: false,
         stoppedBySleep: false,
-        conversion: .hidden,
         onCopy: {},
         onCollapse: {},
         onDismiss: {},
-        onConvert: {},
         devResult: ArtifactCardView.DevResultConfig(
             title: "Changes applied",
             summary: "Recolored the primary button and tightened the header spacing.",

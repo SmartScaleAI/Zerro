@@ -42,8 +42,8 @@ enum ArtifactParser {
     /// Empty-case sentinel the generation step emits (on its own line) when
     /// the recording held no request of any kind. It is NOT a fence: it never
     /// produces or invalidates an artifact — it only flips `requestPresent`
-    /// off so the convert affordance is suppressed (the chat line is still
-    /// shown). Stripped from chat text so it never reaches the UI.
+    /// off (the chat line is still shown). Stripped from chat text so it never
+    /// reaches the UI.
     private nonisolated static let noRequestSentinel = "<<<ZERRO_NO_REQUEST>>>"
 
     /// Strict open fence: `<<<ZERRO_ARTIFACT type="…" title="…">>>`, alone

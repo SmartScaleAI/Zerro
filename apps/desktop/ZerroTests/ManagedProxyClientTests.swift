@@ -13,8 +13,6 @@
 //    • The request sends audio + frames + clicks (+ model/has_speech) ONLY —
 //      never a transcript, a system prompt, or anything that steers the
 //      server-owned prompt — and a Bearer token, never the license key.
-//    • convert (Phase 6): text-only body to /convert, suffixed idempotency
-//      key, same refresh-once + error taxonomy.
 //
 
 import CoreMedia
@@ -393,83 +391,6 @@ final class ManagedProxyClientTests: XCTestCase {
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
         await assertThrows(.rateLimited) {
             _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
-        }
-    }
-
-    // MARK: - Convert (Phase 6 — the free "Write agent prompt" fallback)
-
-    func testConvertPostsToConvertURLWithSuffixedIdempotencyKey() async throws {
-        let session = StubManagedTransport()
-        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
-        let gen = StubManagedTransport()
-        gen.enqueue(#"{"prompt":"<<<ZERRO_ARTIFACT type=\"agent_prompt\" title=\"T\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>"}"#, status: 200)
-        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-
-        let raw = try await proxy.convert(
-            sourceText: "The error is a stale lockfile.",
-            context: "## Attached Context\n**Clicks:** clicked \"Install\"",
-            model: "gemini-3.5-flash",
-            idempotencyKey: "REC-1:convert"
-        )
-
-        XCTAssertTrue(raw.contains("<<<ZERRO_ARTIFACT"))
-        let request = try XCTUnwrap(gen.requests.first)
-        XCTAssertEqual(request.url, ManagedBackend.convertURL)
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1:convert")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer T1")
-
-        let body = try XCTUnwrap(request.httpBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(
-            Set(json.keys),
-            ["source_text", "context", "model"],
-            "the convert body carries text fields ONLY — no audio, no frames, no transcript"
-        )
-        XCTAssertEqual(json["source_text"] as? String, "The error is a stale lockfile.")
-        XCTAssertEqual(json["model"] as? String, "gemini-3.5-flash")
-    }
-
-    func testConvertOmitsNilContextAndRefreshesOnceOn401() async throws {
-        let session = StubManagedTransport()
-        session.enqueue(ManagedFixtures.sessionJSON(token: "T1"), status: 200)
-        session.enqueue(ManagedFixtures.sessionJSON(token: "T2"), status: 200)
-        let gen = StubManagedTransport()
-        gen.enqueue(#"{"error":"invalid_token"}"#, status: 401)
-        gen.enqueue(#"{"prompt":"converted"}"#, status: 200)
-        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-
-        let raw = try await proxy.convert(sourceText: "src", context: nil, idempotencyKey: "K:convert")
-        XCTAssertEqual(raw, "converted")
-        XCTAssertEqual(gen.callCount, 2, "exactly one refresh+retry")
-        XCTAssertEqual(gen.requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer T2")
-        XCTAssertEqual(gen.requests[1].value(forHTTPHeaderField: "Idempotency-Key"), "K:convert")
-
-        let body = try XCTUnwrap(gen.requests[0].httpBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertNil(json["context"], "nil context is omitted from the wire, not sent as null/empty")
-    }
-
-    func testConvertErrorMapping() async {
-        // (status, expected) — same taxonomy as generate's parse.
-        let cases: [(Int, String, ManagedGenerationError)] = [
-            (429, #"{"error":"rate_limited"}"#, .rateLimited),
-            (503, #"{"error":"provider_unavailable"}"#, .providerUnavailable),
-            (403, #"{"error":"not_entitled"}"#, .notEntitled),
-        ]
-        for (status, body, expected) in cases {
-            let (session, gen) = freshStubs(genStatus: status, genBody: body)
-            let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-            await assertThrows(expected) {
-                _ = try await proxy.convert(sourceText: "src", context: nil)
-            }
-        }
-    }
-
-    func testConvertEmptyPromptIsMalformed() async {
-        let (session, gen) = freshStubs(genStatus: 200, genBody: #"{"prompt":""}"#)
-        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-        await assertThrows(.malformedResponse) {
-            _ = try await proxy.convert(sourceText: "src", context: nil)
         }
     }
 

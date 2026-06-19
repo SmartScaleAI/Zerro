@@ -657,9 +657,10 @@ final class AppState {
     /// shown, built ONCE from the processed recording when the result is
     /// accepted (the recording's frames/clicks never change after that).
     /// Internal-only (revision 2026-06-12: the card's context drawer was
-    /// removed): never rendered and never part of any copy payload — it
-    /// survives solely as the convert request's model input. Reset wherever
-    /// `parsedResponse` is.
+    /// removed): never rendered and never part of any copy payload. It fed the
+    /// app-side "Write agent prompt" convert request, which has since been
+    /// removed — the field is still assembled but currently has no reader.
+    /// Reset wherever `parsedResponse` is.
     var attachedContextBlock: String?
 
     /// True when the result was generated from the screen alone because
@@ -990,9 +991,6 @@ final class AppState {
         generatedPrompt = nil
         parsedResponse = nil
         attachedContextBlock = nil
-        conversionTask?.cancel()
-        conversionTask = nil
-        conversionStatus = .idle
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -1211,9 +1209,6 @@ final class AppState {
         generatedPrompt = nil
         parsedResponse = nil
         attachedContextBlock = nil
-        conversionTask?.cancel()
-        conversionTask = nil
-        conversionStatus = .idle
         lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
@@ -2705,9 +2700,8 @@ final class AppState {
         generatedPrompt = rawPrompt
         parsedResponse = parsed
         // Tier 4 analytics: the activation signal — a usable result was produced.
-        // Fired here (the shared generation `.done` tail), so it counts once per
-        // generation and NOT on the "Write agent prompt" conversion re-parse,
-        // which lands in `acceptConversionResult`. Metadata only.
+        // Fired here, in the shared generation `.done` tail, so it counts once
+        // per generation. Metadata only.
         Analytics.capture("artifact_produced", [
             "artifact_type": parsed.artifact?.type.rawValue ?? "chat",
             "was_chat_only": parsed.artifact == nil,
@@ -2768,7 +2762,7 @@ final class AppState {
 
     /// The Copy button's payload per the §2 per-type table (revised
     /// 2026-06-12): the artifact body alone for EVERY type — the Attached
-    /// Context is internal-only (convert model input) and is never copied. A chat-only
+    /// Context is internal-only and is never copied. A chat-only
     /// response copies the chat text. Falls back to the raw output when
     /// parsing produced no structure.
     var resultCopyPayload: String? {
@@ -3367,179 +3361,6 @@ final class AppState {
             self.resetTransientRecordingState() // discards the snapshot + clears dev state
             self.state = .idle
         }
-    }
-
-    // MARK: - Conversion fallback (Phase 6 — "Write agent prompt")
-
-    /// The ghost button's lifecycle. `.idle` with `canConvertToAgentPrompt`
-    /// true renders the button; `.running` the inline spinner; `.failed` the
-    /// unobtrusive "Couldn't write the prompt — try again" note (the button
-    /// stays — it IS the retry affordance). Reset wherever `parsedResponse` is.
-    enum ConversionStatus: Equatable {
-        case idle, running, failed
-    }
-
-    var conversionStatus: ConversionStatus = .idle
-
-    @ObservationIgnored private var conversionTask: Task<Void, Never>?
-
-    /// The ghost "✎ Write agent prompt" button renders ONLY on artifact-less
-    /// results: the model judged the response a question/diagnosis (or the
-    /// fail-safe degraded a malformed response to chat text — there is still
-    /// chat text worth converting). A result that already has a card never
-    /// shows it.
-    ///
-    /// The one artifact-less case that must NOT show it is the empty case —
-    /// the recording held no request at all. Generation signals that with the
-    /// `<<<ZERRO_NO_REQUEST>>>` sentinel, which the parser turns into
-    /// `requestPresent == false`; converting there has nothing to convert and
-    /// would hallucinate a task from on-screen context. `!= false` (not
-    /// `== true`) keeps the button for every other path, since `requestPresent`
-    /// defaults true.
-    var canConvertToAgentPrompt: Bool {
-        state == .done && parsedResponse != nil && parsedResponse?.artifact == nil
-            && parsedResponse?.requestPresent != false
-    }
-
-    /// Converts the current artifact-less response into an `agent_prompt`
-    /// artifact via the free `convert` endpoint (Managed/trial) or a direct
-    /// provider call with the same conversion prompt (BYOK). On success the
-    /// converted artifact joins the EXISTING ParsedResponse (the chat text is
-    /// never replaced) and updates the existing history entry. On any failure
-    /// the result is left exactly as it was, with an inline retry state.
-    func convertToAgentPrompt() {
-        guard canConvertToAgentPrompt, conversionStatus != .running else { return }
-        guard let parsed = parsedResponse else { return }
-        let source = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
-        guard !source.isEmpty else { return }
-        let context = attachedContextBlock
-        let model = recordingModelID
-            ?? preferences?.selectedModelID
-            ?? ModelRegistry.defaultModelID
-        // Plan Phase 6 step 4: the recording's stable key + ":convert". The
-        // server has no dedup cache today; the suffix keeps the key disjoint
-        // from the generation's if one is ever added.
-        let idemKey = (processedRecording?.idempotencyKey ?? UUID().uuidString) + ":convert"
-
-        conversionStatus = .running
-        Log.artifacts.info("conversion started")
-
-        conversionTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let raw = try await self.performConversion(
-                    source: source,
-                    context: context,
-                    model: model,
-                    idempotencyKey: idemKey
-                )
-                // The user may have dismissed the result (or started a new
-                // recording, which cancels this task) while we waited.
-                guard self.state == .done, self.conversionStatus == .running else { return }
-                self.acceptConversionResult(raw: raw)
-            } catch is CancellationError {
-                // A reset path cancelled us — state was already cleaned up.
-            } catch {
-                Log.artifacts.warning("conversion failed: \(error.localizedDescription, privacy: .private)")
-                guard self.state == .done, self.conversionStatus == .running else { return }
-                self.conversionStatus = .failed
-            }
-        }
-    }
-
-    /// Routes the conversion the same way generation routes (Managed proxy /
-    /// trial proxy / BYOK), falling back to BYOK when the proxy isn't wired —
-    /// the same fail-safe posture as `runPromptGeneration`.
-    private func performConversion(
-        source: String,
-        context: String?,
-        model: String,
-        idempotencyKey: String
-    ) async throws -> String {
-        let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
-        switch route {
-        case .managedProxy:
-            if let proxy = managedProxyClient {
-                return try await proxy.convert(
-                    sourceText: source,
-                    context: context,
-                    model: model,
-                    tokenProvider: nil,
-                    idempotencyKey: idempotencyKey
-                )
-            }
-        case .trialProxy:
-            if let proxy = managedProxyClient, let trial = trialCredits {
-                return try await proxy.convert(
-                    sourceText: source,
-                    context: context,
-                    model: model,
-                    tokenProvider: trial,
-                    idempotencyKey: idempotencyKey
-                )
-            }
-        case .trialNeedsEmail, .local:
-            break
-        }
-        // BYOK (or proxy-unwired fallback): same model routing as generation;
-        // the user text is composed exactly like the server composes it
-        // (source, blank line, context block).
-        guard let entry = BYOKRouting.effectiveEntry(
-            selectedModelID: model,
-            availableProviders: ProviderKeys.availableProviders()
-        ) else {
-            throw PromptGenerationError.missingAPIKey
-        }
-        let userText = context.map { "\(source)\n\n\($0)" } ?? source
-        let result = try await BYOKRouting.service(for: entry).convert(
-            userText: userText,
-            systemPrompt: ConversionSystemPrompt.composed()
-        )
-        return result.prompt
-    }
-
-    /// The conversion's `.done` tail: parse, accept ONLY a well-formed
-    /// `agent_prompt` artifact, and graft it onto the existing response. A
-    /// malformed or off-contract result (chat-only, wrong type) flips the
-    /// inline retry state and leaves the response untouched — the existing
-    /// chat text is never destroyed or replaced.
-    private func acceptConversionResult(raw: String) {
-        let converted = ArtifactParser.parse(raw)
-        guard let artifact = converted.artifact, artifact.type == .agentPrompt else {
-            Log.artifacts.warning(
-                "conversion returned no agent_prompt (got: \(converted.artifact?.rawType ?? "none", privacy: .public)) — inline retry offered"
-            )
-            conversionStatus = .failed
-            return
-        }
-        if converted.wasRecovered {
-            let rules = converted.warnings
-                .filter { $0.hasPrefix("recovered") }
-                .joined(separator: "; ")
-            Log.artifacts.warning("conversion recovery tier fired: \(rules, privacy: .public)")
-        }
-
-        let original = parsedResponse
-        parsedResponse = ParsedResponse(
-            chatText: original?.chatText ?? "",
-            artifact: artifact,
-            isValid: true,
-            wasRecovered: converted.wasRecovered,
-            warnings: converted.warnings
-        )
-        conversionStatus = .idle
-        // The conversion updates the EXISTING history entry — never a second
-        // row (plan Phase 6; keyed on the original raw prompt the entry was
-        // added with).
-        if let originalPrompt = generatedPrompt {
-            recentPromptStore?.attachConvertedArtifact(
-                originalPrompt: originalPrompt,
-                type: artifact.type.rawValue,
-                body: artifact.body,
-                title: artifact.title
-            )
-        }
-        Log.artifacts.info("conversion attached an agent_prompt artifact")
     }
 
     /// User-driven dismissal of the failure pill. Same as cancel —
