@@ -349,7 +349,10 @@ struct AreaSelectorView: View {
     /// the measured label width is added to this to size the model button.
     private static let modelButtonChromeWidth: CGFloat =
         modelButtonHPad * 2 + modelIconWidth + modelLabelGap * 2 + modelChevronWidth
-    private static let containerHPad: CGFloat = 6 * toolbarScale     // container edge → first control
+    // container edge → first/last control. Matched to the components' vertical
+    // inset (`scaled(4)`) so the gap to the toolbar edge is uniform on all four
+    // sides; with the capsule container this nests the controls concentrically.
+    private static let containerHPad: CGFloat = 4 * toolbarScale
     private static let dividerGap: CGFloat = 8 * toolbarScale        // breathing room each side of the divider
     private static let dividerWidth: CGFloat = 1 * toolbarScale
     private static let controlGap: CGFloat = 4 * toolbarScale        // gap between adjacent icon buttons
@@ -1731,10 +1734,10 @@ struct AreaSelectorView: View {
     /// instruction pill, with a soft drop shadow for legibility over arbitrary
     /// captured content.
     private var toolbarContainerChrome: some View {
-        RoundedRectangle(cornerRadius: Self.scaled(16), style: .continuous)
+        Capsule(style: .continuous)
             .fill(Color.vfPillBackground)
             .overlay(
-                RoundedRectangle(cornerRadius: Self.scaled(16), style: .continuous)
+                Capsule(style: .continuous)
                     .strokeBorder(Color.vfHairline, lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.35), radius: Self.scaled(18), y: Self.scaled(6))
@@ -1748,7 +1751,7 @@ struct AreaSelectorView: View {
     /// segment's icon is dimmed. Clicking maps to the mode (Part 5 hit-tests the
     /// two halves separately).
     private var modeSwitchControl: some View {
-        HStack(spacing: Self.scaled(2)) {
+        HStack(spacing: Self.scaled(0)) {
             modeSegment(
                 system: "wand.and.stars",
                 active: !state.isDevMode, isDev: false,
@@ -1763,7 +1766,7 @@ struct AreaSelectorView: View {
         .padding(Self.scaled(3))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
+            Capsule(style: .continuous)
                 .fill(Color.black.opacity(0.18))
         )
         // Match the icon buttons' vertical inset so the recessed well doesn't
@@ -1779,13 +1782,14 @@ struct AreaSelectorView: View {
         let iconColor: Color = active
             ? (isDev ? Color.vfDevAccent : Color.vfTextPrimary)
             : Color.vfTextTertiary
-        // With the well inset, each segment reads as a rounded square (~30×26).
+        // The active/hover highlight is a circular knob so the capsule well +
+        // round knob read as a toggle switch.
         return Image(systemName: system)
             .font(.system(size: Self.scaledGlyph(14), weight: .medium))
             .foregroundStyle(iconColor)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: Self.scaled(7), style: .continuous).fill(fill)
+                Circle().fill(fill)
             )
     }
 
@@ -1882,8 +1886,9 @@ struct AreaSelectorView: View {
     // MARK: Record pill
 
     /// The labeled Record button — a fully-rounded red capsule, inset slightly
-    /// within the container. Always `vfRecordingRed`, never green; a subtle white
-    /// tint on hover.
+    /// within the container. Its vertical inset (`scaled(4)`) matches the model/
+    /// mic/dev dropdown buttons so it reads the same height as them. Always
+    /// `vfRecordingRed`, never green; a subtle white tint on hover.
     private var recordPill: some View {
         ZStack {
             Capsule(style: .continuous).fill(Color.vfRecordingRed)
@@ -1897,7 +1902,7 @@ struct AreaSelectorView: View {
                     .foregroundStyle(.white)
             }
         }
-        .padding(.vertical, Self.scaled(3))
+        .padding(.vertical, Self.scaled(4))
     }
 
     /// Inline record-time validation message (e.g. "Pick a folder…"),

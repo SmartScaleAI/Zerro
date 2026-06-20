@@ -483,25 +483,35 @@ final class AreaSelectorWindowController {
                 // to the panel and never re-orders other Zerro windows.
                 if !window.isKeyWindow { window.makeKey() }
 
+                // While a dropdown/popup is open it owns clicks: the menu sits
+                // visually above the toolbar, so a press inside a control's frame
+                // must route to the menu (select the row under the cursor, or
+                // dismiss) rather than fire the control underneath. Without this,
+                // Record (and the other controls) trigger "through" the open agent
+                // & project menu. Suppress the toolbar-control handlers here; the
+                // menu-open blocks further down do the routing.
+                let anyMenuOpen = state.isModelMenuOpen || state.isMicMenuOpen
+                    || state.isUpgradePopupOpen || state.isDevSettingsMenuOpen
+
                 // Mode switch — two segments, each maps to a mode (Artifact = off,
                 // Dev = on). Clicking the already-active segment is a no-op (the
                 // state guards it). Handled first since the switch leads the
                 // cluster. Present in BOTH modes (it's how you enter/leave Dev).
-                if let artifactFrame, artifactFrame.contains(point) {
+                if !anyMenuOpen, let artifactFrame, artifactFrame.contains(point) {
                     self?.setDevMode(false, state: state)
                     return nil
                 }
-                if let devSegmentFrame, devSegmentFrame.contains(point) {
+                if !anyMenuOpen, let devSegmentFrame, devSegmentFrame.contains(point) {
                     self?.setDevMode(true, state: state)
                     return nil
                 }
                 // Dev-settings icon (Dev Mode) — open/close the agent+project menu.
-                if let devSettingsFrame, devSettingsFrame.contains(point) {
+                if !anyMenuOpen, let devSettingsFrame, devSettingsFrame.contains(point) {
                     state.toggleDevSettingsMenu()
                     return nil
                 }
                 // Record button — start recording.
-                if let recordFrame, recordFrame.contains(point) {
+                if !anyMenuOpen, let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
                     return nil
                 }
@@ -509,7 +519,7 @@ final class AreaSelectorWindowController {
                 // upgrade popup instead of the (premium) model list. Otherwise
                 // open/close the model dropdown (one surface at a time; the state
                 // closes the others).
-                if let modelFrame, modelFrame.contains(point) {
+                if !anyMenuOpen, let modelFrame, modelFrame.contains(point) {
                     if state.isModelPickerLocked {
                         state.toggleUpgradePopup()
                     } else {
@@ -518,7 +528,7 @@ final class AreaSelectorWindowController {
                     return nil
                 }
                 // Mic icon — open/close the device dropdown.
-                if let micFrame, micFrame.contains(point) {
+                if !anyMenuOpen, let micFrame, micFrame.contains(point) {
                     state.toggleMicMenu()
                     return nil
                 }
