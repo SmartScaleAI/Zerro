@@ -36,12 +36,6 @@ const WhatIsZerro = () => {
               to paste into any AI tool or send to a person. Or, when you just
               want to understand something, a clear answer in plain language.
             </p>
-            <p>
-              Everything runs locally first, and you bring your own keys — no
-              servers in the middle, no account required. Talking is faster than
-              typing, and Zerro turns what you say into something you can paste,
-              send, or run.
-            </p>
           </div>
         </div>
 

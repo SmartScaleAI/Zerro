@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, type SVGProps } from "react";
-import { motion } from "motion/react";
-import { Mic, Check, Square } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { Mic, Check, X } from "lucide-react";
 
 // --- Agent marks ------------------------------------------------------------
 // Minimal, monochrome glyphs drawn in `currentColor` to match the site's
@@ -106,6 +106,9 @@ const PHASES = [
     { id: "select", step: 1, status: "Selecting area", ms: 2600 },
     { id: "describe", step: 2, status: "Listening", ms: 3000 },
     { id: "spec", step: 2, status: "Capturing your request", ms: 1800 },
+    // The cursor leaves the card and moves up to the Stop button in the pill;
+    // when it lands (this phase ends) the recording stops and step 3 begins.
+    { id: "reach", step: 2, status: "Capturing your request", ms: 850 },
     { id: "apply", step: 3, status: "Making changes", ms: 2600 },
     { id: "done", step: 3, status: "Done", ms: 2200 },
 ] as const;
@@ -134,6 +137,8 @@ function Cursor() {
 
 function DevModeFlow() {
     const [phase, setPhase] = useState(0);
+    // Live recording timer (seconds), shown in the pill during step 2.
+    const [seconds, setSeconds] = useState(0);
 
     // Advance through the phases on a per-phase timer, looping forever.
     useEffect(() => {
@@ -146,7 +151,19 @@ function DevModeFlow() {
 
     const id = PHASES[phase].id;
     const step = PHASES[phase].step;
-    const recording = id === "select" || id === "describe" || id === "spec";
+
+    // While recording (step 2), tick the timer up one second at a time; reset it
+    // whenever recording isn't active so each loop starts fresh at 0:00.
+    const recording = step === 2;
+    useEffect(() => {
+        if (!recording) {
+            setSeconds(0);
+            return;
+        }
+        const t = setInterval(() => setSeconds((s) => s + 1), 1000);
+        return () => clearInterval(t);
+    }, [recording]);
+
     const selecting = id === "select";
     const speaking = id === "describe";
     const writingSpec = id === "spec";
@@ -155,28 +172,35 @@ function DevModeFlow() {
     // The mismatched card has been rewritten to match its siblings once the
     // agent starts working, and stays corrected through the "done" beat.
     const edited = working || done;
-    // The dashed selection box stays around the target card from the moment the
-    // cursor draws it until the change is applied.
-    const selection = selecting || speaking || writingSpec;
+    // Step 1 draws the selection: the cursor drags a marquee across all three
+    // cards (the box grows from its top-left corner in sync), and the green
+    // dashed region then stays put over all three cards through every step.
     // The subtitle of what the user is saying appears while they describe the
     // change and lingers until Zerro has captured it.
     const showSubtitle = id === "describe" || id === "spec";
-    // Status dot color follows the phase: live green while capturing, green
-    // again as the change lands, neutral otherwise.
-    const dotClass = recording || edited ? "bg-green-400" : "bg-white/40";
-    // The dot pulses while recording and while the agent is actively editing.
-    const pulseDot = recording || working;
-    // The cursor is always on screen and moving through the flow: it drags the
-    // selection over the off-card, drops to the caption bar while the request is
-    // spoken, points at the captured spec, then rests on the card being fixed.
+    // The cursor lives at the mock level (so it can travel between the cards and
+    // the pill up in the title bar). `top` is in px because the vertical layout
+    // is a fixed pixel stack from the mock's top (the extra viewport height at
+    // larger breakpoints is added below the cards), so px stays put across
+    // breakpoints; `left` is a width-relative %. The flow: drag the marquee
+    // corner → circle the middle card while talking → move up to the Stop button
+    // in the pill (landing there ends step 2) → drag back down onto the card.
     const cursorPos =
         id === "select"
-            ? { left: "62%", top: "46%" }
-            : id === "describe"
-              ? { left: "14%", top: "86%" }
-              : id === "spec"
-                ? { left: "60%", top: "30%" }
-                : { left: "50%", top: "44%" };
+            ? { left: ["3%", "95%"], top: ["104px", "246px"] }
+            : id === "describe" || id === "spec"
+              ? { left: "50%", top: "176px" }
+              : id === "reach"
+                ? { left: "64%", top: "20px" }
+                : { left: "50%", top: "176px" }; // apply, done — dragged back down
+    // The select drag is a slow sweep; the trip up to Stop and the drag back down
+    // are deliberate moves; every other reposition is a quick glide.
+    const cursorTransition =
+        selecting
+            ? { duration: 1.4, ease: "easeInOut" as const }
+            : id === "reach" || id === "apply"
+              ? { duration: 0.8, ease: "easeInOut" as const }
+              : { duration: 0.6, ease: "easeInOut" as const };
 
     return (
         <div className="relative">
@@ -191,34 +215,156 @@ function DevModeFlow() {
             {/* Browser-window mock — fixed gray chrome in both themes (matches the app) */}
             <div className="relative z-10 overflow-hidden rounded-2xl border border-white/10 bg-[#202022] p-3 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.45)] sm:p-4">
                 {/* Title bar */}
-                <div className="mb-3 flex items-center gap-2 px-1">
+                <div className="relative mb-3 flex items-center gap-2 px-1">
                     <span className="h-2.5 w-2.5 rounded-full bg-white/20" />
                     <span className="h-2.5 w-2.5 rounded-full bg-white/20" />
                     <span className="h-2.5 w-2.5 rounded-full bg-white/20" />
-                    <span className="ml-2 truncate rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-white/45">
+                    <span className="ml-2 hidden truncate rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-white/45 sm:block">
                         localhost:3000
                     </span>
-                    {/* Live status pill */}
-                    <span className="ml-auto flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-white/70">
-                        <motion.span
-                            className={`h-1.5 w-1.5 rounded-full ${dotClass}`}
-                            animate={
-                                pulseDot
-                                    ? { opacity: [1, 0.3, 1] }
-                                    : { opacity: 1 }
-                            }
-                            transition={
-                                pulseDot
-                                    ? { duration: 1.1, repeat: Infinity }
-                                    : { duration: 0.2 }
-                            }
-                        />
-                        {PHASES[phase].status}
-                    </span>
+
+                    {/* Centered status pill — a small replica of the app's
+                        control pill. One fixed-size shell is on screen the whole
+                        time; its three content layers (select prompt → live
+                        recording → changes applied) are stacked in a single grid
+                        cell and cross-fade by step, so every pill is the same
+                        width and height and they dissolve into each other. */}
+                    <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                        <AnimatePresence>
+                            {(step === 1 || step === 2 || step === 3) && (
+                                <motion.div
+                                    key="status-pill"
+                                    initial={{ opacity: 0, y: -4, scale: 0.96 }}
+                                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                                    exit={{ opacity: 0, y: -4, scale: 0.96 }}
+                                    transition={{ duration: 0.3, ease: "easeInOut" }}
+                                    className="relative grid h-7 w-[248px] overflow-hidden rounded-full border border-white/10 bg-black/75 px-1 shadow-lg backdrop-blur-sm sm:w-[255px]"
+                                >
+                                            {/* step 1 — drag-to-select prompt */}
+                                            <motion.div
+                                                initial={false}
+                                                animate={{ opacity: step === 1 ? 1 : 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="flex w-full items-center justify-between pr-2 [grid-area:1/1]"
+                                            >
+                                                {/* left — prompt */}
+                                                <div className="flex items-center gap-1.5">
+                                                    {/* hollow ready ring */}
+                                                    <span className="h-2 w-2 shrink-0 rounded-full border border-white/40" />
+                                                    <span className="shrink-0 whitespace-nowrap text-[10px] text-white/90">
+                                                        Drag to select an area to narrate
+                                                    </span>
+                                                </div>
+                                                {/* right — cancel */}
+                                                <span className="shrink-0 text-[10px] text-white/40">
+                                                    Cancel
+                                                </span>
+                                            </motion.div>
+                                            {/* step 2 — live recording */}
+                                            <motion.div
+                                                initial={false}
+                                                animate={{ opacity: step === 2 ? 1 : 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="flex w-full items-center justify-between [grid-area:1/1]"
+                                            >
+                                                {/* left — recording info */}
+                                                <div className="flex items-center gap-1.5">
+                                                    {/* pulsing red record dot */}
+                                                    <motion.span
+                                                        className="h-2 w-2 shrink-0 rounded-full bg-red-500"
+                                                        animate={{ opacity: [1, 0.35, 1] }}
+                                                        transition={{ duration: 1.1, repeat: Infinity }}
+                                                    />
+                                                    {/* timer */}
+                                                    <span className="shrink-0 font-mono text-[10px] tabular-nums text-white/85">
+                                                        {`${Math.floor(seconds / 60)}:${String(
+                                                            seconds % 60,
+                                                        ).padStart(2, "0")}`}{" "}
+                                                        <span className="text-white/40">/ 3:00</span>
+                                                    </span>
+                                                    {/* live waveform — varied bar
+                                                        heights for a natural audio
+                                                        look, centered on a midline */}
+                                                    <div className="flex shrink-0 items-center gap-[1px]">
+                                                        {[
+                                                            0.35, 0.55, 0.85, 0.3, 0.45, 0.7, 1,
+                                                            0.4, 0.6, 0.95, 0.5, 0.8, 0.35, 0.65,
+                                                            0.9, 0.45, 0.3, 0.55,
+                                                        ].map((h, i) => (
+                                                            <motion.span
+                                                                key={i}
+                                                                className="w-[1.5px] rounded-full bg-white/70"
+                                                                style={{ height: 12 }}
+                                                                animate={
+                                                                    speaking
+                                                                        ? { scaleY: [h * 0.5, h, h * 0.5] }
+                                                                        : { scaleY: h }
+                                                                }
+                                                                transition={
+                                                                    speaking
+                                                                        ? {
+                                                                              duration: 0.7,
+                                                                              repeat: Infinity,
+                                                                              delay: i * 0.05,
+                                                                              ease: "easeInOut",
+                                                                          }
+                                                                        : { duration: 0.2 }
+                                                                }
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                {/* right — controls */}
+                                                <div className="flex items-center gap-2">
+                                                    {/* cancel — trimmed on the narrowest widths */}
+                                                    <span className="hidden shrink-0 items-center gap-1 text-[10px] text-white/40 sm:flex">
+                                                        <X className="h-2.5 w-2.5" strokeWidth={2} />
+                                                        Cancel
+                                                    </span>
+                                                    {/* stop button */}
+                                                    <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-500 px-2 py-0.5 text-[10px] font-medium text-white">
+                                                        <span className="h-1.5 w-1.5 rounded-[1px] bg-white" />
+                                                        Stop
+                                                    </span>
+                                                </div>
+                                            </motion.div>
+                                            <motion.div
+                                                initial={false}
+                                                animate={{ opacity: step === 3 ? 1 : 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="flex w-full items-center justify-between [grid-area:1/1]"
+                                            >
+                                                {/* left — result */}
+                                                <div className="flex items-center gap-1.5">
+                                                    {/* green check */}
+                                                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-400/15 text-green-400 ring-1 ring-green-400/40">
+                                                        <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                                                    </span>
+                                                    {/* result label */}
+                                                    <span className="shrink-0 text-[10px] font-semibold text-white">
+                                                        Changes applied
+                                                    </span>
+                                                </div>
+                                                {/* right — actions */}
+                                                <div className="flex items-center gap-2">
+                                                    {/* undo */}
+                                                    <span className="shrink-0 text-[10px] font-medium text-red-400">
+                                                        Undo
+                                                    </span>
+                                                    {/* accept button */}
+                                                    <span className="shrink-0 rounded-full bg-green-400 px-2.5 py-0.5 text-[10px] font-semibold text-neutral-900">
+                                                        Accept
+                                                    </span>
+                                                </div>
+                                            </motion.div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
                 </div>
 
                 {/* Viewport — the page being recorded */}
-                <div className="relative h-80 overflow-hidden rounded-xl bg-[#0a0a0b] ring-1 ring-white/[0.06] sm:h-[24rem] lg:h-[27rem]">
+                <div className="relative h-72 overflow-hidden rounded-xl bg-[#0a0a0b] ring-1 ring-white/[0.06] sm:h-[21rem] lg:h-[23rem]">
                     {/* Mock page content */}
                     <div className="flex h-full flex-col gap-4 p-5 sm:p-6">
                         {/* Header bar — fixed page chrome (not the edit target) */}
@@ -238,7 +384,8 @@ function DevModeFlow() {
                             the middle one starts off-brand (amber, misaligned
                             widths). It's the div the user asks the agent to fix;
                             once `edited`, it animates back into the shared style. */}
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="relative">
+                            <div className="grid grid-cols-3 gap-4">
                             {[0, 1, 2].map((i) => {
                                 const target = i === 1;
                                 // The middle card is mismatched until corrected.
@@ -246,16 +393,19 @@ function DevModeFlow() {
                                 return (
                                     <motion.div
                                         key={i}
-                                        className="relative flex flex-col gap-2 rounded-lg p-3"
+                                        className="relative flex flex-col gap-3 rounded-lg p-5"
                                         animate={{
                                             backgroundColor: off
                                                 ? "rgba(251,191,36,0.14)"
                                                 : "rgba(255,255,255,0.04)",
+                                            // The middle card starts undersized and
+                                            // grows to match its siblings once fixed.
+                                            scale: off ? 0.8 : 1,
                                         }}
                                         transition={{ duration: 0.45 }}
                                     >
                                         <motion.span
-                                            className="h-6 w-6 rounded-md"
+                                            className="h-10 w-10 rounded-md"
                                             animate={{
                                                 backgroundColor: off
                                                     ? "rgba(251,191,36,0.6)"
@@ -264,7 +414,7 @@ function DevModeFlow() {
                                             transition={{ duration: 0.45 }}
                                         />
                                         <motion.span
-                                            className="block h-2 rounded-full"
+                                            className="block h-2.5 rounded-full"
                                             animate={{
                                                 width: off ? "55%" : "100%",
                                                 backgroundColor: off
@@ -274,7 +424,7 @@ function DevModeFlow() {
                                             transition={{ duration: 0.45 }}
                                         />
                                         <motion.span
-                                            className="block h-2 rounded-full"
+                                            className="block h-2.5 rounded-full"
                                             animate={{
                                                 width: off ? "85%" : "66%",
                                                 backgroundColor: off
@@ -283,36 +433,29 @@ function DevModeFlow() {
                                             }}
                                             transition={{ duration: 0.45 }}
                                         />
-
-                                        {/* Dashed selection box drawn around the
-                                            mismatched card while it's selected */}
-                                        {target && (
-                                            <motion.span
-                                                aria-hidden="true"
-                                                className="pointer-events-none absolute -inset-1 rounded-lg border border-dashed border-green-400/80 bg-green-400/[0.06]"
-                                                initial={false}
-                                                animate={{ opacity: selection ? 1 : 0 }}
-                                                transition={{ duration: 0.3 }}
-                                            />
-                                        )}
-
-                                        {/* Check that pops once the card matches */}
-                                        {target && (
-                                            <motion.span
-                                                className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-green-400 text-neutral-900 shadow"
-                                                initial={false}
-                                                animate={{
-                                                    opacity: edited ? 1 : 0,
-                                                    scale: edited ? 1 : 0.6,
-                                                }}
-                                                transition={{ duration: 0.3 }}
-                                            >
-                                                <Check className="h-3 w-3" strokeWidth={3} />
-                                            </motion.span>
-                                        )}
                                     </motion.div>
                                 );
                             })}
+                            </div>
+
+                            {/* Marquee selection around all three cards. During
+                                step 1 it grows from its top-left corner in sync
+                                with the cursor drag (scale 0 → 1); for every
+                                other step it stays fully drawn over all three. */}
+                            <motion.span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute -inset-2 origin-top-left rounded-xl border border-dashed border-green-400/80 bg-green-400/[0.06]"
+                                initial={false}
+                                animate={{
+                                    scaleX: selecting ? [0, 1] : 1,
+                                    scaleY: selecting ? [0, 1] : 1,
+                                }}
+                                transition={
+                                    selecting
+                                        ? { duration: 1.4, ease: "easeInOut" }
+                                        : { duration: 0.3 }
+                                }
+                            />
                         </div>
 
                         {/* Body skeleton */}
@@ -320,103 +463,11 @@ function DevModeFlow() {
                             <span className="block h-2 w-3/4 rounded-full bg-white/10" />
                             <span className="block h-2 w-1/2 rounded-full bg-white/10" />
                         </div>
-
-                        {/* CTA — static page chrome */}
-                        <div className="mt-auto w-fit">
-                            <button
-                                type="button"
-                                className="rounded-lg bg-indigo-500 px-4 py-2 text-[13px] font-semibold text-white"
-                            >
-                                Get started
-                            </button>
-                        </div>
                     </div>
-
-                    {/* REC / stop badge */}
-                    <div className="absolute left-3 top-3">
-                        {recording ? (
-                            <span className="flex items-center gap-1.5 rounded bg-green-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                                <motion.span
-                                    className="h-1.5 w-1.5 rounded-full bg-white"
-                                    animate={{ opacity: [1, 0.3, 1] }}
-                                    transition={{ duration: 1.1, repeat: Infinity }}
-                                />
-                                REC
-                            </span>
-                        ) : (
-                            <span className="flex items-center gap-1.5 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-white/70">
-                                <Square className="h-2 w-2 fill-current" strokeWidth={0} />
-                                Stopped
-                            </span>
-                        )}
-                    </div>
-
-                    {/* Editing chip while the agent is actively making changes */}
-                    <motion.div
-                        className="absolute right-3 top-3 flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-white/80"
-                        initial={false}
-                        animate={{ opacity: working ? 1 : 0, y: working ? 0 : -4 }}
-                        transition={{ duration: 0.3 }}
-                    >
-                        <motion.span
-                            className="h-1.5 w-1.5 rounded-full bg-green-400"
-                            animate={{ opacity: [1, 0.3, 1] }}
-                            transition={{ duration: 0.9, repeat: Infinity }}
-                        />
-                        Editing
-                    </motion.div>
-
-                    {/* Done chip once the change has landed */}
-                    <motion.div
-                        className="absolute right-3 top-3 flex items-center gap-1 rounded bg-green-400/15 px-1.5 py-0.5 text-[10px] font-semibold text-green-400"
-                        initial={false}
-                        animate={{ opacity: done ? 1 : 0, y: done ? 0 : -4 }}
-                        transition={{ duration: 0.3 }}
-                    >
-                        <Check className="h-3 w-3" strokeWidth={3} />
-                        Done
-                    </motion.div>
-
-                    {/* Zerro writing the spec — a small card scans in */}
-                    <motion.div
-                        className="absolute right-3 top-12 w-44 rounded-lg border border-white/10 bg-[#161617] p-2.5 shadow-lg"
-                        initial={false}
-                        animate={{
-                            opacity: writingSpec ? 1 : 0,
-                            y: writingSpec ? 0 : 8,
-                        }}
-                        transition={{ duration: 0.3 }}
-                    >
-                        <div className="mb-1.5 flex items-center gap-1.5">
-                            <span className="flex h-4 w-4 items-center justify-center rounded bg-white text-[10px] font-bold text-neutral-900">
-                                Z
-                            </span>
-                            <span className="text-[11px] font-semibold text-white">
-                                Change spec
-                            </span>
-                        </div>
-                        <ul className="space-y-1 font-mono text-[10px] leading-snug text-white/60">
-                            <li>1. Match this card to the others.</li>
-                            <li>2. Use the shared card style.</li>
-                        </ul>
-                    </motion.div>
-
-                    {/* Animated cursor — drags the selection over the off-card,
-                        drops to the caption bar while the request is spoken,
-                        points at the captured spec, then rests on the card as it
-                        gets fixed. It's on screen through every step. */}
-                    <motion.div
-                        className="pointer-events-none absolute z-20"
-                        initial={false}
-                        animate={cursorPos}
-                        transition={{ duration: 0.6, ease: "easeInOut" }}
-                    >
-                        <Cursor />
-                    </motion.div>
 
                     {/* Subtitle — what the user is saying out loud */}
                     <motion.div
-                        className="absolute inset-x-3 bottom-3 flex items-center gap-2 rounded-lg bg-black/70 px-3 py-2 backdrop-blur-sm"
+                        className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-2 rounded-lg bg-black/70 px-3 py-2 backdrop-blur-sm"
                         initial={false}
                         animate={{
                             opacity: showSubtitle ? 1 : 0,
@@ -451,10 +502,41 @@ function DevModeFlow() {
                             ))}
                         </div>
                         <span className="truncate text-[12px] text-white/85">
-                            &ldquo;Fix this div so it matches the rest.&rdquo;
+                            &ldquo;Fix this card so it matches the other cards in this section.&rdquo;
                         </span>
                     </motion.div>
                 </div>
+
+                {/* Animated cursor — lives at the mock level so it can travel
+                    between the cards and the pill in the title bar. It drags the
+                    marquee corner, circles the middle card while talking, moves up
+                    to the Stop button to end the recording, then drags back down. */}
+                <motion.div
+                    className="pointer-events-none absolute left-0 top-0 z-30"
+                    initial={false}
+                    animate={cursorPos}
+                    transition={cursorTransition}
+                >
+                    {/* Through step 2 the cursor traces a small circle over the
+                        middle card to "point it out". */}
+                    <motion.div
+                        animate={
+                            speaking || writingSpec
+                                ? {
+                                      x: [0, 7, 10, 7, 0, -7, -10, -7, 0],
+                                      y: [-10, -7, 0, 7, 10, 7, 0, -7, -10],
+                                  }
+                                : { x: 0, y: 0 }
+                        }
+                        transition={
+                            speaking || writingSpec
+                                ? { duration: 1.8, repeat: Infinity, ease: "linear" }
+                                : { duration: 0.2 }
+                        }
+                    >
+                        <Cursor />
+                    </motion.div>
+                </motion.div>
             </div>
 
             {/* Three-step flow — names the story the animation is acting out
@@ -541,7 +623,7 @@ const DevMode = () => {
             {/* Centered section header — eyebrow + heading sit above the hero */}
             <div className="mx-auto mb-10 flex max-w-2xl flex-col items-center gap-3 text-center lg:mb-14">
                 <p className="text-sm font-medium uppercase tracking-[0.18em] text-green-400">
-                    DevMode
+                    Dev Mode
                 </p>
                 <h2 className="text-3xl font-medium leading-tight tracking-tight text-foreground sm:text-4xl lg:text-5xl">
                     Describe the changes,

@@ -124,9 +124,6 @@ const ARTIFACTS: Record<ArtifactType, ArtifactSpec> = {
     },
 };
 
-// Static representative footer value — constant across every type.
-const CREDITS_LINE = "−4 credits · 147 left";
-
 // --- Per-type body renderers ------------------------------------------------
 
 // Agent prompt: markdown, mono-leaning — an intro line followed by numbered steps.
@@ -271,7 +268,7 @@ export default function ToolFeature() {
                     The output
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">
-                    The prompt writes itself.
+                    Never type again.
                 </h2>
                 <p className="max-w-xl text-base text-muted-foreground">
                     Every recording becomes exactly what you need — an agent prompt, a message, a snippet, or a document, written up and ready to use. Or, when you just want to understand something, a clear answer in plain language.
@@ -367,9 +364,8 @@ export default function ToolFeature() {
                         </div>
                     </div>
 
-                    {/* Footer row — credits (left), copy pill with type icon + label (right) */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5">
-                        <span className="text-sm text-white/40">{CREDITS_LINE}</span>
+                    {/* Footer row — copy pill with type icon + label (right) */}
+                    <div className="flex flex-wrap items-center justify-end gap-3 px-5 py-3.5">
                         <button
                             type="button"
                             onClick={handleCopy}
