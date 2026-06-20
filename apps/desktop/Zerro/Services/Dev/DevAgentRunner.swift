@@ -331,6 +331,16 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         DevAgentProcessExecution.parseResultSummary(line)
     }
 
+    /// Testing seam for the `result`-event error parser (the failure-detail path).
+    nonisolated static func parseResultErrorForTesting(_ line: String) -> String? {
+        DevAgentProcessExecution.parseResultError(line)
+    }
+
+    /// Testing seam for the Cursor `error`-event capture (the failure-detail path).
+    nonisolated static func parseStreamErrorEventForTesting(_ line: String) -> String? {
+        DevAgentProcessExecution.parseStreamErrorEvent(line)
+    }
+
     /// Testing seam for the question-stripping pass applied to dev summaries.
     nonisolated static func summaryDroppingQuestionsForTesting(_ text: String) -> String? {
         DevAgentProcessExecution.summaryDroppingQuestions(text)
@@ -383,6 +393,18 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// `result` event. nil until that event is seen (or if it carried no usable
     /// text); rides out on `.succeeded(summary:)` for the result card (Part A).
     nonisolated(unsafe) private var resultSummary: String?
+    /// The agent's error text from a stream-json event that marks a failure —
+    /// Claude Code's terminal `result` (`is_error`/error subtype, enriched with the
+    /// denied command) OR a Cursor top-level `error` event mid-stream (Cursor often
+    /// ends WITHOUT a terminal `result`, so its error rides here or on stderr). Last
+    /// writer wins. Rides out as the `.nonZeroExit` detail so the pill shows the real
+    /// reason instead of the generic fallback. nil until/unless such an event is seen.
+    nonisolated(unsafe) private var resultError: String?
+    /// The last non-empty line a `.text`-format agent (Codex) printed to stdout.
+    /// Codex prints its fatal error as a normal text line; kept here as the FLOOR of
+    /// the failure-detail chain (below stream-json error and stderr) so a non-zero
+    /// exit can still surface it. nil until the first non-empty `.text` line.
+    nonisolated(unsafe) private var lastTextLine: String?
 
     nonisolated init(
         executableURL: URL,
@@ -543,24 +565,40 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// each meaningful event maps to a `DevAgentEvent` (a structural/noise frame
     /// parses to nil and is skipped — DISPLAY only, the stall clock already reset
     /// in `ingestStdout`). When it's the terminal `result` event, also capture the
-    /// agent's final message text for the success summary (Part A). For `.text`
+    /// agent's final message text for the success summary (Part A) AND its error
+    /// text for the failure detail (the stream-json agents report fatal errors in
+    /// the `result` event, not on stderr). For `.text`
     /// (Codex) every non-empty line becomes a coarse `.message` event — still live,
     /// still resets the clock.
     nonisolated private func processStreamLine(_ line: String) {
         switch outputFormat {
         case .streamJSON:
+            // Cursor can emit a top-level `error` event mid-stream and then end
+            // WITHOUT a terminal `result` — capture its text (NOT rendered; it
+            // parses to nil below) so the failure still has detail even if stderr
+            // was empty. Last one wins. Checked before the render guard since the
+            // event has no feed representation.
+            if let errText = DevAgentProcessExecution.parseStreamErrorEvent(line) {
+                resultError = errText
+            }
             guard let event = DevAgentProcessExecution.parseStreamJSONLine(line) else { return }
             // `.done` is produced ONLY by the `result` event, so parse its summary
             // here rather than re-inspecting every line. (Pattern-match rather than
             // `==` so the comparison stays nonisolated under the module's default
             // MainActor isolation.)
-            if case .done = event.kind, let summary = DevAgentProcessExecution.parseResultSummary(line) {
-                resultSummary = summary
+            if case .done = event.kind {
+                if let summary = DevAgentProcessExecution.parseResultSummary(line) {
+                    resultSummary = summary
+                }
+                if let errText = DevAgentProcessExecution.parseResultError(line) {
+                    resultError = errText
+                }
             }
             emit(event)
         case .text:
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+            lastTextLine = trimmed          // remember for the failure detail (Codex)
             emit(DevAgentEvent(kind: .message, detail: trimmed))
         }
     }
@@ -588,10 +626,20 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         if status == 0 {
             finish(.succeeded(summary: resultSummary))
         } else {
-            finish(.failed(.nonZeroExit(
-                code: status,
-                stderrTail: stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
-            )))
+            // Best-available failure detail, most-specific first (handoff §D) — each
+            // CLI reports failures differently:
+            //   resultError  — stream-json error (Claude `result` / Cursor `error` event)
+            //   stderrTail   — Cursor & Codex fatal errors (Claude's rare case)
+            //   lastTextLine — Codex error printed to stdout (the floor)
+            // stderr beats lastTextLine: a non-zero exit with real stderr is a truer
+            // error than the last chatty stdout line. nil → userMessage floors to the
+            // generic line. The associated value stays named `stderrTail` (now "best
+            // available detail"); `DevDispatchFailure.userMessage` shows whatever
+            // non-empty string it gets.
+            let detail = resultError
+                ?? DevAgentProcessExecution.nonEmpty(stderrTail)
+                ?? lastTextLine
+            finish(.failed(.nonZeroExit(code: status, stderrTail: detail ?? "")))
         }
     }
 
@@ -752,6 +800,95 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         // "Want me to also…?" the agent tacks on is a dead end. Drop questions
         // (trailing OR mid-paragraph) so the summary ends on a statement.
         return summaryDroppingQuestions(text)
+    }
+
+    /// Extract the agent's error text from a terminal `result` event that marks a
+    /// FAILURE, so a non-zero exit can surface the real reason instead of the
+    /// generic fallback. The stream-json agents (Claude Code, cursor-agent) report
+    /// their fatal error in the `result` event on stdout, not on stderr — the
+    /// success-only `parseResultSummary` skips it because the Claude Code error
+    /// subtype omits the top-level `result` string.
+    ///
+    /// A `result` event counts as an error when `is_error == true` OR `subtype` is
+    /// anything other than `"success"` (Claude Code uses `success` /
+    /// `error_max_turns` / `error_during_execution`; cursor-agent/Codex vary — we
+    /// don't hard-code one). Returns the first non-empty string among `result`,
+    /// `error`, `message`, `subtype` (agents disagree on which field carries the
+    /// human text; `subtype` is the last resort so we at least surface
+    /// `error_max_turns` rather than nothing). Unlike the success path this does NOT
+    /// strip questions — errors are shown verbatim. nil for a success result, a
+    /// non-result line, or an error with no usable text. Defensive — unknown shapes
+    /// degrade to nil, never crash.
+    nonisolated static func parseResultError(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              obj["type"] as? String == "result"
+        else { return nil }
+        // Only treat it as an error result — a clean `success` is not our concern.
+        let isError = (obj["is_error"] as? Bool) == true
+        let subtype = obj["subtype"] as? String
+        let subtypeIsFailure = subtype != nil && subtype != "success"
+        guard isError || subtypeIsFailure else { return nil }
+        // First non-empty human text, in order of preference; `subtype` last so we
+        // surface a category rather than nothing.
+        var base: String?
+        for key in ["result", "error", "message", "subtype"] {
+            if let s = (obj[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !s.isEmpty {
+                base = s
+                break
+            }
+        }
+        // Edits-only is our default posture (Bash disallowed / sandboxed), so the
+        // most common Claude Code failure is a denied shell command — `error`
+        // ("Permission denied") is true but useless without *which* command. Enrich
+        // from `permission_denials` when present.
+        let denials = permissionDenialSummary(obj["permission_denials"])
+        switch (base, denials) {
+        case let (b?, d?):  return "\(b) — \(d)"
+        case let (b?, nil): return b
+        case let (nil, d?): return d
+        case (nil, nil):    return nil
+        }
+    }
+
+    /// Summarize Claude Code's `permission_denials` array into one line — the denied
+    /// tool + its command per denial (`"Bash: git fetch origin main"`), capped at the
+    /// first 3 so the pill stays sane. Defensive: a non-array, or a denial missing
+    /// `tool_name`, is skipped; nil when nothing usable survives.
+    nonisolated private static func permissionDenialSummary(_ value: Any?) -> String? {
+        guard let denials = value as? [[String: Any]], !denials.isEmpty else { return nil }
+        let parts: [String] = denials.prefix(3).compactMap { denial in
+            guard let tool = (denial["tool_name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !tool.isEmpty else { return nil }
+            if let cmd = ((denial["tool_input"] as? [String: Any])?["command"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !cmd.isEmpty {
+                return "\(tool): \(cmd)"
+            }
+            return tool
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
+    }
+
+    /// Capture a Cursor top-level `error` event's text (NOT rendered to the feed).
+    /// Cursor can emit `{"type":"error", …}` mid-stream and then end the stream
+    /// WITHOUT a terminal `result` event — stashing its message gives the failure a
+    /// detail even when stderr was empty. Returns the `message`/`error` string, or
+    /// nil for a non-error line. Defensive — unknown shapes degrade to nil.
+    nonisolated static func parseStreamErrorEvent(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              obj["type"] as? String == "error"
+        else { return nil }
+        for key in ["message", "error"] {
+            if let s = (obj[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !s.isEmpty {
+                return s
+            }
+        }
+        return nil
     }
 
     /// Remove question sentences from an agent's free-text summary so the
