@@ -1060,25 +1060,103 @@ final class AreaSelectorWindowController {
                 window.makeKeyAndOrderFront(nil)
             }
             guard let self, let state, state.isDevMode else { return }
-            switch BrowserURLReader.resolveFolder(forURL: url, folderForPort: { self.preferences?.projectURL(forPort: $0) }) {
-            case .autoFill(let folder, let port):
-                // HIT → pre-fill the mapped folder, show the hint, verify the repo.
-                state.setAutoMatchedProject(folder, port: port)
+
+            // LIVE port→folder resolution (off-main), consulted BEFORE the learned
+            // cache so a stale `devProjectByPort` entry can self-correct: find the
+            // process actually serving the detected port and derive its project
+            // root. Only runs when an explicit localhost port is present (the
+            // privacy boundary); fail-open to nil → the cache/last-used fallback.
+            let port = url.flatMap { BrowserURLReader.portForLocalhostURL($0) }
+            let liveFolder: URL?
+            if let port {
+                liveFolder = await LocalhostPortResolver.resolveProjectFolder(forPort: port)
+            } else {
+                liveFolder = nil
+            }
+
+            guard let preferences = self.preferences else { return }
+            switch Self.applyLocalhostAutoMatch(
+                url: url,
+                liveFolderForPort: { $0 == port ? liveFolder : nil },
+                state: state,
+                preferences: preferences
+            ) {
+            case .autoFilled(let folder):
+                // HIT (live or cached) → folder pre-filled + map/last-used
+                // refreshed by the helper; verify the repo here (needs the
+                // controller's async git probe).
                 self.beginGitRepoCheck(for: folder, state: state)
-            case .notePort(let port):
-                // Port detected but unmapped → remember it so a folder pick /
-                // record LEARNS the mapping; leave the current folder untouched.
-                state.noteDetectedLocalhostPort(port)
-            case .none:
+            case .notedPort:
+                // Port detected but unresolved → the helper remembered it so a
+                // folder pick / record learns the mapping; folder left untouched.
+                break
+            case .noMatch:
                 // Miss / no localhost tab / denied / timeout → keep the last-used
                 // folder. If permission was actually DENIED, surface the one-time,
                 // dismissible explainer (non-blocking) — never nag.
-                if self.preferences?.hasShownLocalhostDenialNote != true,
+                if preferences.hasShownLocalhostDenialNote != true,
                    BrowserURLReader.automationDenied() {
-                    self.preferences?.hasShownLocalhostDenialNote = true
+                    preferences.hasShownLocalhostDenialNote = true
                     state.showLocalhostNotice(.denied)
                 }
             }
+        }
+    }
+
+    /// What an auto-match attempt resolved to, so the caller can run the
+    /// follow-ups it owns (the async git-repo probe; the denial explainer).
+    enum LocalhostAutoMatchOutcome: Equatable {
+        /// A folder was filled (live hit or cache hit); `folder` is it.
+        case autoFilled(folder: URL)
+        /// A port was detected but no folder resolved; the port was remembered.
+        case notedPort
+        /// No localhost port at all (non-local URL, none, denied, timeout).
+        case noMatch
+    }
+
+    /// The PURE, testable core of localhost auto-match: turn a (possibly nil)
+    /// detected URL + a LIVE port→folder resolver into the state + preference
+    /// mutations, with the learned `devProjectByPort` map as a fallback/cache.
+    ///
+    /// Resolution precedence per detected port: LIVE result (authoritative — the
+    /// project genuinely serving the port) THEN the cached `devProjectByPort`
+    /// entry. On a hit:
+    ///   • pre-fill the folder + flag the hint (`setAutoMatchedProject`),
+    ///   • remember it as the global last-used (`devProjectURL`) — so an
+    ///     auto-matched folder seeds the next launch (previously only the manual
+    ///     picker did this), and
+    ///   • REFRESH the cache (`setProjectURL(forPort:)`) only when it disagrees —
+    ///     so a live result that beat a stale cache entry teaches the map the
+    ///     correct folder (and a pure cache hit writes nothing).
+    /// A miss notes the port (so a later pick learns it) and NEVER clears a set
+    /// folder. Lives here (not in `BrowserURLReader`) because it mutates app
+    /// state/preferences; the live I/O is injected so tests never touch `lsof`.
+    @MainActor
+    @discardableResult
+    static func applyLocalhostAutoMatch(
+        url: String?,
+        liveFolderForPort: (Int) -> URL?,
+        state: AreaSelectorState,
+        preferences: PreferencesStore
+    ) -> LocalhostAutoMatchOutcome {
+        // Live-first, then the learned cache.
+        let folderForPort: (Int) -> URL? = { liveFolderForPort($0) ?? preferences.projectURL(forPort: $0) }
+        switch BrowserURLReader.resolveFolder(forURL: url, folderForPort: folderForPort) {
+        case .autoFill(let folder, let port):
+            state.setAutoMatchedProject(folder, port: port)
+            // Bug fix #1: an auto-matched folder is now remembered as last-used.
+            preferences.devProjectURL = folder
+            // Bug fix #2: refresh a stale/absent cache entry (guarded so a pure
+            // cache hit — live agreed with the map — writes nothing).
+            if preferences.projectURL(forPort: port) != folder {
+                preferences.setProjectURL(folder, forPort: port)
+            }
+            return .autoFilled(folder: folder)
+        case .notePort(let port):
+            state.noteDetectedLocalhostPort(port)
+            return .notedPort
+        case .none:
+            return .noMatch
         }
     }
 

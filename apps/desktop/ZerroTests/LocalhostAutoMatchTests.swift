@@ -146,6 +146,175 @@ final class LocalhostAutoMatchTests: XCTestCase {
         XCTAssertNil(state.localhostNotice, "picking a folder dismisses the notice")
     }
 
+    // MARK: - Live port→folder resolution precedence (live resolver stubbed)
+
+    /// Helper: a state seeded into Dev Mode with a last-used folder, plus a
+    /// fresh ephemeral-defaults preferences store.
+    private func makeDevStateAndPrefs(lastUsed: String = "/last/used")
+        -> (AreaSelectorState, PreferencesStore) {
+        let state = AreaSelectorState()
+        state.setDevState(isDevMode: true, agentID: "x", agentName: "X",
+                          projectURL: URL(fileURLWithPath: lastUsed, isDirectory: true))
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        return (state, prefs)
+    }
+
+    func testLiveResolutionWinsOverStaleCacheAndRefreshesIt() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        // Cache says port 3000 → the STALE folder; live says the genuine one.
+        prefs.setProjectURL(URL(fileURLWithPath: "/proj/stale", isDirectory: true), forPort: 3000)
+        let live = URL(fileURLWithPath: "/proj/live", isDirectory: true)
+
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { $0 == 3000 ? live : nil },
+            state: state, preferences: prefs)
+
+        XCTAssertEqual(outcome, .autoFilled(folder: live))
+        XCTAssertEqual(state.projectURL?.path, "/proj/live", "the live folder wins over the stale cache")
+        XCTAssertTrue(state.projectAutoMatchedFromPort)
+        XCTAssertEqual(state.detectedLocalhostPort, 3000)
+        // The cache self-corrected to the live folder (bug fix #2).
+        XCTAssertEqual(prefs.projectURL(forPort: 3000)?.path, "/proj/live", "the stale cache entry is refreshed to live")
+    }
+
+    func testLiveMissFallsBackToCache() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        prefs.setProjectURL(URL(fileURLWithPath: "/proj/cached", isDirectory: true), forPort: 3000)
+
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { _ in nil },   // live can't answer
+            state: state, preferences: prefs)
+
+        XCTAssertEqual(outcome, .autoFilled(folder: URL(fileURLWithPath: "/proj/cached", isDirectory: true)))
+        XCTAssertEqual(state.projectURL?.path, "/proj/cached", "falls back to the cached folder (today's behavior)")
+        // Cache unchanged (live agreed-by-absence → no needless write).
+        XCTAssertEqual(prefs.projectURL(forPort: 3000)?.path, "/proj/cached")
+    }
+
+    func testTotalMissNeverClearsFolder() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        // Live nil + cache nil for the detected port.
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:5173/",
+            liveFolderForPort: { _ in nil },
+            state: state, preferences: prefs)
+
+        XCTAssertEqual(outcome, .notedPort)
+        XCTAssertEqual(state.projectURL?.path, "/last/used", "a total miss must NOT clear the last-used folder")
+        XCTAssertEqual(state.detectedLocalhostPort, 5173, "the port is remembered so a later pick learns it")
+        XCTAssertFalse(state.projectAutoMatchedFromPort)
+        XCTAssertNil(prefs.projectURL(forPort: 5173))
+    }
+
+    func testNonLocalURLIsNoMatchAndLeavesFolder() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "https://example.com:3000",
+            liveFolderForPort: { _ in URL(fileURLWithPath: "/should/not/matter") },
+            state: state, preferences: prefs)
+        XCTAssertEqual(outcome, .noMatch)
+        XCTAssertEqual(state.projectURL?.path, "/last/used")
+        XCTAssertNil(state.detectedLocalhostPort)
+    }
+
+    func testAutoMatchPersistsLastUsed() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        let live = URL(fileURLWithPath: "/proj/live", isDirectory: true)
+        AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { _ in live },
+            state: state, preferences: prefs)
+        // Bug fix #1: an auto-matched folder is remembered as the global last-used.
+        XCTAssertEqual(prefs.devProjectURL?.path, "/proj/live", "an auto-match updates the last-used folder")
+    }
+
+    func testCacheHitDoesNotRewriteMap() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        // Live AGREES with the cache → the guard must skip the redundant write.
+        let folder = URL(fileURLWithPath: "/proj/same", isDirectory: true)
+        prefs.setProjectURL(folder, forPort: 3000)
+        AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { _ in folder },
+            state: state, preferences: prefs)
+        XCTAssertEqual(prefs.projectURL(forPort: 3000)?.path, "/proj/same")
+        XCTAssertEqual(prefs.devProjectURL?.path, "/proj/same")
+    }
+
+    // MARK: - LocalhostPortResolver pure parsing (no sockets / no lsof)
+
+    func testFirstPIDFromListenerOutput() {
+        XCTAssertEqual(LocalhostPortResolver.firstPID(fromListenerOutput: "12345\n"), 12345)
+        // Multiple listeners (IPv4 + IPv6 of one process) → take the first.
+        XCTAssertEqual(LocalhostPortResolver.firstPID(fromListenerOutput: "12345\n12345\n"), 12345)
+        XCTAssertEqual(LocalhostPortResolver.firstPID(fromListenerOutput: "  678  \n900\n"), 678)
+        // No listener → empty output → nil.
+        XCTAssertNil(LocalhostPortResolver.firstPID(fromListenerOutput: ""))
+        XCTAssertNil(LocalhostPortResolver.firstPID(fromListenerOutput: "\n\n"))
+        XCTAssertNil(LocalhostPortResolver.firstPID(fromListenerOutput: "garbage"))
+        XCTAssertNil(LocalhostPortResolver.firstPID(fromListenerOutput: "0\n"), "pid 0 is not a real process")
+    }
+
+    func testCWDPathFromFieldOutput() {
+        // `lsof -d cwd -Fn` shape: p<pid> / fcwd / n<path>.
+        let out = "p12345\nfcwd\nn/Users/foo/project\n"
+        XCTAssertEqual(LocalhostPortResolver.cwdPath(fromFieldOutput: out), "/Users/foo/project")
+        // A path with spaces survives (the whole n-field is the path).
+        XCTAssertEqual(
+            LocalhostPortResolver.cwdPath(fromFieldOutput: "p1\nfcwd\nn/Users/foo/My Project\n"),
+            "/Users/foo/My Project")
+        // Non-absolute / missing n-field → nil.
+        XCTAssertNil(LocalhostPortResolver.cwdPath(fromFieldOutput: "p1\nfcwd\n"))
+        XCTAssertNil(LocalhostPortResolver.cwdPath(fromFieldOutput: ""))
+    }
+
+    func testProjectRootWalksUpToGitRoot() {
+        let home = "/Users/foo"
+        // .git lives at the repo root; the dev server runs in a sub-package.
+        let exists: (String) -> Bool = { path in
+            path == "/Users/foo/repo/.git" || path == "/Users/foo/repo/packages/web/package.json"
+        }
+        // From the sub-package, the nearest `.git` (repo root) wins over the
+        // closer package.json — Dev Mode needs the git work-tree root.
+        XCTAssertEqual(
+            LocalhostPortResolver.projectRoot(forCWDPath: "/Users/foo/repo/packages/web",
+                                              homePath: home, fileExists: exists)?.path,
+            "/Users/foo/repo")
+        // A trailing slash on the cwd is normalized away.
+        XCTAssertEqual(
+            LocalhostPortResolver.projectRoot(forCWDPath: "/Users/foo/repo/packages/web/",
+                                              homePath: home, fileExists: exists)?.path,
+            "/Users/foo/repo")
+    }
+
+    func testProjectRootFallsBackToManifestWhenNoGit() {
+        let home = "/Users/foo"
+        let exists: (String) -> Bool = { $0 == "/Users/foo/proj/package.json" }
+        XCTAssertEqual(
+            LocalhostPortResolver.projectRoot(forCWDPath: "/Users/foo/proj/src",
+                                              homePath: home, fileExists: exists)?.path,
+            "/Users/foo/proj", "nearest manifest dir when no .git anywhere up the chain")
+    }
+
+    func testProjectRootRejectsHomeAndRootAndMarkerless() {
+        let home = "/Users/foo"
+        // A server launched from a bare $HOME shell must NOT resolve $HOME — even
+        // if $HOME happens to contain a marker.
+        XCTAssertNil(LocalhostPortResolver.projectRoot(
+            forCWDPath: "/Users/foo", homePath: home, fileExists: { _ in true }))
+        // cwd at filesystem root → miss.
+        XCTAssertNil(LocalhostPortResolver.projectRoot(
+            forCWDPath: "/", homePath: home, fileExists: { _ in true }))
+        // No marker found up to home → miss (never resolves home itself).
+        XCTAssertNil(LocalhostPortResolver.projectRoot(
+            forCWDPath: "/Users/foo/random/dir", homePath: home, fileExists: { _ in false }))
+        // A relative / non-absolute cwd → miss.
+        XCTAssertNil(LocalhostPortResolver.projectRoot(
+            forCWDPath: "relative/path", homePath: home, fileExists: { _ in true }))
+    }
+
     // MARK: - Auto-Detect toggle state
 
     func testAutoDetectProjectEnabledStateSetter() {
