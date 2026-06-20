@@ -953,7 +953,7 @@ struct AreaSelectorView: View {
 
     /// Solid dark panel fill for the dropdowns (CleanShot reads as solid, not
     /// translucent — and a solid color also snapshots faithfully).
-    static let menuFill = Color(red: 0.15, green: 0.15, blue: 0.17)
+    static let menuFill = Color(red: 0.165, green: 0.165, blue: 0.173) // ~#2A2A2C, raised over #202022 base
     private static let menuCornerRadius: CGFloat = 12
 
     /// Wrap menu content in the shared panel chrome, sized + positioned to

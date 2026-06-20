@@ -36,9 +36,15 @@ extension Color {
     static let vfDestructive = vfRecordingRed
 
     // Surfaces (dark theme)
-    static let vfPanelBackground = Color(red: 0.10, green: 0.10, blue: 0.12)
-    static let vfCardBackground = Color(red: 0.14, green: 0.14, blue: 0.16)
-    static let vfPillBackground = Color(red: 0.12, green: 0.12, blue: 0.14)
+    // Base / main background — pinned to #202022 (the base gray) for pills,
+    // response views, error/overlay pills, overlay toolbars, Settings, and
+    // Onboarding windows. Was #1A1A1F.
+    static let vfPanelBackground = Color(red: 0.1255, green: 0.1255, blue: 0.1333) // #202022
+    // Raised cards sit on the base — kept slightly lighter for depth. Was #242429.
+    static let vfCardBackground = Color(red: 0.165, green: 0.165, blue: 0.173) // ~#2A2A2C
+    // Pill chrome — same base gray as the panel so pills and their surrounding
+    // surface read as one. Was #1F1F24.
+    static let vfPillBackground = Color(red: 0.1255, green: 0.1255, blue: 0.1333) // #202022
 
     // Text
     static let vfTextPrimary = Color.white.opacity(0.95)
