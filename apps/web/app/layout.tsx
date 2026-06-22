@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import Script from "next/script";
+import { AffiliateCapture } from "@/components/affiliate-capture";
 import {
   OrganizationJsonLd,
   WebSiteJsonLd,
@@ -96,12 +96,12 @@ export default function RootLayout({
             {children}
           </div>
         </PostHogProvider>
-        {/* LemonSqueezy affiliate tracking. The config must be set before
-            affiliate.js loads, so the inline config runs beforeInteractive. */}
-        <Script id="lemonsqueezy-affiliate-config" strategy="beforeInteractive">
-          {`window.lemonSqueezyAffiliateConfig = { store: "zerro" };`}
-        </Script>
-        <Script src="https://lmsqueezy.com/affiliate.js" strategy="afterInteractive" />
+        {/* Affiliate attribution. Purchasing happens only in the Mac app, in a
+            different browser context, so LemonSqueezy's browser affiliate.js
+            can't carry the referral to checkout. Instead we record the `?aff`
+            code server-side (keyed to the visitor's IP); the app matches it at
+            checkout and tags `aff_ref`. See components/affiliate-capture.tsx. */}
+        <AffiliateCapture />
       </body>
     </html>
   );

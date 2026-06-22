@@ -1783,6 +1783,10 @@ final class AppState {
         guard FileManager.default.fileExists(atPath: marker.projectPath),
               let service = try? GitCheckpointService(projectURL: marker.projectURL),
               service.isRepository() else {
+            // The service couldn't be rebuilt (project gone / not a repo), so we
+            // can't `discardSnapshot` through it — remove the orphaned snapshot dir
+            // directly so clearing the marker doesn't leak it. Best-effort.
+            marker.untrackedSnapshotPath.map { try? FileManager.default.removeItem(atPath: $0) }
             devRecoveryStore.clear()
             return false
         }
@@ -1813,6 +1817,12 @@ final class AppState {
         // the git probe, don't preempt — leave the marker for the next offer.
         guard state == .idle else { return false }
         guard let diff, diff.filesChanged > 0 else {
+            // Unresolvable restore ref (GC'd stash → nil diff) OR an empty diff
+            // (a quit in the sliver between the marker write and the first agent
+            // edit → zero-diff checkpoint, per applyDevPhase(.dispatching)). Either
+            // way nothing is recoverable, so discard the snapshot before clearing —
+            // both `service` and `checkpoint` are in scope here.
+            service.discardSnapshot(checkpoint)
             devRecoveryStore.clear()
             return false
         }
@@ -1831,6 +1841,25 @@ final class AppState {
             "files_changed": diff.filesChanged,
         ])
         return true
+    }
+
+    /// Launch-only reclaim of orphaned Dev Mode temp snapshots (Bug 2): a hard
+    /// crash during the review gate leaves a `dev-checkpoint-*` dir with NO marker
+    /// pointing at it (the marker is only persisted at `.dispatching`, after the
+    /// gate), and a crash mid-`writeWorkingTreeSnapshot` can leak a `dev-ckpt-index-*`
+    /// file. Neither is `zerro-`-prefixed, so `WorkingDirectory.sweep` never
+    /// reclaims them. This delegates to `GitCheckpointService.sweepOrphanedSnapshots`,
+    /// sparing only the snapshot the still-pending recovery marker references (nil
+    /// when no marker survives → everything swept).
+    ///
+    /// MUST be called at launch ONLY and AFTER `recoverInterruptedDevCheckpointIfAny`
+    /// has loaded the marker, so the sweep can't race the recovery offer or delete a
+    /// live snapshot. Runs off-main; best-effort (cleanup never blocks launch).
+    func sweepOrphanedDevSnapshots() {
+        let keep = devRecoveryStore.load()?.untrackedSnapshotPath
+        Task.detached(priority: .utility) {
+            GitCheckpointService.sweepOrphanedSnapshots(keeping: keep)
+        }
     }
 
     /// Resolve the cross-launch recovery offer. No-op outside

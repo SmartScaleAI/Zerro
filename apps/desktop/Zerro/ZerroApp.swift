@@ -254,6 +254,13 @@ struct ZerroApp: App {
             // recovery.
             Task { @MainActor [weak state] in
                 let offeredDevRecovery = await state?.recoverInterruptedDevCheckpointIfAny() ?? false
+                // Launch-only reclaim of orphaned Dev Mode temp dirs (a hard crash
+                // at the review gate, or a leaked throwaway index). Runs AFTER
+                // recovery has loaded (and possibly cleared) the marker, so it
+                // spares the one snapshot a surviving offer still needs and can't
+                // race that offer. Launch-only by construction — the wake observer
+                // never calls dev-checkpoint recovery.
+                state?.sweepOrphanedDevSnapshots()
                 guard !offeredDevRecovery else { return }
                 await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
             }

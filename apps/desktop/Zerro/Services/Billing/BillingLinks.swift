@@ -51,7 +51,21 @@ enum BillingLinks {
     /// subscription to that EXACT trial grant and `/generate` can drain the trial
     /// remainder before billing the paid plan. Omitted when nil (BYOK / top-ups /
     /// a never-trialed buyer) → byte-identical to the pre-existing URL.
-    static func checkoutURL(_ base: URL, product: CheckoutProduct, trialGrantId: String? = nil) -> URL {
+    ///
+    /// `affRef`, when supplied, is the LemonSqueezy affiliate referral code for
+    /// this buyer (resolved by `AffiliateAttribution` — a server-side match on
+    /// the device's public IP, since the referral was captured in the browser
+    /// and the app can't read a browser cookie). It rides as the top-level
+    /// `aff_ref` query param LemonSqueezy reads to attribute the sale. Omitted
+    /// when nil/empty (no affiliate, or the lookup missed) → byte-identical to
+    /// the pre-existing URL, so a non-referred purchase is unaffected.
+    /// Ref: https://docs.lemonsqueezy.com/help/affiliates-for-merchants/getting-referrals
+    static func checkoutURL(
+        _ base: URL,
+        product: CheckoutProduct,
+        trialGrantId: String? = nil,
+        affRef: String? = nil
+    ) -> URL {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return base
         }
@@ -62,6 +76,9 @@ enum BillingLinks {
         items.append(URLQueryItem(name: "checkout[custom][product]", value: product.rawValue))
         if let trialGrantId, !trialGrantId.isEmpty {
             items.append(URLQueryItem(name: "checkout[custom][trial_grant_id]", value: trialGrantId))
+        }
+        if let affRef, !affRef.isEmpty {
+            items.append(URLQueryItem(name: "aff_ref", value: affRef))
         }
         components.queryItems = items
         return components.url ?? base

@@ -81,3 +81,12 @@ verify_jwt = false
 # the read can only ever expose model ids (the write path stays service-role-only).
 [functions.agent-models]
 verify_jwt = false
+
+# affiliate — PUBLIC affiliate-attribution endpoint. The website POSTs `?aff`
+# codes seen on landing pages; the app GETs the code matched to its public IP
+# just before opening checkout (to tag `aff_ref`). No Supabase JWT: the only
+# thing keyed on is the CALLER's own public IP (read from proxy headers), which
+# can't be forged for another visitor, and IPs are stored hashed. Security is in
+# code (IP hashing + short retention), so the gateway gate is OFF.
+[functions.affiliate]
+verify_jwt = false

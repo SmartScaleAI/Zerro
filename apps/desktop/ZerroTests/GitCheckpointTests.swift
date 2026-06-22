@@ -509,6 +509,66 @@ final class GitCheckpointTests: XCTestCase {
         XCTAssertEqual(stat.added, 1)
     }
 
+    // MARK: - Orphaned snapshot sweep (Bug 2)
+
+    /// The marker-aware sweep keeps exactly the snapshot a pending recovery marker
+    /// references and reclaims every other `dev-checkpoint-*` / `dev-ckpt-index-*`
+    /// orphan (the leak a hard crash at the review gate leaves). Non-prefixed
+    /// entries are untouched. Driven against a throwaway scratch dir so it can't
+    /// reach a concurrent test's live snapshot. The surviving `keep` also covers
+    /// the regression: a valid pending marker's snapshot is NOT swept.
+    func testSweepRemovesOrphansAndKeepsMarkerReferenced() throws {
+        let scratch = makeScratchDir()
+        let keep = try makeEntry(in: scratch, named: "dev-checkpoint-\(UUID().uuidString)")
+        let orphanSnapshot = try makeEntry(in: scratch, named: "dev-checkpoint-\(UUID().uuidString)")
+        let orphanIndex = try makeEntry(in: scratch, named: "dev-ckpt-index-\(UUID().uuidString)")
+        let bystander = scratch.appendingPathComponent("zerro-something")
+        try makeEntryURL(bystander)
+
+        GitCheckpointService.sweepOrphanedSnapshots(in: scratch, keeping: keep.path)
+
+        let fm = FileManager.default
+        XCTAssertTrue(fm.fileExists(atPath: keep.path), "the marker-referenced snapshot survives")
+        XCTAssertFalse(fm.fileExists(atPath: orphanSnapshot.path), "an unreferenced snapshot is swept")
+        XCTAssertFalse(fm.fileExists(atPath: orphanIndex.path), "a throwaway index is always swept")
+        XCTAssertTrue(fm.fileExists(atPath: bystander.path), "non-prefixed entries are untouched")
+    }
+
+    /// With no marker to keep (the common case — every snapshot is orphaned), the
+    /// sweep reclaims all matching entries.
+    func testSweepWithNilKeepRemovesAllMatching() throws {
+        let scratch = makeScratchDir()
+        let a = try makeEntry(in: scratch, named: "dev-checkpoint-\(UUID().uuidString)")
+        let b = try makeEntry(in: scratch, named: "dev-ckpt-index-\(UUID().uuidString)")
+
+        GitCheckpointService.sweepOrphanedSnapshots(in: scratch, keeping: nil)
+
+        let fm = FileManager.default
+        XCTAssertFalse(fm.fileExists(atPath: a.path))
+        XCTAssertFalse(fm.fileExists(atPath: b.path))
+    }
+
+    // MARK: - Sweep helpers
+
+    private func makeScratchDir() -> URL {
+        // Under `repo` so tearDown's recursive remove reclaims it; never a
+        // `zerro-`/`dev-checkpoint-`-prefixed name at the temp root.
+        let dir = repo.appendingPathComponent("sweep-scratch-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @discardableResult
+    private func makeEntry(in parent: URL, named name: String) throws -> URL {
+        let url = parent.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func makeEntryURL(_ url: URL) throws {
+        try Data().write(to: url)
+    }
+
     // MARK: - Git helpers
 
     private func initRepo() throws {

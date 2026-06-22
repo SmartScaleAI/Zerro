@@ -425,7 +425,13 @@ private struct BuyOnceCard: View {
             "product": BillingLinks.CheckoutProduct.byok.rawValue,
             "placement": "paywall"
         ])
-        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: .byok))
+        // Resolve the affiliate referral (server-side IP match) before opening so
+        // the sale is attributed; nil-safe + time-boxed so it never blocks checkout.
+        Task {
+            let affRef = await AffiliateAttribution.referralCode()
+            let checkout = BillingLinks.checkoutURL(url, product: .byok, affRef: affRef)
+            await MainActor.run { NSWorkspace.shared.open(checkout) }
+        }
     }
 }
 
@@ -480,9 +486,14 @@ private struct SubscriptionOptionCard: View {
         ])
         // A converting trial user carries their grant id so the webhook links
         // this subscription to that exact trial grant (combined-spend un-stranding).
-        NSWorkspace.shared.open(
-            BillingLinks.checkoutURL(url, product: .subscriptionPro, trialGrantId: entitlements.trialGrantIdForCheckout)
-        )
+        // Affiliate referral (server-side IP match) is resolved first so the sale
+        // is attributed; nil-safe + time-boxed so it never blocks checkout.
+        let grantId = entitlements.trialGrantIdForCheckout
+        Task {
+            let affRef = await AffiliateAttribution.referralCode()
+            let checkout = BillingLinks.checkoutURL(url, product: .subscriptionPro, trialGrantId: grantId, affRef: affRef)
+            await MainActor.run { NSWorkspace.shared.open(checkout) }
+        }
     }
 }
 
@@ -595,7 +606,13 @@ private struct TopupPackCard: View {
             "product": product.rawValue,
             "placement": "paywall"
         ])
-        NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product))
+        // Affiliate referral (server-side IP match) resolved first so the sale is
+        // attributed; nil-safe + time-boxed so it never blocks checkout.
+        Task {
+            let affRef = await AffiliateAttribution.referralCode()
+            let checkout = BillingLinks.checkoutURL(url, product: product, affRef: affRef)
+            await MainActor.run { NSWorkspace.shared.open(checkout) }
+        }
     }
 }
 

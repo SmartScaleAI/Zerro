@@ -553,7 +553,14 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct, tr
     Analytics.capture("checkout_opened", ["product": product.rawValue, "placement": "settings"])
     // A converting trial user carries their grant id (custom_data) so the webhook
     // links this subscription to that exact trial grant — see BillingLinks.
-    NSWorkspace.shared.open(BillingLinks.checkoutURL(url, product: product, trialGrantId: trialGrantId))
+    // Resolve the affiliate referral (server-side IP match) first so the sale is
+    // attributed, then open. The lookup is nil-safe + time-boxed, so checkout is
+    // never blocked or meaningfully delayed if attribution is slow/unavailable.
+    Task {
+        let affRef = await AffiliateAttribution.referralCode()
+        let checkout = BillingLinks.checkoutURL(url, product: product, trialGrantId: trialGrantId, affRef: affRef)
+        await MainActor.run { NSWorkspace.shared.open(checkout) }
+    }
 }
 
 // MARK: - Usage meter (multi-model 6F)

@@ -125,6 +125,8 @@ the runtime — do NOT set them yourself.**
 | Secret | Required | What it is |
 |---|---|---|
 | `SESSION_JWT_SECRET` | ✅ | HS256 signing secret for the short-lived session tokens. Generate a long random string (`openssl rand -hex 32`). |
+| `AFFILIATE_IP_SALT` | ✅ (for `affiliate`) | Secret salt mixed into the IP hash the `affiliate` function stores (`sha256(salt‖ip)`), so the raw visitor IP is never persisted. Generate a long random string (`openssl rand -hex 32`) and **never rotate it casually** — changing it orphans all unconverted clicks (their hashes stop matching). Required by the `affiliate` function; unset → the function 500s. |
+| `AFFILIATE_MATCH_WINDOW_HOURS` | optional | How long after a click a purchase can still be attributed by IP match (default `720` = 30 days). Lower = fewer false matches on shared networks; higher = catches more delayed conversions. |
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | ✅ | The signing secret you enter when creating the webhook in LemonSqueezy. The webhook verifies `X-Signature` against it. |
 | `LEMONSQUEEZY_API_KEY` | ⚠️ **G** | A LemonSqueezy **API key** (Settings → API), distinct from the webhook secret. Powers the §14.6 **missed-webhook staleness re-check** in `session`: when the mirror is stale, `session` calls `GET /v1/subscriptions/{id}` to confirm the sub is still live before minting. **Unset → the guard is disabled and `session` fails OPEN** (logged); set it before launch so a dropped `cancelled` webhook can't keep minting tokens forever. |
 | `SESSION_STALENESS_SECONDS` | optional | How stale the mirror may be before `session` does the live re-check (default = `SESSION_TOKEN_TTL_SECONDS`). |
@@ -194,6 +196,7 @@ supabase secrets set GEMINI_API_KEY="<your Gemini key>"   # multi-model — Gemi
 supabase secrets set ANTHROPIC_API_KEY="<your Anthropic key>"  # multi-model — Claude registry models
 supabase secrets set RESEND_API_KEY="<your Resend key>"   # F  — trial-start email
 supabase secrets set LEMONSQUEEZY_API_KEY="<your LS API key>"  # G — staleness re-check
+supabase secrets set AFFILIATE_IP_SALT="$(openssl rand -hex 32)"  # affiliate — IP-hash salt
 # Phase E: supabase secrets set LS_VARIANT_STARTER=... LS_VARIANT_PRO="<monthly-id>,<yearly-id>"
 # Phase F (optional): supabase secrets set TRIAL_CREDITS=40 TRIAL_EMAIL_FROM="Zerro <noreply@getzerro.app>"
 # Phase 5: supabase secrets set LS_VARIANT_YEARLY="<yearly-id>" \
@@ -212,6 +215,9 @@ supabase functions deploy convert             --no-verify-jwt
 # Dev Mode model manifest (see "Dev Mode model manifest" below):
 supabase functions deploy refresh-agent-models --no-verify-jwt
 supabase functions deploy agent-models         --no-verify-jwt
+# Affiliate attribution (needs AFFILIATE_IP_SALT set above + the
+# 20260622120000_affiliate_referrals.sql migration applied):
+supabase functions deploy affiliate            --no-verify-jwt
 ```
 
 **Phase F also needs a verified sender domain in Resend** (`getzerro.app`, or

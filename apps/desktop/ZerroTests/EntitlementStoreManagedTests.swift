@@ -202,4 +202,32 @@ final class EntitlementStoreManagedTests: XCTestCase {
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertFalse(items.contains { $0.name == "checkout[custom][trial_grant_id]" })
     }
+
+    // MARK: - Affiliate referral (server-side IP match → aff_ref)
+
+    /// A resolved affiliate code rides as the top-level `aff_ref` query param
+    /// LemonSqueezy reads to attribute the sale, alongside the existing custom
+    /// data (which stays nested under checkout[custom][…]).
+    func testCheckoutURLAppendsAffRefWhenProvided() {
+        let base = URL(string: "https://store.getzerro.app/checkout/buy/abc")!
+        let url = BillingLinks.checkoutURL(base, product: .subscriptionPro, trialGrantId: "grant-9", affRef: "ZylBs")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(items.contains { $0.name == "aff_ref" && $0.value == "ZylBs" })
+        XCTAssertTrue(items.contains { $0.name == "checkout[custom][product]" && $0.value == "subscription_pro" })
+        XCTAssertTrue(items.contains { $0.name == "checkout[custom][trial_grant_id]" && $0.value == "grant-9" })
+    }
+
+    /// No affiliate (nil or empty) → no `aff_ref`, byte-identical to a plain
+    /// checkout so a non-referred purchase is unaffected.
+    func testCheckoutURLOmitsAffRefWhenNilOrEmpty() {
+        let base = URL(string: "https://store.getzerro.app/checkout/buy/abc")!
+        let plain = BillingLinks.checkoutURL(base, product: .byok)
+        let withNil = BillingLinks.checkoutURL(base, product: .byok, affRef: nil)
+        let withEmpty = BillingLinks.checkoutURL(base, product: .byok, affRef: "")
+        for url in [withNil, withEmpty] {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertFalse(items.contains { $0.name == "aff_ref" })
+        }
+        XCTAssertEqual(withNil.absoluteString, plain.absoluteString)
+    }
 }

@@ -12,6 +12,14 @@
 export const DOWNLOAD_URL = "https://getzerro.app/Zerro.dmg";
 
 /**
+ * Supabase Edge Functions base. NOT a secret — it's the same public base the
+ * Mac app ships with (the server enforces everything; the client is never
+ * trusted). Used by the affiliate-capture beacon to record `?aff` clicks.
+ */
+export const FUNCTIONS_BASE_URL =
+  "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1";
+
+/**
  * Direct LemonSqueezy subscription checkout link for the Managed plan.
  *
  * Not used yet: every pricing CTA currently points to DOWNLOAD_URL, since users

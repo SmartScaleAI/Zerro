@@ -143,6 +143,7 @@
 				FF8546CB2FC74ACC000EB1A6 /* Sources */,
 				FF8546CC2FC74ACC000EB1A6 /* Frameworks */,
 				FF8546CD2FC74ACC000EB1A6 /* Resources */,
+				FF4A2D222FE8E76700C4EEC0 /* Upload dSYMs to PostHog */,
 			);
 			buildRules = (
 			);
@@ -221,6 +222,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FF4A2D222FE8E76700C4EEC0 /* Upload dSYMs to PostHog */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(DWARF_DSYM_FOLDER_PATH)/$(DWARF_DSYM_FILE_NAME)/Contents/Resources/DWARF/$(EXECUTABLE_NAME)",
+			);
+			name = "Upload dSYMs to PostHog";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "[ -z \"$POSTHOG_CLI_API_KEY\" ] && { echo \"No PostHog key — skipping dSYM upload\"; exit 0; }\n   ${BUILD_DIR%/Build/*}/SourcePackages/checkouts/posthog-ios/build-tools/upload-symbols.sh\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		18AA00000000000000000003 /* Sources */ = {

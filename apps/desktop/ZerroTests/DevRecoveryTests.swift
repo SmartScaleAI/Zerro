@@ -179,6 +179,51 @@ final class DevRecoveryTests: XCTestCase {
         try await assertClearedNoOffer(marker(checkpoint, repo: repo))
     }
 
+    // MARK: - Bug 1: stale-marker early-returns must not leak the snapshot dir
+
+    /// Empty-diff early-return (the same guard the unresolvable-ref case hits):
+    /// a valid checkpoint WITH an on-disk untracked snapshot, but the diff vs the
+    /// restore ref is now zero → the guard fires and must `discardSnapshot` before
+    /// clearing, or the `dev-checkpoint-*` dir leaks.
+    func testEmptyDiffDiscardsSnapshotDir() async throws {
+        let (repo, checkpoint) = try makeDirtyCheckpoint()
+        let snapshot = try XCTUnwrap(checkpoint.untrackedSnapshotDir)
+        // Drop the pre-existing untracked file so it isn't counted as an addition;
+        // the dirty tracked file already matches the stash, so the diff against the
+        // restore ref is now empty → the empty-diff branch.
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("untracked.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshot.path), "precondition: snapshot exists")
+
+        let app = makeApp(savingMarker: marker(checkpoint, repo: repo))
+        let offered = await app.recoverInterruptedDevCheckpointIfAny()
+
+        XCTAssertFalse(offered)
+        XCTAssertEqual(app.state, .idle)
+        XCTAssertNil(app.devRecoveryStore.load(), "empty-diff path clears the marker")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshot.path),
+                       "empty-diff early-return must discard the snapshot dir (Bug 1)")
+    }
+
+    /// Project-gone early-return: the service can't be rebuilt, so the snapshot
+    /// dir must be removed DIRECTLY from `untrackedSnapshotPath` before clearing.
+    func testMissingProjectRemovesSnapshotDir() async throws {
+        let snapshot = makeStandaloneSnapshotDir() // a real dev-checkpoint-* dir
+        let phantom = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dev-recovery-test-gone-\(UUID().uuidString)")
+        let m = DevRecoveryMarker(
+            projectPath: phantom.path, baseSha: "abc", stashSha: nil,
+            untrackedSnapshotPath: snapshot.path, untrackedRelativePaths: [],
+            createdAt: Date(), agentName: nil
+        )
+        let app = makeApp(savingMarker: m)
+        let offered = await app.recoverInterruptedDevCheckpointIfAny()
+
+        XCTAssertFalse(offered)
+        XCTAssertNil(app.devRecoveryStore.load())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshot.path),
+                       "project-gone early-return must remove the snapshot dir directly (Bug 1)")
+    }
+
     func testNonIdleStateLeavesMarkerForNextLaunch() async throws {
         let (repo, checkpoint) = try makeDirtyCheckpoint()
         write(repo, "tracked.txt", "agent-edit\n")
@@ -388,6 +433,16 @@ final class DevRecoveryTests: XCTestCase {
         git(repo, "config", "user.name", "Zerro Test")
         git(repo, "config", "commit.gpgsign", "false")
         return repo
+    }
+
+    /// A real `dev-checkpoint-*` dir on disk, not tied to any checkpoint — for the
+    /// Bug 1 paths that must reclaim a snapshot the service can't reach.
+    private func makeStandaloneSnapshotDir() -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dev-checkpoint-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        snapshotDirs.append(dir)
+        return dir
     }
 
     private func makeBareDir() -> URL {

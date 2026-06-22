@@ -118,6 +118,14 @@ enum ManagedBackend {
     /// a DEBUG override reads the manifest from the local stack too.
     static var agentModelsURL: URL { baseURL.appendingPathComponent("agent-models") }
 
+    /// Affiliate attribution endpoint (LemonSqueezy affiliates). PUBLIC, no auth.
+    /// GET resolves the affiliate referral code matched to this device's public
+    /// IP (a server-side match — the referral is captured in the browser when the
+    /// visitor lands on getzerro.app/?aff=CODE, which the app can't read), so the
+    /// app can tag checkout with `aff_ref`. The website POSTs `?aff` codes here.
+    /// Shares the base-URL resolution so a DEBUG override hits the local stack.
+    static var affiliateURL: URL { baseURL.appendingPathComponent("affiliate") }
+
     /// MIME the app declares for the isolated `audio.m4a`. Must be one of the
     /// backend's `ALLOWED_AUDIO_MIME` (`audio/mp4` / `audio/m4a` / `audio/x-m4a`,
     /// see `supabase/functions/generate/config.ts`).

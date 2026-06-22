@@ -124,6 +124,19 @@ struct GitCheckpointService: Sendable {
     let projectURL: URL
     private let gitURL: URL
 
+    /// Filename prefix for the on-disk untracked-file snapshot dirs in `$TMPDIR`
+    /// (`dev-checkpoint-<UUID>/`). Deliberately NOT under `WorkingDirectory.prefix`
+    /// (`zerro-`) so the launch sweep can't delete a LIVE checkpoint's snapshot —
+    /// see `snapshotUntracked`. The launch-only `sweepOrphanedSnapshots` reclaims
+    /// these instead.
+    nonisolated static let snapshotPrefix = "dev-checkpoint-"
+
+    /// Filename prefix for the throwaway git index files (`dev-ckpt-index-<UUID>`,
+    /// plus their `.lock` siblings) used by `writeWorkingTreeSnapshot`. Normally
+    /// removed in a `defer`, but a hard crash mid-snapshot can leak one — never
+    /// marker-referenced, so always safe for `sweepOrphanedSnapshots` to delete.
+    nonisolated static let indexPrefix = "dev-ckpt-index-"
+
     /// - Parameters:
     ///   - projectURL: the project folder (must be inside a git work tree).
     ///   - gitURL: the `git` binary. Defaults to `/usr/bin/git` (always present
@@ -236,7 +249,7 @@ struct GitCheckpointService: Sendable {
     /// falls back to `restoreRef`).
     nonisolated private func writeWorkingTreeSnapshot() -> String? {
         let indexFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dev-ckpt-index-\(UUID().uuidString)")
+            .appendingPathComponent("\(Self.indexPrefix)\(UUID().uuidString)")
         defer {
             try? FileManager.default.removeItem(at: indexFile)
             try? FileManager.default.removeItem(
@@ -463,7 +476,7 @@ struct GitCheckpointService: Sendable {
         // The agent edit is bounded by one dispatch, so the coordinator removes
         // this via `discardSnapshot` on completion/revert.
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dev-checkpoint-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("\(Self.snapshotPrefix)\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             for rel in relPaths {
@@ -509,6 +522,62 @@ struct GitCheckpointService: Sendable {
     nonisolated func discardSnapshot(_ checkpoint: GitCheckpoint) {
         guard let dir = checkpoint.untrackedSnapshotDir else { return }
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Launch-only, marker-aware reclaim of orphaned Dev Mode temp dirs in
+    /// `$TMPDIR`: every `dev-checkpoint-*` snapshot dir and `dev-ckpt-index-*`
+    /// throwaway index, EXCEPT the single `keeping` path (the snapshot a still-
+    /// pending cross-launch recovery marker points at — the only one that may
+    /// still be needed). Closes the two leaks `discardSnapshot` can't reach: a
+    /// hard crash during the review gate (snapshot created, but no marker yet),
+    /// and a leaked index file from a crash mid-`writeWorkingTreeSnapshot`.
+    ///
+    /// MUST run only at launch and only AFTER `recoverInterruptedDevCheckpointIfAny`
+    /// has loaded the marker — otherwise it could race the recovery offer or delete
+    /// a live checkpoint a running app still holds. Best-effort: failures are
+    /// logged and ignored (mirrors `WorkingDirectory.sweep`).
+    nonisolated static func sweepOrphanedSnapshots(keeping keep: String? = nil) {
+        sweepOrphanedSnapshots(in: FileManager.default.temporaryDirectory, keeping: keep)
+    }
+
+    /// Directory-injectable core of `sweepOrphanedSnapshots` — the production path
+    /// passes `$TMPDIR`; tests pass a throwaway subdir so the sweep is hermetic and
+    /// can never reach a concurrent test's live snapshot.
+    nonisolated static func sweepOrphanedSnapshots(in directory: URL, keeping keep: String? = nil) {
+        let fm = FileManager.default
+        let keepPath = keep.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        let contents: [URL]
+        do {
+            contents = try fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            Log.dev.error("dev snapshot sweep: couldn't list tmp: \(error.localizedDescription, privacy: .private)")
+            return
+        }
+
+        var removed = 0
+        for entry in contents {
+            let name = entry.lastPathComponent
+            guard name.hasPrefix(snapshotPrefix) || name.hasPrefix(indexPrefix) else { continue }
+            if let keepPath, entry.standardizedFileURL.path == keepPath { continue }
+            do {
+                try fm.removeItem(at: entry)
+                removed += 1
+            } catch {
+                // The basename is .public — a `dev-checkpoint-*` / `dev-ckpt-index-*`
+                // name we generated ourselves, no user content. The error
+                // description is .private (it embeds paths).
+                Log.dev.error(
+                    "dev snapshot sweep: couldn't remove \(name, privacy: .public): \(error.localizedDescription, privacy: .private)"
+                )
+            }
+        }
+        if removed > 0 {
+            Log.dev.notice("dev snapshot sweep removed \(removed, privacy: .public) orphaned entries")
+        }
     }
 
     // MARK: - Repository probe
