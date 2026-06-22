@@ -57,9 +57,9 @@ export interface GenerationLogRow {
   provider: string;
   /** Phase 3 calibration metadata (non-content, §14.5-compatible) — see the
    *  20260616120000_generation_log_calibration migration.
-   *  creditsUsed: credits ACTUALLY charged (0 on the uncharged free-result
-   *  path; null on any failure row). durationSeconds: recording length in
-   *  seconds (Whisper-measured where available). frameCount: keyframes sent. */
+   *  creditsUsed: credits ACTUALLY charged (the metered charge on success; null
+   *  on any failure row). durationSeconds: recording length in seconds
+   *  (Whisper-measured where available). frameCount: keyframes sent. */
   creditsUsed: number | null;
   durationSeconds: number | null;
   frameCount: number | null;
@@ -73,7 +73,8 @@ export interface IdempotentResult {
   usage: { input_tokens: number; output_tokens: number; model: string };
   creditsRemaining: number;
   /** Credits charged for the ORIGINAL generation (D2) — replayed verbatim so a
-   *  retry reports the same charge (0 on the uncharged-race path). */
+   *  retry reports the same charge (the metered amount; every successful
+   *  generation is charged, so this is never 0 on a fresh charge). */
   creditsCharged: number;
 }
 
@@ -83,16 +84,18 @@ export interface BillingStore {
    *  packs (Phase 4 / F4) — the same definition the 2-arg consume_credit spends
    *  against, so the availability check and the spend can't disagree. */
   creditsRemaining(subId: string, creditsLimit: number): Promise<number>;
-  /** Atomically spend `credits` (plan first, then top-ups FIFO by expiry —
-   *  Phase 1's consume_credit(uuid, integer)). All-or-nothing: COMBINED
-   *  remaining after the spend, or null with NOTHING spent if the combined
-   *  balance can't cover it. */
+  /** Atomically spend `credits` (plan first, then top-ups FIFO by expiry,
+   *  remainder overflowing onto the plan period — consume_credit_overspend).
+   *  ALWAYS spends: COMBINED remaining after the spend, which may be NEGATIVE
+   *  (the one final uncapped generation). null ONLY for a non-spendable
+   *  subscription/period — never an "insufficient balance" null. */
   consumeCredit(subId: string, credits: number): Promise<number | null>;
   /** CROSS-LEDGER atomic spend for a converted user (trial grant + subscription):
-   *  trial remainder first, then plan, then top-ups FIFO. All-or-nothing across
-   *  BOTH ledgers — the combined split (and remaining) after the spend, or null
-   *  with NOTHING spent if the combined balance can't cover it. Backed by the
-   *  consume_combined_credit RPC, the single transaction that makes this safe. */
+   *  trial remainder first, then plan, then top-ups FIFO, remainder overflowing
+   *  onto the plan period. ALWAYS spends across BOTH ledgers — the combined split
+   *  (and remaining, possibly NEGATIVE) after the spend, or null ONLY for a
+   *  non-spendable subscription. Backed by the consume_combined_credit_overspend
+   *  RPC, the single transaction that makes this safe. */
   consumeCombinedCredit(
     grantId: string,
     subId: string,
@@ -130,8 +133,9 @@ export interface BillingStore {
   loadTrialGrant(grantId: string): Promise<TrialGrantRow | null>;
   /** Remaining trial credits on the grant (single bucket — no top-ups). */
   trialCreditsRemaining(grantId: string): Promise<number>;
-  /** Atomically spend `credits` from the grant (Phase 1's 2-arg RPC).
-   *  All-or-nothing: remaining after, or null with nothing spent. */
+  /** Atomically spend `credits` from the grant (consume_trial_credit_overspend).
+   *  ALWAYS spends the full charge onto the single bucket: remaining after,
+   *  possibly NEGATIVE, or null ONLY for a missing/unverified grant. */
   consumeTrialCredit(grantId: string, credits: number): Promise<number | null>;
   acquireTrialSlot(grantId: string, staleSeconds: number): Promise<boolean>;
   releaseTrialSlot(grantId: string): Promise<void>;
@@ -187,8 +191,11 @@ export class SupabaseBillingStore implements BillingStore {
   }
 
   async consumeCredit(subId: string, credits: number): Promise<number | null> {
-    // The 2-arg overload (Phase 1): variable, two-bucket, all-or-nothing.
-    const { data, error } = await this.db.rpc("consume_credit", {
+    // Overspend overload: ALWAYS spends (plan first, then top-ups FIFO,
+    // remainder overflowing onto the plan period). Returns the combined
+    // remaining after the spend — possibly NEGATIVE — or null only for a
+    // non-spendable subscription/period.
+    const { data, error } = await this.db.rpc("consume_credit_overspend", {
       p_subscription_id: subId,
       p_credits: credits,
     });
@@ -204,10 +211,10 @@ export class SupabaseBillingStore implements BillingStore {
     subId: string,
     credits: number,
   ): Promise<CombinedSpendResult | null> {
-    // The cross-ledger RPC (trial → plan → top-ups, all-or-nothing). Returns a
-    // jsonb object on a spend, or NULL (insufficient combined balance) → nothing
-    // spent.
-    const { data, error } = await this.db.rpc("consume_combined_credit", {
+    // The cross-ledger overspend RPC (trial → plan → top-ups, remainder
+    // overflowing onto the plan period). ALWAYS spends; the returned `remaining`
+    // may be NEGATIVE. NULL only for a non-spendable subscription.
+    const { data, error } = await this.db.rpc("consume_combined_credit_overspend", {
       p_grant_id: grantId,
       p_subscription_id: subId,
       p_credits: credits,
@@ -372,8 +379,10 @@ export class SupabaseBillingStore implements BillingStore {
   }
 
   async consumeTrialCredit(grantId: string, credits: number): Promise<number | null> {
-    // The 2-arg overload (Phase 1): variable all-or-nothing single-bucket spend.
-    const { data, error } = await this.db.rpc("consume_trial_credit", {
+    // Overspend overload: ALWAYS spends the full charge onto the single trial
+    // bucket. Returns remaining after — possibly NEGATIVE — or null only for a
+    // missing/unverified grant.
+    const { data, error } = await this.db.rpc("consume_trial_credit_overspend", {
       p_grant_id: grantId,
       p_credits: credits,
     });

@@ -141,6 +141,27 @@ final class PreflightGateTests: XCTestCase {
         XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
     }
 
+    // MARK: - Overspend → negative → blocked (the one final uncapped generation)
+
+    func testOverspendClampsSnapshotToZeroAndBlocksNextGeneration() {
+        // A small positive balance (5) runs ONE costlier generation: the server
+        // charges in full and returns a NEGATIVE remaining (−6). The toast gets
+        // the raw negative, but the cached snapshot clamps to 0 — never up to a
+        // positive, so the prior negative is never netted away — and the NEXT
+        // pre-flight blocks with .outOfCredits.
+        let store = managedStore(snapshot: snapshot(.active, credits: 5))
+        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // 5 credits → records
+
+        // Apply the just-completed overspend (charged 10, server remaining −6).
+        let effective = store.applyGenerationSpend(charged: 10, remaining: -6, isTrial: false)
+        XCTAssertEqual(effective, -6) // the toast shows the true (negative) value
+
+        // The snapshot lands on 0 (not a raw negative, not clamped UP to positive)…
+        XCTAssertEqual(store.managedSnapshot?.creditsRemaining, 0)
+        // …so the next generation is blocked client-side, routed to the top-up paywall.
+        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .outOfCredits)
+    }
+
     // MARK: - Managed: inactive subscription
 
     func testManagedCancelledSnapshotBlocksSubscriptionInactive() {

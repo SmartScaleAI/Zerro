@@ -23,6 +23,7 @@
 //
 
 import Foundation
+import os
 
 enum AffiliateAttribution {
 

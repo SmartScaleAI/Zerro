@@ -102,7 +102,39 @@ final class CreditDisplayTests: XCTestCase {
 
     func testChargeLineFormatsExactServerCharge() {
         XCTAssertEqual(CreditDisplay.chargeLine(charged: 4, remaining: 96), "\u{2212}4 credits \u{00B7} 96 left")
-        XCTAssertEqual(CreditDisplay.chargeLine(charged: 1, remaining: 0), "\u{2212}1 credit \u{00B7} 0 left")
+        // Singular charge singularizes; a positive balance still reads "N left".
+        XCTAssertEqual(CreditDisplay.chargeLine(charged: 1, remaining: 95), "\u{2212}1 credit \u{00B7} 95 left")
+    }
+
+    // MARK: - Balance label + out-of-credits charge line (overspend → negative)
+
+    func testBalanceLabelSwapsToOutOfCreditsAtOrBelowZero() {
+        // Positive → the §1.5 headline; zero or negative → the shared
+        // "Out of Credits" label (a raw negative is never surfaced).
+        XCTAssertEqual(CreditDisplay.balanceLabel(96), "96 credits")
+        XCTAssertEqual(CreditDisplay.balanceLabel(1), "1 credit")
+        XCTAssertEqual(CreditDisplay.balanceLabel(0), "Out of Credits")
+        XCTAssertEqual(CreditDisplay.balanceLabel(-6), "Out of Credits")
+    }
+
+    func testChargeLineShowsOutOfCreditsWhenBalanceHitsZeroOrNegative() {
+        // The one final uncapped generation: the deducted amount stays the
+        // server's exact `credits_charged`, but the balance segment reads
+        // "Out of Credits" rather than "0 left" or a raw negative.
+        XCTAssertEqual(
+            CreditDisplay.chargeLine(charged: 30, remaining: 0),
+            "\u{2212}30 credits \u{00B7} Out of Credits"
+        )
+        // A costlier generation that overshot a small balance into the negative.
+        XCTAssertEqual(
+            CreditDisplay.chargeLine(charged: 10, remaining: -6),
+            "\u{2212}10 credits \u{00B7} Out of Credits"
+        )
+        // Singular charge still singularizes; the balance still swaps.
+        XCTAssertEqual(
+            CreditDisplay.chargeLine(charged: 1, remaining: -1),
+            "\u{2212}1 credit \u{00B7} Out of Credits"
+        )
     }
 
     func testChargeLineRendersExactMeteredValue() {

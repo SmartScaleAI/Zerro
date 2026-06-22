@@ -103,7 +103,7 @@ struct PaywallCopy: Equatable {
     /// Managed user adding credits — point straight at the top-up packs.
     static let topup = PaywallCopy(
         headline: "Add Credits",
-        subheadline: "Top up your balance to keep generating this month. Credits attach to your subscription instantly and carry over for 12 months.",
+        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months.",
         windowTitle: "Add Credits"
     )
     /// Entitled user managing their plan — de-emphasize the sell.

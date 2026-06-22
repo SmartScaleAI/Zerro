@@ -53,7 +53,7 @@ import { verifySessionToken } from "../_shared/jwt.ts";
 import { extractAnchors } from "./anchors.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
-import { creditCostForModel, estimatedCostUsd, estimateGenerationCredits, sttCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { modelById } from "./models.ts";
 import { validateBody, validateTranscribeBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
@@ -62,7 +62,6 @@ import {
   GENERATE_RATE_LIMIT_PER_SUB,
   GENERATE_RATE_LIMIT_WINDOW_SECONDS,
   GENERATE_SLOT_STALE_SECONDS,
-  HEADROOM_CREDITS,
   IDEMPOTENCY_TTL_SECONDS,
   MAX_AUDIO_SECONDS,
   MAX_PAYLOAD_BYTES,
@@ -245,13 +244,16 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       return json({ error: "provider_unavailable", retryable: false }, 503);
     }
 
-    // 8. Pre-Whisper FLOOR check (read-only; do NOT decrement yet). The real
-    //    cost isn't known until after the chat call, so the full estimate gate
-    //    runs post-Whisper (step 10.5). Here we only refuse to pay for STT on an
-    //    account that can't afford even the 1-credit floor of a successful
-    //    generation. `remaining` is stable for the rest of this request (the
-    //    concurrency slot is 1), so the post-Whisper gate REUSES this read.
-    //    402 carries `estimate: null` — no estimate exists this early.
+    // 8. THE credit gate (read-only; do NOT decrement yet). This is the ≤ 0
+    //    block: an account that can't afford even the 1-credit floor of a
+    //    successful generation is refused here, before any STT cost. An account
+    //    with >= 1 spendable credit is allowed exactly ONE generation of ANY
+    //    cost — it is charged in full post-chat (step 12), which may drive the
+    //    balance NEGATIVE; this gate then blocks EVERY further generation until
+    //    the monthly period renews or a top-up is bought. There is no longer a
+    //    pre-generation estimate gate — the one final generation is uncapped.
+    //    402 carries `estimate: null` (the field is kept for response-shape
+    //    stability; the app keys on the status, not this value).
     const remaining = await account.creditsRemaining();
     if (remaining < 1) {
       return json(
@@ -327,40 +329,10 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
       return json({ error: "audio_too_long" }, 413);
     }
 
-    // 10.5 ESTIMATE + HEADROOM gate (Phase 2). The charge is metered on the REAL
-    //      cost post-chat, but we must decide affordability BEFORE paying for the
-    //      chat call. Estimate the cost from the known inputs (frames, transcript,
-    //      OCR, audio) plus a conservative output allowance, and block if the
-    //      balance can't cover it minus a small headroom tolerance. STT was
-    //      already paid, so a rejection logs success=false with the STT cost —
-    //      same honest-accounting pattern the true-seconds gate (step 10) uses.
-    //      `remaining` is the step-8 read, still current under the cap=1 slot.
-    const estimate = estimateGenerationCredits({
-      provider: modelEntry.provider,
-      model,
-      frameCount: frames.length,
-      transcriptChars: segments.reduce((n, s) => n + s.text.length, 0),
-      ocrChars: frames.reduce((n, f) => n + (f.ocrText?.length ?? 0), 0),
-      audioSeconds: measured,
-    });
-    if (remaining < estimate - HEADROOM_CREDITS) {
-      await deps.store.logGeneration({
-        subscriptionId: account.logSubscriptionId,
-        tokensIn: null,
-        tokensOut: null,
-        estCostUsd: sttCostUsd(measured), // STT was paid; chat never ran
-        success: false,
-        model,
-        provider: modelEntry.provider,
-        creditsUsed: null, // nothing charged
-        durationSeconds: measured,
-        frameCount: frames.length,
-      });
-      return json(
-        { error: "out_of_credits", credits_remaining: remaining, estimate },
-        402,
-      );
-    }
+    // (No pre-generation estimate gate: the step-8 credit gate already proved
+    //  the account has >= 1 spendable credit, which buys exactly one uncapped
+    //  generation. The metered charge is applied in full at step 12 and may take
+    //  the balance negative; the next request is then blocked at step 8.)
 
     // 11. Compose the system prompt SERVER-SIDE (the server owns the whole
     //     text; the client supplies only the `mode` SELECTOR, never content),
@@ -401,41 +373,32 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     const afterConsume = await account.consume(credits);
 
     if (afterConsume === null) {
-      // Race edge (near-impossible under the cap=1 slot): the credit became
-      // unspendable between step 8 and here. We've ALREADY paid OpenAI, so per
-      // the locked default we return the result ONCE and log it; we just
-      // couldn't charge. (Reserve-then-commit, Phase G, would avoid the pay.)
-      console.warn(JSON.stringify({ fn: "generate", key: account.key, warn: "uncharged_result_returned", model }));
+      // DEFENSIVE ONLY. With the allow-negative consume RPCs a spendable account
+      // is ALWAYS charged (a costlier-than-balance generation simply drives the
+      // balance negative — see `consume` above). A null here therefore means the
+      // account is genuinely NON-spendable: no spendable usage_period for an
+      // active/past_due subscription, or a missing/unverified trial grant — both
+      // already excluded by resolve-time auth (step 4) and the step-8 gate. We
+      // only reach this on a since-cancelled mid-flight race. We have ALREADY
+      // paid the provider, but the money-safety rule is absolute: NEVER return a
+      // prompt without charging. Log a failure row and refuse with 402 — no free
+      // result, nothing cached.
+      console.error(JSON.stringify({ fn: "generate", key: account.key, error: "consume_non_spendable", model }));
       await deps.store.logGeneration({
         subscriptionId: account.logSubscriptionId,
         tokensIn: chat.inputTokens,
         tokensOut: chat.outputTokens,
-        estCostUsd: estCost,
-        success: true,
+        estCostUsd: estCost, // the provider WAS paid — record it honestly
+        success: false,
         model,
         provider: modelEntry.provider,
-        creditsUsed: 0, // free-result path: result returned but NOT charged
+        creditsUsed: null, // nothing charged
         durationSeconds: measured,
         frameCount: frames.length,
       });
-      // Cache this (uncharged) result too: a retry should replay it, not re-run.
-      if (idemKey) {
-        await deps.store.putIdempotent(account.key, idemKey, {
-          prompt: chat.content,
-          usage: usageBody(chat),
-          creditsRemaining: 0,
-          creditsCharged: 0, // residual-overshoot race: nothing was charged (D2)
-        }, IDEMPOTENCY_TTL_SECONDS);
-      }
       return json(
-        {
-          prompt: chat.content,
-          usage: usageBody(chat),
-          credits_remaining: 0,
-          credits_charged: 0,
-          ...devAnchorsBody(mode, chat.content),
-        },
-        200,
+        { error: "out_of_credits", credits_remaining: 0, estimate: null },
+        402,
       );
     }
 

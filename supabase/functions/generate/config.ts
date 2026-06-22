@@ -5,7 +5,6 @@
 // =============================================================================
 
 import { optionalEnv, optionalEnvInt } from "../_shared/env.ts";
-import { composedSystemPrompt } from "./prompt.ts";
 
 // ---- Providers + models — server-configurable from day one (§ models) ------
 // Defaults match the BYOK path (OpenAI / gpt-4o) so Managed output is identical
@@ -33,31 +32,13 @@ export const GEMINI_THINKING_LEVEL = optionalEnv("GEMINI_THINKING_LEVEL", "low")
 // COGS cap.
 export const USD_PER_CREDIT = 0.01;
 
-// ---- Preflight estimator (Phase 2 — estimate + headroom gate) ---------------
-// The charge is metered on REAL cost post-chat, but the out-of-credits gate runs
-// BEFORE the chat call, so it needs an estimate of the cost from the known
-// inputs (frames, transcript, OCR, audio) plus a conservative output allowance.
-// All env-overridable so the estimator can be retuned from real
-// (frames, tokens_in, tokens_out) data without an app update.
-//
-// SYSTEM_PROMPT_TOKENS is NOT a magic number: it's derived once at module load
-// from the real composed system prompt (~chars/4), so a prompt edit retunes the
-// floor automatically. prompt.ts has no imports, so this can't cycle.
-export const SYSTEM_PROMPT_TOKENS = Math.ceil(composedSystemPrompt().length / 4);
-// Conservative per-generation output-token allowance (real avg out ≈ 1.5–3k in
-// generation_log). Deliberately on the high side so the gate errs toward
-// over-, not under-, estimating the spend.
-export const OUTPUT_TOKENS_ESTIMATE = optionalEnvInt("GENERATE_OUTPUT_TOKENS_ESTIMATE", 3000);
-// Per-frame input-token cost by provider (a frame is a fixed-resolution image,
-// so its token cost is provider-determined, not size-determined).
-export const FRAME_TOKENS_GEMINI = optionalEnvInt("GENERATE_FRAME_TOKENS_GEMINI", 1120); // media_resolution_high
-export const FRAME_TOKENS_OPENAI = optionalEnvInt("GENERATE_FRAME_TOKENS_OPENAI", 1100); // ~6×512px tiles, 16:9; tune later
-export const FRAME_TOKENS_ANTHROPIC = optionalEnvInt("GENERATE_FRAME_TOKENS_ANTHROPIC", 1200); // tune later
-// The gate allows when `balance >= estimate - HEADROOM_CREDITS`: a small
-// tolerance so a user who is a few credits short of a slightly-over estimate
-// isn't blocked from a recording that will, in reality, cost a little less. The
-// residual-overshoot free-result path (handler step 12) covers any remainder.
-export const HEADROOM_CREDITS = optionalEnvInt("GENERATE_HEADROOM_CREDITS", 5);
+// NOTE: there is no pre-generation credit ESTIMATOR. The charge is metered on
+// the REAL post-chat cost (`creditCostForModel`); the out-of-credits decision is
+// the handler's `remaining < 1` FLOOR gate, which allows a user with >= 1 credit
+// exactly one uncapped generation (charged in full, possibly into the negative)
+// and blocks every further one. The former estimate+headroom gate and its token
+// constants (SYSTEM_PROMPT_TOKENS / OUTPUT_TOKENS_ESTIMATE / FRAME_TOKENS_* /
+// HEADROOM_CREDITS) were removed with that gate.
 
 // ---- Server-side input limits — the "generous fuse" (§ input limits) -------
 // Set ABOVE anything a real recording can produce (app hard-caps at 3 min,
@@ -99,9 +80,11 @@ export const MAX_CLICK_LABEL_CHARS = optionalEnvInt("GENERATE_MAX_CLICK_LABEL_CH
 // transcript is already bounded by the MAX_AUDIO_SECONDS audio fuse on call 1;
 // these only stop a FORGED call-2 body from bloating the prompt the server's key
 // pays for. Excess segments are DROPPED (not a reject — a real recording can't
-// hit it); each segment's text is length-capped. The credit ESTIMATE gate is the
-// real money backstop: a forged huge transcript inflates the estimate and blocks
-// ITSELF (out_of_credits) before any chat call.
+// hit it); each segment's text is length-capped. These caps (with the call-1
+// audio fuse) bound the absolute prompt size; the metered charge then bills the
+// REAL cost of whatever is sent, and the handler's `remaining < 1` floor gate
+// blocks the NEXT request — so a forged body can at worst inflate the ONE
+// already-authorized generation, never run unbounded.
 export const MAX_TRANSCRIPT_SEGMENTS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_SEGMENTS", 2000);
 export const MAX_TRANSCRIPT_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_TEXT_CHARS", 8 * 1024);
 

@@ -44,6 +44,17 @@ enum CreditDisplay {
         balance == 1 ? "1 credit" : "\(balance) credits"
     }
 
+    /// The balance readout, with the shared "out of credits" rule in ONE place:
+    /// `"Out of Credits"` once the balance is at or below zero — the server may
+    /// have charged into the negative on the one final uncapped generation, and
+    /// every further generation is then blocked until the monthly credits renew
+    /// or a top-up is bought — otherwise the §1.5 `creditsHeadline`. Used by the
+    /// post-generation charge line and the menu-bar credits line so the two agree
+    /// on exactly when "Out of Credits" shows (a raw negative is never surfaced).
+    static func balanceLabel(_ balance: Int) -> String {
+        balance <= 0 ? "Out of Credits" : creditsHeadline(balance)
+    }
+
     // MARK: - Usage meter (6F)
 
     /// The meter headline: "248 of 300 credits". `combined` is the full
@@ -73,11 +84,17 @@ enum CreditDisplay {
     /// The post-generation toast: "−4 credits · 96 left" (D2 — `charged` is
     /// the server's exact metered `credits_charged`; never derived from any
     /// local per-model number). A replayed/uncharged result (charged == 0)
-    /// reads "No charge · 96 left" rather than "−0 credits".
+    /// reads "No charge · 96 left" rather than "−0 credits". When the metered
+    /// charge took the balance to zero or below — the one final uncapped
+    /// generation that goes into the negative — the balance segment reads
+    /// "Out of Credits" (the shared `balanceLabel` rule) instead of the raw
+    /// "<n> left", e.g. "−30 credits · Out of Credits". The deducted amount is
+    /// always the server's exact `credits_charged`.
     static func chargeLine(charged: Int, remaining: Int) -> String {
         let charge = charged == 0
             ? "No charge"
             : (charged == 1 ? "\u{2212}1 credit" : "\u{2212}\(charged) credits")
-        return "\(charge) \u{00B7} \(remaining) left"
+        let balance = remaining > 0 ? "\(remaining) left" : balanceLabel(remaining)
+        return "\(charge) \u{00B7} \(balance)"
     }
 }

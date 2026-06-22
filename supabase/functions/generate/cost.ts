@@ -21,13 +21,8 @@
 import {
   CHAT_MODEL,
   CHAT_PROVIDER,
-  FRAME_TOKENS_ANTHROPIC,
-  FRAME_TOKENS_GEMINI,
-  FRAME_TOKENS_OPENAI,
-  OUTPUT_TOKENS_ESTIMATE,
   STT_MODEL,
   STT_PROVIDER,
-  SYSTEM_PROMPT_TOKENS,
   USD_PER_CREDIT,
 } from "./config.ts";
 import { modelById } from "./models.ts";
@@ -143,52 +138,6 @@ export function creditCostForModel(modelId: string, estCostUsd: number | null): 
   }
   if (estCostUsd === null || !Number.isFinite(estCostUsd)) return entry.fallbackCredits;
   return Math.max(1, Math.ceil(estCostUsd / USD_PER_CREDIT)); // floor of 1 credit
-}
-
-// Per-frame input-token cost by provider. An UNKNOWN provider falls back to the
-// MAX of the known rates: an over-estimate is safe (the gate errs toward
-// blocking; the real charge is metered post-chat), an under-estimate would let a
-// near-empty account start an unaffordable generation.
-function frameTokensFor(provider: string): number {
-  switch (provider) {
-    case "gemini":
-      return FRAME_TOKENS_GEMINI;
-    case "openai":
-      return FRAME_TOKENS_OPENAI;
-    case "anthropic":
-      return FRAME_TOKENS_ANTHROPIC;
-    default:
-      return Math.max(FRAME_TOKENS_GEMINI, FRAME_TOKENS_OPENAI, FRAME_TOKENS_ANTHROPIC);
-  }
-}
-
-/**
- * PREFLIGHT credit estimate (Phase 2): the cost of a generation predicted from
- * the KNOWN inputs, BEFORE the chat call, so the out-of-credits gate can run
- * without the real (post-chat) cost. Input tokens = the fixed system prompt +
- * per-frame image tokens + ~chars/4 for transcript and OCR text; output tokens =
- * a conservative fixed allowance. Priced through the same `estimatedCostUsd`
- * table the real charge uses, then `ceil(usd / USD_PER_CREDIT)`.
- *
- * Unpriced model / missing STT price → `estimatedCostUsd` returns null; fall
- * back to the model's `fallbackCredits` (or 1 for an unknown id) so the gate
- * never blocks on a pricing gap. The real charge is still metered post-chat.
- */
-export function estimateGenerationCredits(args: {
-  provider: string;
-  model: string;
-  frameCount: number;
-  transcriptChars: number;
-  ocrChars: number;
-  audioSeconds: number;
-}): number {
-  const inputTokens = SYSTEM_PROMPT_TOKENS +
-    args.frameCount * frameTokensFor(args.provider) +
-    Math.ceil(args.transcriptChars / 4) +
-    Math.ceil(args.ocrChars / 4);
-  const outputTokens = OUTPUT_TOKENS_ESTIMATE;
-  const usd = estimatedCostUsd(args.audioSeconds, args.provider, args.model, inputTokens, outputTokens);
-  return usd === null ? (modelById(args.model)?.fallbackCredits ?? 1) : Math.ceil(usd / USD_PER_CREDIT);
 }
 
 // The chat provider/model the cost table prices against (configured, not the

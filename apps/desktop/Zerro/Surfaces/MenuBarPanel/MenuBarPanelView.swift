@@ -524,7 +524,9 @@ struct MenuBarPanelView: View {
             // omitted until the first `/entitlement` refresh lands, rather than
             // flashing a placeholder.
             guard let snapshot = entitlements.managedSnapshot else { return "Ready" }
-            if snapshot.isOutOfCredits { return "Out of credits" }
+            // ≤ 0 (charged to/below zero on the final uncapped generation) → the
+            // shared "Out of Credits" label, never a raw negative number.
+            if snapshot.isOutOfCredits { return CreditDisplay.balanceLabel(snapshot.creditsRemaining) }
             let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
             return "Ready \u{00B7} \(credits)"
         case .expired:

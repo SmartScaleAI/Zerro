@@ -11,7 +11,7 @@ import {
   type TimelineBlock,
 } from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
-import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd } from "./cost.ts";
 import { MODEL_REGISTRY } from "./models.ts";
 import type { BillingStore, CombinedSpendResult, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
@@ -42,8 +42,9 @@ class InMemoryStore implements BillingStore {
   trialGrants = new Map<string, TrialGrant>();
   trialSlots = new Set<string>();
   forceTrialConsumeNull = false;
-  /** D2: force the cross-ledger combined spend to report NULL (nothing spent),
-   *  to exercise the handler's uncharged-result race branch for a converted user. */
+  /** D2: force the cross-ledger combined spend to report NULL (non-spendable),
+   *  to exercise the handler's defensive non-spendable → 402 branch for a
+   *  converted user (the provider is paid but NO uncharged result is returned). */
   forceCombinedConsumeNull = false;
 
   // Idempotency cache (M1). Keyed "<identityKey>::<idemKey>". The fake ignores
@@ -81,23 +82,29 @@ class InMemoryStore implements BillingStore {
     return Promise.resolve(plan + (this.topup.get(subId) ?? 0));
   }
   consumeCredit(subId: string, credits: number) {
-    // Mirrors the 2-arg consume_credit RPC: all-or-nothing, plan bucket first,
-    // remainder from top-ups, returns the COMBINED remaining after the spend.
+    // Mirrors consume_credit_overspend: ALWAYS spends (plan bucket first, then
+    // top-ups FIFO, any remainder overflowing onto the plan period so the
+    // balance goes NEGATIVE). Returns the true (possibly negative) combined
+    // remaining; null ONLY for a non-spendable subscription.
     if (this.forceConsumeNull) return Promise.resolve(null);
     const sub = this.subs.get(subId);
     if (!sub || (sub.status !== "active" && sub.status !== "past_due")) return Promise.resolve(null);
     const used = this.used.get(subId) ?? sub.credits_limit;
     const planAvail = Math.max(0, sub.credits_limit - used);
     const topupAvail = this.topup.get(subId) ?? 0;
-    if (planAvail + topupAvail < credits) return Promise.resolve(null); // nothing spent
     const planSpend = Math.min(credits, planAvail);
-    this.used.set(subId, used + planSpend);
-    this.topup.set(subId, topupAvail - (credits - planSpend));
+    let needed = credits - planSpend;
+    const topupSpend = Math.min(needed, topupAvail); // top-ups never overspent
+    needed -= topupSpend; // remainder overflows onto the plan period
+    this.used.set(subId, used + planSpend + needed);
+    this.topup.set(subId, topupAvail - topupSpend);
     return Promise.resolve(planAvail + topupAvail - credits);
   }
   consumeCombinedCredit(grantId: string, subId: string, credits: number): Promise<CombinedSpendResult | null> {
-    // Mirrors the consume_combined_credit RPC: all-or-nothing across BOTH
-    // ledgers, spent trial → plan → top-up.
+    // Mirrors consume_combined_credit_overspend: ALWAYS spends across BOTH
+    // ledgers (trial → plan → top-up, any remainder overflowing onto the plan
+    // period so the combined balance goes NEGATIVE). null ONLY for a
+    // non-spendable subscription.
     if (this.forceCombinedConsumeNull) return Promise.resolve(null);
     const g = this.trialGrants.get(grantId);
     const trialAvail = g && g.verified ? Math.max(0, g.limit - g.used) : 0;
@@ -106,19 +113,21 @@ class InMemoryStore implements BillingStore {
     const used = this.used.get(subId) ?? sub.credits_limit;
     const planAvail = Math.max(0, sub.credits_limit - used);
     const topupAvail = this.topup.get(subId) ?? 0;
-    if (trialAvail + planAvail + topupAvail < credits) return Promise.resolve(null); // nothing spent
     const trialSpent = Math.min(credits, trialAvail);
     if (trialSpent > 0 && g) g.used += trialSpent;
     let needed = credits - trialSpent;
-    const planSpent = Math.min(needed, planAvail);
-    if (planSpent > 0) this.used.set(subId, used + planSpent);
-    needed -= planSpent;
-    const topupSpent = needed;
-    if (topupSpent > 0) this.topup.set(subId, topupAvail - topupSpent);
+    const planSpend = Math.min(needed, planAvail);
+    needed -= planSpend;
+    const topupSpent = Math.min(needed, topupAvail); // top-ups never overspent
+    needed -= topupSpent;
+    // Any remainder overflows onto the plan period (folded into plan_spent so
+    // trial_spent + plan_spent + topup_spent == credits).
+    this.used.set(subId, used + planSpend + needed);
+    this.topup.set(subId, topupAvail - topupSpent);
     return Promise.resolve({
       remaining: trialAvail + planAvail + topupAvail - credits,
       trialSpent,
-      planSpent,
+      planSpent: planSpend + needed,
       topupSpent,
     });
   }
@@ -165,10 +174,12 @@ class InMemoryStore implements BillingStore {
     return Promise.resolve(g ? Math.max(0, g.limit - g.used) : 0);
   }
   consumeTrialCredit(id: string, credits: number) {
-    // Mirrors the 2-arg consume_trial_credit RPC: all-or-nothing single bucket.
+    // Mirrors consume_trial_credit_overspend: ALWAYS spends the full charge onto
+    // the single bucket (used may exceed limit → NEGATIVE remaining). null ONLY
+    // for a missing/unverified grant.
     if (this.forceTrialConsumeNull) return Promise.resolve(null);
     const g = this.trialGrants.get(id);
-    if (!g || !g.verified || g.used + credits > g.limit) return Promise.resolve(null);
+    if (!g || !g.verified) return Promise.resolve(null);
     g.used += credits;
     return Promise.resolve(g.limit - g.used);
   }
@@ -619,24 +630,10 @@ Deno.test("replay returns the cached result even after the first charge zeroed t
   assertEquals(openai.chatCalls, 1); // replay did no work
 });
 
-Deno.test("uncharged-race result is cached with credits_charged 0 and replayed as 0", async () => {
-  // The circuit-breaker/race path returns (and caches) an UNCHARGED result; a
-  // retry must replay credits_charged: 0, not the model's price.
-  const store = activeStore(0);
-  store.forceConsumeNull = true;
-  const openai = new StubProvider();
-  const KEY = "rec-uuid-race";
-
-  const first = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
-  assertEquals(first.status, 200);
-  assertEquals((await first.json()).credits_charged, 0);
-
-  const retry = await handleGenerate(makeReq(await mintToken(), makeBody(), KEY), deps(store, openai));
-  assertEquals(retry.status, 200);
-  const retryJson = await retry.json();
-  assertEquals(retryJson.credits_charged, 0);
-  assertEquals(openai.chatCalls, 1); // replayed, not re-run
-});
+// (Removed: the "uncharged-race result is cached with credits_charged 0" test.
+//  There is no longer a free/uncharged-result path — a non-spendable consume now
+//  refuses with 402 and caches NOTHING. The defensive 402 behavior is covered by
+//  "consume returns null (non-spendable account, defensive race) → 402 …" below.)
 
 Deno.test("a different Idempotency-Key is a new recording and charges again", async () => {
   const store = activeStore(0);
@@ -699,11 +696,37 @@ Deno.test("zero credits (< 1) → 402 {credits_remaining, estimate:null} BEFORE 
   assertEquals(store.slots.size, 0);
 });
 
-Deno.test("estimate gate: balance below (estimate − HEADROOM) → 402 after Whisper, before chat", async () => {
-  // Opus on the makeBody workload (2 frames, short transcript, 10s) estimates to
-  // 11 credits; HEADROOM is 5, so the gate blocks when remaining < 11 − 5 = 6.
-  // Balance 5 blocks — but only AFTER STT was paid (the gate is post-Whisper).
+Deno.test("overspend: a small positive balance runs ONE costlier generation, charged in full, balance goes negative (estimate gate removed)", async () => {
+  // Balance 5 (used 95). Opus meters this workload to 10 — MORE than the balance.
+  // The former estimate gate would have 402'd here (estimate 11, headroom 5, so
+  // it blocked when remaining < 6); with that gate gone, the one final generation
+  // is uncapped: it proceeds, is charged IN FULL, and the balance goes NEGATIVE.
   const store = activeStore(95); // 5 remaining
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200); // NOT 402 — the final generation is uncapped
+  const json = await res.json();
+  assertEquals(json.credits_charged, 10); // the metered cost, charged in full
+  assertEquals(json.credits_remaining, -5); // 5 − 10: the balance went NEGATIVE
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1); // the provider WAS called (and paid)
+  assertEquals(store.used.get("sub-1"), 105); // overflowed past the 100 plan cap
+  // Logged as a CHARGED success with the full metered amount.
+  assertEquals(store.log.length, 1);
+  assertEquals(store.log[0].success, true);
+  assertEquals(store.log[0].creditsUsed, 10);
+  assertEquals(store.slots.size, 0);
+});
+
+Deno.test("follow-up generation on a ≤ 0 balance → 402 out_of_credits, provider NOT called", async () => {
+  // After overspending into the negative (used 105 > limit 100), the combined
+  // balance reads 0. The NEXT generation is blocked at the step-8 floor gate
+  // BEFORE any provider work — the negative is never netted against; it just
+  // blocks until the monthly renewal or a top-up.
+  const store = activeStore(105); // used > limit → 0 remaining (already overspent)
   const openai = new StubProvider();
   const res = await handleGenerate(
     makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
@@ -712,42 +735,18 @@ Deno.test("estimate gate: balance below (estimate − HEADROOM) → 402 after Wh
   assertEquals(res.status, 402);
   const json = await res.json();
   assertEquals(json.error, "out_of_credits");
-  assertEquals(json.credits_remaining, 5);
-  assertEquals(json.estimate, 11); // the preflight estimate the app surfaces
-  assertEquals(openai.transcribeCalls, 1); // STT WAS paid — gate runs after it
-  assertEquals(openai.chatCalls, 0); // chat never ran (the expensive call is gated)
-  assertEquals(store.used.get("sub-1"), 95); // no credit charged
-  // STT cost recorded honestly as a failed generation (same as the seconds gate).
-  assertEquals(store.log.length, 1);
-  assertEquals(store.log[0].success, false);
-  assertEquals(store.log[0].estCostUsd, sttCostUsd(10));
-  // Phase 3 calibration metadata on a failure row: nothing charged → null;
-  // the measured duration + keyframe count are still recorded.
-  assertEquals(store.log[0].creditsUsed, null);
-  assertEquals(store.log[0].durationSeconds, 10);
-  assertEquals(store.log[0].frameCount, 2);
+  assertEquals(json.credits_remaining, 0); // clamped, never a raw negative
+  assertEquals(json.estimate, null);
+  assertEquals(openai.transcribeCalls, 0); // STT NOT paid
+  assertEquals(openai.chatCalls, 0); // provider NOT called
+  assertEquals(store.used.get("sub-1"), 105); // unchanged
+  assertEquals(store.log.length, 0);
   assertEquals(store.slots.size, 0);
 });
 
-Deno.test("estimate gate: balance exactly AT (estimate − HEADROOM) passes the gate to the chat call", async () => {
-  // Threshold is estimate(11) − HEADROOM(5) = 6; `< 6` blocks, so 6 passes. Proof
-  // the gate let the request through: the chat call ran (vs the blocked case
-  // above where it never does). The headroom is what lets a 6-credit balance
-  // start an 11-estimate recording — the residual is handled post-charge.
-  const store = activeStore(94); // 6 remaining
-  const openai = new StubProvider();
-  const res = await handleGenerate(
-    makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
-    deps(store, openai),
-  );
-  assertEquals(res.status, 200); // NOT 402 — the gate passed
-  assertEquals(openai.transcribeCalls, 1);
-  assertEquals(openai.chatCalls, 1); // got past the gate to the expensive call
-});
-
-Deno.test("estimate gate passes with ample balance → the real metered charge still applies", async () => {
-  // Balance well above the threshold: gate passes, and the post-chat charge is
-  // the METERED cost (Phase 1), not the estimate. Opus meters this workload to 10.
+Deno.test("ample balance: the real metered charge applies (Opus meters this workload to 10)", async () => {
+  // Balance well above the charge: the post-chat charge is the METERED cost
+  // (Phase 1), not a fixed price. Opus meters this workload to 10.
   const store = activeStore(0); // 100 remaining
   const openai = new StubProvider();
   const res = await handleGenerate(
@@ -756,14 +755,14 @@ Deno.test("estimate gate passes with ample balance → the real metered charge s
   );
   assertEquals(res.status, 200);
   const json = await res.json();
-  assertEquals(json.credits_charged, 10); // metered, not the estimate of 11
+  assertEquals(json.credits_charged, 10); // metered
   assertEquals(json.credits_remaining, 90);
 });
 
-Deno.test("idempotent replay returns the cached result WITHOUT re-running the estimate gate", async () => {
-  // First call (ample balance) charges + caches. Then the balance is driven below
-  // the estimate gate's threshold; a replay with the SAME key must still return
-  // the cached 200, never a fresh 402 — the cache check sits before the gate.
+Deno.test("idempotent replay returns the cached result even after the balance has since hit zero", async () => {
+  // First call (ample balance) charges + caches. Then the balance is driven to
+  // zero; a replay with the SAME key must still return the cached 200, never a
+  // fresh 402 — the cache check sits BEFORE the step-8 floor gate.
   const store = activeStore(0); // 100 remaining
   const openai = new StubProvider();
   const KEY = "rec-uuid-gate-replay";
@@ -776,14 +775,14 @@ Deno.test("idempotent replay returns the cached result WITHOUT re-running the es
   const firstJson = await first.json();
   assertEquals(firstJson.credits_charged, 10); // 100 → 90
 
-  // Drain the account below the gate threshold (estimate 11 − headroom 5 = 6).
+  // Drain the account to zero (the floor gate would now 402 a fresh request).
   store.used.set("sub-1", 100); // 0 remaining now
 
   const retry = await handleGenerate(
     makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" }), KEY),
     deps(store, openai),
   );
-  assertEquals(retry.status, 200); // cached replay, NOT 402 from the gate
+  assertEquals(retry.status, 200); // cached replay, NOT 402 from the floor gate
   const retryJson = await retry.json();
   assertEquals(retryJson.prompt, firstJson.prompt);
   assertEquals(retryJson.credits_charged, 10); // the original metered charge
@@ -962,6 +961,34 @@ Deno.test("trial token: zero trial credits → 402, no OpenAI call, no charge", 
   assertEquals(store.trialSlots.size, 0);
 });
 
+Deno.test("trial overspend: a small positive trial balance runs ONE costlier generation → charged in full, balance negative, then blocked", async () => {
+  // 2 trial credits left (13/15); Opus meters this workload to 10. The final
+  // generation is uncapped: charged in full, trial_credits_used overshoots the
+  // limit, and remaining goes negative. The NEXT request is then blocked.
+  const store = trialStore(13, 15); // 2 remaining
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintTrialToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.credits_charged, 10);
+  assertEquals(json.credits_remaining, -8); // 2 − 10: the balance went NEGATIVE
+  assertEquals(store.trialGrants.get("grant-1")?.used, 23); // 13 + 10, past the 15 limit
+  assertEquals(openai.chatCalls, 1); // the provider WAS called
+
+  // The follow-up is blocked at the floor gate (clamped balance reads 0).
+  const blocked = await handleGenerate(
+    makeReq(await mintTrialToken(), makeBody({ model: "claude-opus-4-7" })),
+    deps(store, openai),
+  );
+  assertEquals(blocked.status, 402);
+  assertEquals((await blocked.json()).error, "out_of_credits");
+  assertEquals(openai.chatCalls, 1); // no second provider call
+  assertEquals(store.trialGrants.get("grant-1")?.used, 23); // unchanged — no further spend
+});
+
 Deno.test("trial token: unknown grant → 404", async () => {
   const store = new InMemoryStore(); // grant-1 not seeded
   const openai = new StubProvider();
@@ -1083,20 +1110,28 @@ Deno.test("second concurrent request for same subscriber → 429 (concurrency ca
   assertEquals(store.slots.size, 0); // both slots released
 });
 
-// ---- consume race edge ------------------------------------------------------
-Deno.test("credit becomes unspendable after the check → result returned once, logged with model, not double-charged", async () => {
+// ---- consume race edge (defensive non-spendable) ----------------------------
+Deno.test("consume returns null (non-spendable account, defensive race) → 402, NO free result, failure logged", async () => {
+  // With allow-negative consume, a spendable account is ALWAYS charged; a null is
+  // the genuinely non-spendable case (account cancelled mid-flight). We've ALREADY
+  // paid the provider, but we NEVER hand back an uncharged prompt — 402, log a
+  // failure row, cache nothing.
   const store = activeStore(0);
-  store.forceConsumeNull = true; // simulate a mid-flight state change
+  store.forceConsumeNull = true; // simulate a mid-flight became-non-spendable
   const openai = new StubProvider();
-  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
-  assertEquals(res.status, 200); // we already paid the provider → return the result once
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-defensive"), deps(store, openai));
+  assertEquals(res.status, 402);
   const json = await res.json();
-  assertEquals(json.prompt, "GENERATED PROMPT");
-  assertEquals(json.credits_remaining, 0);
-  assertEquals(json.credits_charged, 0); // D2: nothing was charged on this path
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.prompt, undefined); // NO free result
+  assertEquals(openai.chatCalls, 1); // the provider WAS called (we paid)
+  // Logged as a failure row — nothing charged — still attributed to the model.
   assertEquals(store.log.length, 1);
-  assertEquals(store.log[0].success, true);
-  assertEquals(store.log[0].model, "gemini-3.5-flash"); // the race branch still attributes
+  assertEquals(store.log[0].success, false);
+  assertEquals(store.log[0].creditsUsed, null);
+  assertEquals(store.log[0].model, "gemini-3.5-flash");
+  assertEquals(store.idempotent.size, 0); // nothing cached on the refuse path
+  assertEquals(store.used.get("sub-1"), 0); // nothing charged
   assertEquals(store.slots.size, 0);
 });
 
@@ -1649,23 +1684,25 @@ Deno.test("combined: trial + plan + top-up all contribute, drained in order", as
   assertEquals(store.topup.get("sub-1"), 2); // then top-up (10 − 8)
 });
 
-Deno.test("combined: insufficient combined balance → 402 at the estimate gate, NOTHING spent", async () => {
-  // Opus estimate 11, headroom 5 → blocks when combined < 6. trial 2 + plan 3 = 5.
+Deno.test("combined: a small positive combined balance runs ONE costlier generation → charged in full, combined balance goes negative", async () => {
+  // trial 2 (13/15) + plan 3 (97/100) = combined 5; Opus meters to 10. The former
+  // estimate gate would have 402'd (combined 5 < 6); now the final generation is
+  // uncapped — trial 2 + plan 3 are funded, the 5-credit remainder overflows onto
+  // the plan period, and the combined balance goes negative.
   const store = combinedStore({ trialUsed: 13, trialLimit: 15, planUsed: 97, planLimit: 100 });
   const openai = new StubProvider();
   const res = await handleGenerate(
     makeReq(await mintToken(), makeBody({ model: "claude-opus-4-7" })),
     deps(store, openai),
   );
-  assertEquals(res.status, 402);
+  assertEquals(res.status, 200); // NOT 402 — the final generation is uncapped
   const json = await res.json();
-  assertEquals(json.error, "out_of_credits");
-  assertEquals(json.credits_remaining, 5); // the COMBINED balance
-  assertEquals(json.estimate, 11);
-  assertEquals(openai.chatCalls, 0); // never paid for chat
-  // All-or-nothing: neither ledger moved.
-  assertEquals(store.trialGrants.get("grant-1")?.used, 13);
-  assertEquals(store.used.get("sub-1"), 97);
+  assertEquals(json.credits_charged, 10);
+  assertEquals(json.credits_remaining, -5); // (2 + 3) − 10
+  assertEquals(openai.chatCalls, 1); // the provider WAS called
+  // Trial fully drained; the 3 funded + 5 overflow landed on the plan period.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15);
+  assertEquals(store.used.get("sub-1"), 105); // 97 + 3 funded + 5 overflow
   assertEquals(store.slots.size, 0);
 });
 
@@ -1726,18 +1763,21 @@ Deno.test("combined: concurrency cap holds — two in-flight requests can't doub
   assertEquals(store.slots.size, 0);
 });
 
-Deno.test("combined: spend returning null at consume (race) → result returned once, charged 0", async () => {
+Deno.test("combined: consume returns null (non-spendable, defensive race) → 402, NO free result, ledgers untouched", async () => {
   const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 0, planLimit: 100 });
-  store.forceCombinedConsumeNull = true; // the grant/plan became unspendable mid-flight
+  store.forceCombinedConsumeNull = true; // became non-spendable mid-flight
   const openai = new StubProvider();
-  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
-  assertEquals(res.status, 200); // OpenAI already paid → return once
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody(), "combined-defensive"), deps(store, openai));
+  assertEquals(res.status, 402); // provider was paid, but NEVER an uncharged result
   const json = await res.json();
-  assertEquals(json.credits_charged, 0);
-  assertEquals(json.credits_remaining, 0);
-  // Nothing was charged on this path.
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.prompt, undefined);
+  assertEquals(openai.chatCalls, 1); // the provider WAS called
+  // Neither ledger moved; logged as a failure.
   assertEquals(store.trialGrants.get("grant-1")?.used, 12);
   assertEquals(store.used.get("sub-1"), 0);
-  assertEquals(store.log[0].success, true);
+  assertEquals(store.log[0].success, false);
+  assertEquals(store.log[0].creditsUsed, null);
+  assertEquals(store.idempotent.size, 0); // nothing cached on the refuse path
   assertEquals(store.slots.size, 0);
 });
