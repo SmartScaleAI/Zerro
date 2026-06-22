@@ -154,7 +154,7 @@ jobs:
         # project. Only the API key is secret; project id + host are not.
         env:
           POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
-          POSTHOG_CLI_PROJECT_ID: "473237"
+          POSTHOG_CLI_PROJECT_ID: "469499"
           POSTHOG_CLI_HOST: "https://us.posthog.com"
         run: |
           set -euo pipefail
