@@ -344,7 +344,7 @@ async function mintTokenResponse(
       expires_at: new Date(exp * 1000).toISOString(),
       trial_credits_remaining: creditsRemaining,
       // E4: the grant total, so the trial usage meter can draw a proportional
-      // bar instead of a bare count (the app must not hardcode 40).
+      // bar instead of a bare count (the app must not hardcode 30).
       trial_credits_limit: creditsLimit,
       // The opaque grant id (same value as the token's `sub`). The app caches it
       // and passes it through checkout custom_data on conversion, so the

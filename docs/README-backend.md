@@ -15,7 +15,7 @@ prompt. `generate` is the only function that touches a model provider; it can
 never be bypassed to spend money without a valid identity **and** an available
 credit. **Phase F adds `trial-start`** — an email-gated, server-funded **trial**
 path: a trial user (no API key of their own) verifies an email with a 6-digit
-code and receives a capped credit grant (default 40) keyed to that email, then
+code and receives a capped credit grant (default 30) keyed to that email, then
 their generations route through the SAME `generate` proxy on a `kind:"trial"`
 token (decrementing `trial_grants` instead of a subscription period). The cap is
 enforced server-side per verified email, so delete+reinstall can't farm fresh
@@ -159,7 +159,7 @@ the runtime — do NOT set them yourself.**
 | `GENERATE_PROVIDER_TIMEOUT_MS` | optional | Provider request timeout (default `120000`). Falls back to the legacy `GENERATE_OPENAI_TIMEOUT_MS` if the new var is unset, so a tuned deployment keeps its value. |
 | `CONVERT_RATE_LIMIT_PER_IDENTITY` / `_WINDOW_SECONDS` | optional | `convert` per-identity rate limit (defaults `10` per `60`s) — the free endpoint's ONLY quantitative gate. Input caps are `CONVERT_MAX_{PAYLOAD_BYTES,SOURCE_CHARS,CONTEXT_CHARS}`. |
 | `RESEND_API_KEY` | ✅ **F** | Resend API key for sending the trial verification code email. The new secret `trial-start` requires. Lives only here; never returned/logged. |
-| `TRIAL_CREDITS` | optional | The per-email trial credit grant (default `40`, multi-model plan §1.3). Tunable without a logic change. |
+| `TRIAL_CREDITS` | optional | The per-email trial credit grant (default `30`, multi-model plan §1.3). Tunable without a logic change. |
 | `TRIAL_EMAIL_FROM` | optional | The verified getzerro.app sender (default `Zerro <noreply@getzerro.app>`). Must be a domain verified in Resend. |
 | `TRIAL_CODE_TTL_SECONDS` | optional | Verification-code lifetime (default `600` = 10 min). |
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
@@ -198,7 +198,7 @@ supabase secrets set RESEND_API_KEY="<your Resend key>"   # F  — trial-start e
 supabase secrets set LEMONSQUEEZY_API_KEY="<your LS API key>"  # G — staleness re-check
 supabase secrets set AFFILIATE_IP_SALT="$(openssl rand -hex 32)"  # affiliate — IP-hash salt
 # Phase E: supabase secrets set LS_VARIANT_STARTER=... LS_VARIANT_PRO="<monthly-id>,<yearly-id>"
-# Phase F (optional): supabase secrets set TRIAL_CREDITS=40 TRIAL_EMAIL_FROM="Zerro <noreply@getzerro.app>"
+# Phase F (optional): supabase secrets set TRIAL_CREDITS=30 TRIAL_EMAIL_FROM="Zerro <noreply@getzerro.app>"
 # Phase 5: supabase secrets set LS_VARIANT_YEARLY="<yearly-id>" \
 #          LS_VARIANT_TOPUP_BOOST="<boost-variant-id>" LS_VARIANT_TOPUP_POWER="<power-variant-id>"
 
@@ -573,7 +573,7 @@ subscriptions. Trials see all 6 registry models at the same credit prices.
 A trial generation logs to `generation_log` with `subscription_id = null` (no FK;
 the cap is enforced on `trial_grants`, not the log).
 
-**`TRIAL_CREDITS`** is the grant size (env, default 40) — tune the trial economics
+**`TRIAL_CREDITS`** is the grant size (env, default 30) — tune the trial economics
 without a logic change.
 
 ---

@@ -12,8 +12,8 @@ import { optionalEnv, optionalEnvBool, optionalEnvInt } from "../_shared/env.ts"
 // per-model spend — see multi-model plan §1.2/§1.3; the unit is credits, never
 // a flat generation count). Capped here and enforced server-side
 // (consume_trial_credit), keyed to the verified email so reinstalling can't
-// farm a fresh grant. Default 40 (multi-model plan §1.3).
-export const TRIAL_CREDITS = optionalEnvInt("TRIAL_CREDITS", 40);
+// farm a fresh grant. Default 30 (multi-model plan §1.3).
+export const TRIAL_CREDITS = optionalEnvInt("TRIAL_CREDITS", 30);
 
 // ---- Verification code ------------------------------------------------------
 // 6-digit numeric code, hashed (never stored raw), short TTL, attempt-limited.

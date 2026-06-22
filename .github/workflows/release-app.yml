@@ -164,6 +164,7 @@ jobs:
             -configuration "$CONFIGURATION" \
             -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
             archive \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" \

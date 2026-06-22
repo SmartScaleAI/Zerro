@@ -618,6 +618,24 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             finish(.failed(.cancelled))
             return
         }
+        // FINAL DRAIN (fast-exit race). The process `terminationHandler` and the
+        // stdout `readabilityHandler` both hop onto this serial queue with NO
+        // ordering guarantee, so a quick agent that prints its terminal `result`
+        // line and exits can land here with that line still unread in the pipe —
+        // the stream-json agents report a fatal error in `result` on STDOUT, not
+        // stderr, so losing it drops the whole failure detail. Stop the live
+        // handlers and synchronously read whatever remains now. The child has
+        // already exited (its write ends are closed), so the read hits EOF
+        // promptly — no hang. Best-effort: a read error degrades to the prior
+        // behavior, never crashes.
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        if let out = (try? stdoutPipe.fileHandleForReading.readToEnd()) ?? nil, !out.isEmpty {
+            ingestStdout(out)
+        }
+        if let err = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? nil, !err.isEmpty {
+            ingestStderr(err)
+        }
         // Flush any buffered final line (the terminal `result` event commonly
         // arrives without a trailing newline).
         if !stdoutBuffer.isEmpty, let line = String(data: stdoutBuffer, encoding: .utf8) {

@@ -185,8 +185,8 @@ Deno.test("verify: correct code creates a grant ONCE and mints a trial token", a
   const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
-  assertEquals(json.trial_credits_remaining, 40); // TRIAL_CREDITS default
-  assertEquals(json.trial_credits_limit, 40); // E4: grant total for the meter bar
+  assertEquals(json.trial_credits_remaining, 30); // TRIAL_CREDITS default
+  assertEquals(json.trial_credits_limit, 30); // E4: grant total for the meter bar
   assert(typeof json.token === "string");
 
   // The token is a valid TRIAL token whose sub is the grant id.
@@ -211,16 +211,16 @@ Deno.test("verify: a SECOND verify for the same email does not double-grant / re
   // First verify → grant created, then spend a credit to simulate usage.
   const code1 = await sendAndGetCode(store, email, "a@b.com");
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code1 }), deps(store, email));
-  store.grants.get("a@b.com")!.used = 4; // 36 remaining
+  store.grants.get("a@b.com")!.used = 4; // 26 remaining
 
   // Re-request + re-verify (e.g. after a reinstall lost the token).
   const code2 = await sendAndGetCode(store, email, "a@b.com");
   const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code2 }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
-  // Same grant, credits NOT reset (36 left, not 40).
-  assertEquals(json.trial_credits_remaining, 36);
-  assertEquals(json.trial_credits_limit, 40); // E4: limit rides along unchanged
+  // Same grant, credits NOT reset (26 left, not 30).
+  assertEquals(json.trial_credits_remaining, 26);
+  assertEquals(json.trial_credits_limit, 30); // E4: limit rides along unchanged
   assertEquals(store.grants.size, 1);
 });
 
@@ -284,15 +284,15 @@ Deno.test("resume: verified email re-mints a token with the persisted balance, n
   // Establish a verified grant, then spend some credits.
   const code = await sendAndGetCode(store, email, "a@b.com");
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
-  store.grants.get("a@b.com")!.used = 6; // 34 remaining
+  store.grants.get("a@b.com")!.used = 6; // 24 remaining
   const sentBefore = email.sent.length;
 
   const res = await handleTrialStart(req({ action: "resume", email: "a@b.com" }), deps(store, email));
   assertEquals(res.status, 200);
   const json = await res.json();
   assert(typeof json.token === "string");
-  assertEquals(json.trial_credits_remaining, 34); // persisted balance, NOT reset to 40
-  assertEquals(json.trial_credits_limit, 40); // E4: the PERSISTED grant total
+  assertEquals(json.trial_credits_remaining, 24); // persisted balance, NOT reset to 30
+  assertEquals(json.trial_credits_limit, 30); // E4: the PERSISTED grant total
   assertValidFutureExpiry(json.expires_at);
   // No email sent and no new grant created — resume only reads the grant.
   assertEquals(email.sent.length, sentBefore);
@@ -381,7 +381,7 @@ Deno.test("device: new device + new email → grant created and stamped", async 
   const code = email.sent.at(-1)!.code;
   const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code, device_id_hash: DEV_A }), deps(store, email));
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals((await res.json()).trial_credits_remaining, 30);
   assertEquals(store.grants.get("a@b.com")!.deviceIdHash, DEV_A); // bound to the device
 });
 
@@ -415,7 +415,7 @@ Deno.test("device: same device + SAME email → reinstall re-verify resumes, nev
   await handleTrialStart(req({ action: "request", email: "a@b.com", device_id_hash: DEV_A }), deps(store, email));
   const code1 = email.sent.at(-1)!.code;
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code1, device_id_hash: DEV_A }), deps(store, email));
-  store.grants.get("a@b.com")!.used = 5; // 35 remaining
+  store.grants.get("a@b.com")!.used = 5; // 25 remaining
 
   // Reinstall on the SAME Mac with the SAME email → not a "different email", so
   // never blocked; re-verify resumes the persisted balance.
@@ -423,7 +423,7 @@ Deno.test("device: same device + SAME email → reinstall re-verify resumes, nev
   assertEquals((await r1.json()).status, "code_sent");
   const code2 = email.sent.at(-1)!.code;
   const r2 = await handleTrialStart(req({ action: "verify", email: "a@b.com", code: code2, device_id_hash: DEV_A }), deps(store, email));
-  assertEquals((await r2.json()).trial_credits_remaining, 35); // resumed, not reset to 40
+  assertEquals((await r2.json()).trial_credits_remaining, 25); // resumed, not reset to 30
   assertEquals(store.grants.size, 1);
 });
 
@@ -433,7 +433,7 @@ Deno.test("device: a DIFFERENT device + new email → granted (only the same Mac
   store.grants.set("first@b.com", { id: "g1", verified: true, limit: 40, used: 0, deviceIdHash: DEV_A });
   const code = await sendAndGetCode(store, email, "second@b.com"); // request not blocked
   const res = await handleTrialStart(req({ action: "verify", email: "second@b.com", code, device_id_hash: DEV_B }), deps(store, email));
-  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals((await res.json()).trial_credits_remaining, 30);
   assertEquals(store.grants.get("second@b.com")!.deviceIdHash, DEV_B);
 });
 
@@ -444,7 +444,7 @@ Deno.test("device: missing device hash → email-only cap unchanged (two emails 
   await handleTrialStart(req({ action: "verify", email: "a@b.com", code: c1 }), deps(store, email));
   const c2 = await sendAndGetCode(store, email, "c@d.com");
   const res = await handleTrialStart(req({ action: "verify", email: "c@d.com", code: c2 }), deps(store, email));
-  assertEquals((await res.json()).trial_credits_remaining, 40);
+  assertEquals((await res.json()).trial_credits_remaining, 30);
   assertEquals(store.grants.size, 2); // no device hash → no device cap
 });
 
