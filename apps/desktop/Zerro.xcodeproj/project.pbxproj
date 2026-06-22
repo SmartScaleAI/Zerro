@@ -242,6 +242,7 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "[ -z \"$POSTHOG_CLI_API_KEY\" ] && { echo \"No PostHog key — skipping dSYM upload\"; exit 0; }\n   ${BUILD_DIR%/Build/*}/SourcePackages/checkouts/posthog-ios/build-tools/upload-symbols.sh\n";
+			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
 

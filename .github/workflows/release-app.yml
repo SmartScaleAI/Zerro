@@ -135,11 +135,27 @@ jobs:
           "$RUNNER_TEMP/sparkle/bin/generate_appcast" --version || true
 
       # ----------------------------------------------------------------------
+      # Install the PostHog CLI so the app's dSYM-upload build phase (the
+      # "Upload dSYMs to PostHog" Run Script on the Zerro target) can run
+      # `posthog-cli` during the Archive step below. The macos runner ships
+      # Node/npm, so a global install puts `posthog-cli` on PATH.
+      - name: Install PostHog CLI
+        run: npm install -g @posthog/cli
+
+      # ----------------------------------------------------------------------
       # Versions are passed directly to xcodebuild below (command-line build
       # settings always override the pbxproj). agvtool is NOT used: without
       # VERSIONING_SYSTEM=apple-generic it silently no-ops on the marketing
       # version, which shipped v1.0.4 binaries that identified as 1.0.1.
       - name: Archive
+        # These env vars are read by the "Upload dSYMs to PostHog" Run Script
+        # build phase on the Zerro target. xcodebuild passes them through to
+        # the script, which authenticates `posthog-cli` and targets the Zerro
+        # project. Only the API key is secret; project id + host are not.
+        env:
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+          POSTHOG_CLI_PROJECT_ID: "473237"
+          POSTHOG_CLI_HOST: "https://us.posthog.com"
         run: |
           set -euo pipefail
           xcodebuild \
