@@ -31,6 +31,14 @@ import {
 } from "./types.ts";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
+// Server-side max-output-token cap (B-04). OpenAI left uncapped inflates per-call
+// COGS on the free `convert` endpoint and deepens an A-05 overspend generation;
+// mirrors Anthropic's 16384 cap (anthropic.ts ANTHROPIC_MAX_TOKENS) so a runaway
+// completion is bounded on EVERY path. `max_completion_tokens` is the current
+// chat/completions param (supersedes the deprecated `max_tokens`, required by the
+// GPT-5.x family). A response that hits it returns finish_reason "length", which
+// the chat() mapper already surfaces as a truncation (never returned half-formed).
+const OPENAI_MAX_OUTPUT_TOKENS = 16384;
 
 /** An OpenAI content block on the chat wire (text or a detail-tagged image_url). */
 type OpenAIContentBlock =
@@ -150,6 +158,7 @@ export class OpenAIChatClient extends OpenAITransport implements ChatClient {
   async chat(systemPrompt: string, content: TimelineBlock[]): Promise<ChatResult> {
     const body = JSON.stringify({
       model: this.chatModel,
+      max_completion_tokens: OPENAI_MAX_OUTPUT_TOKENS,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: toOpenAIContent(content) },

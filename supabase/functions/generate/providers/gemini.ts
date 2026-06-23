@@ -29,6 +29,13 @@ import {
 } from "./types.ts";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+// Server-side max-output-token cap (B-04). Gemini left uncapped inflates per-call
+// COGS on the free `convert` endpoint and deepens an A-05 overspend generation;
+// mirrors Anthropic's 16384 cap (anthropic.ts ANTHROPIC_MAX_TOKENS) so a runaway
+// completion is bounded on EVERY path. A response that hits it returns finishReason
+// "MAX_TOKENS", which the chat() mapper already surfaces as a truncation (never
+// returned half-formed). NOTE: Gemini bills thinking tokens against this budget too.
+const GEMINI_MAX_OUTPUT_TOKENS = 16384;
 
 interface GeminiPart {
   text?: string;
@@ -84,6 +91,7 @@ export class GeminiChatClient implements ChatClient {
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents: [{ role: "user", parts: toGeminiParts(content) }],
       generationConfig: {
+        maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
         thinkingConfig: { thinkingLevel: this.thinkingLevel },
       },
     });

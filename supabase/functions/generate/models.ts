@@ -105,3 +105,11 @@ const defaultEntry = MODEL_REGISTRY.find((m) => m.recommended && m.enabled) ??
   MODEL_REGISTRY.find((m) => m.enabled);
 if (!defaultEntry) throw new Error("MODEL_REGISTRY has no enabled entries");
 export const DEFAULT_MODEL_ID: string = defaultEntry.id;
+
+// The cheapest ENABLED model. The registry is ordered cheapest-first by
+// fallbackCredits, so the first enabled entry is the cheapest. Used to pin a
+// TRIAL `convert` to the cheapest model (X-01 / B-01): conversion is a structured
+// rewrite, so the priciest models add no value but cost the most against the
+// metered trial pool. Guaranteed non-null (the throw above proves ≥1 enabled).
+export const CHEAPEST_ENABLED_MODEL_ID: string =
+  (MODEL_REGISTRY.find((m) => m.enabled) ?? defaultEntry).id;

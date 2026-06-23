@@ -28,3 +28,16 @@ export const CONVERT_RATE_LIMIT_WINDOW_SECONDS = optionalEnvInt(
 // Gemini thinking depth — mirrors generate's default ("low"): the conversion
 // is a structured rewrite, not a reasoning problem.
 export const GEMINI_THINKING_LEVEL = optionalEnv("GEMINI_THINKING_LEVEL", "low");
+
+// ---- Trial metering (X-01 / B-01) -------------------------------------------
+// `convert` is FREE for managed/subscription tokens (already paying) but METERS a
+// kind:"trial" token against the SAME per-grant credit pool /generate uses
+// (consume_trial_credit). These mirror generate's slot stale window + idempotency
+// TTL so the metered trial path is exactly as safe: cap-1 in-flight (slot) makes
+// check-then-consume correct, and a retry carrying the same Idempotency-Key
+// replays the cached prompt instead of charging twice.
+export const CONVERT_SLOT_STALE_SECONDS = optionalEnvInt("CONVERT_SLOT_STALE_SECONDS", 180);
+export const CONVERT_IDEMPOTENCY_TTL_SECONDS = optionalEnvInt(
+  "CONVERT_IDEMPOTENCY_TTL_SECONDS",
+  900,
+);

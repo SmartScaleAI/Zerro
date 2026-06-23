@@ -14,7 +14,7 @@
 // (read-only import — this phase does not touch generate/**).
 // =============================================================================
 
-import { ALLOWED_MODELS, DEFAULT_MODEL_ID } from "../generate/models.ts";
+import { ALLOWED_MODELS, CHEAPEST_ENABLED_MODEL_ID, DEFAULT_MODEL_ID } from "../generate/models.ts";
 import { CONVERT_MAX_CONTEXT_CHARS, CONVERT_MAX_SOURCE_CHARS } from "./config.ts";
 
 export interface ParsedConvertRequest {
@@ -66,4 +66,17 @@ export function validateConvertBody(body: unknown): ConvertValidationResult {
   }
 
   return { ok: true, value: { sourceText: rawSource, context, model } };
+}
+
+/**
+ * The effective conversion model for a given token kind (X-01 / B-01).
+ * `convert` is a structured rewrite, so the priciest models add no value but cost
+ * the most against the metered trial pool. A TRIAL token is therefore pinned to
+ * the cheapest enabled model regardless of the client's selection — the model is
+ * NOT caller-selectable for trials. A managed/subscription token keeps full model
+ * choice (it's already paying; behavior unchanged). This is the convert-side
+ * "cheap model subset" allow-list: the subset for trials is exactly {cheapest}.
+ */
+export function modelForConvert(kind: "subscription" | "trial", requested: string): string {
+  return kind === "trial" ? CHEAPEST_ENABLED_MODEL_ID : requested;
 }

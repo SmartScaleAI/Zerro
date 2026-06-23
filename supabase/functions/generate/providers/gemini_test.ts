@@ -74,8 +74,21 @@ Deno.test("GeminiChatClient.chat: posts the exact generateContent body, key in h
           { text: `\n[0:00–0:02] "hello world"` },
         ],
       }],
-      generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
+      // B-04: server-side output cap (maxOutputTokens), mirroring Anthropic's 16384.
+      generationConfig: { maxOutputTokens: 16384, thinkingConfig: { thinkingLevel: "low" } },
     });
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("GeminiChatClient.chat: pins a maxOutputTokens output cap (B-04)", async () => {
+  const f = stubFetch(() => okResponse());
+  try {
+    await new GeminiChatClient("k", "gemini-3.5-flash", "low").chat("SYS", [{ type: "text", text: "hi" }]);
+    const body = JSON.parse(f.calls[0].init.body as string);
+    // The cap is present and bounded — an uncapped request would omit this field.
+    assertEquals(body.generationConfig.maxOutputTokens, 16384);
   } finally {
     f.restore();
   }

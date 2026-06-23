@@ -136,7 +136,21 @@ export function creditCostForModel(modelId: string, estCostUsd: number | null): 
   if (!entry) {
     throw new Error(`creditCostForModel: unknown model '${modelId}' (caller must validate against ALLOWED_MODELS first)`);
   }
-  if (estCostUsd === null || !Number.isFinite(estCostUsd)) return entry.fallbackCredits;
+  return creditCostForUsd(estCostUsd, entry.fallbackCredits);
+}
+
+/**
+ * Meter a known USD cost to credits: `ceil(estCostUsd / USD_PER_CREDIT)` with a
+ * floor of 1 credit. The model-agnostic core of `creditCostForModel` — used
+ * directly where there is NO chat model to carry a per-model fallback (the
+ * STT-only dev-transcribe trial charge, X-01 / B-03), with an explicit
+ * `fallbackCredits` for the unpriced edge. Keeping the $-math here means the
+ * floor-1 ceil rule lives in exactly one place (this module).
+ *  - estCostUsd null/non-finite (unpriced): charge `fallbackCredits` — a pricing
+ *    gap must never charge 0 (which would re-open the free-endpoint abuse) or block.
+ */
+export function creditCostForUsd(estCostUsd: number | null, fallbackCredits: number): number {
+  if (estCostUsd === null || !Number.isFinite(estCostUsd)) return fallbackCredits;
   return Math.max(1, Math.ceil(estCostUsd / USD_PER_CREDIT)); // floor of 1 credit
 }
 

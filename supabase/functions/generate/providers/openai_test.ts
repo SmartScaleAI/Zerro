@@ -64,6 +64,8 @@ Deno.test("OpenAIChatClient.chat: posts the exact /chat/completions body and map
     assertEquals((c.init.headers as Record<string, string>).Authorization, "Bearer test-key");
     assertEquals(JSON.parse(c.init.body as string), {
       model: "gpt-4o",
+      // B-04: server-side output cap, mirroring Anthropic's 16384.
+      max_completion_tokens: 16384,
       messages: [
         { role: "system", content: "SYS" },
         {
@@ -75,6 +77,28 @@ Deno.test("OpenAIChatClient.chat: posts the exact /chat/completions body and map
         },
       ],
     });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("OpenAIChatClient.chat: pins a max_completion_tokens output cap (B-04)", async () => {
+  let captured: RequestInit | null = null;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (_url: string | URL | Request, init?: RequestInit) => {
+    captured = init!;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: "X" } }], usage: {} }),
+        { status: 200 },
+      ),
+    );
+  };
+  try {
+    await new OpenAIChatClient("k", "gpt-5.5").chat("SYS", [{ type: "text", text: "hi" }]);
+    const body = JSON.parse(captured!.body as string);
+    // The cap is present and bounded — an uncapped request would omit this field.
+    assertEquals(body.max_completion_tokens, 16384);
   } finally {
     globalThis.fetch = origFetch;
   }

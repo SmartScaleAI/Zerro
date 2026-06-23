@@ -9,9 +9,10 @@ import "./test_setup.ts"; // MUST be first — sets test env before config.ts lo
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { signSessionToken } from "../_shared/jwt.ts";
-import { type ConvertDeps, handleConvert } from "./handler.ts";
+import { type ConvertDeps, type ConvertStore, handleConvert } from "./handler.ts";
 import { conversionSystemPrompt } from "./prompt.ts";
-import { DEFAULT_MODEL_ID } from "../generate/models.ts";
+import { CHEAPEST_ENABLED_MODEL_ID, DEFAULT_MODEL_ID } from "../generate/models.ts";
+import type { IdempotentResult, TrialGrantRow } from "../generate/store.ts";
 import {
   type ChatClient,
   type ChatResult,
@@ -42,9 +43,85 @@ class FakeChat implements ChatClient {
   }
 }
 
+// In-memory ConvertStore — only the trial-metering bits exercise the credit
+// path; a subscription request touches just rateLimitOk. Mirrors the shape of
+// generate's InMemoryStore (the production SupabaseBillingStore satisfies both).
+interface TrialGrantState {
+  verified: boolean;
+  limit: number;
+  used: number;
+}
+
+class ConvertInMemoryStore implements ConvertStore {
+  rateOk = true;
+  rateCalls: { key: string; max: number; windowSeconds: number }[] = [];
+  trialGrants = new Map<string, TrialGrantState>();
+  trialSlots = new Set<string>();
+  acquireTrialSlotCalls = 0;
+  consumeCalls = 0;
+  idempotent = new Map<string, IdempotentResult>();
+  forceLoadThrow = false;
+  forceCreditsThrow = false;
+  forceConsumeThrow = false;
+
+  seedTrial(id: string, g: Partial<TrialGrantState> = {}) {
+    this.trialGrants.set(id, { verified: true, limit: 30, used: 0, ...g });
+  }
+  used(id: string): number {
+    return this.trialGrants.get(id)?.used ?? 0;
+  }
+
+  rateLimitOk(key: string, max: number, windowSeconds: number) {
+    this.rateCalls.push({ key, max, windowSeconds });
+    return Promise.resolve(this.rateOk);
+  }
+  loadTrialGrant(id: string): Promise<TrialGrantRow | null> {
+    if (this.forceLoadThrow) return Promise.reject(new Error("db down"));
+    const g = this.trialGrants.get(id);
+    if (!g) return Promise.resolve(null);
+    return Promise.resolve({
+      id,
+      verified_at: g.verified ? "2026-06-02T00:00:00.000Z" : null,
+      trial_credits_limit: g.limit,
+      trial_credits_used: g.used,
+    });
+  }
+  trialCreditsRemaining(id: string) {
+    if (this.forceCreditsThrow) return Promise.reject(new Error("db down"));
+    const g = this.trialGrants.get(id);
+    return Promise.resolve(g ? Math.max(0, g.limit - g.used) : 0);
+  }
+  consumeTrialCredit(id: string, credits: number): Promise<number | null> {
+    this.consumeCalls++;
+    if (this.forceConsumeThrow) return Promise.reject(new Error("rpc down"));
+    const g = this.trialGrants.get(id);
+    if (!g || !g.verified) return Promise.resolve(null);
+    g.used += credits; // overspend overload: always spends (may go negative)
+    return Promise.resolve(g.limit - g.used);
+  }
+  acquireTrialSlot(id: string, _staleSeconds: number) {
+    this.acquireTrialSlotCalls++;
+    if (this.trialSlots.has(id)) return Promise.resolve(false);
+    this.trialSlots.add(id);
+    return Promise.resolve(true);
+  }
+  releaseTrialSlot(id: string) {
+    this.trialSlots.delete(id);
+    return Promise.resolve();
+  }
+  getIdempotent(identityKey: string, idemKey: string, _ttl: number) {
+    return Promise.resolve(this.idempotent.get(`${identityKey}::${idemKey}`) ?? null);
+  }
+  putIdempotent(identityKey: string, idemKey: string, value: IdempotentResult, _ttl: number) {
+    this.idempotent.set(`${identityKey}::${idemKey}`, value);
+    return Promise.resolve();
+  }
+}
+
 interface Harness {
   deps: ConvertDeps;
   chat: FakeChat;
+  store: ConvertInMemoryStore;
   rateCalls: { key: string; max: number; windowSeconds: number }[];
   makeChatCalls: { provider: string; model: string }[];
   setRateOk(ok: boolean): void;
@@ -53,17 +130,11 @@ interface Harness {
 
 function makeHarness(): Harness {
   const chat = new FakeChat();
-  let rateOk = true;
   let makeChatThrows = false;
-  const rateCalls: Harness["rateCalls"] = [];
   const makeChatCalls: Harness["makeChatCalls"] = [];
+  const store = new ConvertInMemoryStore();
   const deps: ConvertDeps = {
-    store: {
-      rateLimitOk(key, max, windowSeconds) {
-        rateCalls.push({ key, max, windowSeconds });
-        return Promise.resolve(rateOk);
-      },
-    },
+    store,
     makeChat: (provider, model) => {
       makeChatCalls.push({ provider, model });
       if (makeChatThrows) throw new Error("PROVIDER_API_KEY unset");
@@ -75,10 +146,11 @@ function makeHarness(): Harness {
   return {
     deps,
     chat,
-    rateCalls,
+    store,
+    rateCalls: store.rateCalls,
     makeChatCalls,
     setRateOk: (ok) => {
-      rateOk = ok;
+      store.rateOk = ok;
     },
     setMakeChatThrows: () => {
       makeChatThrows = true;
@@ -104,9 +176,10 @@ function makeBody(overrides: Record<string, unknown> = {}): Record<string, unkno
   };
 }
 
-function request(body: unknown, token: string | null, method = "POST"): Request {
+function request(body: unknown, token: string | null, method = "POST", idemKey?: string): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (idemKey) headers["Idempotency-Key"] = idemKey;
   return new Request("http://localhost/convert", {
     method,
     headers,
@@ -250,9 +323,22 @@ Deno.test("convert: rate-limited identity → 429, keyed under convert: prefix",
 
 Deno.test("convert: trial identity rate-limits under its own key", async () => {
   const h = makeHarness();
+  h.store.seedTrial("grant_7"); // a verified grant with credits so the call proceeds
   const res = await handleConvert(request(makeBody(), await trialToken("grant_7")), h.deps);
   assertEquals(res.status, 200);
   assertEquals(h.rateCalls[0].key, "convert:trial:grant_7");
+});
+
+Deno.test("convert: rate reject happens BEFORE any trial credit work", async () => {
+  const h = makeHarness();
+  h.setRateOk(false);
+  h.store.seedTrial("grant_9");
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_9")), h.deps);
+  assertEquals(res.status, 429);
+  // No grant lookup, no slot, no charge — the limiter is the outer gate.
+  assertEquals(h.store.acquireTrialSlotCalls, 0);
+  assertEquals(h.store.consumeCalls, 0);
+  assertEquals(h.chat.calls.length, 0);
 });
 
 // ---- Provider error mapping -------------------------------------------------
@@ -283,6 +369,17 @@ Deno.test("convert: terminal provider failure → 502", async () => {
   const res = await handleConvert(request(makeBody(), await subToken()), h.deps);
   assertEquals(res.status, 502);
   assertEquals((await res.json()).error, "generation_failed");
+});
+
+Deno.test("convert: output-cap truncation → 422 (withholds partial; charges nothing for a trial)", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 0 });
+  // The B-04 output cap makes this reachable; mirror generate's distinct mapping.
+  h.chat.fail = new ProviderError("gemini_truncated: MAX_TOKENS", false, 200, "gemini", true);
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 422);
+  assertEquals((await res.json()).error, "response_truncated");
+  assertEquals(h.store.used("grant_1"), 0, "a truncated conversion charges nothing");
 });
 
 Deno.test("convert: unexpected (non-provider) failure → 500", async () => {
@@ -320,9 +417,137 @@ Deno.test("convert: chat sees the server-owned conversion prompt and one text bl
   );
 });
 
-Deno.test("convert: trial token converts exactly like a subscription token", async () => {
+// ---- Trial metering (X-01) --------------------------------------------------
+// convert meters a kind:"trial" token against the SAME per-grant pool /generate
+// spends. Managed/subscription stays free (above). The FakeChat returns 100/50
+// tokens on the forced cheapest model (gemini-3.5-flash) → metered cost is
+// 1 credit per conversion.
+
+Deno.test("convert: trial token is metered — returns { prompt } and decrements the grant once", async () => {
   const h = makeHarness();
-  const res = await handleConvert(request(makeBody(), await trialToken()), h.deps);
+  h.store.seedTrial("grant_1", { limit: 30, used: 0 });
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).prompt, h.chat.result.content);
+  const body = await res.json();
+  assertEquals(body.prompt, h.chat.result.content);
+  // Same response shape as the subscription path — metering is server-side only.
+  assertEquals(Object.keys(body), ["prompt"]);
+  // Charged exactly once (1 credit for this token shape); slot taken + released.
+  assertEquals(h.store.used("grant_1"), 1);
+  assertEquals(h.store.consumeCalls, 1);
+  assertEquals(h.store.acquireTrialSlotCalls, 1);
+  assertEquals(h.store.trialSlots.size, 0, "slot released on the success path");
+});
+
+Deno.test("convert: trial token with 0 credits → 402, NO provider call (X-01 floor gate)", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 30 }); // exhausted
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 402);
+  assertEquals((await res.json()).error, "out_of_credits");
+  assertEquals(h.chat.calls.length, 0, "no provider spend for an out-of-credits trial");
+  assertEquals(h.store.consumeCalls, 0);
+  assertEquals(h.store.trialSlots.size, 0, "slot released after the floor reject");
+});
+
+Deno.test("convert: trial retry with the same Idempotency-Key does NOT double-charge", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 0 });
+  const token = await trialToken("grant_1");
+
+  const first = await handleConvert(request(makeBody(), token, "POST", "rec-abc"), h.deps);
+  assertEquals(first.status, 200);
+  assertEquals(h.store.used("grant_1"), 1);
+
+  // Same recording, same key — replays the cached prompt, charges nothing more.
+  const retry = await handleConvert(request(makeBody(), token, "POST", "rec-abc"), h.deps);
+  assertEquals(retry.status, 200);
+  assertEquals((await retry.json()).prompt, h.chat.result.content);
+  assertEquals(h.store.used("grant_1"), 1, "retry did not double-charge");
+  assertEquals(h.store.consumeCalls, 1, "consume ran only for the original");
+  assertEquals(h.chat.calls.length, 1, "retry replayed from cache — no second provider call");
+});
+
+Deno.test("convert: trial token is pinned to the cheapest model, ignoring the requested one", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  // Request the priciest model — a trial must be downgraded to the cheapest.
+  const res = await handleConvert(
+    request(makeBody({ model: "claude-opus-4-7" }), await trialToken("grant_1")),
+    h.deps,
+  );
+  assertEquals(res.status, 200);
+  assertEquals(h.makeChatCalls.length, 1);
+  assertEquals(h.makeChatCalls[0].model, CHEAPEST_ENABLED_MODEL_ID);
+  assertEquals(h.makeChatCalls[0].provider, "gemini");
+});
+
+Deno.test("convert: subscription token keeps full model choice and is NOT charged", async () => {
+  const h = makeHarness();
+  const res = await handleConvert(
+    request(makeBody({ model: "claude-opus-4-7" }), await subToken("sub_5")),
+    h.deps,
+  );
+  assertEquals(res.status, 200);
+  // The requested (pricey) model rides through untouched.
+  assertEquals(h.makeChatCalls[0], { provider: "anthropic", model: "claude-opus-4-7" });
+  // No trial credit machinery touched for a paying subscriber.
+  assertEquals(h.store.acquireTrialSlotCalls, 0);
+  assertEquals(h.store.consumeCalls, 0);
+});
+
+Deno.test("convert: trial grant lookup error FAILS CLOSED → refuse, no provider call", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  h.store.forceLoadThrow = true;
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals((await res.json()).error, "credit_check_failed");
+  assertEquals(h.chat.calls.length, 0, "fail closed — never serve a free provider call");
+  assertEquals(h.store.consumeCalls, 0);
+});
+
+Deno.test("convert: trial floor-check error FAILS CLOSED → refuse, no provider call", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  h.store.forceCreditsThrow = true;
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals(h.chat.calls.length, 0);
+  assertEquals(h.store.trialSlots.size, 0, "slot released after the fail-closed refuse");
+});
+
+Deno.test("convert: missing trial grant → 404; unverified → 403 (defensive gate)", async () => {
+  const missing = makeHarness();
+  const res404 = await handleConvert(request(makeBody(), await trialToken("ghost")), missing.deps);
+  assertEquals(res404.status, 404);
+  assertEquals(missing.chat.calls.length, 0);
+
+  const unverified = makeHarness();
+  unverified.store.seedTrial("grant_1", { verified: false });
+  const res403 = await handleConvert(request(makeBody(), await trialToken("grant_1")), unverified.deps);
+  assertEquals(res403.status, 403);
+  assertEquals(unverified.chat.calls.length, 0);
+});
+
+Deno.test("convert: a held trial slot makes a concurrent conversion → 429", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  h.store.trialSlots.add("grant_1"); // simulate an in-flight call holding the slot
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 429);
+  assertEquals((await res.json()).error, "conversion_in_progress");
+  assertEquals(h.chat.calls.length, 0);
+  assertEquals(h.store.consumeCalls, 0);
+});
+
+Deno.test("convert: a trial provider failure charges NOTHING (consume only on success)", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 0 });
+  h.chat.fail = new ProviderError("gemini_400", false, 400, "gemini");
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 502);
+  assertEquals(h.store.used("grant_1"), 0, "no charge on a failed conversion");
+  assertEquals(h.store.consumeCalls, 0);
+  assertEquals(h.store.trialSlots.size, 0, "slot released on the error path");
 });

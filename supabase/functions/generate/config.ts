@@ -112,6 +112,17 @@ export const PROVIDER_TIMEOUT_MS = optionalEnvInt(
   optionalEnvInt("GENERATE_OPENAI_TIMEOUT_MS", 120_000),
 );
 
+// ---- Trial dev-transcribe metering (X-01 / B-03) ---------------------------
+// The free Dev-Mode call-1 transcription is FREE for a managed subscriber but
+// METERED against a TRIAL grant (the previously-unmetered free-Whisper abuse
+// surface). The charge is the real absorbed Whisper cost (`ceil(stt_usd / $0.01)`,
+// floor 1). This fallback is used only if STT is somehow unpriced (a config gap)
+// so a metered trial call still decrements the pool rather than passing free.
+export const DEV_TRANSCRIBE_FALLBACK_CREDITS = optionalEnvInt(
+  "GENERATE_DEV_TRANSCRIBE_FALLBACK_CREDITS",
+  1,
+);
+
 // ---- Idempotency cache TTL (M1) --------------------------------------------
 // How long a charged generation's result stays replayable for a retry carrying
 // the same Idempotency-Key. Set to the SHORTEST window that reliably covers the
