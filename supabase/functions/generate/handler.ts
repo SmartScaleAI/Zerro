@@ -53,20 +53,18 @@ import { verifySessionToken } from "../_shared/jwt.ts";
 import { extractAnchors } from "./anchors.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { buildInterleavedContent } from "./interleave.ts";
-import { creditCostForModel, creditCostForUsd, estimatedCostUsd, sttCostUsd } from "./cost.ts";
+import { creditCostForModel, estimatedCostUsd, sttCostUsd } from "./cost.ts";
 import { modelById } from "./models.ts";
 import { validateBody, validateTranscribeBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
-  DEV_TRANSCRIBE_FALLBACK_CREDITS,
   GENERATE_RATE_LIMIT_PER_SUB,
   GENERATE_RATE_LIMIT_WINDOW_SECONDS,
   GENERATE_SLOT_STALE_SECONDS,
   IDEMPOTENCY_TTL_SECONDS,
   MAX_AUDIO_SECONDS,
   MAX_PAYLOAD_BYTES,
-  STT_MODEL,
 } from "./config.ts";
 
 export interface GenerateDeps {
@@ -160,13 +158,16 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   //     client needs the word transcript to resolve deixis anchors BEFORE the
   //     billable generation (call 2). This path deliberately does NONE of the
   //     billing machinery: no credit, no chat model, no concurrency SLOT, no
-  //     idempotency entry. It is still auth-gated (above) and rate-limited
-  //     (inside) because STT costs us real money. For a SUBSCRIPTION token it
-  //     takes NO slot and is FREE (unchanged: the pair consumes two rate-limit
-  //     tokens and exactly one credit on call 2). For a TRIAL token it is METERED
-  //     against the per-grant pool (X-01 / B-03) — see handleDevTranscribe.
+  //     idempotency entry — FREE for BOTH subscription and trial tokens. We "eat"
+  //     the sub-cent Whisper cost rather than meter it (the X-01 trial metering on
+  //     THIS leg was reverted; precise combined billing is a deferred post-launch
+  //     task). It is still auth-gated (above) and rate-limited (inside); the abuse
+  //     bound on a single transcription is the tightened audio byte cap
+  //     (MAX_AUDIO_BYTES, enforced pre-Whisper in validateTranscribeBody) plus the
+  //     out-of-band global provider-spend cap (B-05). The paired generation (call 2)
+  //     still meters exactly one credit; convert stays metered.
   if (isDevTranscribeRequest(body)) {
-    return await handleDevTranscribe(body, account, deps, claims.kind === "trial", idemKey);
+    return await handleDevTranscribe(body, account, deps);
   }
 
   // 5. Server-side input fuse — BEFORE any OpenAI call or credit work. A legit
@@ -555,26 +556,25 @@ function isDevTranscribeRequest(body: unknown): boolean {
 }
 
 /** Handle Dev Mode call 1: transcribe audio with WORD-level timing and return it.
- *  Always rate-limited (STT costs money). Cost policy splits on identity:
- *   • SUBSCRIPTION → FREE, slot-free, no credit/idempotency (unchanged).
- *   • TRIAL        → METERED against the per-grant pool (X-01 / B-03): floor gate
- *     (≥1 credit), the SAME trial slot generate holds (cap-1 makes check-then-
- *     consume safe), consume the absorbed STT cost on success, and an idempotent
- *     retry replays the cached transcript without a second charge.
- *  `has_speech:false` → an empty transcript with NO provider call, so it's free
- *  for both kinds (nothing to meter) and never breaks the 2-call flow. */
+ *  FREE for BOTH subscription and trial tokens — we "eat" the sub-cent Whisper cost
+ *  rather than meter it. This path does NONE of the billing machinery: no credit, no
+ *  chat model, no concurrency SLOT, no idempotency entry. It is still rate-limited
+ *  (coarse per-identity) so it can't be hammered as an unlimited free transcription
+ *  service, and the abuse bound on a SINGLE call is the tightened audio byte cap
+ *  (MAX_AUDIO_BYTES, enforced in validateTranscribeBody BEFORE this Whisper call) plus
+ *  the out-of-band global provider-spend cap (B-05). A transcription failure charges
+ *  nothing (it never did). `has_speech:false` → an empty transcript with NO provider
+ *  call, so it never breaks the 2-call flow. */
 async function handleDevTranscribe(
   body: unknown,
   account: ResolvedAccount,
   deps: GenerateDeps,
-  isTrial: boolean,
-  idemKey: string | null,
 ): Promise<Response> {
   const v = validateTranscribeBody(body);
   if (!v.ok) return json({ error: v.error }, v.status);
 
   // Rate-limit (same coarse per-identity limiter as generation) so this can't be
-  // abused as a free unlimited transcription service.
+  // abused as a free unlimited transcription service. NO slot acquired.
   const withinRate = await deps.store.rateLimitOk(
     account.key,
     GENERATE_RATE_LIMIT_PER_SUB,
@@ -582,95 +582,22 @@ async function handleDevTranscribe(
   );
   if (!withinRate) return json({ error: "rate_limited" }, 429);
 
-  // No speech → no provider call → nothing to meter. Return an empty transcript;
-  // the client falls back to click/dwell anchoring (build requirement #3). Free
-  // for both identities and short-circuited before any slot/credit work.
+  // No speech → no provider call → nothing to transcribe. Return an empty transcript;
+  // the client falls back to click/dwell anchoring (build requirement #3).
   if (!v.value.hasSpeech) {
     return json({ transcript: { segments: [], words: [], durationSeconds: 0 } }, 200);
   }
 
-  // --- Subscription (free) path: unchanged — no slot, no credit, no idempotency.
-  if (!isTrial) {
-    try {
-      const tr = await deps.stt.transcribe(v.value.audio, { words: true });
-      return json(
-        { transcript: { segments: tr.segments, words: tr.words ?? [], durationSeconds: tr.durationSeconds } },
-        200,
-      );
-    } catch (e) {
-      // A transcription failure charges nothing and is NOT logged — call 1 is not
-      // a billable generation.
-      return providerErrorResponse(e);
-    }
-  }
-
-  // --- Trial (metered) path. Mirrors generate's slot → replay → floor → spend.
-  // The idempotency identity key is namespaced apart from the paired /generate
-  // (`account.key`) so a recording's single Idempotency-Key can't cross-replay a
-  // cached transcript as a generation prompt (or vice-versa).
-  const idemIdentity = `${account.key}:transcribe`;
-
-  const gotSlot = await account.acquireSlot();
-  if (!gotSlot) return json({ error: "generation_in_progress" }, 429);
   try {
-    // Idempotent replay: a retry carrying the same key returns the cached
-    // transcript (stored as JSON in the cache's `prompt` field) and charges 0.
-    if (idemKey) {
-      const cached = await deps.store.getIdempotent(idemIdentity, idemKey, IDEMPOTENCY_TTL_SECONDS);
-      if (cached) {
-        try {
-          return json({ transcript: JSON.parse(cached.prompt) }, 200);
-        } catch {
-          // A malformed/legacy cache row → fall through and re-transcribe.
-        }
-      }
-    }
-
-    // Floor gate. FAIL CLOSED: refuse on a credit-lookup error rather than serve
-    // a free Whisper call.
-    let remaining: number;
-    try {
-      remaining = await account.creditsRemaining();
-    } catch (e) {
-      console.error(JSON.stringify({ fn: "generate", key: account.key, op: "devTranscribeFloor", error: String(e) }));
-      return json({ error: "credit_check_failed", retryable: true }, 503);
-    }
-    if (remaining < 1) {
-      return json({ error: "out_of_credits", credits_remaining: remaining, estimate: null }, 402);
-    }
-
-    // Transcribe (paid). A failure charges nothing.
-    let tr;
-    try {
-      tr = await deps.stt.transcribe(v.value.audio, { words: true });
-    } catch (e) {
-      return providerErrorResponse(e);
-    }
-
-    // Meter the absorbed STT cost and consume from the grant — `ceil(stt / $0.01)`,
-    // floor 1, the same metering generate uses (cost.ts).
-    const credits = creditCostForUsd(sttCostUsd(tr.durationSeconds), DEV_TRANSCRIBE_FALLBACK_CREDITS);
-    const after = await account.consume(credits);
-    if (after === null) {
-      // DEFENSIVE: consume returns null only for a missing/unverified grant —
-      // already excluded by resolve-time auth. Provider paid; refuse a free result.
-      console.error(JSON.stringify({ fn: "generate", key: account.key, error: "devTranscribe_consume_non_spendable" }));
-      return json({ error: "out_of_credits", credits_remaining: 0, estimate: null }, 402);
-    }
-
-    const transcript = { segments: tr.segments, words: tr.words ?? [], durationSeconds: tr.durationSeconds };
-    // Cache the charged transcript for an idempotent retry — best-effort.
-    if (idemKey) {
-      await deps.store.putIdempotent(idemIdentity, idemKey, {
-        prompt: JSON.stringify(transcript),
-        usage: { input_tokens: 0, output_tokens: 0, model: STT_MODEL },
-        creditsRemaining: after,
-        creditsCharged: credits,
-      }, IDEMPOTENCY_TTL_SECONDS);
-    }
-    return json({ transcript }, 200);
-  } finally {
-    await account.releaseSlot();
+    const tr = await deps.stt.transcribe(v.value.audio, { words: true });
+    return json(
+      { transcript: { segments: tr.segments, words: tr.words ?? [], durationSeconds: tr.durationSeconds } },
+      200,
+    );
+  } catch (e) {
+    // A transcription failure charges nothing and is NOT logged — call 1 is not a
+    // billable generation.
+    return providerErrorResponse(e);
   }
 }
 

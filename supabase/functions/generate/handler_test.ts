@@ -1406,70 +1406,41 @@ Deno.test("dev_transcribe applies the audio fuse (missing audio → 400, no STT)
   assertEquals(openai.transcribeCalls, 0);
 });
 
-// ---- dev_transcribe metering for TRIAL tokens (X-01 / B-03) ------------------
-// A trial token's free Dev-Mode call-1 transcription is metered against the SAME
-// per-grant pool /generate spends. A subscription token stays FREE (the test
-// above, which uses mintToken()). The StubProvider's 10s duration → 1 credit.
+// ---- dev_transcribe is FREE for everyone (X-01 trial metering on THIS leg
+// reverted — we "eat" the sub-cent Whisper cost; the audio byte cap + rate limit +
+// the out-of-band global cap are the bound, not a credit). The subscription free
+// path is also covered by the "charges/runs/holds NOTHING" test above. -----------
 
-Deno.test("dev_transcribe (trial): metered — transcribes, decrements the grant once, holds+frees the trial slot", async () => {
+Deno.test("dev_transcribe (trial): FREE — transcribes, consumes NO credit, takes NO slot, writes NO idempotency", async () => {
   const store = trialStore(0, 15);
   const openai = new StubProvider();
+  // Pass an Idempotency-Key to prove the free path ignores it (writes no entry).
   const res = await handleGenerate(
-    makeReq(await mintTrialToken(), devTranscribeBody()),
+    makeReq(await mintTrialToken(), devTranscribeBody(), "rec-free-1"),
     deps(store, openai),
   );
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(json.transcript.words, [{ word: "hello", start: 0, end: 1 }, { word: "world", start: 1, end: 2 }]);
   assertEquals(openai.transcribeCalls, 1);
-  assertEquals(openai.chatCalls, 0, "still no chat model on call 1");
-  // Metered: 10s of Whisper → 1 credit charged against the grant.
-  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
-  assertEquals(store.trialSlots.size, 0, "the trial slot is released on success");
+  assertEquals(openai.chatCalls, 0, "no chat model on call 1");
+  // Free for a TRIAL token: nothing charged, no slot, no idempotency entry.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0, "trial transcription is free");
+  assertEquals(store.trialSlots.size, 0, "no trial slot taken");
+  assertEquals(store.idempotent.size, 0, "no idempotency entry written on the free path");
 });
 
-Deno.test("dev_transcribe (trial): charge scales with the absorbed STT cost", async () => {
-  const store = trialStore(0, 15);
+Deno.test("dev_transcribe (trial): free EVEN on an exhausted grant (no floor gate on the eaten leg)", async () => {
+  const store = trialStore(15, 15); // 0 credits remaining
   const openai = new StubProvider();
-  openai.duration = 600; // 10 min of audio → $0.06 → 6 credits
-  await handleGenerate(makeReq(await mintTrialToken(), devTranscribeBody()), deps(store, openai));
-  assertEquals(store.trialGrants.get("grant-1")?.used, 6);
-});
-
-Deno.test("dev_transcribe (trial): 0 credits → 402, NO STT (X-01 floor gate)", async () => {
-  const store = trialStore(15, 15); // exhausted grant
-  const openai = new StubProvider();
-  const res = await handleGenerate(
-    makeReq(await mintTrialToken(), devTranscribeBody()),
-    deps(store, openai),
-  );
-  assertEquals(res.status, 402);
-  assertEquals((await res.json()).error, "out_of_credits");
-  assertEquals(openai.transcribeCalls, 0, "no free Whisper for an out-of-credits trial");
-  assertEquals(store.trialGrants.get("grant-1")?.used, 15, "nothing charged");
-  assertEquals(store.trialSlots.size, 0, "slot released after the floor reject");
-});
-
-Deno.test("dev_transcribe (trial): retry with the same Idempotency-Key does NOT double-charge", async () => {
-  const store = trialStore(0, 15);
-  const openai = new StubProvider();
-  const token = await mintTrialToken();
-
-  const first = await handleGenerate(makeReq(token, devTranscribeBody(), "rec-xyz"), deps(store, openai));
-  assertEquals(first.status, 200);
-  assertEquals(store.trialGrants.get("grant-1")?.used, 1);
+  const res = await handleGenerate(makeReq(await mintTrialToken(), devTranscribeBody()), deps(store, openai));
+  assertEquals(res.status, 200, "transcription is free regardless of balance");
   assertEquals(openai.transcribeCalls, 1);
-
-  // Same recording + key → replay the cached transcript, charge nothing more.
-  const retry = await handleGenerate(makeReq(token, devTranscribeBody(), "rec-xyz"), deps(store, openai));
-  assertEquals(retry.status, 200);
-  const json = await retry.json();
-  assertEquals(json.transcript.words, [{ word: "hello", start: 0, end: 1 }, { word: "world", start: 1, end: 2 }]);
-  assertEquals(store.trialGrants.get("grant-1")?.used, 1, "retry did not double-charge");
-  assertEquals(openai.transcribeCalls, 1, "retry replayed from cache — STT did not re-run");
+  assertEquals(store.trialGrants.get("grant-1")?.used, 15, "unchanged — nothing charged");
+  // The PAIRED generation (call 2) still enforces the credit floor — that leg is unchanged.
 });
 
-Deno.test("dev_transcribe (trial): has_speech:false is free — no charge, no slot, no STT", async () => {
+Deno.test("dev_transcribe (trial): has_speech:false stays free with NO provider call", async () => {
   const store = trialStore(0, 15);
   const openai = new StubProvider();
   const res = await handleGenerate(
@@ -1478,21 +1449,67 @@ Deno.test("dev_transcribe (trial): has_speech:false is free — no charge, no sl
   );
   assertEquals(res.status, 200);
   assertEquals((await res.json()).transcript.segments, []);
-  assertEquals(openai.transcribeCalls, 0);
-  assertEquals(store.trialGrants.get("grant-1")?.used, 0, "no provider call → nothing to meter");
-  assertEquals(store.trialSlots.size, 0);
+  assertEquals(openai.transcribeCalls, 0, "no-speech → no Whisper");
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0);
 });
 
-Deno.test("dev_transcribe (trial): a non-spendable consume → 402 (defensive, provider already paid)", async () => {
+// ---- Audio byte cap (B-03) — the load-bearing pre-Whisper bound on a single STT
+// call now that transcription is free. test_setup caps GENERATE_MAX_AUDIO_BYTES at
+// 4096; `"A".repeat(6000)` decodes to ~4.5 KB (over), `"A".repeat(1500)` to ~1.1 KB
+// (under). The PRODUCTION cap is 2 MB ≥ a real 1.44 MB 3-min recording (see config.ts).
+
+function oversizeAudio() {
+  return { mime: "audio/m4a", filename: "rec.m4a", data: "A".repeat(6000) };
+}
+function normalAudio() {
+  return { mime: "audio/m4a", filename: "rec.m4a", data: "A".repeat(1500) };
+}
+
+Deno.test("dev_transcribe: oversize audio → 413 audio_too_large BEFORE any Whisper", async () => {
   const store = trialStore(0, 15);
-  store.forceTrialConsumeNull = true; // grant vanished mid-flight
   const openai = new StubProvider();
   const res = await handleGenerate(
-    makeReq(await mintTrialToken(), devTranscribeBody()),
+    makeReq(await mintTrialToken(), devTranscribeBody({ audio: oversizeAudio() })),
     deps(store, openai),
   );
-  assertEquals(res.status, 402);
-  assertEquals(store.trialSlots.size, 0, "slot released on the defensive path");
+  assertEquals(res.status, 413);
+  assertEquals((await res.json()).error, "audio_too_large");
+  assertEquals(openai.transcribeCalls, 0, "rejected before paying Whisper");
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0);
+});
+
+Deno.test("generate: oversize audio → 413 audio_too_large BEFORE any Whisper or chat (no charge)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ audio: oversizeAudio() })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 413);
+  assertEquals((await res.json()).error, "audio_too_large");
+  assertEquals(openai.transcribeCalls, 0, "rejected before Whisper");
+  assertEquals(openai.chatCalls, 0, "rejected before chat");
+  assertEquals(store.used.get("sub-1") ?? 0, 0, "nothing charged");
+});
+
+Deno.test("a normal-size recording (under the cap) is still accepted on BOTH paths", async () => {
+  // Stands in for a real ~1.44 MB 3-min recording < the 2 MB production cap.
+  const tStore = trialStore(0, 15);
+  const tAI = new StubProvider();
+  const tRes = await handleGenerate(
+    makeReq(await mintTrialToken(), devTranscribeBody({ audio: normalAudio() })),
+    deps(tStore, tAI),
+  );
+  assertEquals(tRes.status, 200, "normal recording accepted on the transcribe path");
+  assertEquals(tAI.transcribeCalls, 1);
+
+  const gStore = activeStore(0);
+  const gAI = new StubProvider();
+  const gRes = await handleGenerate(
+    makeReq(await mintToken(), makeBody({ audio: normalAudio() })),
+    deps(gStore, gAI),
+  );
+  assertEquals(gRes.status, 200, "normal recording accepted on the generate path");
 });
 
 // ---- Dev Mode generation: mode selects the dev prompt (Phase 2 M5/M7) --------

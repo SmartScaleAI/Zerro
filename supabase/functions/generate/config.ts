@@ -48,11 +48,22 @@ export const USD_PER_CREDIT = 0.01;
 export const MAX_AUDIO_SECONDS = optionalEnvInt("GENERATE_MAX_AUDIO_SECONDS", 300); // 5 min
 export const MAX_FRAMES = optionalEnvInt("GENERATE_MAX_FRAMES", 200);
 export const MAX_PAYLOAD_BYTES = optionalEnvInt("GENERATE_MAX_PAYLOAD_BYTES", 60 * 1024 * 1024); // 60 MB
-// Byte fuse on the audio part specifically: a pre-OpenAI proxy for "seconds"
-// (we can't decode m4a duration without a codec). ~256 kbps ceiling over
-// MAX_AUDIO_SECONDS, generous. The TRUE seconds gate is re-applied after Whisper
-// returns its measured `duration`, before the expensive chat call.
-export const MAX_AUDIO_BYTES = optionalEnvInt("GENERATE_MAX_AUDIO_BYTES", 12 * 1024 * 1024); // 12 MB
+// Byte fuse on the audio part specifically (B-03). This is now LOAD-BEARING: with
+// Dev-Mode transcription billed as FREE ("eat the sub-cent cost"), this cap — not a
+// credit — is the pre-Whisper bound on a single STT call, so it is tightened to a
+// realistic ceiling for the app's real recording.
+//   Derivation: the desktop app encodes 64 kbps MONO AAC (RecordingSession.swift
+//   AVEncoderBitRateKey: 64_000, AVNumberOfChannelsKey: 1) and HARD-CAPS a recording
+//   at 180 s (150 s/180 s auto-stop). 64 kbps = 8 000 bytes/s → a real 3-min file is
+//   ≈ 180 × 8 000 = 1.44 MB (+ negligible MP4 container overhead). 2 MB gives ≈40%
+//   headroom over that worst-case real recording (it is never rejected) while capping
+//   a single accepted file to ≈4.4 min at the real bitrate (≈$0.026 of Whisper) —
+//   ~6× tighter than the old 12 MB. A forged LOW-bitrate file can still pack more
+//   duration per byte, so this is the per-call bound; the per-identity rate limit and
+//   the out-of-band global provider-spend cap (B-05) are the aggregate ceilings.
+//   We can't decode m4a duration server-side without a codec, so the cap stays on
+//   bytes; the declared-duration check below is a secondary honest-client sanity gate.
+export const MAX_AUDIO_BYTES = optionalEnvInt("GENERATE_MAX_AUDIO_BYTES", 2 * 1024 * 1024); // 2 MB
 
 export const ALLOWED_AUDIO_MIME = ["audio/mp4", "audio/m4a", "audio/x-m4a"];
 export const ALLOWED_FRAME_MIME = ["image/jpeg"];
@@ -112,16 +123,6 @@ export const PROVIDER_TIMEOUT_MS = optionalEnvInt(
   optionalEnvInt("GENERATE_OPENAI_TIMEOUT_MS", 120_000),
 );
 
-// ---- Trial dev-transcribe metering (X-01 / B-03) ---------------------------
-// The free Dev-Mode call-1 transcription is FREE for a managed subscriber but
-// METERED against a TRIAL grant (the previously-unmetered free-Whisper abuse
-// surface). The charge is the real absorbed Whisper cost (`ceil(stt_usd / $0.01)`,
-// floor 1). This fallback is used only if STT is somehow unpriced (a config gap)
-// so a metered trial call still decrements the pool rather than passing free.
-export const DEV_TRANSCRIBE_FALLBACK_CREDITS = optionalEnvInt(
-  "GENERATE_DEV_TRANSCRIBE_FALLBACK_CREDITS",
-  1,
-);
 
 // ---- Idempotency cache TTL (M1) --------------------------------------------
 // How long a charged generation's result stays replayable for a retry carrying
