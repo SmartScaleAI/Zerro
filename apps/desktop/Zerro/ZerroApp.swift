@@ -7,6 +7,7 @@
 
 import AppKit
 import KeyboardShortcuts
+import MetricKit
 import os
 import SwiftUI
 
@@ -42,6 +43,12 @@ struct ZerroApp: App {
     /// `AppState.devCursorActive`; owned here for the app's lifetime like the
     /// other overlay controllers.
     @State private var devCursorController: DevCursorWindowController
+
+    /// MetricKit → PostHog bridge for crash/hang/exception diagnostics. Held
+    /// for the app's lifetime because `MXMetricManager` keeps only a weak
+    /// reference to its subscribers; registered in the one-shot bootstrap block
+    /// alongside `CrashReporting.start()`.
+    @State private var metricKitObserver: MetricKitObserver
 
     /// Phase 14 / C3.4: Sparkle updater. Must live for the full app
     /// session — owning it inside the MenuBarExtra content closure
@@ -93,6 +100,7 @@ struct ZerroApp: App {
         let ent = EntitlementStore(sessionTokens: sessionTokens, trialCredits: trial)
         let history = RecentPromptStore()
         let launch = LaunchAtLoginController()
+        let metricObserver = MetricKitObserver()
         let selectorCtrl = AreaSelectorWindowController()
         let pillCtrl = PillWindowController(appState: state)
         // Phase 10: let AppState start/stop TCC monitoring around an
@@ -124,6 +132,7 @@ struct ZerroApp: App {
         _trialCredits = State(initialValue: trial)
         _recentPrompts = State(initialValue: history)
         _launchAtLogin = State(initialValue: launch)
+        _metricKitObserver = State(initialValue: metricObserver)
         _pillController = State(initialValue: pillCtrl)
         _recordingFocusController = State(initialValue: RecordingFocusWindowController(appState: state))
         _areaSelectorController = State(initialValue: selectorCtrl)
@@ -153,6 +162,13 @@ struct ZerroApp: App {
             // once across SwiftUI's re-invocations of App.init, so we
             // get the right one-shot semantics for free.
             CrashReporting.start()
+            // Subscribe to MetricKit so genuine crash/hang/CPU/disk-write
+            // diagnostics (the detail PostHog's bare-SIGTRAP autocapture misses)
+            // are forwarded into PostHog. `metricObserver` is retained for the
+            // app's lifetime by the @State above — MXMetricManager keeps only a
+            // weak reference. Inside this one-shot, preview-gated block so it
+            // registers exactly once and never during a #Preview launch.
+            MXMetricManager.shared.add(metricObserver)
             // Tier 1 analytics: seed the entitlement super-properties from the
             // resolved launch state so EVERY event this session carries
             // monetization context. The EntitlementStore.state didSet keeps them

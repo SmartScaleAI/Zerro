@@ -51,8 +51,10 @@ enum DiagnosticsCollector {
         // so a support email correlates to a captured crash / non-fatal
         // event in the PostHog dashboard. Reads `nil` if no event has
         // been sent this launch OR if the user has the crash-reporting
-        // toggle OFF (in which case `beforeSend` drops everything and
-        // never populates this).
+        // toggle OFF — when off, `Analytics.isEnabled` is false, so
+        // `CrashReporting.capture` early-returns without recording an event
+        // (and the PostHog SDK is held in `optOut`, so nothing transmits),
+        // leaving this unpopulated.
         lines.append("")
         lines.append("Support:")
         lines.append("  Crash report ID: \(CrashReporting.lastEventId ?? "(none this launch)")")
