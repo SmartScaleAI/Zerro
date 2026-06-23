@@ -13,6 +13,8 @@ import {
 import { composedSystemPrompt } from "./prompt.ts";
 import { creditCostForModel, estimatedCostUsd } from "./cost.ts";
 import { MODEL_REGISTRY } from "./models.ts";
+import { GENERATE_SLOT_STALE_SECONDS, PROVIDER_TIMEOUT_MS, slotStaleSeconds } from "./config.ts";
+import { SlotTable } from "../_shared/slot_table_fake.ts";
 import type { BillingStore, CombinedSpendResult, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
 
 const SECRET = "test_session_jwt_secret";
@@ -29,7 +31,10 @@ class InMemoryStore implements BillingStore {
   subs = new Map<string, SubRow>();
   used = new Map<string, number>(); // subId → credits_used (latest period)
   topup = new Map<string, number>(); // subId → remaining non-expired top-up credits
-  slots = new Set<string>();
+  // Slot tables that HONOR staleSeconds (B-09) — not bare Sets. Both share no
+  // clock by default (each defaults to nowMs=0); a test that needs to age a slot
+  // uses `slots.seed(id, ageSeconds)` / `slots.nowMs`.
+  slots = new SlotTable();
   /** Phase 2 — count slot acquisitions so a test can assert the dev-transcribe
    *  path takes NO slot (the normal path acquires+releases, ending at size 0,
    *  so the set size alone can't distinguish "never acquired"). */
@@ -40,7 +45,7 @@ class InMemoryStore implements BillingStore {
 
   // Trial path (Phase F).
   trialGrants = new Map<string, TrialGrant>();
-  trialSlots = new Set<string>();
+  trialSlots = new SlotTable();
   forceTrialConsumeNull = false;
   /** D2: force the cross-ledger combined spend to report NULL (non-spendable),
    *  to exercise the handler's defensive non-spendable → 402 branch for a
@@ -131,14 +136,14 @@ class InMemoryStore implements BillingStore {
       topupSpent,
     });
   }
-  acquireSlot(subId: string) {
+  acquireSlot(subId: string, staleSeconds: number) {
     this.acquireSlotCalls++;
-    if (this.slots.has(subId)) return Promise.resolve(false);
-    this.slots.add(subId);
-    return Promise.resolve(true);
+    // Honors staleSeconds (B-09): a fresh slot refuses; a slot older than the
+    // window is stale-reclaimed — exactly acquire_generation_slot's contract.
+    return Promise.resolve(this.slots.acquire(subId, staleSeconds));
   }
   releaseSlot(subId: string) {
-    this.slots.delete(subId);
+    this.slots.release(subId);
     return Promise.resolve();
   }
   rateLimitOk() {
@@ -183,13 +188,11 @@ class InMemoryStore implements BillingStore {
     g.used += credits;
     return Promise.resolve(g.limit - g.used);
   }
-  acquireTrialSlot(id: string) {
-    if (this.trialSlots.has(id)) return Promise.resolve(false);
-    this.trialSlots.add(id);
-    return Promise.resolve(true);
+  acquireTrialSlot(id: string, staleSeconds: number) {
+    return Promise.resolve(this.trialSlots.acquire(id, staleSeconds));
   }
   releaseTrialSlot(id: string) {
-    this.trialSlots.delete(id);
+    this.trialSlots.release(id);
     return Promise.resolve();
   }
 }
@@ -1108,6 +1111,103 @@ Deno.test("second concurrent request for same subscriber → 429 (concurrency ca
   assertEquals((await r1.json()).credits_remaining, 0);
   assertEquals(store.used.get("sub-1"), 100); // charged exactly once
   assertEquals(store.slots.size, 0); // both slots released
+});
+
+// ---- A-04: slot stale-reclaim window > worst-case hold ----------------------
+// The reclaim window must EXCEED the worst-case time one live request holds the
+// slot, or a slow-but-live request is reclaimed mid-flight and a 2nd concurrent
+// generation overspends (cap-1 broken). These lock the invariant + the timing.
+
+Deno.test("INVARIANT (A-04): GENERATE_SLOT_STALE_SECONDS exceeds the worst-case STT+chat hold", () => {
+  // A generation holds the slot across STT *then* chat, each up to
+  // 2 × PROVIDER_TIMEOUT_MS (one transient retry). The window must be strictly
+  // greater than that sum, or acquire_generation_slot reclaims a live slot.
+  const worstCaseHoldSeconds = (2 /* STT+chat */ * 2 /* attempts */ * PROVIDER_TIMEOUT_MS) / 1000;
+  assert(
+    GENERATE_SLOT_STALE_SECONDS > worstCaseHoldSeconds,
+    `stale ${GENERATE_SLOT_STALE_SECONDS}s must exceed worst-case hold ${worstCaseHoldSeconds}s`,
+  );
+  // And it must be the value the helper derives (600s @ the 120s default) — a
+  // regression guard against anyone reverting to the old flat 180s.
+  assertEquals(GENERATE_SLOT_STALE_SECONDS, slotStaleSeconds(2));
+  assert(GENERATE_SLOT_STALE_SECONDS > 180, "must be above the buggy old 180s default");
+});
+
+Deno.test("slot fake honors staleSeconds: fresh refused, past-window reclaimed (B-09)", async () => {
+  // The fake actually models the reclaim window now (the old Set-based fake
+  // ignored staleSeconds, so no test could catch A-04). Drive acquireSlot directly.
+  const store = new InMemoryStore();
+
+  // First acquire on a free slot succeeds; a 2nd while it's FRESH is refused (cap-1).
+  assertEquals(await store.acquireSlot("sub-1", GENERATE_SLOT_STALE_SECONDS), true);
+  assertEquals(await store.acquireSlot("sub-1", GENERATE_SLOT_STALE_SECONDS), false);
+
+  // A slot aged 300s — longer than the OLD 180s default but within the real
+  // worst-case hold — is NOT reclaimed under the corrected window (this is the
+  // exact condition the bug got wrong). Under stale=180 the SAME slot WOULD be
+  // reclaimed, which is the A-04 overspend door.
+  store.slots.seed("sub-1", 300);
+  assertEquals(await store.acquireSlot("sub-1", GENERATE_SLOT_STALE_SECONDS), false, "300s < new window → not reclaimed");
+  assertEquals(await store.acquireSlot("sub-1", 180), true, "300s ≥ old 180s → would (wrongly) reclaim — the bug");
+
+  // A genuinely crashed slot (older than the window) IS reclaimed so a subscriber
+  // is never locked out forever.
+  store.slots.seed("sub-1", GENERATE_SLOT_STALE_SECONDS + 60);
+  assertEquals(await store.acquireSlot("sub-1", GENERATE_SLOT_STALE_SECONDS), true, "past window → reclaimed");
+});
+
+Deno.test("A-04 regression: a slot held > 180s but within worst-case hold is NOT reclaimed (no overspend)", async () => {
+  // Seed a slot held 300s — past the OLD 180s reclaim window, but well inside the
+  // ~480s worst-case STT+chat hold, i.e. a slow-but-LIVE generation. The 2nd
+  // request must be REFUSED (429), not handed a reclaimed slot. Under the old
+  // 180s default this slot would have been reclaimed and this 2nd generation
+  // would overspend — the launch blocker.
+  const store = activeStore(0);
+  store.slots.seed("sub-1", 300);
+  const openai = new StubProvider();
+
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 429);
+  assertEquals((await res.json()).error, "generation_in_progress");
+
+  // No provider work, nothing charged → no concurrent overspend.
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.used.get("sub-1") ?? 0, 0);
+  // The live request's slot is untouched — neither reclaimed nor released by the
+  // refused 2nd request (the 429 path returns before the slot's try/finally).
+  assert(store.slots.has("sub-1"));
+  assertEquals(store.slots.size, 1);
+});
+
+Deno.test("A-04: a genuinely stale slot (older than the window) IS reclaimed and the generation proceeds", async () => {
+  // A crashed request whose slot is older than the window must not lock the
+  // subscriber out: the next /generate reclaims it and runs normally.
+  const store = activeStore(0);
+  store.slots.seed("sub-1", GENERATE_SLOT_STALE_SECONDS + 60); // crashed, past the window
+  const openai = new StubProvider();
+
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).credits_remaining, 96); // ran + charged the default 4
+  assertEquals(openai.transcribeCalls, 1);
+  assertEquals(openai.chatCalls, 1);
+  assertEquals(store.slots.size, 0); // reclaimed then released in finally
+});
+
+Deno.test("A-04: trial slot uses the SAME (corrected) window and is not reclaimed mid-flight", async () => {
+  // The trial generate path reuses GENERATE_SLOT_STALE_SECONDS and the same
+  // STT+chat hold, so the same regression must hold for trial grants.
+  const store = trialStore(0, 15);
+  store.trialSlots.seed("grant-1", 300); // live, past the old 180s, within worst-case hold
+  const openai = new StubProvider();
+
+  const res = await handleGenerate(makeReq(await mintTrialToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 429);
+  assertEquals((await res.json()).error, "generation_in_progress");
+  assertEquals(openai.transcribeCalls, 0);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0); // nothing charged
+  assert(store.trialSlots.has("grant-1"));
 });
 
 // ---- consume race edge (defensive non-spendable) ----------------------------

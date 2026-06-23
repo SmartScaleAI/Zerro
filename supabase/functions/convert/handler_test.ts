@@ -12,6 +12,9 @@ import { signSessionToken } from "../_shared/jwt.ts";
 import { type ConvertDeps, type ConvertStore, handleConvert } from "./handler.ts";
 import { conversionSystemPrompt } from "./prompt.ts";
 import { CHEAPEST_ENABLED_MODEL_ID, DEFAULT_MODEL_ID } from "../generate/models.ts";
+import { PROVIDER_TIMEOUT_MS, slotStaleSeconds } from "../generate/config.ts";
+import { CONVERT_SLOT_STALE_SECONDS } from "./config.ts";
+import { SlotTable } from "../_shared/slot_table_fake.ts";
 import type { IdempotentResult, TrialGrantRow } from "../generate/store.ts";
 import {
   type ChatClient,
@@ -56,7 +59,7 @@ class ConvertInMemoryStore implements ConvertStore {
   rateOk = true;
   rateCalls: { key: string; max: number; windowSeconds: number }[] = [];
   trialGrants = new Map<string, TrialGrantState>();
-  trialSlots = new Set<string>();
+  trialSlots = new SlotTable(); // honors staleSeconds (B-09), not a bare Set
   acquireTrialSlotCalls = 0;
   consumeCalls = 0;
   idempotent = new Map<string, IdempotentResult>();
@@ -99,14 +102,12 @@ class ConvertInMemoryStore implements ConvertStore {
     g.used += credits; // overspend overload: always spends (may go negative)
     return Promise.resolve(g.limit - g.used);
   }
-  acquireTrialSlot(id: string, _staleSeconds: number) {
+  acquireTrialSlot(id: string, staleSeconds: number) {
     this.acquireTrialSlotCalls++;
-    if (this.trialSlots.has(id)) return Promise.resolve(false);
-    this.trialSlots.add(id);
-    return Promise.resolve(true);
+    return Promise.resolve(this.trialSlots.acquire(id, staleSeconds));
   }
   releaseTrialSlot(id: string) {
-    this.trialSlots.delete(id);
+    this.trialSlots.release(id);
     return Promise.resolve();
   }
   getIdempotent(identityKey: string, idemKey: string, _ttl: number) {
@@ -539,6 +540,46 @@ Deno.test("convert: a held trial slot makes a concurrent conversion → 429", as
   assertEquals((await res.json()).error, "conversion_in_progress");
   assertEquals(h.chat.calls.length, 0);
   assertEquals(h.store.consumeCalls, 0);
+});
+
+// ---- A-04 (convert facet): chat-only slot stale window ----------------------
+// convert holds the trial slot across a SINGLE chat call (no STT), so its safe
+// reclaim window is HALF generate's. Same invariant: window > worst-case hold.
+
+Deno.test("INVARIANT (A-04): CONVERT_SLOT_STALE_SECONDS exceeds the chat-only worst-case hold", () => {
+  // One provider call (chat), up to 2 × PROVIDER_TIMEOUT_MS (initial + 1 retry).
+  const worstCaseHoldSeconds = (1 /* chat only */ * 2 /* attempts */ * PROVIDER_TIMEOUT_MS) / 1000;
+  assert(
+    CONVERT_SLOT_STALE_SECONDS > worstCaseHoldSeconds,
+    `convert stale ${CONVERT_SLOT_STALE_SECONDS}s must exceed chat-only hold ${worstCaseHoldSeconds}s`,
+  );
+  assertEquals(CONVERT_SLOT_STALE_SECONDS, slotStaleSeconds(1));
+  assert(CONVERT_SLOT_STALE_SECONDS > 180, "above the buggy old 180s default");
+});
+
+Deno.test("convert A-04: a trial slot held within the window is NOT reclaimed (concurrent conversion → 429)", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  // Held 200s: past the OLD 180s default but within convert's chat-only worst-case
+  // hold — a slow-but-live conversion. Must still block, not be reclaimed.
+  h.store.trialSlots.seed("grant_1", 200);
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 429);
+  assertEquals((await res.json()).error, "conversion_in_progress");
+  assertEquals(h.chat.calls.length, 0);
+  assertEquals(h.store.consumeCalls, 0);
+  assert(h.store.trialSlots.has("grant_1")); // the live slot is intact, not reclaimed
+});
+
+Deno.test("convert A-04: a genuinely stale trial slot IS reclaimed and the conversion runs", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1");
+  h.store.trialSlots.seed("grant_1", CONVERT_SLOT_STALE_SECONDS + 60); // crashed, past the window
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals(h.chat.calls.length, 1);
+  assertEquals(h.store.consumeCalls, 1); // charged exactly once
+  assertEquals(h.store.trialSlots.size, 0); // reclaimed, then released in finally
 });
 
 Deno.test("convert: a trial provider failure charges NOTHING (consume only on success)", async () => {

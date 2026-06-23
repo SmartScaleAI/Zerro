@@ -99,11 +99,60 @@ export const MAX_CLICK_LABEL_CHARS = optionalEnvInt("GENERATE_MAX_CLICK_LABEL_CH
 export const MAX_TRANSCRIPT_SEGMENTS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_SEGMENTS", 2000);
 export const MAX_TRANSCRIPT_TEXT_CHARS = optionalEnvInt("GENERATE_MAX_TRANSCRIPT_TEXT_CHARS", 8 * 1024);
 
+// ---- Provider request timeout ----------------------------------------------
+// Bounds a hung provider call so the slot is released and the user gets a clear
+// retryable error rather than waiting on the function wall-clock. Prefer the
+// provider-neutral var; fall back to the legacy OpenAI-named one so deployments
+// with a tuned GENERATE_OPENAI_TIMEOUT_MS don't silently reset to the default.
+// DEFINED BEFORE the concurrency cap on purpose: the slot stale-reclaim window
+// is DERIVED from this value (slotStaleSeconds below), so retuning the timeout
+// can never leave the stale window shorter than the worst-case hold (A-04).
+export const PROVIDER_TIMEOUT_MS = optionalEnvInt(
+  "GENERATE_PROVIDER_TIMEOUT_MS",
+  optionalEnvInt("GENERATE_OPENAI_TIMEOUT_MS", 120_000),
+);
+
 // ---- Concurrency cap (=1 in flight) — backs the credit-ordering guard -------
-// Slot stale-reclaim window. MUST exceed the worst-case OpenAI round-trip so a
-// slow-but-live request is never reclaimed out from under itself; small enough
-// that a crashed request frees the subscriber reasonably soon.
-export const GENERATE_SLOT_STALE_SECONDS = optionalEnvInt("GENERATE_SLOT_STALE_SECONDS", 180);
+// Slot stale-reclaim window. THE INVARIANT (A-04): STALE_SECONDS MUST be
+// STRICTLY GREATER THAN the worst-case time a single LIVE request can hold the
+// slot. Violate it and acquire_generation_slot reclaims a slow-but-live request's
+// slot mid-flight, hands a 2nd concurrent request a slot, both pass the credit
+// floor gate, and the cap-1 overspend bound (A-05) breaks → concurrent overspend.
+//
+// WORST-CASE HOLD: a generation holds ONE slot across BOTH provider calls — STT
+// then chat — back to back (handler.ts acquireSlot → transcribe → chat → release
+// in finally). Each provider client (providers/openai.ts / anthropic.ts /
+// gemini.ts) does ONE retry on a transient 429/5xx, and every attempt is bounded
+// by PROVIDER_TIMEOUT_MS, so a single call can take up to 2 × PROVIDER_TIMEOUT_MS
+// and a whole generation up to (STT + chat) = 2 calls × 2 attempts ×
+// PROVIDER_TIMEOUT_MS (= 480s at the 120s default). The old flat 180s default was
+// shorter than even ONE such call — the A-04 launch blocker.
+//
+// We DERIVE the window from PROVIDER_TIMEOUT_MS (never a magic number) so it can
+// never fall below the hold when the timeout is retuned via secrets.
+
+/** Worst-case-safe slot stale-reclaim window (seconds) for a slot held across
+ *  `providerCalls` back-to-back provider round-trips. Each call is initial + one
+ *  transient retry (PROVIDER_CALL_ATTEMPTS), each attempt bounded by
+ *  PROVIDER_TIMEOUT_MS; a fixed buffer covers DB round-trips, base64/JSON work,
+ *  and scheduler jitter. The result is STRICTLY GREATER than the worst-case hold
+ *  — the A-04 invariant. Shared with the chat-only convert path so both windows
+ *  track PROVIDER_TIMEOUT_MS from one source of truth.
+ *    generate / trial generate → providerCalls = 2 (STT + chat) → 600s @ 120s.
+ *    convert                   → providerCalls = 1 (chat only)  → 360s @ 120s. */
+export function slotStaleSeconds(providerCalls: number): number {
+  const PROVIDER_CALL_ATTEMPTS = 2; // initial request + one transient retry (providers/*.ts send())
+  const SLOT_BUFFER_MS = 120_000; // margin for DB round-trips, base64/JSON work, and jitter
+  const worstCaseHoldMs = providerCalls * PROVIDER_CALL_ATTEMPTS * PROVIDER_TIMEOUT_MS;
+  return Math.ceil((worstCaseHoldMs + SLOT_BUFFER_MS) / 1000);
+}
+
+// generate (and the trial generate path, handler.ts resolveTrial) holds the slot
+// across STT *and* chat → two provider calls → slotStaleSeconds(2) (600s @ 120s).
+export const GENERATE_SLOT_STALE_SECONDS = optionalEnvInt(
+  "GENERATE_SLOT_STALE_SECONDS",
+  slotStaleSeconds(2),
+);
 
 // ---- Per-subscriber rate limit (reuses check_rate_limit) -------------------
 // A coarse fixed-window cap on top of the concurrency cap. Phase G tightens.
@@ -112,16 +161,6 @@ export const GENERATE_RATE_LIMIT_WINDOW_SECONDS = optionalEnvInt(
   60,
 );
 export const GENERATE_RATE_LIMIT_PER_SUB = optionalEnvInt("GENERATE_RATE_LIMIT_PER_SUB", 20);
-
-// ---- Provider request timeout ----------------------------------------------
-// Bounds a hung provider call so the slot is released and the user gets a clear
-// retryable error rather than waiting on the function wall-clock. Prefer the
-// provider-neutral var; fall back to the legacy OpenAI-named one so deployments
-// with a tuned GENERATE_OPENAI_TIMEOUT_MS don't silently reset to the default.
-export const PROVIDER_TIMEOUT_MS = optionalEnvInt(
-  "GENERATE_PROVIDER_TIMEOUT_MS",
-  optionalEnvInt("GENERATE_OPENAI_TIMEOUT_MS", 120_000),
-);
 
 
 // ---- Idempotency cache TTL (M1) --------------------------------------------

@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { optionalEnv, optionalEnvInt } from "../_shared/env.ts";
+import { slotStaleSeconds } from "../generate/config.ts";
 
 // ---- Input fuse -------------------------------------------------------------
 // The client sends at most ~20k chars of chat text + a ~4k context block as
@@ -36,7 +37,19 @@ export const GEMINI_THINKING_LEVEL = optionalEnv("GEMINI_THINKING_LEVEL", "low")
 // TTL so the metered trial path is exactly as safe: cap-1 in-flight (slot) makes
 // check-then-consume correct, and a retry carrying the same Idempotency-Key
 // replays the cached prompt instead of charging twice.
-export const CONVERT_SLOT_STALE_SECONDS = optionalEnvInt("CONVERT_SLOT_STALE_SECONDS", 180);
+//
+// SLOT STALE WINDOW (A-04, convert facet): convert is CHAT-ONLY — it makes NO STT
+// call (runConversionChat → chatClient.chat), so its worst-case slot hold is a
+// SINGLE provider call (initial + 1 retry, each ≤ PROVIDER_TIMEOUT_MS) — HALF
+// generate's STT+chat hold. We derive it from the SAME slotStaleSeconds helper
+// generate uses (one source of truth) with providerCalls = 1, so it stays
+// STRICTLY GREATER than the chat-only worst-case hold (240s @ 120s → 360s) and
+// tracks PROVIDER_TIMEOUT_MS if it's retuned. The old flat 180s was shorter than
+// the 2×120s chat worst case — the convert facet of the same reclaim-mid-flight bug.
+export const CONVERT_SLOT_STALE_SECONDS = optionalEnvInt(
+  "CONVERT_SLOT_STALE_SECONDS",
+  slotStaleSeconds(1),
+);
 export const CONVERT_IDEMPOTENCY_TTL_SECONDS = optionalEnvInt(
   "CONVERT_IDEMPOTENCY_TTL_SECONDS",
   900,
