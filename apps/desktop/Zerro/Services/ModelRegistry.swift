@@ -92,7 +92,10 @@ enum ModelRegistry {
     /// ordering, plan 6A). The app shows no per-model cost, so this is just the
     /// stable render order; ids/order stay in lockstep with models.ts.
     static let all: [ModelEntry] = [
-        ModelEntry(id: "gpt-5.4-mini", provider: .openai, displayName: "GPT-5.4 mini"),
+        // Kill-switched (enabled:false) — mirrors the server's models.ts. Out of
+        // the picker (`enabled`), still in `.all` so historic results resolve its
+        // name via `entry(id:)`.
+        ModelEntry(id: "gpt-5.4-mini", provider: .openai, displayName: "GPT-5.4 mini", enabled: false),
         ModelEntry(id: "gemini-3.5-flash", provider: .gemini, displayName: "Gemini 3.5 Flash", recommended: true),
         ModelEntry(id: "gemini-3.1-pro-preview", provider: .gemini, displayName: "Gemini 3.1 Pro"),
         ModelEntry(id: "claude-sonnet-4-6", provider: .anthropic, displayName: "Claude Sonnet 4.6"),

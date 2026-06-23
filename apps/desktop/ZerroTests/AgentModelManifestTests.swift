@@ -124,17 +124,36 @@ final class AgentModelManifestTests: XCTestCase {
 
     func testParseCodexModelsCache() {
         // Mirrors ~/.codex/models_cache.json: visibility "list" kept (priority
-        // asc), "hide" dropped (e.g. codex-auto-review).
+        // asc), "hide" dropped (e.g. codex-auto-review). GPT-5.4 mini is also
+        // dropped by the Dev Mode exclusion (see testParseCodexModelsCacheExcludesGPT54Mini).
         let json = #"""
         {"fetched_at":"x","models":[
-          {"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","visibility":"list","priority":23},
+          {"slug":"gpt-5.5-codex","display_name":"GPT-5.5 Codex","visibility":"list","priority":23},
           {"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","priority":9},
           {"slug":"codex-auto-review","display_name":"Codex Auto Review","visibility":"hide","priority":43}
         ]}
         """#
         let out = DevAgentDetection.parseCodexModelsCache(Data(json.utf8))
-        XCTAssertEqual(out.map(\.modelID), ["gpt-5.5", "gpt-5.4-mini"])   // priority-sorted
+        XCTAssertEqual(out.map(\.modelID), ["gpt-5.5", "gpt-5.5-codex"])   // priority-sorted
         XCTAssertEqual(out.first?.displayName, "GPT-5.5")
+    }
+
+    func testParseCodexModelsCacheExcludesGPT54Mini() {
+        // Dev Mode product exclusion: GPT-5.4 mini AND its effort/latency variants
+        // are filtered out even though the user's Codex account lists them; every
+        // other model survives. (DevAgentDetection.devModelExclusions — the
+        // app-side mirror of the models.ts / ModelRegistry.swift `enabled:false`.)
+        let json = #"""
+        {"fetched_at":"x","models":[
+          {"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","visibility":"list","priority":23},
+          {"slug":"gpt-5.4-mini-high","display_name":"GPT-5.4-Mini High","visibility":"list","priority":24},
+          {"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","priority":9},
+          {"slug":"gpt-5.5-codex","display_name":"GPT-5.5 Codex","visibility":"list","priority":5}
+        ]}
+        """#
+        let out = DevAgentDetection.parseCodexModelsCache(Data(json.utf8))
+        XCTAssertEqual(out.map(\.modelID), ["gpt-5.5-codex", "gpt-5.5"])   // priority-sorted, mini family gone
+        XCTAssertFalse(out.contains { $0.modelID.contains("gpt-5.4-mini") })
     }
 
     func testParseCodexModelsCacheGarbageIsEmpty() {
@@ -188,6 +207,20 @@ final class AgentModelManifestTests: XCTestCase {
         auto - Auto
         """)
         XCTAssertEqual(out.map(\.modelID), ["auto", "claude-opus-4-8-high"])
+    }
+
+    func testParseCursorModelsExcludesGPT54MiniFamily() {
+        // Defensive Dev Mode exclusion: even if Cursor advertises a gpt-5.4-mini
+        // family, every permutation collapses to one rep and is then dropped;
+        // other families survive and `auto` stays pinned first.
+        let out = DevAgentDetection.parseCursorModels("""
+        auto - Auto
+        gpt-5.4-mini-high - GPT-5.4 mini High
+        gpt-5.4-mini-medium - GPT-5.4 mini Medium
+        gpt-5.5-high - GPT-5.5 High
+        """)
+        XCTAssertEqual(out.map(\.modelID), ["auto", "gpt-5.5-high"])
+        XCTAssertFalse(out.contains { $0.modelID.contains("gpt-5.4-mini") })
     }
 
     func testParseCursorModelsEmpty() {

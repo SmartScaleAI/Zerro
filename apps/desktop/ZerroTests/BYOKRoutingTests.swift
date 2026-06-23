@@ -30,12 +30,13 @@ final class BYOKRoutingTests: XCTestCase {
 
     func testKeylessSelectionFallsBackToCheapestAvailable() {
         // Recommended default (Gemini Flash) selected, but only an OpenAI key
-        // on file → cheapest OpenAI model, not a failure.
+        // on file → cheapest ENABLED OpenAI model, not a failure. With GPT-5.4
+        // mini kill-switched, that's GPT-5.5 (the only enabled OpenAI model).
         let entry = BYOKRouting.effectiveEntry(
             selectedModelID: "gemini-3.5-flash",
             availableProviders: [.openai]
         )
-        XCTAssertEqual(entry?.id, "gpt-5.4-mini")
+        XCTAssertEqual(entry?.id, "gpt-5.5")
     }
 
     func testFallbackPrefersCheapestAcrossAvailableProviders() {
@@ -43,7 +44,10 @@ final class BYOKRoutingTests: XCTestCase {
             selectedModelID: "claude-sonnet-4-6", // anthropic — no key
             availableProviders: [.openai, .gemini]
         )
-        XCTAssertEqual(entry?.id, "gpt-5.4-mini") // cheapest overall available
+        // Cheapest ENABLED model across the available providers. GPT-5.4 mini was
+        // the cheapest overall, but it's disabled now, so the next cheapest the
+        // user can run is Gemini Flash.
+        XCTAssertEqual(entry?.id, "gemini-3.5-flash")
     }
 
     func testNoChatKeyAtAllReturnsNil() {

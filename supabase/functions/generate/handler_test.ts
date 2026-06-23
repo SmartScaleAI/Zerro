@@ -1255,16 +1255,19 @@ Deno.test("metering: a heavy real cost is charged straight through, never blocks
   const openai = new StubProvider();
   openai.chatOutputTokens = 30_000; // heavy/abusive workload → large real cost
   const res = await handleGenerate(
-    makeReq(await mintToken(), makeBody({ model: "gpt-5.4-mini" })),
+    // gpt-5.5: an ENABLED OpenAI model (gpt-5.4-mini is now kill-switched and
+    // would 400 at the request gate — see models_test.ts). The point of this
+    // test is the metered AMOUNT, so it just needs any model that reaches chat.
+    makeReq(await mintToken(), makeBody({ model: "gpt-5.5" })),
     deps(store, openai),
   );
   assertEquals(res.status, 200); // metering changes the AMOUNT, never the outcome
 
   // Expected metered charge, computed with the production helpers (duration 10s,
   // the StubProvider's default input tokens, the overridden output tokens).
-  const est = estimatedCostUsd(10, "openai", "gpt-5.4-mini", openai.chatInputTokens, 30_000);
-  const metered = creditCostForModel("gpt-5.4-mini", est);
-  assert(metered > 2, `metered charge should exceed gpt-5.4-mini's fallback of 2, got ${metered}`);
+  const est = estimatedCostUsd(10, "openai", "gpt-5.5", openai.chatInputTokens, 30_000);
+  const metered = creditCostForModel("gpt-5.5", est);
+  assert(metered > 11, `metered charge should exceed gpt-5.5's fallback of 11, got ${metered}`);
 
   const json = await res.json();
   assertEquals(json.credits_remaining, 100 - metered);

@@ -101,6 +101,24 @@ final class DevAgentDetection {
         for cb in callbacks { cb(resolved) }
     }
 
+    // MARK: - Dev Mode model exclusions
+
+    /// Models we deliberately keep OUT of every Dev Mode agent picker even when
+    /// the user's own Codex/Cursor account advertises them. This is an app-side
+    /// product decision (the GPT-5.4 mini removal — mirrored server-side by
+    /// models.ts / ModelRegistry.swift `enabled:false`). Dev Mode sources its
+    /// models from the agent's own per-account list, so there is NO server kill
+    /// switch for it; this exclusion is that switch. Keyed by canonical family
+    /// (effort/latency suffixes stripped), so a family also excludes its variants.
+    nonisolated private static let devModelExclusions: Set<String> = ["gpt-5.4-mini"]
+
+    /// True when `id` — or its effort/latency family base — is on the Dev Mode
+    /// exclusion list. Centralizes the Codex + Cursor filtering so both paths
+    /// share one source of truth (e.g. `gpt-5.4-mini`, `gpt-5.4-mini-high`).
+    nonisolated private static func isDevExcluded(_ id: String) -> Bool {
+        devModelExclusions.contains(id) || devModelExclusions.contains(modelFamilyKey(id))
+    }
+
     // MARK: - Cursor models (client-side CLI)
 
     /// Probe `cursor-agent models` for Cursor's selectable model ids (Phase 2).
@@ -193,7 +211,7 @@ final class DevAgentDetection {
         var familyOrder: [String] = []
         var byFamily: [String: [(id: String, display: String)]] = [:]
         for row in rows {
-            let key = cursorModelFamilyKey(row.id)
+            let key = modelFamilyKey(row.id)
             if byFamily[key] == nil { familyOrder.append(key) }
             byFamily[key, default: []].append(row)
         }
@@ -218,6 +236,12 @@ final class DevAgentDetection {
             curated.append(AgentModel(modelID: rep.id, displayName: rep.display))
         }
 
+        // 3b. Dev Mode product exclusion (see `devModelExclusions`): drop any
+        // representative whose family is excluded — e.g. a `gpt-5.4-mini` family
+        // collapsed to `gpt-5.4-mini-high` — even if Cursor advertises it. The
+        // `auto` fallback below still applies, so this can never empty the menu.
+        curated.removeAll { isDevExcluded($0.modelID) }
+
         // 4. Pin `auto` first (Cursor's default).
         if let i = curated.firstIndex(where: { $0.modelID == "auto" }), i != 0 {
             curated.insert(curated.remove(at: i), at: 0)
@@ -225,12 +249,15 @@ final class DevAgentDetection {
         return curated
     }
 
-    /// Family key for a Cursor model id: strip a trailing run of effort/latency
-    /// suffix tokens so all permutations of one model collapse together — e.g.
+    /// Family key for a model id: strip a trailing run of effort/latency suffix
+    /// tokens so all permutations of one model collapse together — e.g.
     /// `claude-opus-4-8-thinking-high-fast` → `claude-opus-4-8`,
     /// `composer-2.5-fast` → `composer-2.5`, `gpt-5.4-mini-high` → `gpt-5.4-mini`.
-    /// `auto` and unknown suffixes are left intact (their own family).
-    nonisolated private static func cursorModelFamilyKey(_ id: String) -> String {
+    /// `auto` and unknown suffixes are left intact (their own family). Shared by
+    /// Cursor curation (collapsing the permutation explosion) and the Dev Mode
+    /// exclusion check (`isDevExcluded`), so an excluded family also catches its
+    /// effort/latency variants.
+    nonisolated private static func modelFamilyKey(_ id: String) -> String {
         let suffixes: Set<String> = ["fast", "none", "low", "medium", "high", "xhigh", "extra", "max", "thinking"]
         var tokens = id.split(separator: "-").map(String.init)
         while tokens.count > 1, let last = tokens.last, suffixes.contains(last) {
@@ -279,6 +306,10 @@ final class DevAgentDetection {
         guard let cache = try? JSONDecoder().decode(Cache.self, from: data) else { return [] }
         return cache.models
             .filter { $0.visibility == "list" }
+            // Dev Mode product exclusion (see `devModelExclusions`): drop GPT-5.4
+            // mini and its effort/latency variants even though the user's Codex
+            // account lists them. A bundled fallback applies when this empties.
+            .filter { !isDevExcluded($0.slug) }
             .sorted { ($0.priority ?? Int.max) < ($1.priority ?? Int.max) }
             .map { AgentModel(modelID: $0.slug, displayName: ($0.displayName?.isEmpty == false ? $0.displayName! : $0.slug)) }
     }

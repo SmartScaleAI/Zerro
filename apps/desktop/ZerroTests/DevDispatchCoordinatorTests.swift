@@ -117,6 +117,38 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.lastModel, "claude-opus-4-8")
     }
 
+    // MARK: - Do-not-commit guard is appended to every dispatched prompt
+
+    func testDispatchAppendsNoCommitGuardToPrompt() async throws {
+        initRepo()
+        write("app.css", ".btn { color: blue; }\n")
+        git("add", "-A"); git("commit", "-m", "baseline")
+
+        let runner = FakeRunner(result: .succeeded(summary: nil))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+
+        let spec = "Goal: recolor the button\n\nChanges:\n1. blue -> teal"
+        _ = await coordinator.dispatch(
+            prompt: spec, projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            onPhase: { _ in }
+        )
+
+        let dispatched = try XCTUnwrap(runner.lastPrompt, "the runner must have been handed a prompt")
+        // The original change spec rides through verbatim …
+        XCTAssertTrue(dispatched.contains(spec),
+                      "the generated change spec must be preserved:\n\(dispatched)")
+        // … and the do-not-commit invariant is appended as the closing block.
+        XCTAssertTrue(dispatched.contains(DevDispatchCoordinator.noCommitInstruction),
+                      "the do-not-commit guard must be appended:\n\(dispatched)")
+        XCTAssertTrue(dispatched.hasSuffix(DevDispatchCoordinator.noCommitInstruction),
+                      "the guard belongs at the end so it's the last thing the agent reads")
+        // Spot-check the guard actually forbids the publishing commands.
+        for forbidden in ["git commit", "git push", "git add"] {
+            XCTAssertTrue(dispatched.contains(forbidden),
+                          "the guard must explicitly forbid `\(forbidden)`")
+        }
+    }
+
     // MARK: - Stale index lock maps to the actionable failure
 
     func testStaleIndexLockFailsAsIndexLockedWithoutDispatching() async throws {
@@ -334,10 +366,14 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
     private let lock = NSLock()
     private var _runCount = 0
     private var _lastModel: String?
+    private var _lastPrompt: String?
     var runCount: Int { lock.lock(); defer { lock.unlock() }; return _runCount }
     /// The `model` forwarded on the most recent run (Phase 2) — lets a test
     /// assert the dispatch threads the selected model through to the runner.
     var lastModel: String? { lock.lock(); defer { lock.unlock() }; return _lastModel }
+    /// The exact `prompt` forwarded on the most recent run — lets a test assert
+    /// the dispatch appends the do-not-commit guard to the change spec.
+    var lastPrompt: String? { lock.lock(); defer { lock.unlock() }; return _lastPrompt }
 
     init(result: DevRunResult, sideEffect: (@Sendable (URL) -> Void)? = nil) {
         self.result = result
@@ -354,7 +390,7 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void,
         onStall: @escaping @Sendable (Bool) -> Void
     ) async -> DevRunResult {
-        lock.lock(); _runCount += 1; _lastModel = model; lock.unlock()
+        lock.lock(); _runCount += 1; _lastModel = model; _lastPrompt = prompt; lock.unlock()
         sideEffect?(projectURL)
         return result
     }

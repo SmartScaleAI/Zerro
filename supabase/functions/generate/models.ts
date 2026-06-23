@@ -59,7 +59,11 @@ export interface ModelEntry {
 // Ordered by fallbackCredits ascending — the picker renders cheapest-first
 // (plan 6A) and this order is the product's "label by cost, not quality".
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
-  { id: "gpt-5.4-mini", provider: "openai", displayName: "GPT-5.4 mini", fallbackCredits: 2, enabled: true },
+  // Kill-switched (enabled:false) — removed from the user-selectable pickers but
+  // kept in the registry (priced in cost.ts) so historic generations that used
+  // it still resolve their model name + cost via modelById. See the `enabled`
+  // header note above.
+  { id: "gpt-5.4-mini", provider: "openai", displayName: "GPT-5.4 mini", fallbackCredits: 2, enabled: false },
   { id: "gemini-3.5-flash", provider: "gemini", displayName: "Gemini 3.5 Flash", fallbackCredits: 4, recommended: true, enabled: true },
   { id: "gemini-3.1-pro-preview", provider: "gemini", displayName: "Gemini 3.1 Pro", fallbackCredits: 5, enabled: true },
   { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6", fallbackCredits: 7, enabled: true },

@@ -313,6 +313,8 @@ private struct PillHostView: View {
             onErrorRetryRegion: { appState.retryRecordingFromRegion() },
             // M5 — resume a paid-blocked recording after the user pays.
             onResumePaidGeneration: { appState.resumePaidGeneration() },
+            // Record-start out-of-credits "Add Credits" → open the top-up paywall.
+            onAddCredits: { appState.openOutOfCreditsTopUp() },
             onDismissResult: { appState.resetToIdle() },
             // M2 — recovery offer resolutions, exactly two outcomes. Generate
             // runs the recovered recording (spends the credit, with consent);

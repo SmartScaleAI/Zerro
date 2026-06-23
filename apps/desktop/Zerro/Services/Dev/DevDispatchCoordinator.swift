@@ -113,6 +113,33 @@ enum DevDispatchFailure: Equatable, Sendable {
 @MainActor
 final class DevDispatchCoordinator {
 
+    /// A non-negotiable Dev Mode invariant appended to EVERY agent prompt right
+    /// before dispatch: the coding agent edits files and STOPS — it must never
+    /// commit, stage, or push. Dev Mode owns the version-control decision (the
+    /// developer reviews the diff in the result card and commits themselves, §7),
+    /// and the git checkpoint is the revert containment — an agent commit would
+    /// bury its edits in history and defeat that.
+    ///
+    /// This is belt-and-suspenders on top of the edits-only permission posture
+    /// (§11): that posture denies the shell for Claude Code (`--disallowedTools
+    /// Bash`) and Cursor's default `-p`, but it does NOT cover the allow-commands
+    /// opt-in, Codex's `workspace-write` sandbox (which can run a local `git
+    /// commit`), or a user who has globally weakened Cursor's auto-run. The
+    /// instruction closes that gap for every agent and both permission modes, and
+    /// — unlike a rule in the generation system prompt — is deterministic rather
+    /// than model-dependent. Appended (not part of the change spec) so it rides
+    /// the same well-attended tail position for every run; the result card's
+    /// shown change spec is unchanged.
+    static let noCommitInstruction = """
+    IMPORTANT — DO NOT COMMIT OR PUSH:
+    Make only the file edits described above, then stop. Do NOT run `git commit`, \
+    `git push`, `git add`, `git stash`, or any other command that stages, records, \
+    or publishes changes — not even if the task looks finished or it seems helpful. \
+    Leave every change unstaged and uncommitted in the working tree so the developer \
+    can review the diff and commit it themselves. Committing, staging, and pushing \
+    are never your responsibility.
+    """
+
     /// One shared runner so the cap-1 concurrency guard (§9) spans every
     /// dispatch, not just one call.
     private let runner: DevAgentRunner
@@ -241,12 +268,15 @@ final class DevDispatchCoordinator {
             return .failed(.agent(.cancelled), checkpoint: checkpoint, service: service, diff: nil)
         }
 
-        // Dispatch the agent — it edits the working tree directly.
+        // Dispatch the agent — it edits the working tree directly. The change
+        // spec is the generated `agent_prompt`; we append the Dev Mode
+        // do-not-commit invariant so EVERY agent (any permission mode) is told,
+        // deterministically, to leave the edits uncommitted for the developer.
         onPhase(.dispatching)
         let runResult = await runner.run(
             entry: agent,
             permission: permission,
-            prompt: prompt,
+            prompt: Self.promptWithDevModeGuards(prompt),
             projectURL: projectURL,
             timeouts: .default,
             model: model,
@@ -284,5 +314,15 @@ final class DevDispatchCoordinator {
             let diff = try? await Task.detached { try service.diffStat(since: checkpoint) }.value
             return .failed(.agent(reason), checkpoint: checkpoint, service: service, diff: diff)
         }
+    }
+
+    /// The final prompt handed to the coding agent: the generated change spec
+    /// followed by the Dev Mode invariants (currently the do-not-commit guard),
+    /// separated by a blank line so the guard reads as its own closing block. The
+    /// change spec is preserved verbatim — the guard is only ever appended.
+    static func promptWithDevModeGuards(_ prompt: String) -> String {
+        let spec = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spec.isEmpty else { return noCommitInstruction }
+        return spec + "\n\n" + noCommitInstruction
     }
 }

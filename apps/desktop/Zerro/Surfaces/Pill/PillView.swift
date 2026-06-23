@@ -40,6 +40,14 @@ enum PillState: Equatable {
     /// the bridge so Observation tracks it). Mapped from `.failed` by the bridge
     /// when `AppState.canResumePaidGeneration` is true.
     case paidBlockResume(headline: String, detail: String, entitled: Bool)
+    /// Record-START out-of-credits block (preflight, nothing captured). Rendered
+    /// as the shared failure card (same 760-wide chrome as `.error` /
+    /// `.paidBlockResume`): the `headline` on top, the start-oriented `detail`
+    /// below, and a plain Dismiss + an "Add Credits" primary that opens the
+    /// top-up paywall. Crucially there is NO Retry and NO Resume — nothing was
+    /// recorded, so neither affordance has anything to act on. Mapped from
+    /// `.failed(.outOfCreditsAtStart)` by the bridge.
+    case outOfCreditsStart(headline: String, detail: String)
     /// The expanded failure card — shown for RETRYABLE generation failures
     /// (`AppState.canRetryFailure == true`). Reuses the success card's chrome
     /// in an error configuration: amber caution badge, the `headline`
@@ -146,6 +154,12 @@ struct PillView: View {
     /// labels. Default no-op so #Preview blocks can pass literal states without
     /// ceremony.
     var onResumePaidGeneration: () -> Void = {}
+    /// The `.outOfCreditsStart` pill's "Add Credits" primary. Wired in
+    /// `PillWindowController` to `AppState.openOutOfCreditsTopUp`, which opens the
+    /// top-up paywall and clears the block. Distinct from `onResumePaidGeneration`
+    /// — there is no held recording, so this only routes to the paywall. Default
+    /// no-op so #Preview blocks can pass the literal state without ceremony.
+    var onAddCredits: () -> Void = {}
     /// Closes the result pill from either compact or expanded state. The
     /// affordance is a small "x" badge tucked into the chrome's top-right
     /// corner so users can dismiss after copying without having to wait
@@ -263,7 +277,7 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the 760-wide failure card
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .error, .paidBlockResume, .devDone, .devFailed,
+             .error, .paidBlockResume, .outOfCreditsStart, .devDone, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         }
@@ -277,7 +291,8 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the failure card: the title +
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed,
+        case .resultExpanded, .failureExpanded, .error, .paidBlockResume,
+             .outOfCreditsStart, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
@@ -403,6 +418,34 @@ struct PillView: View {
                     badgeSymbol: entitled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                 ),
                 onRetry: onResumePaidGeneration
+            )
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        case .outOfCreditsStart(let headline, let detail):
+            // Record-START out-of-credits: the same failure card with a plain
+            // Dismiss + an "Add Credits" primary that opens the top-up paywall.
+            // No Retry and no Resume — nothing was captured, so the primary's only
+            // job is to route to the paywall (wired to `onAddCredits`).
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissError,
+                failure: ArtifactCardView.FailureConfig(
+                    headline: headline,
+                    detail: detail,
+                    secondaryTitle: "Dismiss",
+                    onSecondary: onDismissError,
+                    primaryTitle: "Add Credits",
+                    primaryIcon: nil,
+                    primaryRole: .warning
+                ),
+                onRetry: onAddCredits
             )
             .frame(width: 760)
             .fixedSize(horizontal: false, vertical: true)

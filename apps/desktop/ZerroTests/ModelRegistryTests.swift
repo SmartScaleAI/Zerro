@@ -20,22 +20,36 @@ final class ModelRegistryTests: XCTestCase {
     // MARK: - Mirror contract (literal — intentionally NOT derived)
 
     func testRegistryMirrorsServerIdsAndProviders() {
-        // (id, provider) and ORDER exactly as in generate/models.ts. No price
-        // mirror — the app shows no per-model cost (metered-credits Phase 4).
-        let expected: [(String, ModelProvider)] = [
-            ("gpt-5.4-mini", .openai),
-            ("gemini-3.5-flash", .gemini),
-            ("gemini-3.1-pro-preview", .gemini),
-            ("claude-sonnet-4-6", .anthropic),
-            ("claude-opus-4-7", .anthropic),
-            ("gpt-5.5", .openai),
+        // (id, provider, enabled) and ORDER exactly as in generate/models.ts. No
+        // price mirror — the app shows no per-model cost (metered-credits Phase 4).
+        // GPT-5.4 mini is kill-switched (enabled:false) but stays in `.all`.
+        let expected: [(String, ModelProvider, Bool)] = [
+            ("gpt-5.4-mini", .openai, false),
+            ("gemini-3.5-flash", .gemini, true),
+            ("gemini-3.1-pro-preview", .gemini, true),
+            ("claude-sonnet-4-6", .anthropic, true),
+            ("claude-opus-4-7", .anthropic, true),
+            ("gpt-5.5", .openai, true),
         ]
         XCTAssertEqual(ModelRegistry.all.count, expected.count)
-        for (entry, (id, provider)) in zip(ModelRegistry.all, expected) {
+        for (entry, (id, provider, enabled)) in zip(ModelRegistry.all, expected) {
             XCTAssertEqual(entry.id, id)
             XCTAssertEqual(entry.provider, provider, entry.id)
-            XCTAssertTrue(entry.enabled, entry.id) // all six ship enabled
+            XCTAssertEqual(entry.enabled, enabled, entry.id)
         }
+    }
+
+    func testGPT54MiniDisabledButStillResolvable() {
+        // The kill-switch contract (mirrors models.ts ALLOWED_MODELS-excludes /
+        // modelById-resolves): out of the picker (`enabled`), still in `.all` and
+        // resolvable via `entry(id:)` so historic generations render its name.
+        XCTAssertFalse(
+            ModelRegistry.enabled.contains { $0.id == "gpt-5.4-mini" },
+            "disabled model must not appear in the picker"
+        )
+        XCTAssertTrue(ModelRegistry.all.contains { $0.id == "gpt-5.4-mini" })
+        XCTAssertEqual(ModelRegistry.entry(id: "gpt-5.4-mini")?.displayName, "GPT-5.4 mini")
+        XCTAssertEqual(ModelRegistry.entry(id: "gpt-5.4-mini")?.enabled, false)
     }
 
     func testExactlyOneRecommended_andItIsFlash() {

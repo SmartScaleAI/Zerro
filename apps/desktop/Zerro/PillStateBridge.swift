@@ -69,6 +69,14 @@ extension AppState {
             return isResultExpanded ? .resultExpanded : .resultCompact
 
         case .failed(let reason):
+            // Record-START out-of-credits block (preflight, nothing captured):
+            // its own paywall-routed pill — Dismiss + "Add Credits", NO Retry.
+            // Checked FIRST so it never falls through to the Cancel/Retry `.error`
+            // card (whose non-retryable "Retry" would nonsensically reopen the
+            // area selector) or the post-capture Discard/Upgrade resume card.
+            if case .outOfCreditsAtStart = reason {
+                return .outOfCreditsStart(headline: reason.headline, detail: reason.detail)
+            }
             // Retryable failures get the expanded card so the user can read
             // the real error and retry from there; everything else keeps the
             // compact amber capsule unchanged. `canRetryFailure` is re-evaluated

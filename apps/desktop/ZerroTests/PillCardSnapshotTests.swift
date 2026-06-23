@@ -50,6 +50,9 @@ final class PillCardSnapshotTests: XCTestCase {
                 detail: "Claude Code changed +42 \u{2212}7 in 3 files. Undo it?")))),
             ("07-devrecovery-anon", AnyView(PillView(state: .confirmDevRecovery(
                 detail: "The agent changed +5 \u{2212}0 in 1 file. Undo it?")))),
+            ("08-outofcredits-start", AnyView(PillView(state: .outOfCreditsStart(
+                headline: RecordingFailureReason.outOfCreditsAtStart.headline,
+                detail: RecordingFailureReason.outOfCreditsAtStart.detail)))),
         ]
 
         for (name, view) in cases {

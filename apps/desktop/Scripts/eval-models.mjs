@@ -107,13 +107,16 @@ function composedSystemPrompt() {
 //   Anthropic https://platform.claude.com/docs/en/about-claude/models/overview
 //
 // NOTE: `gpt-5.4-mini` is the cheapest GPT-5-family mini that actually exists at
-// OpenAI (the plan's §1.1 "gpt-5-mini" id was a non-existent placeholder); it is
-// the registry's "Lowest cost" OpenAI model (models.ts), priced below.
+// OpenAI (the plan's §1.1 "gpt-5-mini" id was a non-existent placeholder). It is
+// now DISABLED in the registry (models.ts `enabled:false`), so it is not part of
+// the harness's default model set — but its price row stays so an explicitly
+// `--models openai:gpt-5.4-mini` run (e.g. re-pricing a historic eval) still
+// prices instead of showing "unpriced".
 const CHAT_PRICING = {
   // — legacy / prior eval baseline —
   "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list
   // — the six Phase 0 candidates —
-  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 }, // registry's lowest-cost OpenAI model
+  "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 }, // registry-disabled; priced for historic/explicit runs
   "openai:gpt-5.5": { inPerM: 5.0, outPerM: 30.0 },
   "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // flat
   "gemini:gemini-3.1-pro-preview": { // tiered by input tokens (>200k raises both rates)

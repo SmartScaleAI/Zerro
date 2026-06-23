@@ -37,7 +37,8 @@ Deno.test("registry: exactly one recommended model (Gemini 3.5 Flash)", () => {
 });
 
 Deno.test("ALLOWED_MODELS: contains exactly the enabled registry ids", () => {
-  assertEquals(ALLOWED_MODELS.size, 6);
+  // Five of the six ship enabled — gpt-5.4-mini is kill-switched (enabled:false).
+  assertEquals(ALLOWED_MODELS.size, 5);
   for (const m of MODEL_REGISTRY) {
     assertEquals(ALLOWED_MODELS.has(m.id), m.enabled, m.id);
   }
@@ -45,13 +46,25 @@ Deno.test("ALLOWED_MODELS: contains exactly the enabled registry ids", () => {
   assert(!ALLOWED_MODELS.has("gpt-9-imaginary"));
 });
 
+Deno.test("ALLOWED_MODELS: gpt-5.4-mini is kill-switched out but still resolvable", () => {
+  // The disable removes it from the request gate (new requests with this model
+  // 400) while modelById still resolves it, so historic generation_log rows that
+  // used it keep rendering their model name + cost.
+  assert(!ALLOWED_MODELS.has("gpt-5.4-mini"));
+  const entry = modelById("gpt-5.4-mini");
+  assertEquals(entry?.enabled, false);
+  assertEquals(entry?.displayName, "GPT-5.4 mini");
+});
+
 Deno.test("ALLOWED_MODELS: a disabled entry would be excluded (kill-switch shape)", () => {
-  // Recompute the derivation over a copy with one model disabled — proves the
-  // set is driven by `enabled`, which is the no-deploy kill switch.
+  // Recompute the derivation over a copy with one MORE model disabled — proves
+  // the set is driven by `enabled`, the no-deploy kill switch. The base registry
+  // already has gpt-5.4-mini disabled, so disabling gpt-5.5 leaves four enabled.
   const copy = MODEL_REGISTRY.map((m) => m.id === "gpt-5.5" ? { ...m, enabled: false } : m);
   const allowed = new Set(copy.filter((m) => m.enabled).map((m) => m.id));
-  assertEquals(allowed.size, 5);
+  assertEquals(allowed.size, 4);
   assert(!allowed.has("gpt-5.5"));
+  assert(!allowed.has("gpt-5.4-mini"));
 });
 
 Deno.test("modelById: round-trips every registry entry; unknown → undefined", () => {

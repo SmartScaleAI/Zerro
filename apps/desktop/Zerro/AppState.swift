@@ -265,11 +265,24 @@ public enum RecordingFailureReason: Equatable {
     case artifactUnreadable
 
     // Phase E — Managed proxy failures
-    /// Managed: the month's credits are spent (`generate` returned 402).
-    /// Non-punitive — the user keeps library access and the menu-bar / Billing
-    /// surfaces show "resets {date}" + an upgrade CTA. NOT retryable (another
-    /// attempt fails identically until credits reset or the plan upgrades).
+    /// Managed: the month's credits are spent and a recording WAS captured — the
+    /// post-generation 402, with the processed recording held on disk. The copy
+    /// is finish/resume-oriented ("…finish this recording", "…this recording stay
+    /// available") and the pill is the `.paidBlockResume` Discard/Upgrade card so
+    /// the user can pay and continue the SAME recording. Non-punitive — the user
+    /// keeps library access. NOT retryable (another attempt fails identically
+    /// until credits reset or the plan upgrades). For the record-START block
+    /// (nothing captured yet) use `.outOfCreditsAtStart` instead.
     case outOfCredits
+    /// Managed: credits are spent and the user tried to START a new recording —
+    /// the record-start PRE-FLIGHT block, before anything is captured. Split from
+    /// `.outOfCredits` so the copy is start-oriented (no "finish this recording" /
+    /// "this recording stay available") and the presentation is the paywall-routed
+    /// "Add Credits" pill rather than the Cancel/Retry or Discard/Upgrade cards —
+    /// there is no recording to retry or resume. NOT retryable, and NOT a
+    /// `PaidBlockReason` (nothing to hold/resume). Set only by
+    /// `presentPreflightBlock`.
+    case outOfCreditsAtStart
     /// Managed: the subscription is no longer active (cancelled/expired, or the
     /// session resolved to nothing — `generate` returned 403/404). Routes the
     /// user back toward the paywall on their next record attempt; the
@@ -310,7 +323,7 @@ public enum RecordingFailureReason: Equatable {
              .artifactUnreadable,
              .apiKeyMissing, .apiAuth,
              .responseTooLong,
-             .outOfCredits, .subscriptionInactive,
+             .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
         }
@@ -362,6 +375,8 @@ public enum RecordingFailureReason: Equatable {
             return "Couldn\u{2019}t process the recording."
         case .outOfCredits:
             return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
+        case .outOfCreditsAtStart:
+            return "You\u{2019}re out of credits \u{2014} top up to start a new recording."
         case .subscriptionInactive:
             return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
         case .trialVerificationRequired:
@@ -399,6 +414,7 @@ public enum RecordingFailureReason: Equatable {
         case .responseTooLong:           return "Response too long"
         case .artifactUnreadable:        return "Couldn\u{2019}t read result"
         case .outOfCredits:              return "Out of credits"
+        case .outOfCreditsAtStart:       return "Out of credits"
         case .subscriptionInactive:      return "Subscription inactive"
         case .trialVerificationRequired: return "Verify your email"
         case .trialCreditsExhausted:     return "Free trial used up"
@@ -458,6 +474,8 @@ public enum RecordingFailureReason: Equatable {
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
         case .outOfCredits:
             return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
+        case .outOfCreditsAtStart:
+            return "You\u{2019}re out of credits. Top up from the menu bar or wait for your monthly reset to start a new recording."
         case .subscriptionInactive:
             return "Your subscription isn\u{2019}t active right now, so this recording can\u{2019}t be generated. Reactivate under Settings \u{203A} Billing, then try again."
         case .trialVerificationRequired:
@@ -1198,7 +1216,12 @@ final class AppState {
     func presentPreflightBlock(_ block: EntitlementStore.PreflightBlock) -> RecordingFailureReason {
         let reason: RecordingFailureReason
         switch block {
-        case .outOfCredits: reason = .outOfCredits
+        // Record-START block: nothing is captured yet, so this gets the
+        // start-oriented `.outOfCreditsAtStart` (paywall-routed "Add Credits"
+        // pill, no Retry/Resume) — NOT the post-capture `.outOfCredits` resume
+        // copy. The paywall trigger below stays `.outOfCredits` so the top-up
+        // paywall copy/analytics are unchanged.
+        case .outOfCredits: reason = .outOfCreditsAtStart
         case .subscriptionInactive: reason = .subscriptionInactive
         case .apiKeyMissing: reason = .apiKeyMissing
         }
@@ -3525,6 +3548,19 @@ final class AppState {
         requestAreaSelector?()
     }
 
+    /// The record-START out-of-credits pill's primary ("Add Credits"). Unlike
+    /// `resumePaidGeneration`, there is no held recording to continue (nothing was
+    /// captured), so this does no entitlement re-check and reconstructs nothing —
+    /// it routes the user straight to the top-up paywall and clears the block. The
+    /// `.outOfCredits` trigger is re-asserted here (it may have been read-and-
+    /// cleared by an earlier paywall open) so PaywallView shows the top-up copy and
+    /// reports the right `paywall_shown.trigger`.
+    func openOutOfCreditsTopUp() {
+        entitlements?.paywallTrigger = .outOfCredits
+        AppDelegate.openPaywall()
+        dismissFailure()
+    }
+
     /// True when the current failure is transient AND we have a processed
     /// recording on disk to re-run AND we haven't already exhausted
     /// `maxFailureRetries`. The pill reads this via the bridge to decide
@@ -3770,7 +3806,7 @@ final class AppState {
              .recordingTooShort, .diskFull,
              .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
              .providerUnavailable, .responseTooLong,
-             .outOfCredits, .subscriptionInactive,
+             .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
         }

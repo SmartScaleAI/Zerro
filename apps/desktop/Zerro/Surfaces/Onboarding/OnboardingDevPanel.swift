@@ -76,7 +76,7 @@ struct OnboardingDevPanel: View {
             permissionPinRow(label: "SCREEN", binding: bindScreen)
         case .microphone:
             permissionPinRow(label: "MIC", binding: bindMic)
-        case .welcome, .consent, .email, .allSet:
+        case .welcome, .consent, .email, .devMode, .allSet:
             HStack {
                 Text("\u{2014}").font(.system(size: 11)).foregroundStyle(Color.vfTextTertiary)
                 Text("No sub-states for this step")

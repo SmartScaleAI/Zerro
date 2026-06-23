@@ -539,6 +539,154 @@ struct MicrophoneStepView: View {
     }
 }
 
+// MARK: - Dev Mode (educational)
+
+/// Purely informational step shown to every user just before All Set.
+/// Introduces Dev Mode at "what it is + where the switch is" depth — it does
+/// NOT cover agent-CLI install or folder setup (those live in the selector's
+/// dev-settings menu and Settings). No gating: shown to all users.
+struct DevModeStepView: View {
+    @Environment(OnboardingState.self) private var onboarding
+
+    var body: some View {
+        OnboardingStepLayout {
+            DevModeGlyphTile()
+        } content: {
+            VStack(spacing: VFSpacing.md) {
+                Text("Building software? Try Dev Mode")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text("Normally Zerro copies a ready-to-paste result \u{2014} a prompt, draft, snippet, or doc \u{2014} to your clipboard. Flip the green </> Dev switch in the selector toolbar and Zerro instead hands your narrated recording to a local coding agent \u{2014} like Claude Code \u{2014} that edits the files in your project for you.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } accessory: {
+            VStack(spacing: VFSpacing.sm) {
+                DevModeToolbarIllustration()
+
+                Text("Look for it on the left of the toolbar after you select a region.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.vfTextTertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } actions: {
+            OnboardingPrimaryButton("Continue") { onboarding.advance() }
+        }
+    }
+}
+
+/// Small icon tile echoing the real Dev switch: the `</>` glyph in the same
+/// green (`vfDevAccent`) the toolbar segment shows when active.
+private struct DevModeGlyphTile: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+            .fill(Color.vfDevAccent.opacity(0.14))
+            .frame(width: 64, height: 64)
+            .overlay(
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Color.vfDevAccent)
+            )
+    }
+}
+
+// MARK: - Dev Mode toolbar illustration
+
+/// A static, non-interactive picture of the selector toolbar with the Dev mode
+/// switch turned ON — so the onboarding step shows users exactly what to look
+/// for and where. Mirrors `AreaSelectorView.modeSegment` styling (same SF
+/// Symbols + `vfDevAccent`) but is fully self-contained: no `AreaSelectorState`,
+/// no geometry/hit-testing, no animation. Hand-kept mock — if the real mode
+/// switch is restyled, update this to match.
+private struct DevModeToolbarIllustration: View {
+    var body: some View {
+        miniToolbar
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("The selector toolbar, with the Dev mode switch turned on at its left end.")
+    }
+
+    private var miniToolbar: some View {
+        HStack(spacing: VFSpacing.sm) {
+            modeSwitch
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(width: 1, height: 18)
+            ghostChip(system: "slider.horizontal.3")   // model (representative)
+            ghostChip(system: "mic.fill")               // mic
+            recordPill                                  // record affordance
+        }
+        .padding(.horizontal, VFSpacing.sm)
+        .padding(.vertical, VFSpacing.xs + 2)
+        .background(
+            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                .fill(Color.black.opacity(0.45))
+                .overlay(
+                    RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    /// Two-segment mode switch in a recessed well: Artifact (dimmed, inactive) |
+    /// Dev (active, green). A soft green ring rings the well to pull the eye.
+    private var modeSwitch: some View {
+        HStack(spacing: 0) {
+            segment(system: "wand.and.stars", active: false, isDev: false)
+            segment(system: "chevron.left.forwardslash.chevron.right", active: true, isDev: true)
+        }
+        .padding(3)
+        .background(Capsule(style: .continuous).fill(Color.black.opacity(0.18)))
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Color.vfDevAccent.opacity(0.55), lineWidth: 1.5)
+        )
+    }
+
+    private func segment(system: String, active: Bool, isDev: Bool) -> some View {
+        let fill: Color = active
+            ? (isDev ? Color.vfDevAccent.opacity(0.22) : Color.white.opacity(0.12))
+            : .clear
+        let iconColor: Color = active
+            ? (isDev ? Color.vfDevAccent : Color.vfTextPrimary)
+            : Color.vfTextTertiary
+        return Image(systemName: system)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(iconColor)
+            .frame(width: 30, height: 26)
+            .background(Circle().fill(fill))
+    }
+
+    private func ghostChip(system: String) -> some View {
+        Image(systemName: system)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Color.vfTextTertiary)
+            .frame(width: 26, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+    }
+
+    /// The trailing Record pill — a fully-rounded `vfRecordingRed` capsule with
+    /// a white dot + white label, matching `AreaSelectorView.recordPill`.
+    private var recordPill: some View {
+        HStack(spacing: 5) {
+            Circle().fill(Color.white).frame(width: 9, height: 9)
+            Text("Record")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white)
+        }
+        .padding(.horizontal, VFSpacing.sm)
+        .frame(height: 26)
+        .background(Capsule(style: .continuous).fill(Color.vfRecordingRed))
+    }
+}
+
 // MARK: - All Set
 
 struct AllSetStepView: View {
