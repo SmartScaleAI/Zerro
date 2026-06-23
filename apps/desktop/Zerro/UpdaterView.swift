@@ -57,6 +57,49 @@ final class UpdateWindowUpdaterDelegate: NSObject, SPUUpdaterDelegate {
             return appcast.items[index]
         }
     }
+
+    // MARK: - Auto-update failure reporting
+
+    /// Reports genuine auto-update failures to error tracking so a broken
+    /// updater surfaces instead of silently stranding users on an old build.
+    ///
+    /// Sparkle drives the whole check through this one catch-all callback —
+    /// download, unarchive, signature and install failures all land here — but
+    /// so do two routine, non-failure outcomes that fire on ordinary launches.
+    /// `SPUUpdaterDelegate.h` documents exactly those two as the "special
+    /// possible values" for `didAbortWithError`, and we return early on them:
+    /// capturing either would mint a PostHog issue (and trip the Slack alert)
+    /// every time a user launches with nothing to update.
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        let nsError = error as NSError
+
+        // Benign outcomes Sparkle routes through this same callback — ignore.
+        if nsError.domain == SUSparkleErrorDomain,
+           let suError = SUError(rawValue: OSStatus(nsError.code)) {
+            switch suError {
+            case .noUpdateError,             // no newer build in the feed
+                 .installationCanceledError: // user cancelled the install/auth prompt
+                return
+            default:
+                break
+            }
+        }
+
+        // Genuine failure. Sparkle invokes delegate callbacks on the main
+        // thread; under `-default-isolation=MainActor` the @objc delegate
+        // witness is nonisolated, so hop onto MainActor to reach
+        // `CrashReporting.capture`. `assumeIsolated` is safe — we are already
+        // on main. Only "errorCode" is allowlisted by the privacy contract;
+        // the error itself rides along for its type + code, never its text.
+        MainActor.assumeIsolated {
+            _ = CrashReporting.capture(
+                error,
+                message: "Sparkle auto-update failed",
+                stage: "update",
+                context: ["errorCode": String(nsError.code)]
+            )
+        }
+    }
 }
 
 @MainActor
