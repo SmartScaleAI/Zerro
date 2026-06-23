@@ -13,11 +13,18 @@
 //      list; empty when the tree is clean → fall back to HEAD). Separately copy
 //      untracked files aside, since stash-create omits them.
 //    • The agent then edits the working tree directly.
-//    • revert(): restore tracked files from the snapshot commit, remove
-//      agent-created untracked files (git clean, which respects .gitignore so
-//      build dirs survive), then copy the saved untracked files back. Net: the
-//      working tree returns to exactly the pre-run state; the user's
-//      uncommitted work is intact; branch history is untouched.
+//    • revert(): restore tracked files from the snapshot commit, remove the
+//      files the AGENT created (a `git clean` scoped to agent-added untracked
+//      paths only — never the user's pre-existing untracked work — which still
+//      respects .gitignore so build dirs survive), then copy the saved untracked
+//      files back. Net: the working tree returns to exactly the pre-run state;
+//      the user's uncommitted work is intact; branch history is untouched.
+//      CRASH-SAFE (G-01): the order + scope guarantee that a throw at ANY step
+//      cannot leave the user's pre-existing untracked work deleted-and-
+//      unrecoverable — a pre-flight check aborts before any destructive step if
+//      the untracked snapshot is missing, and `clean` never targets the user's
+//      pre-existing untracked set. Combined with the caller retaining the
+//      checkpoint until a VERIFIED restore, a failed revert is always retryable.
 //
 //  All git invocations run with `cwd = projectURL`. Phase 1 REQUIRES a git repo
 //  (design §4); a non-git project throws `.notAGitRepository`, surfaced to the
@@ -272,6 +279,14 @@ struct GitCheckpointService: Sendable {
     nonisolated func revert(_ checkpoint: GitCheckpoint) throws {
         try verifyRepository()
 
+        // 0. CRASH-SAFETY PRE-FLIGHT (G-01): the untracked snapshot is the ONLY
+        //    copy of the user's pre-existing untracked work. If it's gone (e.g. a
+        //    reboot cleared $TMPDIR), a destructive step below could delete
+        //    untracked files we can no longer restore — so abort HERE, with the
+        //    working tree untouched, and let the caller keep the checkpoint and
+        //    surface a retryable .revertFailed rather than tear down to idle.
+        try verifyUntrackedSnapshotIntact(checkpoint)
+
         // 1. Restore tracked files to the checkpoint (recreates files the agent
         //    deleted, reverts modifications). `checkout <ref> -- .` doesn't
         //    remove files absent from the ref — those are handled by clean.
@@ -287,14 +302,74 @@ struct GitCheckpointService: Sendable {
             try run(["reset", "-q"], allowFailure: true)
         }
 
-        // 2. Remove untracked files the agent created. `-fd` covers files +
-        //    directories; no `-x`, so .gitignore'd build output is preserved.
-        try run(["clean", "-fd"])
+        // 2. Remove ONLY the untracked files the AGENT created — never the user's
+        //    pre-existing untracked work (those are restored in place by step 3).
+        //    The old blanket `git clean -fd` deleted the pre-existing untracked
+        //    set too and relied on step 3 to copy it back; a throw in between left
+        //    those files deleted (G-01). Scoping the clean to agent-added paths
+        //    makes a mid-revert throw non-destructive to the user's work.
+        try cleanAgentAddedUntracked(checkpoint)
 
-        // 3. Copy the saved untracked files back into place.
+        // 3. Copy the saved untracked files back into place — reverts an agent
+        //    edit to a pre-existing untracked file, recreates one it deleted.
         try restoreUntracked(checkpoint)
 
         Log.dev.notice("Dev checkpoint reverted to \(checkpoint.restoreRef, privacy: .public)")
+    }
+
+    /// Throw BEFORE any destructive revert step if the untracked snapshot — the
+    /// sole copy of the user's pre-existing untracked work — is missing. Guards the
+    /// "$TMPDIR cleared after checkpoint" case: without it, the `clean` step would
+    /// delete untracked files the restore can no longer recover. A checkpoint with
+    /// no pre-existing untracked files needs no snapshot, so this is a no-op there.
+    nonisolated private func verifyUntrackedSnapshotIntact(_ checkpoint: GitCheckpoint) throws {
+        guard !checkpoint.untrackedRelativePaths.isEmpty else { return }
+        guard let dir = checkpoint.untrackedSnapshotDir,
+              FileManager.default.fileExists(atPath: dir.path) else {
+            throw GitCheckpointError.fileOperationFailed(
+                "untracked snapshot missing — refusing to revert (would delete unrecoverable untracked files)"
+            )
+        }
+    }
+
+    /// Remove the untracked files the AGENT created during the run, scoped so the
+    /// user's PRE-EXISTING untracked work is never deleted (it's restored in place
+    /// by `restoreUntracked`). The candidate set is the current untracked set MINUS
+    /// the checkpoint's pre-existing untracked set; `.gitignore`'d files are excluded
+    /// from both (`--exclude-standard`), so build output survives exactly as the old
+    /// blanket `clean -fd` (no `-x`) preserved it. Empty agent-created directories
+    /// left behind are then pruned to match the old clean's directory removal.
+    nonisolated private func cleanAgentAddedUntracked(_ checkpoint: GitCheckpoint) throws {
+        let raw = try run(["ls-files", "--others", "--exclude-standard", "-z"]).stdout
+        let current = raw.split(separator: "\0").map(String.init).filter { !$0.isEmpty }
+        let preExisting = Set(checkpoint.untrackedRelativePaths)
+        let agentAdded = current.filter { !preExisting.contains($0) }
+        guard !agentAdded.isEmpty else { return }
+        // `-fd` descends into any directory the agent created; the explicit
+        // pathspec keeps the removal off the pre-existing untracked set.
+        try run(["clean", "-fd", "--"] + agentAdded)
+        pruneEmptyAgentDirectories(agentAdded)
+    }
+
+    /// After removing agent-added files, drop any now-EMPTY directories the agent
+    /// created so a reverted tree carries no stray empty dirs (parity with the old
+    /// blanket `clean -fd`). Walks each agent-added path's ancestors bottom-up,
+    /// removing a directory ONLY while it is genuinely empty — so a dir still holding
+    /// the user's pre-existing untracked work is never touched, and `restoreUntracked`
+    /// recreates any dir it needs afterward. Best-effort: an empty dir is cosmetic,
+    /// never data loss, so failures are ignored.
+    nonisolated private func pruneEmptyAgentDirectories(_ agentAdded: [String]) {
+        let fm = FileManager.default
+        for rel in agentAdded {
+            var dir = (rel as NSString).deletingLastPathComponent
+            while !dir.isEmpty {
+                let abs = projectURL.appendingPathComponent(dir)
+                guard let contents = try? fm.contentsOfDirectory(atPath: abs.path),
+                      contents.isEmpty else { break }
+                try? fm.removeItem(at: abs)
+                dir = (dir as NSString).deletingLastPathComponent
+            }
+        }
     }
 
     // MARK: Revert verification
@@ -497,19 +572,34 @@ struct GitCheckpointService: Sendable {
 
     nonisolated private func restoreUntracked(_ checkpoint: GitCheckpoint) throws {
         guard let dir = checkpoint.untrackedSnapshotDir else { return }
+        let fm = FileManager.default
         do {
             for rel in checkpoint.untrackedRelativePaths {
                 let src = dir.appendingPathComponent(rel)
                 let dst = projectURL.appendingPathComponent(rel)
-                guard FileManager.default.fileExists(atPath: src.path) else { continue }
-                try FileManager.default.createDirectory(
+                guard fm.fileExists(atPath: src.path) else { continue }
+                try fm.createDirectory(
                     at: dst.deletingLastPathComponent(), withIntermediateDirectories: true
                 )
-                // `git clean` already removed it; copy the saved original back.
-                if FileManager.default.fileExists(atPath: dst.path) {
-                    try FileManager.default.removeItem(at: dst)
+                // ATOMIC per-file restore: copy the saved original to a temp sibling,
+                // then swap it into place. A plain remove-then-copy had a gap — if
+                // the copy threw, the destination was already deleted, briefly losing
+                // a pre-existing untracked file (recoverable only because the snapshot
+                // is retained). Copying first, then atomically replacing, means a
+                // mid-restore failure leaves the destination exactly as it was.
+                let tmp = dst.deletingLastPathComponent()
+                    .appendingPathComponent(".zerro-restore-\(UUID().uuidString)-\(dst.lastPathComponent)")
+                do {
+                    try fm.copyItem(at: src, to: tmp)
+                } catch {
+                    try? fm.removeItem(at: tmp)
+                    throw error
                 }
-                try FileManager.default.copyItem(at: src, to: dst)
+                if fm.fileExists(atPath: dst.path) {
+                    _ = try fm.replaceItemAt(dst, withItemAt: tmp)
+                } else {
+                    try fm.moveItem(at: tmp, to: dst)
+                }
             }
         } catch {
             throw GitCheckpointError.fileOperationFailed("restore untracked: \(error.localizedDescription)")

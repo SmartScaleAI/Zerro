@@ -226,6 +226,103 @@ final class GitCheckpointTests: XCTestCase {
                        "a leftover untracked file must NOT verify as restored")
     }
 
+    // MARK: - Crash-safe revert (G-01)
+
+    /// G-01 crash-safety: if the untracked snapshot is gone before a revert (e.g. a
+    /// reboot cleared $TMPDIR), the revert must ABORT before any destructive step —
+    /// it must NOT `clean` away the user's pre-existing untracked work it can no
+    /// longer restore. The old blanket `clean -fd` → restore order deleted those
+    /// untracked files and the restore then silently skipped them (gone for good).
+    func testRevertWithMissingSnapshotAbortsWithoutDeletingUntracked() throws {
+        try initRepo()
+        write("tracked.txt", "v1\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        write("tracked.txt", "v1-dirty\n")          // dirty tracked
+        write("user-untracked.txt", "precious\n")    // pre-existing untracked
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        let snapshot = try XCTUnwrap(checkpoint.untrackedSnapshotDir)
+
+        // The agent edits, then the snapshot dir is lost (reboot cleared $TMPDIR).
+        write("tracked.txt", "agent-edit\n")
+        write("agent-new.txt", "added\n")
+        try FileManager.default.removeItem(at: snapshot)
+
+        XCTAssertThrowsError(try service.revert(checkpoint),
+                             "a missing untracked snapshot must abort the revert")
+
+        // The user's pre-existing untracked file was NOT deleted — fully recoverable.
+        XCTAssertTrue(exists("user-untracked.txt"),
+                      "a failed revert must NOT delete the user's pre-existing untracked work")
+        XCTAssertEqual(read("user-untracked.txt"), "precious\n")
+        // Nothing was reverted, so it does not verify as restored — the caller keeps
+        // the checkpoint and offers a retry.
+        XCTAssertFalse(service.isRestored(to: checkpoint))
+    }
+
+    /// G-01: `clean` is scoped to ONLY the files the agent added — the user's
+    /// pre-existing untracked files are never a clean target. Even when the restore
+    /// step can't read its snapshot (forced here by making the saved copy
+    /// unreadable, so it throws AFTER the clean), the pre-existing untracked file is
+    /// still on disk because it was never deleted (scoped clean + atomic restore).
+    /// Skipped as root, where the permission bits don't apply.
+    func testRevertCleanNeverTargetsPreExistingUntracked() throws {
+        try XCTSkipIf(getuid() == 0, "permission-based failure injection needs a non-root user")
+        try initRepo()
+        write("tracked.txt", "v1\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        write("tracked.txt", "v1-dirty\n")
+        write("user-untracked.txt", "precious\n")    // pre-existing untracked
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+        let snapshot = try XCTUnwrap(checkpoint.untrackedSnapshotDir)
+
+        // Agent modifies the pre-existing untracked file and adds one of its own.
+        write("user-untracked.txt", "agent-mangled\n")
+        write("agent-new.txt", "added\n")
+
+        // Make the saved copy unreadable so restoreUntracked throws mid-revert
+        // (AFTER the scoped clean) — the crash we're hardening against.
+        let savedCopy = snapshot.appendingPathComponent("user-untracked.txt")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: savedCopy.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: savedCopy.path) }
+
+        XCTAssertThrowsError(try service.revert(checkpoint))
+
+        // The agent-added file WAS cleaned (the scoped clean ran)…
+        XCTAssertFalse(exists("agent-new.txt"), "the scoped clean removed the agent-added file")
+        // …but the user's pre-existing untracked file is STILL ON DISK — the atomic
+        // restore never deleted it and the clean never targeted it. No data loss.
+        XCTAssertTrue(exists("user-untracked.txt"),
+                      "a restore failure must NOT delete the user's pre-existing untracked work")
+    }
+
+    /// G-01: a now-empty directory the agent created is pruned on revert, matching
+    /// the old blanket `clean -fd`'s directory removal (the scoped clean removes the
+    /// file; the prune drops the empty parent).
+    func testRevertPrunesEmptyAgentCreatedDirectory() throws {
+        try initRepo()
+        write("keep.txt", "k\n")
+        git("add", "-A")
+        git("commit", "-m", "baseline")
+        backdate("keep.txt")
+
+        let service = try GitCheckpointService(projectURL: repo)
+        let checkpoint = try service.checkpoint()
+
+        // Agent creates a file inside a brand-new directory.
+        write("agentdir/created.ts", "x\n")
+        try service.revert(checkpoint)
+
+        XCTAssertFalse(exists("agentdir/created.ts"), "agent file removed")
+        XCTAssertFalse(exists("agentdir"), "the now-empty agent-created directory is pruned")
+        XCTAssertTrue(service.isRestored(to: checkpoint))
+    }
+
     // MARK: - diffStat
 
     func testDiffStatCountsTrackedChanges() throws {

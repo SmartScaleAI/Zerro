@@ -276,6 +276,42 @@ final class DevRecoveryTests: XCTestCase {
         XCTAssertNil(app.pendingDevRecovery)
     }
 
+    // MARK: - G-01: a recovery Undo whose revert FAILS keeps the marker for retry
+
+    /// The cross-launch analogue of the cancel launch-blocker. A recovery Undo whose
+    /// revert does NOT verify-restore must KEEP the snapshot + marker and RE-PRESENT
+    /// the offer (so Undo is retryable) — never discard the only copy of the user's
+    /// pre-existing untracked work and settle to idle.
+    func testRecoveryUndoFailureKeepsMarkerAndReoffers() async throws {
+        let (repo, checkpoint) = try makeDirtyCheckpoint()
+        // Agent-like edit so the diff vs the checkpoint is non-empty → a valid offer.
+        write(repo, "tracked.txt", "agent-edit\n")
+        let snapshot = try XCTUnwrap(checkpoint.untrackedSnapshotDir)
+
+        let app = makeApp(savingMarker: marker(checkpoint, repo: repo))
+        let offered = await app.recoverInterruptedDevCheckpointIfAny()
+        XCTAssertTrue(offered)
+
+        // The snapshot is lost AFTER the offer (e.g. a tmp sweep) → the revert's
+        // crash-safety pre-flight aborts before any destructive step.
+        try FileManager.default.removeItem(at: snapshot)
+
+        app.resolveDevRecovery(undo: true)
+        // Undo passes through .devReverting, then — on the failed restore —
+        // RE-PRESENTS the offer rather than settling to idle.
+        await settle { app.state == .confirmingDevRecovery }
+
+        XCTAssertEqual(app.state, .confirmingDevRecovery, "a failed Undo must re-present the offer, not idle")
+        XCTAssertTrue(app.devRecoveryRevertFailed, "the re-presented offer flags the failed restore")
+        XCTAssertNotNil(app.pendingDevRecovery, "the offer stays live so Undo can be retried")
+        XCTAssertNotNil(app.devRecoveryStore.load(), "the marker must SURVIVE a failed Undo")
+        XCTAssertEqual(read(repo, "untracked.txt"), "u1\n",
+                       "the user's pre-existing untracked file must not be lost")
+        // The detail copy now signals the failed restore.
+        XCTAssertTrue(app.devRecoveryDetail.contains("try Undo again"),
+                      "the re-presented offer copy reflects the failed restore: \(app.devRecoveryDetail)")
+    }
+
     func testResolveIsNoOpOutsideConfirmingDevRecovery() {
         let app = AppState()
         app.devRecoveryStore = DevRecoveryStore(fileURL: makeTempFile())

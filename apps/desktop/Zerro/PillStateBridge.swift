@@ -171,6 +171,12 @@ extension AppState {
     /// somehow absent.
     var devRecoveryDetail: String {
         guard let pending = pendingDevRecovery else { return "Undo the last change?" }
+        // G-01: a prior Undo whose revert didn't fully restore is re-presented here
+        // (the marker + snapshot are retained so it stays retryable) — say so rather
+        // than silently re-showing the original offer copy.
+        if devRecoveryRevertFailed {
+            return "Couldn\u{2019}t fully restore your files \u{2014} try Undo again."
+        }
         let stat = pending.diffStat
         let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
         let lead = pending.agentName ?? "The agent"

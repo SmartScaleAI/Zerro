@@ -619,8 +619,9 @@ final class AppState {
     /// have been edited. A cancel BEFORE this (e.g. at the review gate) skips the
     /// revert entirely: the agent never touched the tree, so reverting would
     /// needlessly remove + re-copy the user's untracked files (and risk a restore
-    /// failure).
-    @ObservationIgnored private var devAgentStarted = false
+    /// failure). Internal (not private) so the G-01 teardown-safety tests can drive
+    /// the agent-started cancel path directly, like the sibling `devCheckpoint`.
+    @ObservationIgnored var devAgentStarted = false
 
     // MARK: Dev Mode (Phase 2, M5/M6) — resolved deixis anchors
 
@@ -789,6 +790,15 @@ final class AppState {
     /// `recoverInterruptedDevCheckpointIfAny` once validation passes; consumed by
     /// `resolveDevRecovery(undo:)` (Undo or Keep). Nil otherwise.
     @ObservationIgnored var pendingDevRecovery: PendingDevRecovery?
+
+    /// True when a cross-launch recovery Undo's revert did NOT verify-restore, so
+    /// the RE-PRESENTED offer (G-01: we keep the marker/snapshot and re-offer
+    /// rather than settling to idle) tells the user the restore failed instead of
+    /// silently re-showing the original copy. Set in the `resolveDevRecovery(undo:)`
+    /// failure branch; cleared on a successful Undo, a Keep, a fresh offer, or any
+    /// teardown. Read by `devRecoveryDetail` — a state-driven render, so it needn't
+    /// be independently observed.
+    @ObservationIgnored var devRecoveryRevertFailed = false
 
     // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
     // (same lifetime + weak-ref contract as `entitlements`). The proxy
@@ -1343,6 +1353,7 @@ final class AppState {
         // the checkpoint it points at.
         devRecoveryStore.clear()
         pendingDevRecovery = nil
+        devRecoveryRevertFailed = false
         devCancelInFlight = false
         devAgentStarted = false
         devDispatchStartTime = nil
@@ -1858,6 +1869,7 @@ final class AppState {
             diffStat: diff,
             agentName: marker.agentName
         )
+        devRecoveryRevertFailed = false // a fresh offer, not a failed-revert re-present
         state = .confirmingDevRecovery
         Log.dev.notice("offering interrupted dev-checkpoint recovery — files: \(diff.filesChanged, privacy: .public)")
         Analytics.capture("dev_recovery_offered", [
@@ -1888,17 +1900,20 @@ final class AppState {
     /// Resolve the cross-launch recovery offer. No-op outside
     /// `.confirmingDevRecovery`. `undo == true` restores the working tree to the
     /// checkpoint via the existing `GitCheckpointService.revert`; `false` (Keep,
-    /// and any dismissal the UI routes here) retains the agent's edits. EITHER
-    /// outcome clears the marker + discards the snapshot — once the user has
-    /// engaged, the marker never survives on disk.
+    /// and any dismissal the UI routes here) retains the agent's edits. The marker
+    /// + snapshot are torn down ONLY after a VERIFIED-successful restore (or an
+    /// explicit Keep) — a failed Undo keeps them and re-presents the offer so the
+    /// user can retry (G-01: never discard the only copy of pre-existing untracked
+    /// work on a revert that didn't actually restore).
     func resolveDevRecovery(undo: Bool) {
         guard case .confirmingDevRecovery = state, let pending = pendingDevRecovery else { return }
-        pendingDevRecovery = nil
         let checkpoint = pending.checkpoint
         let service = pending.service
 
         guard undo else {
             // Keep — retain the edits, drop the now-unneeded snapshot + marker.
+            pendingDevRecovery = nil
+            devRecoveryRevertFailed = false
             service.discardSnapshot(checkpoint)
             devRecoveryStore.clear()
             state = .idle
@@ -1907,31 +1922,36 @@ final class AppState {
             return
         }
 
-        // Undo — restore the tree off-main (it shells out to git), then clear.
+        // Undo — restore the tree off-main, then VERIFY it fully restored (the
+        // in-session pattern: `performRevert` reverts AND confirms `isRestored`,
+        // not merely that no git op threw) before tearing anything down.
         state = .devReverting
-        Task { @MainActor [weak self] in
-            let ok = await Task.detached {
-                do { try service.revert(checkpoint); return true } catch { return false }
-            }.value
+        devDispatchTask = Task { @MainActor [weak self] in
+            let restored = await self?.performRevert(checkpoint, service: service) ?? false
             guard let self else { return }
-            // The checkpoint won't get healthier on retry, so clear the marker +
-            // snapshot regardless of revert success — a stale marker re-offering a
-            // broken checkpoint every launch would be worse than keeping the edits.
-            service.discardSnapshot(checkpoint)
-            self.devRecoveryStore.clear()
-            if ok {
+            if restored {
+                // DATA-SAFETY (G-01): ONLY now — after a verified restore — is it
+                // safe to discard the snapshot + clear the marker.
+                self.pendingDevRecovery = nil
+                self.devRecoveryRevertFailed = false
+                service.discardSnapshot(checkpoint)
+                self.devRecoveryStore.clear()
+                self.state = .idle
                 Log.dev.notice("dev-checkpoint recovery undone — working tree restored")
                 Analytics.capture("dev_recovery_undone")
             } else {
-                // Non-blocking: there's no live checkpoint to retry against and the
-                // user's edits are still on disk (the revertFailed copy — "check
-                // your working tree" — names the recourse), so settle to idle
-                // rather than parking on a dead-end failure card. The log +
-                // analytics record the failure.
-                Log.dev.error("dev-checkpoint recovery revert failed — \(DevDispatchFailure.revertFailed.userMessage, privacy: .public)")
+                // The revert did NOT verify-restore. KEEP the snapshot + marker
+                // (the only copy of the user's pre-existing untracked work) and
+                // RE-PRESENT the recovery offer so Undo can be retried — never
+                // settle to idle, which would strand the agent's partial edits
+                // with no recoverable undo. Mirrors the in-session failure branch
+                // (keep the checkpoint, surface a retryable revert).
+                self.devRecoveryRevertFailed = true
+                self.pendingDevRecovery = pending
+                self.state = .confirmingDevRecovery
+                Log.dev.error("dev-checkpoint recovery revert failed — keeping the checkpoint for retry (\(DevDispatchFailure.revertFailed.userMessage, privacy: .public))")
                 Analytics.capture("dev_recovery_undo_failed")
             }
-            self.state = .idle
         }
     }
 
@@ -3511,11 +3531,29 @@ final class AppState {
             // risk a restore failure). The snapshot is still discarded below.
             if self.devAgentStarted, let checkpoint = self.devCheckpoint, let service = self.devCheckpointService {
                 let restored = await self.performRevert(checkpoint, service: service)
+                // The cancel's revert attempt is complete; release the in-flight
+                // flag so the resulting resting card (idle on success, .devFailed
+                // on failure) owns the state cleanly.
+                self.devCancelInFlight = false
                 Log.dev.notice("Dev dispatch cancelled — auto-revert restored: \(restored, privacy: .public)")
+                guard restored else {
+                    // DATA-SAFETY (G-01): the auto-revert did NOT verify-restore.
+                    // Tearing down here (resetTransientRecordingState → idle) would
+                    // discard the untracked snapshot + recovery marker — the only
+                    // copy of the user's pre-existing untracked work — and strand
+                    // the agent's partial edits with no undo. Instead KEEP the
+                    // checkpoint/snapshot/marker and surface the retryable
+                    // .revertFailed card (its Revert button re-runs the verified
+                    // revert via revertDevDispatch). Mirrors the in-session
+                    // revertDevDispatch failure branch — never idle on a failed revert.
+                    self.devFailure = .revertFailed
+                    self.state = .devFailed
+                    return
+                }
             } else {
+                self.devCancelInFlight = false
                 Log.dev.notice("Dev dispatch cancelled before the agent ran — no revert needed")
             }
-            self.devCancelInFlight = false
             self.resetTransientRecordingState() // discards the snapshot + clears dev state
             self.state = .idle
         }
