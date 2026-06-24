@@ -687,3 +687,130 @@ The service role (used inside the functions) bypasses RLS and works normally.
 - **`trial_codes` / expired-row cleanup** → Phase G. Expired code rows are burned
   on the next verify attempt but there's no periodic sweep; a cron/TTL job is a
   Phase G nicety (the rows are tiny + harmless).
+
+---
+
+## Release DMG upload (L-01) — least-privilege swap (owner action)
+
+**Status:** NOT yet applied. The release workflow
+(`.github/workflows/release-app.yml` → "Upload notarized dmg to Supabase
+Storage") still authenticates the DMG upsert with **`SUPABASE_SERVICE_ROLE_KEY`**
+(full backend access, bypasses RLS). That key is wildly over-privileged for what
+the step does: upsert exactly one object, `downloads/Zerro.dmg`.
+
+**Why it can't just be downgraded in CI:** the `downloads` bucket has **zero RLS
+write policies**, so `service_role` (which bypasses RLS) is currently the *only*
+credential that can write to it. There is also no Supabase API key that is
+*scoped to a single bucket* — the new `sb_secret_…` keys are full-access, same
+blast radius as `service_role`. So a genuine least-privilege swap **requires a
+Supabase-side change**. Two clean options; **(A) is recommended.**
+
+### Option A — edge-function-minted signed upload URL (recommended)
+
+The service-role key never touches CI. A tiny function mints a **one-time,
+path-scoped, ~2-hour** `createSignedUploadUrl` for `downloads/Zerro.dmg`; CI
+PUTs the DMG straight to that URL holding **no Supabase key** — only a narrow
+`RELEASE_UPLOAD_SECRET` whose entire power is "ask for an upload token for that
+one path." This matches the project's existing `verify_jwt=false` +
+own-shared-secret pattern (`feedback`, `trial-start`).
+
+1. **Add the function** `supabase/functions/release-upload-url/index.ts`:
+
+```ts
+// =============================================================================
+// release-upload-url — mints a one-time, path-scoped signed upload URL for the
+// release DMG so CI never holds the service-role key (hardening L-01).
+// verify_jwt=false at the gateway; gated here by a constant-time compare of
+// the x-release-secret header against RELEASE_UPLOAD_SECRET. The service-role
+// key lives ONLY in Edge secrets (auto-injected), never in GitHub Actions.
+// =============================================================================
+import { requireEnv } from "../_shared/env.ts";
+import { serviceClient } from "../_shared/db.ts";
+import { handlePreflight, json } from "../_shared/http.ts";
+
+const OBJECT_PATH = "Zerro.dmg"; // within the `downloads` bucket
+
+// Constant-time string compare so a wrong secret can't be timed out byte-by-byte.
+function timingSafeEqual(a: string, b: string): boolean {
+  const ab = new TextEncoder().encode(a);
+  const bb = new TextEncoder().encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+Deno.serve(async (req: Request) => {
+  const preflight = handlePreflight(req);
+  if (preflight) return preflight;
+  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+  const expected = requireEnv("RELEASE_UPLOAD_SECRET");
+  const got = req.headers.get("x-release-secret") ?? "";
+  if (!timingSafeEqual(got, expected)) return json({ error: "unauthorized" }, 401);
+
+  const { data, error } = await serviceClient()
+    .storage.from("downloads")
+    .createSignedUploadUrl(OBJECT_PATH, { upsert: true });
+  if (error || !data) return json({ error: "mint_failed" }, 502);
+
+  // data.signedUrl is the relative path incl. ?token=… ; the token IS the auth,
+  // so the caller needs no key. Never logged.
+  return json({ path: data.path, token: data.token, signedUrl: data.signedUrl });
+});
+```
+
+2. **Register it `verify_jwt=false`** in `supabase/config.toml` alongside the
+   others, then deploy:
+   ```bash
+   supabase functions deploy release-upload-url --no-verify-jwt
+   ```
+3. **Set the CI-only secret** (Edge side) and add the SAME value as a GitHub
+   Actions repo secret named `RELEASE_UPLOAD_SECRET`:
+   ```bash
+   supabase secrets set RELEASE_UPLOAD_SECRET="$(openssl rand -hex 32)"
+   ```
+4. **Swap the workflow step** — replace the service-role `curl` with (uses the
+   public project URL + the new secret; **no** `SUPABASE_SERVICE_ROLE_KEY`):
+   ```yaml
+   - name: Upload notarized dmg to Supabase Storage
+     env:
+       SUPABASE_FUNCTIONS_URL: https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1
+       SUPABASE_URL: https://wjxqmurgwyxwkezncxke.supabase.co
+       RELEASE_UPLOAD_SECRET: ${{ secrets.RELEASE_UPLOAD_SECRET }}
+     run: |
+       set -euo pipefail   # never `set -x` — would echo the secret
+       SIGNED_URL="$(curl --fail-with-body -sS -X POST \
+         "$SUPABASE_FUNCTIONS_URL/release-upload-url" \
+         -H "x-release-secret: $RELEASE_UPLOAD_SECRET" \
+         | python3 -c 'import sys,json; print(json.load(sys.stdin)["signedUrl"])')"
+       # Token is in SIGNED_URL — no Authorization header / no Supabase key here.
+       curl --fail-with-body -X PUT \
+         "${SUPABASE_URL}/storage/v1${SIGNED_URL}" \
+         -H "Content-Type: application/x-apple-diskimage" \
+         -H "x-upsert: true" \
+         --data-binary @"dist/${APP_NAME}.dmg"
+   ```
+   > Confirm the signed-URL PUT shape on the first run — if it 4xxs, mirror what
+   > storage-js `uploadToSignedUrl` sends (it targets
+   > `…/storage/v1/object/upload/sign/downloads/Zerro.dmg?token=…`). The next
+   > release run is the real test of this whole swap.
+5. **Rotate `SUPABASE_SERVICE_ROLE_KEY`** (Dashboard → Project Settings → API)
+   and delete the GitHub Actions secret once the new path is proven — it has
+   been resident in CI and is no longer needed there.
+
+### Option B — RLS policy + a scoped JWT (fallback, no new function)
+
+If you'd rather not add a function: write a narrow RLS policy on
+`storage.objects` permitting only `INSERT`/`UPDATE` on `bucket_id='downloads' AND
+name='Zerro.dmg'` for a dedicated role/claim, mint a long-lived HS256 JWT signed
+with the project JWT secret carrying that claim, and store it as the CI secret.
+A leaked token can then only upsert that one object. **Why A is preferred:** the
+token here is long-lived and can upload directly, whereas A's token is single-use
++ short-lived + only obtainable by presenting the gate secret. B also couples to
+the legacy symmetric JWT secret.
+
+**Until one of these ships:** the workflow keeps the service-role upload but it
+is **flagged in-file** (not silent), the key is a registered GitHub secret
+(auto-masked) and is never echoed (no `set -x`, no `curl -v`), and rotation is
+recommended above.
