@@ -47,8 +47,8 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 5. ✅ **E-02 + K-08** reconcile credits→30 + refresh `llms.txt` (decision: 30; secret already 30) — applied + verified (stale values gone, new facts present); Vercel + app-build deploy pending
 6. ✅ **K-03** remove dead `/auth` page (page + layout + 3 auth-only UI components + robots ref; build clean, zero dangling links) — Vercel deploy pending
 7. ✅ **K-04** finish security headers — HSTS + X-Content-Type-Options + X-Frame-Options + report-only CSP added (Referrer-Policy from K-01 preserved); Vercel deploy pending. Follow-up: flip CSP report-only→enforce after a clean prod console check.
-8. **L-01/02/03** CI supply-chain (least-priv upload token, pin Sparkle tarball + posthog-cli, pin Actions to SHA)
-9. **L-09** verify EdDSA key-pair (manual)
+8. ✅ **L-02/L-03 done** (Sparkle SHA-256 gate + posthog-cli@0.7.30 + Actions SHA-pinned, all verified); **L-01** = no clean swap exists → documented + runbook (decision: accept for launch + Option A post-launch)
+9. ⏳ **L-09** verify EdDSA key-pair (manual/owner) — public key confirmed structurally valid (32-byte Ed25519); match-to-CI-private-key still to be verified via a staging "Check for Updates" (or `generate_keys -p` vs Info.plist `SUPublicEDKey`)
 Plus: deploy the `affiliate` edge function if used (currently undeployed).
 
 ### Decisions to make
@@ -212,15 +212,15 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 
 ### L — Build, release, signing & CI/CD ✅ reviewed
 **Verdict:** Release free of DEBUG hatches (E-11 resolved). Signing/notarization/EdDSA-publish chain tamper-resistant, no CI secret leak.
-- **L-01** Security · 🟡 **(hardening #8)** — service-role key used for DMG Storage upload (over-privileged). Least-priv upload token.
-- **L-02** Supply-chain · 🟡 **(hardening #8)** — Sparkle tarball fetched without integrity check yet receives the EdDSA private key on stdin; `@posthog/cli` unpinned. Pin by SHA-256.
-- **L-03** Supply-chain · 🟡 **(hardening #8)** — third-party Actions pinned to floating tags, not SHAs.
+- **L-01** Security · 🟠 documented (decision pending) — service-role key for the DMG Storage upload (over-privileged). **No clean least-priv swap exists** without a Supabase-side change (downloads bucket has no scoped key; `sb_secret` keys are full-access; service_role is the only writer — no RLS write policies). Kept upload working; confirmed key never logged (no `set -x`/`curl -v`; masked GitHub secret); documented inline + runbook (`README-backend.md`) with **Option A** (signed-upload-URL edge function → CI holds no Supabase key) + Option B (RLS + scoped JWT). **Decision: accept residual for launch + do Option A post-launch** (recommended) + rotate the service-role key periodically.
+- **L-02** Supply-chain · ✅ fixed — Sparkle tarball now SHA-256-verified (`2.9.2`, hash dual-sourced vs GitHub's published digest) **before** `generate_appcast` gets the EdDSA key; `@posthog/cli` pinned `@0.7.30`. Real test = next release run.
+- **L-03** Supply-chain · ✅ fixed — `actions/checkout`→`34e1148…` (v4.3.1) and `softprops/action-gh-release`→`3bb1273…` (v2.6.2), SHAs verified via `git ls-remote` (zero behavior change). 
 - **L-04** Reliability · 🟡 — manual backend deploy, no CI gate, ordering-sensitive, no rollback (with A-02).
 - **L-05** Reliability · 🟡 — deploy runbook lists 5 of 9 edge functions (drift).
 - **L-06** Reliability · 🟡 — `cut-release.sh` emits `v*` tags the workflow no longer triggers on.
 - **L-07** Distribution/Reliability · 🟡 — mutable single `Zerro.dmg` URL → no retention + release-window signature race. Versioned object name.
 - **L-08** Code quality · 🟡 — stale release docs (tags, workflow filename, two-repo topology). *(Also: the notarize step's error-handler fetches a STALE prior submission log on a submit-403, masking the real error — fix to show the real failure.)*
-- **L-09** Distribution · ⚪ confirm **(hardening #9)** — verify shipped `SUPublicEDKey` ↔ CI `SPARKLE_PRIVATE_KEY` (mismatch silently breaks auto-update for all users). Staging "Check for Updates".
+- **L-09** Distribution · ⏳ owner-verify — shipped `SUPublicEDKey` (`IV0J9TIWJpe/…`, confirmed 32-byte Ed25519) ↔ CI `SPARKLE_PRIVATE_KEY` must be a pair or auto-update silently breaks for all users. Verify via staging "Check for Updates" (definitive) or `generate_keys -p` vs Info.plist. Owner/manual — needs the private key + a build.
 
 ### X — Cross-cutting
 - **X-01** Cost/Abuse · ✅ deployed (B-05 ops cap pending) — see launch-blockers.
