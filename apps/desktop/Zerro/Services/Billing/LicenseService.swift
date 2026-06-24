@@ -49,6 +49,7 @@
 //  nonisolated and trip the project's MainActor-default isolation.
 //
 
+import AppKit
 import Foundation
 import os
 
@@ -90,6 +91,14 @@ enum LicenseError: Error, Equatable {
     /// the expected shape. Treated as inconclusive (never de-activates).
     case malformedResponse
 
+    /// The activation would have REPLACED a different license already on this
+    /// device, and the user declined the "Replace your current license?"
+    /// confirmation (E-01). Thrown BEFORE any network call or Keychain write, so
+    /// the existing license is left fully intact. The UI treats this as a quiet
+    /// no-op (return to idle), NOT a failed activation — so it never surfaces an
+    /// error pill and never emits `purchase_failed` funnel analytics.
+    case replaceCancelled
+
     /// User-facing, non-punitive copy for each failure. Mirrors
     /// `RecordingFailureReason.userMessage`'s flat single-line style.
     var userFacingMessage: String {
@@ -106,6 +115,8 @@ enum LicenseError: Error, Equatable {
             return "Couldn\u{2019}t reach the licensing server \u{2014} check your connection and try again."
         case .malformedResponse:
             return "Something went wrong activating your license \u{2014} please try again."
+        case .replaceCancelled:
+            return "Kept your current license \u{2014} activation cancelled."
         }
     }
 }
@@ -260,6 +271,15 @@ final class LicenseService {
     /// tests assert on a fixed label; production derives it from the host.
     private let instanceNameProvider: () -> String
 
+    /// Asks the user to confirm REPLACING a different license already on this
+    /// device (E-01). Returns `true` to proceed with the overwrite, `false` to
+    /// abort (activation then throws `.replaceCancelled` before touching the
+    /// network or the Keychain). Production presents a modal NSAlert; tests inject
+    /// a deterministic answer so they never block on UI. Consulted ONLY when the
+    /// incoming key differs from the one on file — same-key and no-current-license
+    /// activations never call it (they stay frictionless).
+    private let confirmReplace: () async -> Bool
+
     // MARK: - Init
 
     /// `nil` dependency arguments resolve to the real Keychain slots /
@@ -272,7 +292,8 @@ final class LicenseService {
         licenseCreatedAtSlot: KeychainSlot? = nil,
         transport: LicenseTransport? = nil,
         clock: @escaping () -> Date = { Date() },
-        instanceNameProvider: (() -> String)? = nil
+        instanceNameProvider: (() -> String)? = nil,
+        confirmReplace: (() async -> Bool)? = nil
     ) {
         self.licenseKeySlot = licenseKeySlot ?? KeychainStore.byokLicenseKey
         self.instanceIDSlot = instanceIDSlot ?? KeychainStore.byokInstanceID
@@ -282,6 +303,7 @@ final class LicenseService {
         self.transport = transport ?? URLSessionLicenseTransport()
         self.clock = clock
         self.instanceNameProvider = instanceNameProvider ?? LicenseService.defaultInstanceName
+        self.confirmReplace = confirmReplace ?? { await LicenseService.presentReplaceConfirmation() }
     }
 
     // MARK: - Activate
@@ -295,6 +317,22 @@ final class LicenseService {
     func activate(licenseKey: String) async throws -> ActivationResult {
         let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw LicenseError.keyInvalid }
+
+        // E-01: never silently replace a DIFFERENT license already on this
+        // device. A present key that doesn't match the incoming one means a real
+        // (often paying) license would be clobbered — covering BOTH the
+        // checkout-return deep link and the manual paste field, which both reach
+        // here. Require an explicit user confirmation FIRST, before any network
+        // call or Keychain write. Activating the SAME key, or activating with no
+        // current license, skips this entirely and stays frictionless. A declined
+        // confirmation throws `.replaceCancelled` with the existing license fully
+        // intact (never written, never POSTed).
+        if let existing = currentLicenseKey(), existing != key {
+            guard await confirmReplace() else {
+                Log.billing.notice("license activate cancelled — user kept the current license (E-01)")
+                throw LicenseError.replaceCancelled
+            }
+        }
 
         #if DEBUG
         // Local-backend testing bypass — active ONLY when the debug build is
@@ -607,6 +645,25 @@ final class LicenseService {
         let host = Host.current().localizedName ?? "Mac"
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(instanceNameSuffixLength)
         return "\(host)-\(suffix)"
+    }
+
+    // MARK: - Replace confirmation (E-01)
+
+    /// The production "Replace your current license?" confirmation — a modal
+    /// NSAlert presented on the main thread (NSAlert is main-thread only; this
+    /// type is already `@MainActor`). Returns `true` only if the user explicitly
+    /// chooses Replace. The license key is NEVER shown (secret-handling contract);
+    /// the copy is generic. Tests inject a stub `confirmReplace`, so this never
+    /// runs headless.
+    @MainActor
+    static func presentReplaceConfirmation() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Replace your current license?"
+        alert.informativeText = "This Mac is already activated with a different license. Activating this key will replace it on this device. Your existing license stays valid \u{2014} you can re-activate it later."
+        alert.addButton(withTitle: "Replace License")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - Preview / test support

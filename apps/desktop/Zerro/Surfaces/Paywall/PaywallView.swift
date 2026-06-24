@@ -133,6 +133,15 @@ struct PaywallView: View {
     @State private var capturedTrigger: EntitlementStore.PaywallTrigger?
     @State private var didCaptureTrigger = false
 
+    /// Latched true when a checkout-return deep link delivers a key while the
+    /// user is already `.managed` (E-01). The Managed surface otherwise shows
+    /// only the top-up packs, so without this the prefilled key would be stranded
+    /// with no field to enter it. The latch persists for the window's lifetime so
+    /// the field stays mounted after `ActivateLicenseCard` consumes the one-shot
+    /// prefill flags. Only a Managed subscriber activating a DIFFERENT key (e.g.
+    /// a separately-bought BYOK license) reaches it.
+    @State private var managedActivatePending = false
+
     private var copy: PaywallCopy {
         let trigger = didCaptureTrigger ? capturedTrigger : entitlements.paywallTrigger
         return PaywallCopy.resolve(trigger: trigger, state: entitlements.state)
@@ -165,6 +174,7 @@ struct PaywallView: View {
                 capturedTrigger = entitlements.paywallTrigger
                 didCaptureTrigger = true
                 entitlements.paywallTrigger = nil
+                latchManagedActivateIfNeeded()
             }
             .onChange(of: entitlements.paywallTrigger) { _, newValue in
                 // A fresh open while the window is already on screen (the menu
@@ -175,6 +185,25 @@ struct PaywallView: View {
                 didCaptureTrigger = true
                 entitlements.paywallTrigger = nil
             }
+            // A deep-link key arriving while the (Managed) window is already open
+            // re-routes here rather than re-firing onAppear — latch then too, so
+            // the activate field appears for the Managed user (E-01).
+            .onChange(of: entitlements.prefillLicenseKey) { _, key in
+                if key != nil { latchManagedActivateIfNeeded() }
+            }
+    }
+
+    /// Latches `managedActivatePending` when a checkout-return prefill is pending
+    /// for a Managed user. Keyed strictly on `prefillLicenseKey` (the deep-link-
+    /// with-key path always sets it) — NOT `focusActivationFieldOnOpen`, which the
+    /// no-key "brand-new buyer must paste" path also sets and which, if left stale
+    /// on the long-lived store, would otherwise surface an empty activate field to
+    /// a Managed user. Safe to read the flag here: the Managed branch doesn't
+    /// mount `ActivateLicenseCard` until this latch flips, so nothing has consumed
+    /// (cleared) it yet.
+    private func latchManagedActivateIfNeeded() {
+        guard case .managed = entitlements.state, entitlements.prefillLicenseKey != nil else { return }
+        managedActivatePending = true
     }
 
     // MARK: - Main panel
@@ -204,19 +233,27 @@ struct PaywallView: View {
     // MARK: - Options
 
     /// The option stack adapts to the entitlement (the consolidation target):
-    ///   • Managed   → ONLY the two top-up pack cards (the one purchasable
-    ///                 thing left). No re-sell, no manage link, no activate
-    ///                 field — a Managed user already holds the plan and a key.
+    ///   • Managed   → the two top-up pack cards (the one purchasable thing
+    ///                 left). No re-sell, no manage link, no activate field — a
+    ///                 Managed user already holds the plan and a key — EXCEPT when
+    ///                 a checkout-return deep link delivered a different key to
+    ///                 activate (E-01), where the activate card is surfaced so the
+    ///                 key isn't stranded.
     ///   • BYOK      → a manage link only (BYOK funds locally; no credits to
     ///                 top up, no plan to upgrade to) + the activate field.
     ///   • Trial/Expired → the plan sell: Managed + BYOK side by side + activate.
     @ViewBuilder
     private var optionStack: some View {
-        // Managed is its own self-contained surface: the two top-up packs and
-        // nothing else. Return early so none of the manage/activate affordances
-        // below render for this state.
+        // Managed is its own self-contained surface: the two top-up packs (plus,
+        // only when a deep-link key is pending, the activate field). Return early
+        // so none of the manage/sell affordances below render for this state.
         if case .managed = entitlements.state {
-            TopupPacksRow()
+            VStack(spacing: VFSpacing.md) {
+                TopupPacksRow()
+                if managedActivatePending {
+                    ActivateLicenseCard(onActivated: showActivationSuccess)
+                }
+            }
         } else {
             nonManagedOptions
         }
@@ -263,25 +300,28 @@ struct PaywallView: View {
             }
 
             // One shared activation path for an already-purchased key (BYOK or
-            // subscription). On success, show the same "you're all set"
+            // subscription) — whether the user pasted it or the checkout-return
+            // deep link prefilled it. On success, show the same "you're all set"
             // confirmation the deep-link path uses — don't bare-dismiss.
             ActivateLicenseCard(
-                onActivated: showManualActivationSuccess
+                onActivated: showActivationSuccess
             )
         }
     }
 
-    /// Manual-paste activation succeeded: derive the confirmation from the
-    /// now-paid state and route through `purchaseSuccess` so the success screen
-    /// shows (mirrors the deep-link path). Defensively dismisses if there's
-    /// somehow no paid state to confirm.
-    private func showManualActivationSuccess() {
+    /// Activation succeeded: derive the confirmation from the now-paid state and
+    /// route through `purchaseSuccess` so the success screen shows. Defensively
+    /// dismisses if there's somehow no paid state to confirm. The `method` tracks
+    /// how the key arrived (`deeplink` when the checkout-return link prefilled the
+    /// field, otherwise `manual_paste`) so the funnel attribution stays accurate.
+    private func showActivationSuccess(origin: PaywallActivationModel.Origin) {
         guard let info = PurchaseSuccessInfo.fromActivatedState(entitlements.state) else {
             dismissWindow(id: PaywallScene.windowID)
             return
         }
         entitlements.purchaseSuccess = info
-        Analytics.capture("purchase_success_shown", ["method": "manual_paste", "plan": info.analyticsPlan])
+        let method = origin == .deeplink ? "deeplink" : "manual_paste"
+        Analytics.capture("purchase_success_shown", ["method": method, "plan": info.analyticsPlan])
     }
 
     /// The plan sell shows only to users who don't have a plan yet.
@@ -337,11 +377,33 @@ final class PaywallActivationModel {
         case failed(message: String, showManageDevices: Bool)
     }
 
+    /// Where the key in the field came from. Drives the `purchase_activated`
+    /// funnel analytics: a `.deeplink` key (the checkout-return link PREFILLED
+    /// it) emits `purchase_activated` on the user's explicit Activate tap, so the
+    /// purchase funnel still records the conversion — but gated on a REAL
+    /// user-initiated outcome, never on merely opening a (possibly spoofed)
+    /// `zerro://` link (E-01). A `.manualPaste` key fires only the existing
+    /// `purchase_success_shown` on success, exactly as before.
+    enum Origin: Equatable {
+        case manualPaste
+        case deeplink
+    }
+
     /// License/subscription keys aren't as sensitive as API keys, so the field
     /// is shown in plain text with a paste affordance — friendlier than a
     /// masked field.
     var licenseKey: String = ""
     var phase: Phase = .idle
+    /// Defaults to manual paste; flipped to `.deeplink` when the checkout-return
+    /// deep link prefills the field (see `ActivateLicenseCard.adoptPrefillIfPresent`).
+    var origin: Origin = .manualPaste
+
+    /// Analytics sink for the `purchase_activated` funnel event. Injectable —
+    /// mirroring `AppDelegate.CheckoutReturnEffects.capture` — so unit tests can
+    /// observe the gated emission without a live PostHog (`Analytics.capture` is
+    /// a no-op until `Analytics.start()` runs). Production forwards to the global.
+    @ObservationIgnored
+    var capture: (_ event: String, _ properties: [String: Any]) -> Void = { Analytics.capture($0, $1) }
 
     var trimmedKey: String {
         licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -355,30 +417,70 @@ final class PaywallActivationModel {
     }
 
     /// Runs activation through the shared `EntitlementStore`. On success calls
-    /// `onSuccess` (the paywall dismisses); on a `LicenseError` renders the
-    /// typed copy. No product hint — the backend probe in `activate` decides
-    /// BYOK vs Managed.
+    /// `onSuccess` (the paywall shows the confirmation); on a `LicenseError`
+    /// renders the typed copy. No product hint — the backend probe in `activate`
+    /// decides BYOK vs Managed.
+    ///
+    /// This is the SINGLE place an activation attempt the user initiated emits
+    /// `purchase_activated` (deep-link origin only — see `Origin`). The
+    /// checkout-return handler no longer fires it, so a hostile/spoofed link
+    /// can't pollute the purchase funnel (E-01).
     func activate(using entitlements: EntitlementStore, onSuccess: @escaping () -> Void) {
+        Task { @MainActor in
+            if await performActivation(using: entitlements) { onSuccess() }
+        }
+    }
+
+    /// The awaitable activation core, split out of `activate` so it's directly
+    /// unit-testable without the fire-and-forget Task. Owns the phase transitions
+    /// and the gated `purchase_activated` emission; returns `true` on success.
+    @discardableResult
+    func performActivation(using entitlements: EntitlementStore) async -> Bool {
         let key = trimmedKey
         guard !key.isEmpty else {
             phase = .failed(message: "Enter your license key to continue.", showManageDevices: false)
-            return
+            return false
         }
         phase = .activating
-        Task { @MainActor in
-            do {
-                try await entitlements.activate(licenseKey: key)
-                phase = .activated
-                onSuccess()
-            } catch let error as LicenseError {
-                phase = .failed(
-                    message: error.userFacingMessage,
-                    showManageDevices: error == .atActivationLimit
-                )
-            } catch {
-                phase = .failed(message: "Activation failed — please try again.", showManageDevices: false)
-            }
+        do {
+            try await entitlements.activate(licenseKey: key)
+            phase = .activated
+            // Resolve the product from the now-paid state (byok/managed); the
+            // outcome is real and server-confirmed, so the funnel can record it.
+            capturePurchaseOutcome("success", product: PurchaseSuccessInfo.fromActivatedState(entitlements.state)?.analyticsPlan ?? "unknown")
+            return true
+        } catch LicenseError.replaceCancelled {
+            // The user declined the "replace your current license?" prompt
+            // (E-01). Not a failure — a quiet no-op. Return to idle, show no
+            // error, and emit NOTHING (a spoofed/mistaken key must never look
+            // like a real failed purchase in the funnel).
+            phase = .idle
+            return false
+        } catch let error as LicenseError {
+            phase = .failed(
+                message: error.userFacingMessage,
+                showManageDevices: error == .atActivationLimit
+            )
+            capturePurchaseOutcome("failed", product: "unknown")
+            return false
+        } catch {
+            phase = .failed(message: "Activation failed — please try again.", showManageDevices: false)
+            capturePurchaseOutcome("failed", product: "unknown")
+            return false
         }
+    }
+
+    /// Emits `purchase_activated` for a deep-link-originated activation attempt
+    /// (the funnel's conversion event), gated so it fires ONLY on a real,
+    /// user-initiated outcome. A manual paste emits nothing here — it keeps its
+    /// existing `purchase_success_shown`-on-success behavior.
+    private func capturePurchaseOutcome(_ outcome: String, product: String) {
+        guard origin == .deeplink else { return }
+        capture("purchase_activated", [
+            "product": product,
+            "method": "deeplink",
+            "outcome": outcome
+        ])
     }
 }
 
@@ -642,8 +744,10 @@ private struct ManagePlanLink: View {
 /// via a backend probe. Self-contained so the field state lives with the card.
 private struct ActivateLicenseCard: View {
     @Environment(EntitlementStore.self) private var entitlements
-    /// Called when activation succeeds — the paywall dismisses.
-    let onActivated: () -> Void
+    /// Called when activation succeeds — the paywall shows the confirmation. The
+    /// `Origin` says whether the key was pasted or deep-link-prefilled, so the
+    /// success analytics attribute the `method` correctly.
+    let onActivated: (PaywallActivationModel.Origin) -> Void
 
     @State private var model = PaywallActivationModel()
     @State private var isEntering = false
@@ -691,14 +795,17 @@ private struct ActivateLicenseCard: View {
         Task { @MainActor in fieldFocused = true }
     }
 
-    /// Reads + clears the one-shot prefill, populating the field with the key an
-    /// automatic (deep-link) activation just failed on so the user can correct or
-    /// retry it. Demotes the phase to `.idle` so no stale pill shows over it.
+    /// Reads + clears the one-shot prefill, populating the field with the key the
+    /// checkout-return deep link delivered so the user can review it and tap
+    /// Activate (E-01 — the link never auto-activates). Marks the origin
+    /// `.deeplink` so a successful confirm still records the purchase funnel
+    /// event. Demotes the phase to `.idle` so no stale pill shows over it.
     private func adoptPrefillIfPresent() {
         guard let key = entitlements.prefillLicenseKey else { return }
         entitlements.prefillLicenseKey = nil
         isEntering = true
         model.licenseKey = key
+        model.origin = .deeplink
         model.phase = .idle
     }
 
@@ -764,7 +871,7 @@ private struct ActivateLicenseCard: View {
     }
 
     private func runActivation() {
-        model.activate(using: entitlements, onSuccess: onActivated)
+        model.activate(using: entitlements) { onActivated(model.origin) }
     }
 }
 

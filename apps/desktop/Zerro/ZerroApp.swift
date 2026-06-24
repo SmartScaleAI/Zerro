@@ -857,11 +857,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Resolves a checkout return. Two shapes:
     ///
     ///   • The link carries a `license_key` (LemonSqueezy's bounce page forwards
-    ///     the issued key): activate AUTOMATICALLY so the buyer never has to
-    ///     paste. On success refresh + surface the app + dismiss the paywall; on
-    ///     failure open the paywall with the attempted key prefilled and a mapped
-    ///     error. An already-active key/device is idempotent — a success, never
-    ///     an error.
+    ///     the issued key): do NOT activate automatically (E-01 — any page/email
+    ///     can craft such a link). Instead route the key into the activation UI
+    ///     PREFILLED + focused so the user explicitly taps Activate; the
+    ///     overwrite-a-present-license guard then lives in `LicenseService`.
+    ///     An already-active key/device is the one exception — it's idempotent
+    ///     (requires THIS device's exact active key, so it isn't spoofable) and
+    ///     shows the success confirmation without re-POSTing. No purchase
+    ///     analytics fire from this handler in either case.
     ///   • No `license_key` (a Managed top-up or an older link): keep the prior
     ///     behavior exactly — refresh, then silently surface an already-entitled
     ///     user or open the paywall focused on the activation field.
@@ -913,38 +916,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await resolveCheckoutReturnWithoutKey(entitlements: entitlements, effects: effects)
         }
 
-        let productProperty = parsed.productKind?.rawValue ?? "unknown"
-
         // Idempotency: an already-entitled user clicking the link again (or whose
         // key already activated THIS device) is a SUCCESS — don't re-POST to
-        // LemonSqueezy, which could needlessly burn a machine slot.
+        // LemonSqueezy, which could needlessly burn a machine slot. This requires
+        // THIS device's EXACT active key, so it can't be spoofed by a hostile
+        // link; it shows the confirmation without firing `purchase_activated`.
         entitlements.refresh()
         if entitlements.isActiveLicenseKey(key) {
             await finishSuccessfulActivation(entitlements: entitlements, effects: effects)
-            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "already_active"])
             Log.billing.notice("deep link: key already active — treated as success")
             return .alreadyActive
         }
 
-        do {
-            _ = try await entitlements.activate(licenseKey: key, expectedProduct: parsed.productKind)
-            await finishSuccessfulActivation(entitlements: entitlements, effects: effects)
-            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "success"])
-            Log.billing.notice("deep link: license activated automatically")
-            return .activated
-        } catch {
-            // Failure: open the paywall focused on the activation field with the
-            // attempted key prefilled so the user sees + can retry it. The card
-            // surfaces the mapped `LicenseError` copy when they re-submit; the
-            // typed reason is logged here.
-            entitlements.prefillLicenseKey = key
-            entitlements.paywallTrigger = .manage
-            entitlements.focusActivationFieldOnOpen = true
-            effects.openPaywall()
-            effects.capture("purchase_activated", ["product": productProperty, "method": "deeplink", "outcome": "failed"])
-            Log.billing.error("deep link: automatic activation failed — \(String(describing: error), privacy: .public)")
-            return .activationFailed
-        }
+        // E-01: do NOT auto-activate an externally-supplied key. Route it into the
+        // activation card PREFILLED + focused so the user explicitly taps Activate
+        // — the same confirm path a failed auto-activation already used. The
+        // "replace a present license?" guard lives in `LicenseService.activate`,
+        // and `purchase_activated` is emitted only when the user actually
+        // confirms (see `PaywallActivationModel`), never from this handler. No
+        // network call, no Keychain write, no analytics happen here.
+        entitlements.prefillLicenseKey = key
+        entitlements.paywallTrigger = .manage
+        entitlements.focusActivationFieldOnOpen = true
+        effects.openPaywall()
+        Log.billing.notice("deep link: key received — prefilled activation field for explicit confirmation")
+        return .prefilled
     }
 
     /// The no-key checkout return (a Managed top-up or an older link): refresh,

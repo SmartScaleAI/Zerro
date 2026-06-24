@@ -66,7 +66,8 @@ final class CheckoutReturnTests: XCTestCase {
     private func makeService(
         transport: LicenseTransport,
         keySlot: InMemoryKeychainSlot,
-        instanceSlot: InMemoryKeychainSlot = InMemoryKeychainSlot()
+        instanceSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
+        confirmReplace: @escaping () async -> Bool = { true }
     ) -> LicenseService {
         LicenseService(
             licenseKeySlot: keySlot,
@@ -75,7 +76,8 @@ final class CheckoutReturnTests: XCTestCase {
             licenseCreatedAtSlot: InMemoryKeychainSlot(),
             transport: transport,
             clock: { Date() },
-            instanceNameProvider: { "TestMac-DEADBEEF" }
+            instanceNameProvider: { "TestMac-DEADBEEF" },
+            confirmReplace: confirmReplace
         )
     }
 
@@ -161,16 +163,17 @@ final class CheckoutReturnTests: XCTestCase {
         XCTAssertNil(CheckoutReturn.parse(URL(string: bad)!)?.licenseKey)
     }
 
-    // MARK: - Success
+    // MARK: - Deep-link key → PREFILL + CONFIRM (E-01), never auto-activate
 
-    func testKeyActivationSucceedsEntitlesAndDismisses() async {
+    func testKeyDeepLinkPrefillsActivationFieldWithoutActivating() async {
+        // A first-time buyer's checkout-return link carries a key. E-01: the app
+        // must NOT activate it on its own — it routes the key into the activation
+        // field, prefilled + focused, and waits for the user to tap Activate.
         let transport = LicenseServiceStubTransport(responses: [activatedResponse()])
         let keySlot = InMemoryKeychainSlot()
         let service = makeService(transport: transport, keySlot: keySlot)
-        // The /session probe returns not-entitled (403) → BYOK classification.
-        let session = StubManagedTransport()
-        session.enqueue(#"{"error":"not_entitled"}"#, status: 403)
-        let store = makeStore(licenseService: service, keySlot: keySlot, sessionTransport: session)
+        let store = makeStore(licenseService: service, keySlot: keySlot)
+        XCTAssertFalse(store.isPaidEntitled) // precondition: a fresh trial user
 
         let spy = EffectsSpy()
         let outcome = await AppDelegate.resolveCheckoutReturn(
@@ -179,47 +182,52 @@ final class CheckoutReturnTests: XCTestCase {
             effects: spy.make()
         )
 
-        XCTAssertEqual(outcome, .activated)
-        XCTAssertEqual(store.state, .byok)
-        // Success now SHOWS the confirmation (opens the paywall) instead of
-        // dismissing — the user dismisses via the confirmation's button.
-        XCTAssertEqual(store.purchaseSuccess, .byok)
-        XCTAssertEqual(spy.openedPaywall, 1)
-        XCTAssertEqual(spy.dismissed, 0)
-        XCTAssertEqual(spy.capturedOutcome, "success")
-        XCTAssertEqual(spy.capturedProduct, "byok")
-        XCTAssertEqual(spy.successShown?.method, "deeplink")
-        XCTAssertEqual(spy.successShown?.plan, "byok")
-        XCTAssertNil(store.prefillLicenseKey)
-    }
-
-    // MARK: - Failure
-
-    func testKeyActivationFailureOpensPaywallWithPrefill() async {
-        let transport = LicenseServiceStubTransport(responses: [atLimitResponse()])
-        let keySlot = InMemoryKeychainSlot()
-        let service = makeService(transport: transport, keySlot: keySlot)
-        let store = makeStore(licenseService: service, keySlot: keySlot)
-
-        let spy = EffectsSpy()
-        let outcome = await AppDelegate.resolveCheckoutReturn(
-            CheckoutReturn(licenseKey: sampleKey, productKind: .managed),
-            entitlements: store,
-            effects: spy.make()
-        )
-
-        XCTAssertEqual(outcome, .activationFailed)
-        // The paywall opens focused on the activation field with the attempted
-        // key prefilled so the user can see + retry it.
+        XCTAssertEqual(outcome, .prefilled)
+        // The paywall opens focused on the activation field with the key prefilled.
         XCTAssertEqual(spy.openedPaywall, 1)
         XCTAssertEqual(store.prefillLicenseKey, sampleKey)
         XCTAssertEqual(store.paywallTrigger, .manage)
         XCTAssertTrue(store.focusActivationFieldOnOpen)
-        XCTAssertEqual(spy.broughtForward, 0)
-        XCTAssertEqual(spy.capturedOutcome, "failed")
-        XCTAssertEqual(spy.capturedProduct, "managed")
-        // A failed activation never wrote the Keychain.
+        // NOTHING was activated: no POST, no Keychain write, state unchanged.
+        XCTAssertEqual(transport.callCount, 0)
         XCTAssertEqual(keySlot.readResult(), .absent)
+        XCTAssertNil(store.purchaseSuccess)
+        if case .trial = store.state {} else { XCTFail("state must NOT change from a deep link") }
+        // CRITICAL: a spoofed link must not pollute the purchase funnel — the
+        // handler emits NO analytics at all (purchase_activated fires only when
+        // the user taps Activate; purchase_success_shown only on a real success).
+        XCTAssertTrue(spy.captures.isEmpty)
+    }
+
+    func testKeyDeepLinkNeverOverwritesAnExistingPaidLicense() async {
+        // A PAYING user (license A on file) receives a hostile/mistaken link with
+        // a DIFFERENT key B. The deep link must neither activate B nor clobber A —
+        // it only prefills B for the user to consider; A is left fully intact.
+        let existingKey = "AAAA1111-BBBB-2222-CCCC-333344445555"
+        let attackerKey = "DEAD0000-BEEF-1111-FACE-222233334444"
+        let transport = LicenseServiceStubTransport(responses: [activatedResponse()])
+        let keySlot = InMemoryKeychainSlot(existingKey)
+        let instanceSlot = InMemoryKeychainSlot("instance-A")
+        let service = makeService(transport: transport, keySlot: keySlot, instanceSlot: instanceSlot)
+        let store = makeStore(licenseService: service, keySlot: keySlot, productKind: .byok)
+        XCTAssertTrue(store.isPaidEntitled) // precondition: already paid
+
+        let spy = EffectsSpy()
+        let outcome = await AppDelegate.resolveCheckoutReturn(
+            CheckoutReturn(licenseKey: attackerKey, productKind: .byok),
+            entitlements: store,
+            effects: spy.make()
+        )
+
+        XCTAssertEqual(outcome, .prefilled)
+        XCTAssertEqual(store.prefillLicenseKey, attackerKey)
+        XCTAssertEqual(spy.openedPaywall, 1)
+        // The existing license A is untouched: no POST, Keychain still holds A,
+        // and the user is still .byok-entitled.
+        XCTAssertEqual(transport.callCount, 0)
+        XCTAssertEqual(keySlot.readResult(), .found(existingKey))
+        XCTAssertEqual(store.state, .byok)
+        XCTAssertTrue(spy.captures.isEmpty)
     }
 
     // MARK: - Idempotency (already active)
@@ -248,7 +256,11 @@ final class CheckoutReturnTests: XCTestCase {
         XCTAssertEqual(store.purchaseSuccess, .byok)
         XCTAssertEqual(spy.openedPaywall, 1)
         XCTAssertEqual(spy.dismissed, 0)
-        XCTAssertEqual(spy.capturedOutcome, "already_active")
+        // E-01: the handler no longer fires `purchase_activated` — a deep link
+        // never counts as a purchase outcome. The success SCREEN being shown is
+        // still recorded (and this branch isn't spoofable: it requires THIS
+        // device's exact active key).
+        XCTAssertNil(spy.capturedOutcome)
         XCTAssertEqual(spy.successShown?.method, "deeplink")
         XCTAssertEqual(spy.successShown?.plan, "byok")
         XCTAssertNil(store.prefillLicenseKey)
@@ -424,7 +436,7 @@ final class CheckoutReturnTests: XCTestCase {
 
         // The manual-paste card activates through the SAME store entry point,
         // then derives the confirmation from the resulting state (what
-        // `PaywallView.showManualActivationSuccess` does).
+        // `PaywallView.showActivationSuccess` does).
         try? await store.activate(licenseKey: sampleKey)
         XCTAssertEqual(store.state, .byok)
         let info = PurchaseSuccessInfo.fromActivatedState(store.state)
@@ -435,6 +447,113 @@ final class CheckoutReturnTests: XCTestCase {
         // Dismissing the confirmation clears the one-shot.
         store.purchaseSuccess = nil
         XCTAssertNil(store.purchaseSuccess)
+    }
+
+    // MARK: - PaywallActivationModel: purchase_activated gating (E-01 Property 3, positive half)
+
+    /// The Activate tap is the SINGLE place `purchase_activated` may fire — and
+    /// only for a deep-link-originated key, so the funnel records a real,
+    /// user-initiated conversion (the handler itself never emits it). Captures the
+    /// analytics through the model's injectable `capture` seam (the global
+    /// `Analytics.capture` is a no-op until `Analytics.start()` runs).
+    func testPaywallModelDeepLinkSuccessEmitsPurchaseActivated() async {
+        let transport = LicenseServiceStubTransport(responses: [activatedResponse()])
+        let keySlot = InMemoryKeychainSlot()
+        let service = makeService(transport: transport, keySlot: keySlot)
+        let session = StubManagedTransport()
+        session.enqueue(#"{"error":"not_entitled"}"#, status: 403) // → BYOK
+        let store = makeStore(licenseService: service, keySlot: keySlot, sessionTransport: session)
+
+        var captured: [(event: String, props: [String: Any])] = []
+        let model = PaywallActivationModel()
+        model.origin = .deeplink
+        model.licenseKey = sampleKey
+        model.capture = { captured.append((event: $0, props: $1)) }
+
+        let ok = await model.performActivation(using: store)
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.state, .byok)
+        XCTAssertEqual(captured.count, 1)
+        XCTAssertEqual(captured.first?.event, "purchase_activated")
+        XCTAssertEqual(captured.first?.props["outcome"] as? String, "success")
+        XCTAssertEqual(captured.first?.props["method"] as? String, "deeplink")
+        XCTAssertEqual(captured.first?.props["product"] as? String, "byok")
+    }
+
+    /// A MANUAL paste emits NO `purchase_activated` (unchanged from before — only
+    /// the view's `purchase_success_shown` fires on a manual success). Gating is
+    /// strictly on `origin == .deeplink`.
+    func testPaywallModelManualPasteSuccessEmitsNoPurchaseActivated() async {
+        let transport = LicenseServiceStubTransport(responses: [activatedResponse()])
+        let keySlot = InMemoryKeychainSlot()
+        let service = makeService(transport: transport, keySlot: keySlot)
+        let session = StubManagedTransport()
+        session.enqueue(#"{"error":"not_entitled"}"#, status: 403)
+        let store = makeStore(licenseService: service, keySlot: keySlot, sessionTransport: session)
+
+        var captured: [(event: String, props: [String: Any])] = []
+        let model = PaywallActivationModel()
+        model.origin = .manualPaste // the default; explicit for the contrast
+        model.licenseKey = sampleKey
+        model.capture = { captured.append((event: $0, props: $1)) }
+
+        let ok = await model.performActivation(using: store)
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.state, .byok)
+        XCTAssertTrue(captured.isEmpty, "a manual paste must not emit purchase_activated")
+    }
+
+    /// A deep-link activation that FAILS emits `purchase_activated` outcome:failed
+    /// (a real, user-initiated attempt that the funnel should record as a loss).
+    func testPaywallModelDeepLinkFailureEmitsFailedOutcome() async {
+        let transport = LicenseServiceStubTransport(responses: [atLimitResponse()])
+        let keySlot = InMemoryKeychainSlot()
+        let service = makeService(transport: transport, keySlot: keySlot)
+        let store = makeStore(licenseService: service, keySlot: keySlot)
+
+        var captured: [(event: String, props: [String: Any])] = []
+        let model = PaywallActivationModel()
+        model.origin = .deeplink
+        model.licenseKey = sampleKey
+        model.capture = { captured.append((event: $0, props: $1)) }
+
+        let ok = await model.performActivation(using: store)
+
+        XCTAssertFalse(ok)
+        if case .failed = model.phase {} else { XCTFail("expected a .failed phase") }
+        XCTAssertEqual(captured.count, 1)
+        XCTAssertEqual(captured.first?.event, "purchase_activated")
+        XCTAssertEqual(captured.first?.props["outcome"] as? String, "failed")
+        XCTAssertEqual(captured.first?.props["method"] as? String, "deeplink")
+    }
+
+    /// Declining the E-01 replace confirmation is a quiet no-op: phase returns to
+    /// `.idle`, NOTHING is emitted (a spoofed/mistaken key must never look like a
+    /// failed purchase), and the existing license is untouched.
+    func testPaywallModelReplaceCancelledEmitsNothingAndReturnsIdle() async {
+        let existingKey = "AAAA1111-BBBB-2222-CCCC-333344445555"
+        let attackerKey = "DEAD0000-BEEF-1111-FACE-222233334444"
+        let transport = LicenseServiceStubTransport(responses: [activatedResponse()])
+        let keySlot = InMemoryKeychainSlot(existingKey)
+        let instanceSlot = InMemoryKeychainSlot("instance-A")
+        let service = makeService(transport: transport, keySlot: keySlot, instanceSlot: instanceSlot, confirmReplace: { false })
+        let store = makeStore(licenseService: service, keySlot: keySlot, productKind: .byok)
+
+        var captured: [(event: String, props: [String: Any])] = []
+        let model = PaywallActivationModel()
+        model.origin = .deeplink
+        model.licenseKey = attackerKey
+        model.capture = { captured.append((event: $0, props: $1)) }
+
+        let ok = await model.performActivation(using: store)
+
+        XCTAssertFalse(ok)
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertTrue(captured.isEmpty, "a declined replace must emit no funnel analytics")
+        XCTAssertEqual(transport.callCount, 0)
+        XCTAssertEqual(keySlot.readResult(), .found(existingKey))
     }
 }
 

@@ -52,7 +52,8 @@ final class LicenseServiceTests: XCTestCase {
         instanceSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         lastValidatedSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         createdAtSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
-        clock: @escaping () -> Date = { Date() }
+        clock: @escaping () -> Date = { Date() },
+        confirmReplace: @escaping () async -> Bool = { true }
     ) -> LicenseService {
         LicenseService(
             licenseKeySlot: keySlot,
@@ -61,8 +62,20 @@ final class LicenseServiceTests: XCTestCase {
             licenseCreatedAtSlot: createdAtSlot,
             transport: transport,
             clock: clock,
-            instanceNameProvider: { "TestMac-DEADBEEF" }
+            instanceNameProvider: { "TestMac-DEADBEEF" },
+            confirmReplace: confirmReplace
         )
+    }
+
+    /// Records whether the "replace your current license?" confirmation was
+    /// asked, and answers with a fixed verdict — so the E-01 replace-gate tests
+    /// assert both the answer's effect AND that the gate is consulted only when
+    /// it should be (a different key on file), never on the frictionless paths.
+    private final class ConfirmReplaceSpy {
+        private(set) var asked = 0
+        let answer: Bool
+        init(answer: Bool) { self.answer = answer }
+        func confirm() -> Bool { asked += 1; return answer }
     }
 
     /// Hermetic `EntitlementStore` dependencies. The store's defaults reach
@@ -203,6 +216,142 @@ final class LicenseServiceTests: XCTestCase {
         } catch let error as LicenseError {
             XCTAssertEqual(error, .keyDisabled)
         }
+    }
+
+    // MARK: - E-01: replace-a-present-license confirmation gate
+
+    /// Covers BOTH activation entry points (the checkout-return deep link and the
+    /// manual-paste field route through here): a DIFFERENT key on file requires
+    /// an explicit confirmation before overwriting, and DECLINING keeps the old
+    /// license fully intact — no network call, no Keychain write.
+    func testReplaceDifferentKeyDeclinedKeepsOldLicenseUntouched() async {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        let keySlot = InMemoryKeychainSlot("OLD-KEY")
+        let instanceSlot = InMemoryKeychainSlot("old-instance")
+        let confirm = ConfirmReplaceSpy(answer: false)
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            confirmReplace: { confirm.confirm() }
+        )
+
+        do {
+            _ = try await service.activate(licenseKey: "NEW-KEY")
+            XCTFail("expected .replaceCancelled when the user declines the replace prompt")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .replaceCancelled)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(confirm.asked, 1, "the replace confirmation must be asked for a different key")
+        XCTAssertEqual(transport.callCount, 0, "a declined replace must NOT contact LemonSqueezy")
+        // The old license is fully intact.
+        XCTAssertEqual(keySlot.readResult(), .found("OLD-KEY"))
+        XCTAssertEqual(instanceSlot.readResult(), .found("old-instance"))
+    }
+
+    /// Confirming the replace proceeds normally: the new key + instance are
+    /// written, overwriting the old binding.
+    func testReplaceDifferentKeyConfirmedOverwrites() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        let keySlot = InMemoryKeychainSlot("OLD-KEY")
+        let instanceSlot = InMemoryKeychainSlot("old-instance")
+        let confirm = ConfirmReplaceSpy(answer: true)
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            confirmReplace: { confirm.confirm() }
+        )
+
+        let result = try await service.activate(licenseKey: "NEW-KEY")
+
+        XCTAssertEqual(confirm.asked, 1)
+        XCTAssertEqual(result.instanceID, "inst_NEW")
+        XCTAssertEqual(transport.callCount, 1)
+        XCTAssertEqual(keySlot.readResult(), .found("NEW-KEY"))
+        XCTAssertEqual(instanceSlot.readResult(), .found("inst_NEW"))
+    }
+
+    /// Re-activating the SAME key (an idempotent re-activation, e.g. a repeat
+    /// checkout-return click) stays frictionless — the replace prompt is NEVER
+    /// shown, even though a key is already on file. Trimmed comparison, since the
+    /// on-file key was stored trimmed.
+    func testReactivatingSameKeyNeverPromptsToReplace() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_SAME" } }"#), 200)]
+        let keySlot = InMemoryKeychainSlot("SAME-KEY")
+        let instanceSlot = InMemoryKeychainSlot("old-instance")
+        // answer:false would THROW if the gate were (wrongly) consulted.
+        let confirm = ConfirmReplaceSpy(answer: false)
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            confirmReplace: { confirm.confirm() }
+        )
+
+        _ = try await service.activate(licenseKey: "  SAME-KEY  ")
+
+        XCTAssertEqual(confirm.asked, 0, "the same key must never trigger the replace prompt")
+        XCTAssertEqual(transport.callCount, 1)
+        XCTAssertEqual(keySlot.readResult(), .found("SAME-KEY"))
+    }
+
+    /// A first activation (no license on file) is always frictionless — the
+    /// replace prompt is never shown.
+    func testFirstActivationWithNoCurrentLicenseNeverPrompts() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_FRESH" } }"#), 200)]
+        let keySlot = InMemoryKeychainSlot()
+        let confirm = ConfirmReplaceSpy(answer: false)
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            confirmReplace: { confirm.confirm() }
+        )
+
+        _ = try await service.activate(licenseKey: "FRESH-KEY")
+
+        XCTAssertEqual(confirm.asked, 0)
+        XCTAssertEqual(keySlot.readResult(), .found("FRESH-KEY"))
+    }
+
+    /// The manual-paste / Settings path goes through `EntitlementStore.activate`,
+    /// which must propagate `.replaceCancelled` and leave the entitlement
+    /// unchanged when the user declines (proves the gate covers that path too).
+    func testStoreActivateDifferentKeyDeclinedLeavesEntitlementIntact() async {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        let keySlot = InMemoryKeychainSlot("OLD-KEY")
+        let confirm = ConfirmReplaceSpy(answer: false)
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: InMemoryKeychainSlot("old-instance"),
+            confirmReplace: { confirm.confirm() }
+        )
+        // The present OLD-KEY license + (no product kind) computes to .byok.
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .byok, "precondition: already paid on the old key")
+
+        do {
+            try await store.activate(licenseKey: "NEW-KEY")
+            XCTFail("expected .replaceCancelled to propagate")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .replaceCancelled)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(confirm.asked, 1)
+        XCTAssertEqual(transport.callCount, 0)
+        XCTAssertEqual(keySlot.readResult(), .found("OLD-KEY"))
+        XCTAssertEqual(store.state, .byok, "the entitlement must be unchanged on a declined replace")
     }
 
     // MARK: - Validate: definitive negative clears + drops to trial

@@ -6,10 +6,12 @@
 //  outcome of resolving one. LemonSqueezy's per-product "Redirect URL after
 //  purchase" bounces the browser through getzerro.app/checkout-complete, which
 //  forwards the issued `license_key` (and a `product` hint) into the custom
-//  scheme so the app can activate automatically instead of asking the buyer to
-//  paste their key. Both query values are UNTRUSTED external input — anything
-//  can land in a URL — so the key is sanity-checked and the product is mapped
-//  through a closed enum before we ever touch the network.
+//  scheme. The app does NOT activate automatically — anyone can craft such a
+//  link (E-01), so the inbound key is routed into the activation UI PREFILLED
+//  and the user must explicitly confirm (tap Activate). Both query values are
+//  UNTRUSTED external input — anything can land in a URL — so the key is
+//  sanity-checked and the product is mapped through a closed enum before we
+//  ever touch the network.
 //
 //  Kept free of AppKit so the parsing is a pure, unit-testable function (see
 //  AppDelegate.resolveCheckoutReturn for the side-effecting resolution).
@@ -27,9 +29,11 @@ struct CheckoutReturn: Equatable {
     let licenseKey: String?
 
     /// The purchased product, mapped from the `product` hint, or `nil` when
-    /// absent/unrecognized. Forwarded to `EntitlementStore.activate` as the
-    /// `expectedProduct` fallback used only if the backend probe can't resolve
-    /// BYOK vs Managed.
+    /// absent/unrecognized. Parsed for logging/diagnostics only — since E-01 the
+    /// resolver no longer auto-activates, so it is NOT forwarded to
+    /// `EntitlementStore.activate` as an `expectedProduct` hint; the user
+    /// activates the prefilled key explicitly and the `/session` probe alone
+    /// disambiguates BYOK vs Managed (the manual-paste path never hinted either).
     let productKind: LicenseProductKind?
 
     /// Parses a checkout-return URL. Returns `nil` for any URL whose host isn't
@@ -90,11 +94,16 @@ enum CheckoutOutcome: Equatable {
     /// the activation field (a brand-new buyer must paste). No analytics.
     case openedPaywallNoKey
     /// The link's key already activates this device — treated as success
-    /// without re-POSTing. Analytics `outcome: already_active`.
+    /// without re-POSTing (idempotent re-click of a genuine purchase; not
+    /// spoofable, since it requires THIS device's exact active key). Shows the
+    /// success confirmation. NO `purchase_activated` analytics — the deep link
+    /// itself never counts as a purchase outcome (E-01).
     case alreadyActive
-    /// The link's key activated successfully. Analytics `outcome: success`.
-    case activated
-    /// Activation threw — opened the paywall with the attempted key prefilled.
-    /// Analytics `outcome: failed`.
-    case activationFailed
+    /// The link carried a (different, or first-time) key: it was routed into the
+    /// activation UI PREFILLED + focused so the user can explicitly confirm.
+    /// Nothing is activated and NO purchase analytics fire here — a hostile or
+    /// spoofed `zerro://` link can neither silently activate a key nor pollute
+    /// the purchase funnel. The real `purchase_activated` is emitted only when
+    /// the user taps Activate (E-01).
+    case prefilled
 }

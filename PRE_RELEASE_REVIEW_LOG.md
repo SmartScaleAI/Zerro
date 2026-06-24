@@ -42,7 +42,7 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 ### Pre-launch hardening list (🟡, cheap) — order
 1. ✅ **D-01** revoke anon cron RPC (migration added; deploy pending)
 2. ✅ **C-10** force RLS on `affiliate_referrals` (migration added; deploy pending) — also fixed a discovered missing `service_role` grant (**C-12**)
-3. **E-01** checkout deeplink auto-activation
+3. ✅ **E-01** checkout deeplink auto-activation (prefill+confirm; replace-confirm gate; analytics gated) — app build
 4. **H-05 / H-08** in-app privacy/redaction copy
 5. **E-02 + K-08** reconcile 40-vs-30 credits + stale `llms.txt`
 6. **K-03** remove dead `/auth` page
@@ -113,7 +113,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 
 ### E — Desktop billing & entitlement (client) ✅ reviewed
 **Verdict:** No client path spends provider money without server-validated entitlement; no secret leaks. BYOK direct-to-provider; managed body carries only a bearer token; secrets in Keychain.
-- **E-01** Security · 🟡 **(hardening #3)** — checkout deeplink `zerro://checkout-complete?license_key=…` auto-activates an attacker-supplied key with no confirmation + overwrites local license; also lets a page spoof purchase analytics. Reuse confirm path; refuse overwrite of a present paid license.
+- **E-01** Security · ✅ fixed-in-code — deeplink no longer auto-activates: prefills key + explicit Activate; `LicenseService.activate` adds a replace-confirm gate BEFORE any POST/Keychain write (covers deeplink + manual paste; decline leaves license intact); purchase analytics gated on a real user-initiated outcome; parse hardening intact. Full suite green (673). Ships in app build.
 - **E-02** Payments/UX · 🟡 **(hardening #5)** — website advertises "40 free credits", server grants 30 (also in JSON-LD; see K-08). Reconcile.
 - **E-03** Security · 🟡 — Keychain `AfterFirstUnlock` (not `…ThisDeviceOnly`). Confirmed justified; only trial slots merit ThisDeviceOnly.
 - **E-04** Reliability · 🟡 — crash-restored Dev-Mode paid-block resumes via non-dev path (degrades; no double-charge).

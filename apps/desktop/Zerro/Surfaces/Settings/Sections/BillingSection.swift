@@ -183,21 +183,35 @@ final class BillingLicenseModel {
 
     /// Activate (or re-activate) the typed key through the shared store.
     func activate(using entitlements: EntitlementStore) {
+        Task { @MainActor in await performActivation(using: entitlements) }
+    }
+
+    /// Awaitable activation core, split out of `activate` so the phase
+    /// transitions — notably the E-01 `.replaceCancelled` → `.unverified`
+    /// quiet-no-op — are unit-testable without the fire-and-forget Task.
+    func performActivation(using entitlements: EntitlementStore) async {
         let key = trimmedKey
         guard !key.isEmpty else {
             phase = .failed("Enter your license key.")
             return
         }
         phase = .working
-        Task { @MainActor in
-            do {
-                try await entitlements.activate(licenseKey: key)
-                phase = .licensed
-            } catch let error as LicenseError {
-                phase = .failed(error.userFacingMessage)
-            } catch {
-                phase = .failed("Activation failed — please try again.")
-            }
+        do {
+            try await entitlements.activate(licenseKey: key)
+            phase = .licensed
+        } catch LicenseError.replaceCancelled {
+            // The user declined the "replace your current license?" prompt
+            // (E-01). Not a failure — restore the row to the unchanged on-file
+            // license with NO error pill: drop the rejected key and re-sync to
+            // the active entitlement, so this row reflects the license that is
+            // still active rather than the key the user backed out of.
+            licenseKey = ""
+            phase = .unverified
+            syncToEntitlement(entitlements.state)
+        } catch let error as LicenseError {
+            phase = .failed(error.userFacingMessage)
+        } catch {
+            phase = .failed("Activation failed — please try again.")
         }
     }
 
