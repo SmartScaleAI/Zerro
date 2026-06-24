@@ -1,0 +1,78 @@
+-- =============================================================================
+-- Pre-launch hardening C-10 — FORCE RLS on affiliate_referrals (+ a discovered
+-- missing service_role grant the same table needs to actually be usable)
+-- =============================================================================
+-- (PRE_RELEASE_REVIEW_LOG.md C-10 / D-04.)
+--
+-- affiliate_referrals (added in 20260622120000_affiliate_referrals.sql) has RLS
+-- ENABLED but NOT FORCED — the lone exception among public tables, which are all
+-- enabled + forced + service-role-only. The ensure_rls/rls_auto_enable event
+-- trigger that normally FORCEs RLS on new tables (C-03 schema drift) didn't catch
+-- this one. It's already safe in practice (no policies + no anon/authenticated
+-- grants + service_role BYPASSRLS), so forcing is defense-in-depth / consistency,
+-- closing the D-04 exception. This migration brings it fully in line:
+--
+--   1. ALTER TABLE ... FORCE ROW LEVEL SECURITY  — subject even the table owner
+--      to RLS, matching subscriptions/usage_periods/idempotency_cache/etc.
+--   2. GRANT select,insert,update,delete ... TO service_role  — a DEFECT found
+--      while verifying C-10 (see "DISCOVERED" below): without it the affiliate
+--      Edge Function cannot read or write its own table at all.
+--
+-- ---------------------------------------------------------------------------
+-- WHY FORCE DOESN'T BREAK EITHER ACCESS PATH — verified live, not assumed
+-- (proved in a rolled-back transaction on the project DB; see PR notes):
+--
+--   * WRITE/READ path (Edge Function `affiliate`): the function talks to the
+--     table only through serviceClient() (_shared/db.ts, built from
+--     SUPABASE_SERVICE_ROLE_KEY), i.e. as `service_role`. service_role has the
+--     BYPASSRLS attribute (verified: pg_roles.rolbypassrls = true), and a
+--     BYPASSRLS role ALWAYS bypasses row security — FORCE only removes the
+--     OWNER's implicit bypass, never the attribute-based one. So FORCE is a
+--     no-op for service_role's row visibility (a post-grant SELECT under FORCE
+--     still sees its rows).
+--
+--   * PRUNE path (pg_cron job `affiliate-referrals-prune`, daily 04:00 UTC):
+--     it runs the inline DELETE as username `postgres` (verified:
+--     cron.job.username = postgres — the role that called cron.schedule in the
+--     creating migration). `postgres` ALSO has BYPASSRLS (verified:
+--     pg_roles.rolbypassrls = true), so FORCE doesn't apply to it either. This
+--     is the SAME pattern that keeps the other forced tables' jobs working:
+--     `refresh-yearly-credits` runs as postgres and writes the FORCE-RLS
+--     usage_periods table today (active). A rolled-back live test confirmed the
+--     prune DELETE succeeds with FORCE enabled. No SECURITY DEFINER / bypassing
+--     wrapper is needed — the existing role already bypasses.
+--
+-- ---------------------------------------------------------------------------
+-- DISCOVERED while confirming the write path (out of scope of the literal C-10
+-- ask, folded in because it's the other half of "service-role-only"):
+--   affiliate_referrals' creating migration ran `revoke all ... from anon,
+--   authenticated` but NEVER granted DML to service_role — unlike every billing
+--   table (see *_billing_grants.sql) and idempotency_cache, which grant it
+--   explicitly. In THIS project the default privileges for postgres-created
+--   public tables grant service_role only `Dxtm` (TRUNCATE/REFERENCES/TRIGGER/
+--   MAINTAIN), NOT the DML `arwd` (verified: pg_default_acl). Net result: the
+--   table's ACL is `service_role=Dxtm` — no INSERT/SELECT/UPDATE/DELETE — so the
+--   Edge Function's insert (record) and select (latestCode) fail with
+--   "permission denied for table affiliate_referrals" (reproduced live). That is
+--   a TABLE-PRIVILEGE failure, wholly independent of RLS/FORCE; BYPASSRLS waives
+--   row security but a role still needs table privileges first. The grant below
+--   fixes it and makes the table's ACL match idempotency_cache
+--   (`service_role=arwdDxtm`). anon/authenticated remain with NOTHING.
+--
+-- ---------------------------------------------------------------------------
+-- POST-DEPLOY CHECK:
+--   * affiliate_referrals.relforcerowsecurity = true (D-04 exception cleared).
+--   * has_table_privilege('service_role','public.affiliate_referrals',
+--       'insert,select,update,delete') = true; ACL = service_role=arwdDxtm.
+--   * anon/authenticated still hold no privileges; row count unaffected.
+--   * tomorrow's affiliate-referrals-prune cron run still fires.
+--
+-- IDEMPOTENT: FORCE ROW LEVEL SECURITY is a no-op when already forced, and a
+-- repeated GRANT is a no-op — safe to re-apply.
+-- =============================================================================
+
+alter table public.affiliate_referrals force row level security;
+
+-- Service-role DML grant (RLS bypass still requires table-level privileges;
+-- see *_billing_grants.sql for the rationale). anon/authenticated get NOTHING.
+grant select, insert, update, delete on public.affiliate_referrals to service_role;

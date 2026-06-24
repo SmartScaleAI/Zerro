@@ -41,7 +41,7 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 
 ### Pre-launch hardening list (🟡, cheap) — order
 1. ✅ **D-01** revoke anon cron RPC (migration added; deploy pending)
-2. **C-10** force RLS on `affiliate_referrals`
+2. ✅ **C-10** force RLS on `affiliate_referrals` (migration added; deploy pending) — also fixed a discovered missing `service_role` grant (**C-12**)
 3. **E-01** checkout deeplink auto-activation
 4. **H-05 / H-08** in-app privacy/redaction copy
 5. **E-02 + K-08** reconcile 40-vs-30 credits + stale `llms.txt`
@@ -98,7 +98,8 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **C-07** Abuse/Reliability · 🟡 — trial rate limiter fails open on limiter error. Fail-closed per-IP; alert.
 - **C-08** Abuse/Cost · 🟡 — affiliate self-referral + unauth insert amplifier. Confirm LS clawback; throttle/upsert-dedup.
 - **C-09** Code quality · 🟡 — `incrementCodeAttempts` non-atomic read-modify-write (moot under 8/hr).
-- **C-10** Reliability/Security · 🟡 **(hardening #2)** — `affiliate_referrals` RLS enabled but **not FORCED**. Add `FORCE ROW LEVEL SECURITY`.
+- **C-10** Reliability/Security · ✅ fixed-in-code — `affiliate_referrals` not FORCED → migration `20260623130000` adds `FORCE ROW LEVEL SECURITY` (prune cron via `postgres` + write path via `service_role` both bypass via BYPASSRLS — verified live, rolled-back). Deploy pending. Clears the D-04 exception.
+- **C-12** Reliability · ✅ fixed-in-code (discovered during C-10) — `affiliate_referrals` was **missing the `service_role` DML grant**: its creating migration revoked anon/authenticated but never granted DML, and the project default ACL gives `service_role` only `Dxtm` (no `arwd`). The affiliate Edge Function would fail **"permission denied" on first use** (BYPASSRLS waives RLS, not table privileges). Grant added in the same migration; ACL now matches `idempotency_cache`. **Must ship before/with deploying the affiliate function.**
 - **C-11** Code quality · 🟡 — test gaps (feedback, device-spoof, fail-open, affiliate window, refresh 401).
 - *(C-02/C-03 → merged into D-01; C-06 → A-06.)*
 
