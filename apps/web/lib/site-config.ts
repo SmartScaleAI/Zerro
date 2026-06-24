@@ -23,7 +23,7 @@ export const FUNCTIONS_BASE_URL =
  * Direct LemonSqueezy subscription checkout link for the Managed plan.
  *
  * Not used yet: every pricing CTA currently points to DOWNLOAD_URL, since users
- * download the app, get 40 free credits, then subscribe in-app. This is a
+ * download the app, get 30 free credits, then subscribe in-app. This is a
  * placeholder for if/when the Managed card links straight to checkout.
  *
  * TODO(Colin): paste the LemonSqueezy checkout URL (the same one used in the

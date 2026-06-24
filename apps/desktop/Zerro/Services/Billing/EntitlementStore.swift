@@ -921,7 +921,7 @@ final class EntitlementStore {
         case .trial, .expired:
             // Trial is a pure credit pool; `.expired` is that pool at zero. Either
             // way, refill it to the grant limit (refilling re-enters `.trial`).
-            let limit = trialCreditsLimit ?? 40
+            let limit = trialCreditsLimit ?? 30
             trialCredits?.applyCreditsRemaining(limit)
             state = .trial(creditsRemaining: limit)
             Log.ui.notice("entitlement dev → reset trial credits to \(limit, privacy: .public)")

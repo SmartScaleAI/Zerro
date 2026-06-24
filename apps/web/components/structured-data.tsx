@@ -71,7 +71,7 @@ export function SoftwareApplicationJsonLd() {
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
           "Local-first processing — audio isolation and frame downsampling run on your machine",
           "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
-          "40 free credits to start — no card, no key, no time limit",
+          "30 free credits to start — no card, no key, no time limit",
           "3-minute recording cap keeps each request fast and predictable",
           "Signed & notarized .dmg distribution",
           "Sparkle auto-updates",

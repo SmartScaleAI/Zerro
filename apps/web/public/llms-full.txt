@@ -54,7 +54,7 @@ Zerro is built the way you'd build it if it were your tool.
   an Electron tab pretending to be a Mac app.
 - **Local-first processing.** Audio isolation and frame downsampling happen on your
   machine before anything leaves it.
-- **Bring your own keys.** Your OpenAI and Gemini keys, stored in macOS Keychain.
+- **Bring your own keys.** Your OpenAI, Gemini & Anthropic keys, stored in macOS Keychain.
   No servers handling your data.
 - **Cost-bounded by design.** A 3-minute hard cap on every recording keeps each
   request fast, cheap, and predictable.
@@ -79,7 +79,7 @@ capabilities change over time, so check each product for current details.
 | Local-first processing | Yes | No | No |
 | Bring your own API keys | Yes | No | No |
 | Native macOS app | Yes | Yes | No |
-| Pricing model | One-time ($39) | Subscription | Subscription |
+| Pricing model | One-time ($69) | Subscription | Subscription |
 
 ---
 
@@ -97,29 +97,31 @@ type. Zerro is built for that future: less typing, more talking.
 
 ## Pricing — pay once, or let us handle it
 
-BYOK is available at launch. The Managed tier opens up shortly after.
+Both BYOK and Managed are available now. Everyone starts free with 30 credits —
+no card, no key, no time limit — then picks a path.
 
-### BYOK — $39 one-time (available now)
+### BYOK — $69 one-time (available now)
 
 Pay once. Bring your own keys.
 
-- All features and future updates
-- Bring your own OpenAI + Gemini keys
+- Includes 1 year of updates — your installed version keeps working after
+- Bring your own OpenAI, Gemini & Anthropic keys
 - Keys stored in your macOS Keychain
 - No subscription, no account required
 - No servers handling your data
 
-### Managed — $12/month, or $96/year (coming soon)
+### Managed — $15/month, or $12/month billed yearly ($144/year)
 
 We handle the tokens — no keys, no setup.
 
 - No API keys required
-- Monthly recording credits included
+- 300 credits per month across 6 models (Claude, GPT & Gemini)
+- Top up anytime — Boost (200 credits, $10) or Power (500 credits, $22)
 - We manage all token usage
-- Priority support
 - Cancel anytime
 
-Prices listed in USD. The one-time purchase includes all v1 features and updates.
+Prices listed in USD. The one-time BYOK purchase includes 1 year of updates;
+your installed version keeps working after that.
 
 ---
 
@@ -141,18 +143,20 @@ for you. Zerro is purpose-built for coding agents: it captures your screen along
 your voice and returns a structured prompt, not plain dictated text.
 
 **How much does Zerro cost?**
-Zerro is a one-time purchase of $39 for the BYOK plan, which includes all features
-and future updates. A Managed plan at $12/month — where Zerro handles token usage
-and no API keys are required — is coming soon.
+Everyone starts free with 30 credits — no card, no key, no time limit. After that,
+BYOK is a one-time $69 purchase that includes 1 year of updates; your installed
+version keeps working after that. Managed — where Zerro handles token usage and no
+API keys are required — is available now at $15/month, or $12/month billed yearly
+($144/year), with 300 credits per month.
 
 **Is my data private?**
 Audio isolation and frame downsampling always run locally on your Mac, and a
 best-effort pass masks the on-screen secrets it detects (it can't catch everything)
-before anything leaves your machine. On the Managed plan, those prepped, redacted
-frames and your spoken narration are sent to a third-party AI provider (OpenAI,
-Google, or Anthropic) to generate the result — audio is sent as recorded and isn't
-redacted. On BYOK, the request goes straight to the provider on your own key, so it
-never touches Zerro's servers.
+before anything leaves your machine. On the Managed and Trial plans, those prepped,
+redacted frames and your spoken narration are sent to a third-party AI provider
+(OpenAI, Google, or Anthropic) to generate the result — audio is sent as recorded
+and isn't redacted. On BYOK, the request goes straight to the provider on your own
+key, so it never touches Zerro's servers.
 
 **Does Zerro need an account?**
 No. The BYOK plan requires no account and no subscription. You bring your own API

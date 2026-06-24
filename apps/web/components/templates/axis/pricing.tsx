@@ -111,7 +111,7 @@ const tiers: Tier[] = [
         badge: "Most popular",
         limitedOffer: true,
         features: [
-            "40 free credits to start",
+            "30 free credits to start",
             {
                 label: "300 credits per month",
                 note: "≈ 75 generations with Gemini 3.5 Flash, or ~30 with Claude Opus.",
@@ -131,7 +131,7 @@ const tiers: Tier[] = [
         price: "$69",
         cadence: "one-time",
         features: [
-            "40 free credits to start",
+            "30 free credits to start",
             "Includes 1 year of updates — your installed version keeps working after",
             "Bring your own OpenAI, Gemini & Anthropic API keys",
             "All 6 models — Claude, GPT & Gemini",
@@ -181,7 +181,7 @@ const Pricing = () => {
             <div className="relative z-10 mb-12 lg:mb-16 flex justify-center">
                 <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-1.5 text-sm font-medium text-primary">
                     <Sparkles className="h-4 w-4" strokeWidth={2} />
-                    Start free — 40 credits. No card, no key, no time limit.
+                    Start free — 30 credits. No card, no key, no time limit.
                 </span>
             </div>
 

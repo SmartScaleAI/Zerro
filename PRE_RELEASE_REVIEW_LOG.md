@@ -44,7 +44,7 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 2. ✅ **C-10** force RLS on `affiliate_referrals` (migration added; deploy pending) — also fixed a discovered missing `service_role` grant (**C-12**)
 3. ✅ **E-01** checkout deeplink auto-activation (prefill+confirm; replace-confirm gate; analytics gated) — app build
 4. ✅ **H-05 / H-08** in-app privacy/redaction copy (onboarding + Settings; + paywall sweep) — pending owner wording sign-off; app build
-5. **E-02 + K-08** reconcile 40-vs-30 credits + stale `llms.txt`
+5. ✅ **E-02 + K-08** reconcile credits→30 + refresh `llms.txt` (decision: 30; secret already 30) — applied + verified (stale values gone, new facts present); Vercel + app-build deploy pending
 6. **K-03** remove dead `/auth` page
 7. **K-04** finish security headers (Referrer-Policy done via K-01)
 8. **L-01/02/03** CI supply-chain (least-priv upload token, pin Sparkle tarball + posthog-cli, pin Actions to SHA)
@@ -114,7 +114,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 ### E — Desktop billing & entitlement (client) ✅ reviewed
 **Verdict:** No client path spends provider money without server-validated entitlement; no secret leaks. BYOK direct-to-provider; managed body carries only a bearer token; secrets in Keychain.
 - **E-01** Security · ✅ fixed-in-code — deeplink no longer auto-activates: prefills key + explicit Activate; `LicenseService.activate` adds a replace-confirm gate BEFORE any POST/Keychain write (covers deeplink + manual paste; decline leaves license intact); purchase analytics gated on a real user-initiated outcome; parse hardening intact. Full suite green (673). Ships in app build.
-- **E-02** Payments/UX · 🟡 **(hardening #5)** — website advertises "40 free credits", server grants 30 (also in JSON-LD; see K-08). Reconcile.
+- **E-02** Payments/UX · ✅ fixed (decision: 30) — **live secret confirmed already 30** (digest = sha256("30"); the grant I first saw at 40 was a stale pre-change test row — my earlier "live=40" read was wrong). Web copy + JSON-LD + FAQ (×2 incl. line 41) → 30; `site-config.ts:26` comment + `EntitlementStore.swift:924` fallback → 30. App reads server value dynamically. Vercel deploy pending. (Optional: clear stale 40-limit test grants.)
 - **E-03** Security · 🟡 — Keychain `AfterFirstUnlock` (not `…ThisDeviceOnly`). Confirmed justified; only trial slots merit ThisDeviceOnly.
 - **E-04** Reliability · 🟡 — crash-restored Dev-Mode paid-block resumes via non-dev path (degrades; no double-charge).
 - **E-05** Payments/UX · 🟡 — hardcoded paywall price literals can drift from LS.
@@ -208,7 +208,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **K-05** Security · 🟡 — affiliate beacon sends unvalidated/unbounded `aff`. Clamp.
 - **K-06** Code quality · 🟡 (info) — dep advisories not runtime-reachable (static site).
 - **K-07** Code quality · 🟡 (info) — `/Zerro.dmg` redirect comment misstates (307 to Supabase, not 302 GitHub).
-- **K-08** Payments/Code quality · 🟡 **(hardening #5)** — `llms.txt`/`llms-full.txt` stale: BYOK "$39" (live $69), Managed "coming soon" ($12 vs $15), missing Anthropic. Refresh with E-02.
+- **K-08** Payments/Code quality · ✅ fixed — `llms.txt`/`llms-full.txt` refreshed to live facts (verified against pricing.tsx): trial 30, BYOK $69, Managed live $15/mo·$144/yr, 300 credits/mo, +Anthropic, +top-ups (Boost 200/$10, Power 500/$22). Also corrected two **false claims** found in the files: "all future updates" → "1 year of updates"; removed a non-existent "Priority support" line. Vercel deploy pending. **Follow-up (post-launch):** llms files still position Zerro narrowly as "structured prompt for coding agents" — broaden to the full artifact range (prompt/message/snippet/document/answer) to match the site; left as a separate brand task.
 
 ### L — Build, release, signing & CI/CD ✅ reviewed
 **Verdict:** Release free of DEBUG hatches (E-11 resolved). Signing/notarization/EdDSA-publish chain tamper-resistant, no CI secret leak.
