@@ -45,7 +45,7 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 3. ✅ **E-01** checkout deeplink auto-activation (prefill+confirm; replace-confirm gate; analytics gated) — app build
 4. ✅ **H-05 / H-08** in-app privacy/redaction copy (onboarding + Settings; + paywall sweep) — pending owner wording sign-off; app build
 5. ✅ **E-02 + K-08** reconcile credits→30 + refresh `llms.txt` (decision: 30; secret already 30) — applied + verified (stale values gone, new facts present); Vercel + app-build deploy pending
-6. **K-03** remove dead `/auth` page
+6. ✅ **K-03** remove dead `/auth` page (page + layout + 3 auth-only UI components + robots ref; build clean, zero dangling links) — Vercel deploy pending
 7. **K-04** finish security headers (Referrer-Policy done via K-01)
 8. **L-01/02/03** CI supply-chain (least-priv upload token, pin Sparkle tarball + posthog-cli, pin Actions to SHA)
 9. **L-09** verify EdDSA key-pair (manual)
@@ -203,7 +203,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **K-00** Security · ✅ resolved — `.env.local` gitignore concern refuted (nested `apps/web/.gitignore` ignores `.env*`).
 - **K-01** Privacy/Security · ✅ fixed-in-code — license-key→PostHog leak: clean-URL + `before_send` scrub (incl. `$initial_*` + autocapture `$elements_chain`) + Referrer-Policy. Vercel pending.
 - **K-02** Privacy/Legal · ✅ copy rewritten — landing locality claims scoped to BYOK + privacy caveat. Owner sign-off + Vercel pending. **Follow-up — fixed during H-05/H-08:** the BYOK "never leaves your Mac" overstatement spanned ~6 lines (`built-right.tsx:29`, `pricing.tsx:130/139/424`, `structured-data.tsx:95` JSON-LD, `faq-data.ts:51` "Is my data private?"). The original K-02 audit wrongly accepted these as "scoped to BYOK" — but BYOK recordings DO go to the provider, so they were inaccurate. All now use the precise "straight to your provider / never through Zerro's servers" wording; faq-data expanded to match the privacy policy (best-effort redaction + audio-not-redacted). Verified zero remaining locality-overstatement strings site-wide. `privacy/page.tsx:139` left as-is (hardware-ID line — confirm it reflects a salted hash is sent). Site now internally consistent + matches the policy.
-- **K-03** Security/UX · 🟡 do pre-launch **(hardening #6)** — dead `/auth` sign-in page ships (discards input). Remove/flag-gate.
+- **K-03** Security/UX · ✅ fixed — dead `/auth` page removed (page + layout + 3 auth-only UI components + `robots.ts` ref); `/sign-up` & `/forgot-password` were 404 scaffolding only-linked from `/auth`, now gone; build clean (12/12 pages), grep proves zero dangling links. Vercel deploy pending.
 - **K-04** Security · 🟡 **(hardening #7)** — security headers: Referrer-Policy added (K-01); add CSP, HSTS, X-Frame-Options, X-Content-Type-Options.
 - **K-05** Security · 🟡 — affiliate beacon sends unvalidated/unbounded `aff`. Clamp.
 - **K-06** Code quality · 🟡 (info) — dep advisories not runtime-reachable (static site).

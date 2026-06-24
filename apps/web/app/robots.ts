@@ -8,8 +8,7 @@ const SITE_URL = "https://getzerro.app";
  * Zerro's story is BYOK + local-first + privacy-respecting — there's nothing
  * sensitive to hide from crawlers, and being cited in AI chat answers is a
  * wanted distribution channel. So every major AI crawler is explicitly named
- * and allowed; none are blocked. `/auth` is disallowed since it's a sign-in
- * page with no content worth indexing.
+ * and allowed; none are blocked.
  */
 export default function robots(): MetadataRoute.Robots {
   const aiCrawlers = [
@@ -29,7 +28,6 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: "/auth",
       },
       // Explicitly allow each AI crawler. Naming them is a clearer signal than
       // relying on the wildcard rule, and documents intent for anyone reading
