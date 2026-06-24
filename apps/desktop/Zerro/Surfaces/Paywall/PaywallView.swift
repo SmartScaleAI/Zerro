@@ -503,7 +503,7 @@ private struct BuyOnceCard: View {
                     .foregroundStyle(Color.vfTextPrimary)
             }
 
-            Text("Pay once \u{2014} includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings stay fully on your Mac.")
+            Text("Pay once \u{2014} includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings never pass through Zerro\u{2019}s servers \u{2014} they go straight to your provider.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
@@ -604,7 +604,7 @@ private struct SubscriptionOptionCard: View {
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
 private struct ManagedPrivacyNote: View {
     var body: some View {
-        Text("Managed sends your recording to Zerro\u{2019}s server to generate the prompt. Bring-your-own-key stays fully on your Mac.")
+        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers \u{2014} it goes straight to that provider on your own key.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)

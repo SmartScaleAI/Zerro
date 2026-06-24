@@ -452,7 +452,7 @@ struct ScreenRecordingStepView: View {
             } content: {
                 OnboardingHeadline(
                     title: "Screen Recording",
-                    bodyText: "Zerro needs to see your screen to capture what you\u{2019}re showing."
+                    bodyText: "Zerro needs to see your screen to capture what you\u{2019}re showing. On the Managed and Trial plans, those frames \u{2014} and your spoken narration \u{2014} are sent to a third-party AI provider to generate your result; on-device redaction blacks out common secrets first, but it\u{2019}s best-effort and never covers your audio."
                 )
             } accessory: {
                 RecordingPillDemo()

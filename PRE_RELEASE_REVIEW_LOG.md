@@ -43,7 +43,7 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 1. ✅ **D-01** revoke anon cron RPC (migration added; deploy pending)
 2. ✅ **C-10** force RLS on `affiliate_referrals` (migration added; deploy pending) — also fixed a discovered missing `service_role` grant (**C-12**)
 3. ✅ **E-01** checkout deeplink auto-activation (prefill+confirm; replace-confirm gate; analytics gated) — app build
-4. **H-05 / H-08** in-app privacy/redaction copy
+4. ✅ **H-05 / H-08** in-app privacy/redaction copy (onboarding + Settings; + paywall sweep) — pending owner wording sign-off; app build
 5. **E-02 + K-08** reconcile 40-vs-30 credits + stale `llms.txt`
 6. **K-03** remove dead `/auth` page
 7. **K-04** finish security headers (Referrer-Policy done via K-01)
@@ -164,10 +164,10 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **H-02** Accessibility · 🟡 — AreaSelector toolbar mouse-only, invisible to AT.
 - **H-03** Accessibility · 🟡 — transient pill state not announced to AT.
 - **H-04** Accessibility · 🟡 — no Reduce Motion honoring.
-- **H-05** Privacy · 🟡 do pre-launch **(hardening #4)** — onboarding doesn't disclose frames→AI providers + best-effort redaction. (F-02 web/app copy.)
+- **H-05** Privacy · ✅ fixed-in-code (copy; pending sign-off) — onboarding consent + screen-recording steps now disclose frames+audio→third-party AI on Managed/Trial + best-effort redaction (BYOK direct). App build.
 - **H-06** Reliability · 🟡 — re-consent vs permission-revocation collision → re-onboarding loop.
 - **H-07** UX · 🟡 — Pill positions on NSScreen.main only (multi-display); no reposition on display change.
-- **H-08** Privacy · 🟡 do pre-launch **(hardening #4)** — Settings "Redact secrets" copy states best-effort as a guarantee.
+- **H-08** Privacy · ✅ fixed-in-code (copy; pending sign-off) — Settings "Redact secrets" toggle reworded to best-effort + "never redacts spoken audio". Also swept 2 in-app paywall overstatements (where-recordings-go note + BYOK card). App build.
 - **H-09** Reliability · 🟡 — stale screen-recording-granted cache can bypass record-start gate.
 - **H-10** UX · 🟡 — no Back navigation in onboarding (dead `goBack()`).
 - **H-11** UX · 🟡 — non-retryable error pill labeled "Retry" but reopens area selector.
@@ -202,7 +202,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 **Verdict:** Privacy policy strong; two launch-blockers fixed (K-01/K-02). No service-role secret to client; no exploitable XSS.
 - **K-00** Security · ✅ resolved — `.env.local` gitignore concern refuted (nested `apps/web/.gitignore` ignores `.env*`).
 - **K-01** Privacy/Security · ✅ fixed-in-code — license-key→PostHog leak: clean-URL + `before_send` scrub (incl. `$initial_*` + autocapture `$elements_chain`) + Referrer-Policy. Vercel pending.
-- **K-02** Privacy/Legal · ✅ copy rewritten — landing locality claims scoped to BYOK + privacy caveat. Owner sign-off + Vercel pending.
+- **K-02** Privacy/Legal · ✅ copy rewritten — landing locality claims scoped to BYOK + privacy caveat. Owner sign-off + Vercel pending. **Follow-up — fixed during H-05/H-08:** the BYOK "never leaves your Mac" overstatement spanned ~6 lines (`built-right.tsx:29`, `pricing.tsx:130/139/424`, `structured-data.tsx:95` JSON-LD, `faq-data.ts:51` "Is my data private?"). The original K-02 audit wrongly accepted these as "scoped to BYOK" — but BYOK recordings DO go to the provider, so they were inaccurate. All now use the precise "straight to your provider / never through Zerro's servers" wording; faq-data expanded to match the privacy policy (best-effort redaction + audio-not-redacted). Verified zero remaining locality-overstatement strings site-wide. `privacy/page.tsx:139` left as-is (hardware-ID line — confirm it reflects a salted hash is sent). Site now internally consistent + matches the policy.
 - **K-03** Security/UX · 🟡 do pre-launch **(hardening #6)** — dead `/auth` sign-in page ships (discards input). Remove/flag-gate.
 - **K-04** Security · 🟡 **(hardening #7)** — security headers: Referrer-Policy added (K-01); add CSP, HSTS, X-Frame-Options, X-Content-Type-Options.
 - **K-05** Security · 🟡 — affiliate beacon sends unvalidated/unbounded `aff`. Clamp.

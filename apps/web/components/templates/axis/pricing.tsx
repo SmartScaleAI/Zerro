@@ -127,7 +127,7 @@ const tiers: Tier[] = [
     },
     {
         name: "BYOK",
-        blurb: "Bring your own keys. Runs fully on your Mac.",
+        blurb: "Bring your own keys. No Zerro servers in between.",
         price: "$69",
         cadence: "one-time",
         features: [
@@ -136,7 +136,7 @@ const tiers: Tier[] = [
             "Bring your own OpenAI, Gemini & Anthropic API keys",
             "All 6 models — Claude, GPT & Gemini",
             "Keys stored in your macOS Keychain",
-            "Recordings never leave your Mac",
+            "Recordings never pass through Zerro's servers",
             "No subscription, no account",
         ],
         cta: { label: "Download for Mac", variant: "primary" },
@@ -421,8 +421,9 @@ const Pricing = () => {
             {/* Honest privacy distinction — a genuine selling point, not buried.
                 Bumped to foreground/75 so it clears AA contrast over the gradient surface. */}
             <p className="relative z-10 mt-8 mx-auto max-w-2xl text-center text-sm text-foreground/75">
-                Managed sends your recording to Zerro&apos;s server to generate the result.
-                Bring-your-own-key stays fully on your Mac — recordings never leave your machine.
+                Managed sends your recording to Zerro&apos;s server, which forwards it to a
+                third-party AI provider to generate the result. Bring-your-own-key skips our
+                servers — recordings go straight to that provider on your own key.
             </p>
 
             <p className="relative z-10 mt-4 text-center text-sm text-foreground/60">

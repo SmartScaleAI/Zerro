@@ -26,7 +26,7 @@ const items: Item[] = [
         icon: KeyRound,
         title: "Bring your own key",
         description:
-            "On BYOK, your OpenAI, Gemini & Anthropic keys are stored in macOS Keychain and recordings never leave your Mac.",
+            "On BYOK, your OpenAI, Gemini & Anthropic keys are stored in macOS Keychain and recordings go straight to your provider on your own key — never through Zerro's servers.",
     },
     {
         icon: Timer,

@@ -92,7 +92,7 @@ export function SoftwareApplicationJsonLd() {
             price: "69",
             priceCurrency: "USD",
             description:
-              "Pay once. Bring your own OpenAI, Gemini & Anthropic keys; recordings stay fully on your Mac. Includes 1 year of updates.",
+              "Pay once. Bring your own OpenAI, Gemini & Anthropic keys; recordings go straight to your provider and never pass through Zerro's servers. Includes 1 year of updates.",
             availability: "https://schema.org/InStock",
           },
         ],

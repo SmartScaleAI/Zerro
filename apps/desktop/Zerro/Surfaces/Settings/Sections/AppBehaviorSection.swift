@@ -44,12 +44,15 @@ struct AppBehaviorSection: View {
 
 // MARK: - Analytics & Crash Reporting
 
-// The SINGLE documented exception to Zerro's "your content stays local"
-// story. Anonymous, on by default, one-click off. The toggle writes to
-// the UserDefaults key both `Analytics` and `CrashReporting` read for
-// their opt-out gate, and `.onChange` flips PostHog's opt-out state live,
-// so turning it OFF stops all transmission immediately — no restart.
-// Default ON matches the `isEnabled` fallback ("key absent" → true).
+// Anonymous analytics + crash reporting — the one stream Zerro sends that
+// ISN'T part of generating your result (on Managed/Trial the prepped
+// frames + audio go to a third-party AI provider; this stream is metadata
+// only — never recordings, transcripts, prompts, or keys). On by default,
+// one-click off. The toggle writes to the UserDefaults key both `Analytics`
+// and `CrashReporting` read for their opt-out gate, and `.onChange` flips
+// PostHog's opt-out state live, so turning it OFF stops all transmission
+// immediately — no restart. Default ON matches the `isEnabled` fallback
+// ("key absent" → true).
 
 private struct CrashReportingRow: View {
     @AppStorage(CrashReporting.isEnabledDefaultsKey) private var isEnabled: Bool = true

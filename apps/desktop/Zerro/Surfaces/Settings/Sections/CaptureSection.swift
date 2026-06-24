@@ -144,7 +144,7 @@ private struct RedactSecretsRow: View {
 
         SettingsRow(
             label: "Redact Detected Secrets",
-            description: "Scans each captured frame on-device and blacks out API keys, tokens, passwords, and card numbers \u{2014} in both the image and the extracted text \u{2014} before anything is sent."
+            description: "Tries to detect and black out common on-screen secrets \u{2014} API keys, tokens, passwords, and card numbers \u{2014} in both the captured image and the extracted text before upload. Best-effort, so it can miss some, and it never redacts your spoken audio."
         ) {
             Toggle("Redact Detected Secrets", isOn: $preferences.redactSecrets)
                 .labelsHidden()
