@@ -21,6 +21,70 @@ export function parseVariantList(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// ---- Startup config validation (launch-blocker A-01) -------------------------
+// A misconfigured LS_VARIANT_YEARLY silently mislabels yearly subscriptions as
+// "monthly": resolveBillingInterval (below) only tags a sub "yearly" when its
+// variant is in the yearly list, else "monthly". An empty or wrong list →
+// yearly subs recorded as billing_interval='monthly' → excluded from
+// refresh_yearly_credit_periods() (which filters billing_interval='yearly') →
+// the prepaid yearly customer is starved after one month (LS sends only an
+// annual renewal webhook). These checks turn that silent misconfig into a loud,
+// impossible-to-miss failure at deploy time. See PRE_RELEASE_REVIEW_LOG.md A-01.
+
+export interface ConfigValidation {
+  /** True when LS_VARIANT_YEARLY is safe (non-empty AND ⊆ LS_VARIANT_MANAGED). */
+  ok: boolean;
+  /** Distinct, greppable error code when !ok (null when ok). */
+  code: string | null;
+  /** Human-readable explanation when !ok (null when ok). */
+  message: string | null;
+}
+
+/**
+ * Validate the yearly-variant config against the full managed-variant list.
+ * PURE — a function of the two raw secret strings only — so the verdict is
+ * deterministic and never "transient" (same env → same answer, no I/O that can
+ * flake), and it is unit-testable without touching env or the network.
+ *
+ * Two rules, both A-01:
+ *   1. LS_VARIANT_YEARLY must list ≥1 id. Empty → every sub (incl. yearly)
+ *      resolves to "monthly" and the yearly refresh cron skips it.
+ *   2. Every yearly id must also appear in LS_VARIANT_MANAGED (the full managed
+ *      monthly+yearly list). A yearly id absent from managed means the two
+ *      secrets have drifted (a typo or a stale/removed variant) — that variant
+ *      could never be recognized as managed, so the config is untrustworthy.
+ */
+export function validateYearlyVariantConfig(
+  yearlyRaw: string,
+  managedRaw: string,
+): ConfigValidation {
+  const yearly = parseVariantList(yearlyRaw);
+  if (yearly.length === 0) {
+    return {
+      ok: false,
+      code: "config_yearly_variants_empty",
+      message:
+        "LS_VARIANT_YEARLY is empty: every subscription (including yearly) would be " +
+        "recorded as billing_interval='monthly' and excluded from the yearly " +
+        "credit-refresh cron, starving prepaid yearly customers after one month.",
+    };
+  }
+  const managed = new Set(parseVariantList(managedRaw));
+  const orphans = yearly.filter((id) => !managed.has(id));
+  if (orphans.length > 0) {
+    return {
+      ok: false,
+      code: "config_yearly_variants_not_subset_of_managed",
+      message:
+        `LS_VARIANT_YEARLY has id(s) not present in LS_VARIANT_MANAGED: ` +
+        `[${orphans.join(", ")}]. The yearly ids must be a SUBSET of the managed ` +
+        `list (monthly + yearly); an orphan means the secrets have drifted (typo ` +
+        `or a stale/removed variant).`,
+    };
+  }
+  return { ok: true, code: null, message: null };
+}
+
 export interface TierVariantConfig {
   /** Raw comma-separated YEARLY variant ids (LS_VARIANT_YEARLY). Drives
    *  billing_interval only — both intervals share the managed allowance and

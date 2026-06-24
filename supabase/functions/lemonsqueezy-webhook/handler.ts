@@ -23,6 +23,7 @@ import { sha256Hex } from "../_shared/crypto.ts";
 import { normalizeTrialEmail } from "../_shared/email-normalize.ts";
 import {
   CREDITS_MANAGED,
+  LS_VARIANT_MANAGED,
   LS_VARIANT_TOPUP_BOOST,
   LS_VARIANT_TOPUP_POWER,
   LS_VARIANT_YEARLY,
@@ -38,11 +39,15 @@ import type {
   LsWebhook,
 } from "../_shared/types.ts";
 import {
+  type BillingInterval,
+  type ConfigValidation,
+  parseVariantList,
   resolveBillingInterval,
   resolveTier,
   resolveTopupPack,
   type TierVariantConfig,
   type TopupVariantConfig,
+  validateYearlyVariantConfig,
 } from "./tier.ts";
 import type { Status, WebhookStore } from "./store.ts";
 import { capturePostHog } from "./posthog.ts";
@@ -58,11 +63,37 @@ export interface WebhookDeps {
   secret: string;
   /** Injectable clock for the rare period-start fallback (deterministic tests). */
   nowIso?: () => string;
+  /** Injectable config verdict (deterministic tests). Defaults to the real
+   *  module-level check over LS_VARIANT_YEARLY/LS_VARIANT_MANAGED. */
+  configCheck?: ConfigValidation;
 }
 
 const TIER_CONFIG: TierVariantConfig = {
   yearlyVariantIds: LS_VARIANT_YEARLY,
 };
+
+// ---- A-01: yearly-variant config validation, evaluated once per instance -----
+// The verdict is computed at module load (function "startup") from the static
+// secrets — pure, so it never changes across requests in this instance. A bad
+// deploy is surfaced LOUD on the first authenticated webhook (see
+// `guardYearlyConfig`), then on every subsequent delivery until the env is fixed
+// and the function is redeployed.
+const CONFIG_CHECK: ConfigValidation = validateYearlyVariantConfig(
+  LS_VARIANT_YEARLY,
+  LS_VARIANT_MANAGED,
+);
+// The loud alarm (error log + analytics) fires AT MOST once per instance so a
+// misconfig is impossible to miss without spamming logs/analytics on every
+// retry. The HTTP rejection below is NOT memoized — it returns on every affected
+// delivery so LS keeps retrying until the config is fixed.
+let configAlarmEmitted = false;
+
+// The ONLY events that persist subscriptions.billing_interval (see
+// handleSubscriptionUpsert / handleSubscriptionUpdated). With the yearly config
+// broken we cannot tell a yearly sub from a monthly one, so these must be
+// rejected (not silently mislabeled). Every other event (cancel/expire,
+// invoices, orders, license keys) is config-independent and processes normally.
+const BILLING_INTERVAL_EVENTS = new Set(["subscription_created", "subscription_updated"]);
 
 const TOPUP_CONFIG: TopupVariantConfig = {
   boostVariantIds: LS_VARIANT_TOPUP_BOOST,
@@ -73,6 +104,77 @@ const TOPUP_CONFIG: TopupVariantConfig = {
 
 function logAction(event: string, subscriptionId: string | null, action: string) {
   console.log(JSON.stringify({ fn: "lemonsqueezy-webhook", event, subscriptionId, action }));
+}
+
+/**
+ * A-01 fail-loud gate. When LS_VARIANT_YEARLY is unsafe (empty, or not a subset
+ * of LS_VARIANT_MANAGED) a yearly subscription would be silently recorded as
+ * "monthly" and starved by the refresh cron. So we:
+ *   1. emit a prominent error log + a best-effort analytics alarm ONCE per
+ *      instance, on the first authenticated delivery of ANY event type — so a
+ *      bad deploy is impossible to miss even if the first webhook isn't a
+ *      subscription event; and
+ *   2. return a distinct 500 for the events that WRITE billing_interval
+ *      (subscription_created/_updated) so they are RETRIED (LS retries 5xx)
+ *      rather than persisted with a guessed interval. Once the env is fixed and
+ *      the function redeployed, the retried events land correctly — no data lost.
+ *
+ * Config-independent events (cancel/expire, invoices, orders, license keys) are
+ * NOT rejected: they never touch billing_interval, so blocking them would be
+ * disruption beyond what surfacing the config error requires. Returns a 500
+ * result to short-circuit, or null to proceed. The verdict is PURE, so the only
+ * thing that can reject a webhook here is a genuine misconfig — never a transient
+ * dependency (the analytics emit is best-effort and cannot throw).
+ */
+async function guardYearlyConfig(eventName: string, check: ConfigValidation): Promise<WebhookResult | null> {
+  if (check.ok) return null;
+
+  if (!configAlarmEmitted) {
+    configAlarmEmitted = true;
+    console.error(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      error: "config_invalid",
+      code: check.code,
+      message: check.message,
+    }));
+    // Best-effort infra alarm (never throws; no-ops without POSTHOG_API_KEY).
+    // Fixed sentinel distinct id — this is a deploy alarm, tied to no person.
+    await capturePostHog("webhook_config_invalid", "ls:config-alarm", { code: check.code });
+  }
+
+  if (BILLING_INTERVAL_EVENTS.has(eventName)) {
+    return { status: 500, body: `config error: ${check.code}` };
+  }
+  return null;
+}
+
+/**
+ * A-01 guard rail for a CORRECTLY-configured deploy: a subscription arrived whose
+ * variant is in NEITHER list, so resolveBillingInterval defaulted it to
+ * "monthly". That is correct today, but it signals a NEW variant shipped without
+ * updating LS_VARIANT_MANAGED/_YEARLY — a future silent mislabel if that variant
+ * turns out to be yearly. Warn so the gap is visible before it bites. Only
+ * meaningful for subscription events (they carry variant_id); invoice/order
+ * events have none and resolve the interval to null, not "monthly".
+ */
+function warnIfUnrecognizedVariant(
+  eventName: string,
+  lsSubId: string,
+  attrs: LsSubscriptionAttributes,
+  billingInterval: BillingInterval | null,
+): void {
+  if (billingInterval !== "monthly") return;
+  const variant = attrs.variant_id !== undefined ? String(attrs.variant_id) : "";
+  if (!variant) return;
+  if (parseVariantList(LS_VARIANT_MANAGED).includes(variant)) return;
+  console.warn(JSON.stringify({
+    fn: "lemonsqueezy-webhook",
+    event: eventName,
+    subscriptionId: lsSubId,
+    warn: "unrecognized_variant",
+    variant_id: variant,
+    detail: "resolved to monthly but variant is not in LS_VARIANT_MANAGED — new variant shipped without config?",
+  }));
 }
 
 /**
@@ -137,6 +239,11 @@ export async function handleWebhook(
 
   const eventName = eventNameHeader ?? payload.meta?.event_name ?? "";
   if (!eventName) return { status: 400, body: "missing event name" };
+
+  // A-01: fail loud on an unsafe yearly-variant config BEFORE recording the
+  // idempotency key, so a rejected (5xx) subscription event is cleanly retried.
+  const configFailure = await guardYearlyConfig(eventName, deps.configCheck ?? CONFIG_CHECK);
+  if (configFailure) return configFailure;
 
   // Composite idempotency key (see header). Fall back to the signature only if
   // the resource id is missing (shouldn't happen — JSON:API requires `id`).
@@ -230,6 +337,9 @@ async function handleSubscriptionUpsert(
     logAction("subscription_created", existing.id, "stale_ignored");
     return;
   }
+  // After the stale guard (mirrors handleSubscriptionUpdated): only warn for an
+  // event we'll actually persist, so an out-of-order redelivery doesn't add noise.
+  warnIfUnrecognizedVariant("subscription_created", lsSubId, attrs, billingInterval);
 
   const orderId = attrs.order_id !== undefined ? String(attrs.order_id) : null;
   const { id: subscriptionId, ls_order_id } = await deps.store.upsertSubscription({
@@ -285,6 +395,7 @@ async function handleSubscriptionUpdated(deps: WebhookDeps, payload: LsWebhook) 
     logAction("subscription_updated", existing.id, "stale_ignored");
     return;
   }
+  warnIfUnrecognizedVariant("subscription_updated", lsSubId, attrs, billingInterval);
 
   // v1: update tier + credits_limit (new limit applies NEXT period only — the
   // open usage_period is untouched) and refresh the period-end anchor. Status is

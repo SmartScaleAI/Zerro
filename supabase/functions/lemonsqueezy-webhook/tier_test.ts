@@ -1,5 +1,11 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { parseVariantList, resolveBillingInterval, resolveTier, resolveTopupPack } from "./tier.ts";
+import {
+  parseVariantList,
+  resolveBillingInterval,
+  resolveTier,
+  resolveTopupPack,
+  validateYearlyVariantConfig,
+} from "./tier.ts";
 
 // Single managed tier: the only variant distinction that still matters is which
 // id is the YEARLY one (for billing_interval). LS_VARIANT_YEARLY lists it.
@@ -44,6 +50,42 @@ Deno.test("billing interval: yearly-listed variant → yearly, any other present
 
 Deno.test("billing interval: a MISSING variant id → null (never guessed)", () => {
   assertEquals(resolveBillingInterval(attrs(undefined), CONFIG), null);
+});
+
+// ---- A-01: yearly-variant config validation ----------------------------------
+// The full managed list (monthly + yearly); the yearly ids must be a subset.
+const MANAGED_LIST = "1735329,1735330";
+
+Deno.test("config validation: a correct config (yearly ⊆ managed, non-empty) passes", () => {
+  const v = validateYearlyVariantConfig("1735330", MANAGED_LIST);
+  assertEquals(v, { ok: true, code: null, message: null });
+  // Multiple yearly ids (e.g. live + test-mode), all in managed, also pass.
+  assertEquals(validateYearlyVariantConfig("1735330", "1735329,1735330,1735331").ok, true);
+});
+
+Deno.test("config validation: an EMPTY LS_VARIANT_YEARLY is flagged (A-01 starvation)", () => {
+  const empty = validateYearlyVariantConfig("", MANAGED_LIST);
+  assertEquals(empty.ok, false);
+  assertEquals(empty.code, "config_yearly_variants_empty");
+  // Whitespace/comma-only secrets parse to zero ids → same failure.
+  assertEquals(validateYearlyVariantConfig("  , ,", MANAGED_LIST).code, "config_yearly_variants_empty");
+});
+
+Deno.test("config validation: a yearly id NOT in LS_VARIANT_MANAGED is flagged", () => {
+  // 1735999 is not in the managed list → not a subset.
+  const orphan = validateYearlyVariantConfig("1735999", MANAGED_LIST);
+  assertEquals(orphan.ok, false);
+  assertEquals(orphan.code, "config_yearly_variants_not_subset_of_managed");
+  // One good + one orphan still fails (subset must hold for EVERY id).
+  assertEquals(
+    validateYearlyVariantConfig("1735330,1735999", MANAGED_LIST).code,
+    "config_yearly_variants_not_subset_of_managed",
+  );
+  // A non-empty yearly with an EMPTY managed list can't be a subset → flagged.
+  assertEquals(
+    validateYearlyVariantConfig("1735330", "").code,
+    "config_yearly_variants_not_subset_of_managed",
+  );
 });
 
 // ---- top-up packs (Phase 5, one-time orders) ----------------------------------

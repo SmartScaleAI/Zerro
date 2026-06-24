@@ -433,6 +433,109 @@ Deno.test("created with an unrecognized variant → still managed, billing_inter
   assertEquals(s.billing_interval, "monthly");
 });
 
+// ===========================================================================
+// §A-01 — fail loud on an unsafe yearly-variant config (launch blocker)
+// ===========================================================================
+// The check is PURE, so a test drives the verdict by injecting `configCheck`.
+// (The production default is the module-level check over the real env, exercised
+// implicitly green by every other test via test_setup.ts's valid config.)
+const BAD_CONFIG = {
+  ok: false,
+  code: "config_yearly_variants_empty",
+  message: "test: LS_VARIANT_YEARLY unsafe",
+} as const;
+
+/** Deliver a validly-signed webhook under an INJECTED (bad) config verdict. */
+async function deliverBadConfig(store: InMemoryWebhookStore, eventName: string, payload: unknown) {
+  const raw = JSON.stringify(payload);
+  const signature = await sign(raw);
+  return await handleWebhook(raw, signature, eventName, { ...deps(store), configCheck: BAD_CONFIG });
+}
+
+Deno.test("A-01: bad config → subscription_created 500'd, nothing written, idempotency untouched", async () => {
+  const store = new InMemoryWebhookStore();
+  const res = await deliverBadConfig(store, "subscription_created", subPayload());
+  assertEquals(res.status, 500);
+  assert(res.body.includes(BAD_CONFIG.code)); // distinct error code surfaced in the body
+  assertEquals(store.subs.length, 0); // never persisted with a guessed interval
+  assertEquals(store.events.size, 0); // idempotency ledger untouched → an LS retry re-processes
+});
+
+Deno.test("A-01: bad config → subscription_updated 500'd (it also writes billing_interval)", async () => {
+  const store = new InMemoryWebhookStore();
+  const res = await deliverBadConfig(store, "subscription_updated", subPayload());
+  assertEquals(res.status, 500);
+  assertEquals(store.events.size, 0);
+});
+
+Deno.test("A-01: bad config does NOT over-reject config-independent events (cancel processes)", async () => {
+  // A status-only event never writes billing_interval, so a yearly misconfig must
+  // not block it — rejecting it would be disruption beyond surfacing the error.
+  const store = new InMemoryWebhookStore();
+  store.subs.push({
+    id: "sub-1",
+    ls_subscription_id: "ls_1",
+    ls_customer_id: "5",
+    email_normalized: null,
+    ls_order_id: "order_1",
+    tier: "managed",
+    status: "active",
+    current_period_end: null,
+    credits_limit: 300,
+    billing_interval: "monthly",
+    ls_updated_at: "2026-06-02T00:00:00.000Z",
+    license_key_hash: null,
+  });
+  const res = await deliverBadConfig(
+    store,
+    "subscription_cancelled",
+    subPayload({ status: "cancelled", updated_at: "2026-06-04T00:00:00.000Z" }),
+  );
+  assertEquals(res.status, 200); // processed, not 500'd
+  assertEquals(store.sub("ls_1")!.status, "cancelled");
+});
+
+Deno.test("A-01: unrecognized variant under a VALID config → monthly + an unrecognized_variant warn", async () => {
+  // Config is correct (test_setup: yearly ⊆ managed), but variant 9999 is in
+  // NEITHER list → resolves to monthly AND emits the per-event warn so a future
+  // new variant can't silently mislabel.
+  const warnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...a: unknown[]) => warnings.push(String(a[0]));
+  try {
+    const store = new InMemoryWebhookStore();
+    const res = await deliver(store, "subscription_created", subPayload({ variant_id: 9999 }));
+    assertEquals(res.status, 200);
+    assertEquals(store.sub("ls_1")!.billing_interval, "monthly");
+    assert(warnings.some((w) => w.includes("unrecognized_variant") && w.includes("9999")));
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+Deno.test("A-01: a STALE subscription_created with an unrecognized variant does NOT warn (dropped event)", async () => {
+  // The warn must only fire for events we actually persist — an out-of-order
+  // redelivery (older updated_at) is dropped as stale, so it should be silent
+  // (symmetry with subscription_updated, which warns after the stale guard).
+  const store = new InMemoryWebhookStore();
+  await deliver(store, "subscription_created", subPayload({ variant_id: 101, updated_at: "2026-06-05T00:00:00.000Z" }));
+  const warnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...a: unknown[]) => warnings.push(String(a[0]));
+  try {
+    // Older updated_at than what we hold → stale → dropped before the warn.
+    const res = await deliver(
+      store,
+      "subscription_created",
+      subPayload({ variant_id: 9999, updated_at: "2026-06-01T00:00:00.000Z" }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(warnings.filter((w) => w.includes("unrecognized_variant")).length, 0);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 Deno.test("payment_success (renewal) → new period + credits reset, status active", async () => {
   const store = new InMemoryWebhookStore();
   await deliver(store, "subscription_created", subPayload());
