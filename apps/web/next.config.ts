@@ -19,6 +19,31 @@ const nextConfig: NextConfig = {
   },
   // PostHog needs trailing-slash-sensitive routes to pass through untouched.
   skipTrailingSlashRedirect: true,
+  // K-01 / K-04: don't leak full URLs (which may carry secret query params like
+  // the LemonSqueezy `license_key`) to cross-origin destinations via `Referer`.
+  async headers() {
+    return [
+      {
+        // Site-wide default: send only the origin on cross-origin requests,
+        // and nothing at all on HTTPS→HTTP downgrades.
+        source: "/:path*",
+        headers: [
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+        ],
+      },
+      {
+        // The checkout hand-off briefly holds the `license_key` in the URL
+        // before the page scrubs it — send NO referrer from here so the key
+        // can never ride the `Referer` on any outbound request (analytics
+        // beacon, image, font, …). More specific, so it wins for this route.
+        source: "/checkout-complete",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+    ]
+  },
   async redirects() {
     return [
       {

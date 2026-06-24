@@ -9,6 +9,10 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // Lets the Node-native test runner import sibling modules by their real
+    // `.ts` path (e.g. lib/analytics-sanitize.test.ts). Safe: emit is off and
+    // app/bundler imports still use extensionless `@/...` paths.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",

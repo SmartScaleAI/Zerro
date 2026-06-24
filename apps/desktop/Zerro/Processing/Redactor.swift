@@ -85,17 +85,9 @@ enum Redactor {
 
             let finalLine: String
             if redact {
-                let secrets = SecretDetector.sensitiveSubstrings(in: line)
-                if secrets.isEmpty {
-                    finalLine = line
-                } else {
-                    secretBoxes.append(observation.boundingBox)
-                    var masked = line
-                    for secret in secrets {
-                        masked = masked.replacingOccurrences(of: secret, with: "[REDACTED]")
-                    }
-                    finalLine = masked
-                }
+                let masked = maskSecrets(in: line)
+                if masked.didMask { secretBoxes.append(observation.boundingBox) }
+                finalLine = masked.text
             } else {
                 finalLine = line
             }
@@ -121,6 +113,25 @@ enum Redactor {
             return Output(image: image, text: text, lines: lineBoxes)
         }
         return Output(image: boxed, text: text, lines: lineBoxes)
+    }
+
+    // MARK: - Text masking
+
+    /// Mask every `SecretDetector` hit in `line` as `[REDACTED]`, returning the
+    /// (possibly unchanged) line and whether anything was masked. This is the
+    /// TEXT half of redaction, factored out of `process` so other on-device
+    /// egress paths — notably the Dev-Mode anchor OCR hint (DevAnchorPipeline) —
+    /// mask their strings IDENTICALLY to the keyframe pass: same detector, same
+    /// `[REDACTED]` token. The `didMask` flag tells the pixel pass which line's
+    /// box to paint, keeping pixels and text in lock step.
+    nonisolated static func maskSecrets(in line: String) -> (text: String, didMask: Bool) {
+        let secrets = SecretDetector.sensitiveSubstrings(in: line)
+        guard !secrets.isEmpty else { return (line, false) }
+        var masked = line
+        for secret in secrets {
+            masked = masked.replacingOccurrences(of: secret, with: "[REDACTED]")
+        }
+        return (masked, true)
     }
 
     // MARK: - Compositing

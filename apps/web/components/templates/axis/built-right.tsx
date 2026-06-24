@@ -20,7 +20,7 @@ const items: Item[] = [
         icon: Lock,
         title: "Local-first processing",
         description:
-            "Your voice and screen recordings are analyzed securely on your own device, ensuring your data never leaves your Mac without your permission.",
+            "Audio isolation, frame downsampling, and best-effort on-screen-text redaction all run on your Mac before anything is sent. On Managed plans the prepped frames and your spoken narration then go to a third-party AI provider to generate your result; with BYOK they go straight to the provider on your own key — no Zerro servers in between.",
     },
     {
         icon: KeyRound,

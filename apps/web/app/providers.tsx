@@ -4,6 +4,7 @@ import { Suspense, useEffect } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider, usePostHog } from "posthog-js/react";
+import { sanitizePostHogEvent } from "@/lib/analytics-sanitize";
 
 // PostHog for the marketing site. Deliberately the opposite posture of the
 // macOS app: autocapture ON (a landing page is the right place for it), but
@@ -32,6 +33,11 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
       capture_pageleave: true,
       disable_session_recording: true,
       enable_heatmaps: true,
+      // K-01: scrub secret query params (e.g. the LemonSqueezy `license_key`
+      // landing on /checkout-complete) out of `$current_url`/`$referrer` on
+      // EVERY event before it leaves the browser — the last line of defense in
+      // case the URL hasn't been cleaned from the address bar yet.
+      before_send: sanitizePostHogEvent,
     });
   }, []);
 

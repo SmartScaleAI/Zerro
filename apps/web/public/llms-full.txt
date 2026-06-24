@@ -16,10 +16,12 @@ instructions into a structured prompt for AI coding agents. You frame a region o
 your screen, dictate what you want in plain language, and Zerro returns a Markdown
 prompt ready to paste into Cursor, Windsurf, v0, or any agent you already use.
 
-Processing is local-first: audio isolation and frame downsampling happen on your
-machine before a single API call turns the recording into a prompt. You bring your
-own OpenAI and Gemini keys, stored in the macOS Keychain — there are no servers in
-the middle handling your data, and no account required.
+Processing is local-first: audio isolation and frame downsampling always happen on
+your machine before the AI step turns the recording into a prompt. You can let Zerro
+handle the AI on the Managed plan — where your prepped (redacted) frames and audio
+are sent to a third-party AI provider — or bring your own OpenAI, Google, or
+Anthropic keys, stored in the macOS Keychain, so the request goes straight to the
+provider with no Zerro servers in the middle and no account required.
 
 Think of it as voice dictation for your codebase: instead of plain text, you get a
 structured prompt. There's no new app to learn; the whole flow runs from the menu bar.
@@ -32,8 +34,10 @@ structured prompt. There's no new app to learn; the whole flow runs from the men
    want the agent to see. Native macOS crosshair, no window switching.
 2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
    Point at things, change your mind, ramble. Zerro records up to 3 minutes.
-3. **Zerro processes locally.** Audio gets isolated and frames get downsampled on
-   your machine. Then a single API call turns it into a structured prompt.
+3. **Your Mac preps it, then AI.** Audio gets isolated and frames get downsampled on
+   your machine, with detected on-screen secrets masked. Then an AI call — in the
+   cloud on the Managed plan, or on your own key with BYOK — turns it into a
+   structured prompt.
 4. **Paste the prompt.** A Markdown prompt lands on your clipboard, ready to drop
    into Cursor, Windsurf, v0, or wherever you ship from.
 
@@ -142,9 +146,13 @@ and future updates. A Managed plan at $12/month — where Zerro handles token us
 and no API keys are required — is coming soon.
 
 **Is my data private?**
-Yes. Audio isolation and frame downsampling run locally on your Mac before anything
-leaves it. Zerro uses your own OpenAI and Gemini keys, stored in the macOS Keychain,
-so there are no Zerro servers handling your recordings.
+Audio isolation and frame downsampling always run locally on your Mac, and a
+best-effort pass masks the on-screen secrets it detects (it can't catch everything)
+before anything leaves your machine. On the Managed plan, those prepped, redacted
+frames and your spoken narration are sent to a third-party AI provider (OpenAI,
+Google, or Anthropic) to generate the result — audio is sent as recorded and isn't
+redacted. On BYOK, the request goes straight to the provider on your own key, so it
+never touches Zerro's servers.
 
 **Does Zerro need an account?**
 No. The BYOK plan requires no account and no subscription. You bring your own API

@@ -2489,7 +2489,8 @@ final class AppState {
             clicks: processed.clicks,
             sourceVideoURL: processed.sourceVideoURL,
             baseTimestamp: processed.duration,
-            workingDirectory: processed.workingDirectory
+            workingDirectory: processed.workingDirectory,
+            redactSecrets: self.recordingRedactSecrets
         )
         self.devResolvedAnchors = resolved
 
@@ -2699,7 +2700,8 @@ final class AppState {
                         clicks: processed.clicks,
                         sourceVideoURL: processed.sourceVideoURL,
                         baseTimestamp: processed.duration,
-                        workingDirectory: processed.workingDirectory
+                        workingDirectory: processed.workingDirectory,
+                        redactSecrets: self.recordingRedactSecrets
                     )
                     self.devResolvedAnchors = resolved
                     anchorFrames = frames
@@ -3236,16 +3238,21 @@ final class AppState {
         clicks: [ResolvedClick],
         sourceVideoURL: URL?,
         baseTimestamp: CMTime,
-        workingDirectory: URL
+        workingDirectory: URL,
+        redactSecrets: Bool
     ) async -> (resolved: [ResolvedDeixisAnchor], anchorFrames: [ExtractedFrame]) {
         let candidates = DeixisResolver.resolve(
             words: words,
             cursorTrack: cursorTrack,
             clickTimes: clicks.map(\.seconds)
         )
+        // F-01: honor the redaction toggle on the anchor path, exactly as the
+        // keyframe pipeline does — the crop pixels + OCR hint are masked in lock
+        // step before they egress to the managed/trial proxy or the BYOK provider.
         let resolved = await DevAnchorPipeline.build(
             candidates: candidates,
-            sourceVideoURL: sourceVideoURL
+            sourceVideoURL: sourceVideoURL,
+            redactSecrets: redactSecrets
         )
         let anchorFrames = writeAnchorFrames(
             resolved, baseTimestamp: baseTimestamp, into: workingDirectory

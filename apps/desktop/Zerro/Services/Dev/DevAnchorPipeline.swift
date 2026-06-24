@@ -41,10 +41,17 @@ enum DevAnchorPipeline {
     /// Build the resolved anchors. Async — extracts a native frame per reference.
     /// Best-effort per anchor: a failed extraction yields an anchor with no marked
     /// frame / OCR (still carrying the dwell point + a low client confidence).
+    ///
+    /// `redactSecrets` mirrors the keyframe contract (F-01): when ON, the crop
+    /// pixels AND the OCR hint strings are passed through the SAME `Redactor` /
+    /// `SecretDetector` pass the keyframes use, in lock step, BEFORE the marker is
+    /// composited and the crop is encoded — so the anchor path never egresses a
+    /// raw secret the user asked to redact. OFF is the pre-fix behavior unchanged.
     static func build(
         candidates: [CandidateAnchor],
         sourceVideoURL: URL?,
-        cropSize: Int = defaultCropSize
+        cropSize: Int = defaultCropSize,
+        redactSecrets: Bool = ProcessingConfig.redactSecretsDefault
     ) async -> [ResolvedDeixisAnchor] {
         var out: [ResolvedDeixisAnchor] = []
         out.reserveCapacity(candidates.count)
@@ -55,8 +62,12 @@ enum DevAnchorPipeline {
                let native = try? await NativeFrameExtractor.frame(atSeconds: c.targetSeconds, from: videoURL),
                let cropped = NativeFrameExtractor.crop(native, around: (point.x, point.y), cropSize: cropSize) {
                 // OCR the CLEAN crop (the marker must not pollute recognition).
-                ocr = VisionOCR.recognize(cropped.image, nearTopLeft: cropped.pointInCrop)
-                let marked = AnchorMarker.composite(on: cropped.image, atTopLeft: cropped.pointInCrop) ?? cropped.image
+                let recognized = VisionOCR.recognize(cropped.image, nearTopLeft: cropped.pointInCrop)
+                // F-01: redact the crop pixels + OCR hint in lock step BEFORE the
+                // marker is composited / the crop is encoded (no-op when OFF).
+                let safe = redactCrop(cropped.image, ocr: recognized, redact: redactSecrets)
+                ocr = safe.ocr
+                let marked = AnchorMarker.composite(on: safe.image, atTopLeft: cropped.pointInCrop) ?? safe.image
                 jpeg = NativeFrameExtractor.jpegData(marked).map { $0.base64EncodedString() }
             }
             out.append(ResolvedDeixisAnchor(
@@ -68,6 +79,28 @@ enum DevAnchorPipeline {
             ))
         }
         return out
+    }
+
+    /// F-01 — apply the keyframe redaction contract to a SINGLE anchor crop:
+    ///   • PIXELS: run the crop through the SAME `Redactor` box pass the keyframes
+    ///     use, painting opaque boxes over EVERY detected secret line in the crop
+    ///     (full-crop coverage, not just the strings we attach). The crop is small
+    ///     (~768²), so the extra on-device Vision pass is negligible.
+    ///   • TEXT: mask each (proximity-ordered) OCR hint string with the SAME
+    ///     `SecretDetector`, so a secret blacked out in the crop is also
+    ///     `[REDACTED]` in the text the model sees — pixels and text in lock step.
+    /// `redact == false` returns the inputs unchanged (OFF is byte-for-byte the
+    /// pre-fix path). Pure + Vision-only, so it's unit-testable on a synthesized
+    /// crop with no source video (see DevAnchorRedactionTests).
+    nonisolated static func redactCrop(
+        _ image: CGImage,
+        ocr: [OCRString],
+        redact: Bool
+    ) -> (image: CGImage, ocr: [OCRString]) {
+        guard redact else { return (image, ocr) }
+        let boxed = Redactor.process(image, redact: true).image
+        let masked = ocr.map { OCRString(text: Redactor.maskSecrets(in: $0.text).text, box: $0.box) }
+        return (boxed, masked)
     }
 
     /// The client confidence signal (§7): a click is certain; a tight dwell over a

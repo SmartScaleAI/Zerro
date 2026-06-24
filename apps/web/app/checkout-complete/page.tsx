@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -16,26 +16,49 @@ import { cn } from "@/lib/utils";
 // (e.g. product, and LemonSqueezy link variables like [license_key]/[order_id]).
 const APP_SCHEME = "zerro://checkout-complete";
 
-const buildDeepLink = (): string => {
-    // Read the live query string so all LemonSqueezy params pass through
-    // verbatim. Reading from `window.location` (not `useSearchParams`) keeps the
-    // page a simple client component with no Suspense/SSR bail-out.
-    const search = typeof window !== "undefined" ? window.location.search : "";
-    return `${APP_SCHEME}${search}`;
-};
-
 const Page = () => {
-    const [deepLink, setDeepLink] = useState(APP_SCHEME);
+    // The license-bearing deep link is held in a ref (memory) and NEVER written
+    // to the DOM. Critically, the fallback <a> keeps a key-free href and hands
+    // off via onClick from this ref — if the full link were the anchor's href,
+    // PostHog autocapture would lift the license key off `attr__href` on click.
+    const deepLinkRef = useRef(APP_SCHEME);
 
     useEffect(() => {
-        const url = buildDeepLink();
-        setDeepLink(url);
-        // Auto-attempt the hand-off. If Zerro is installed, macOS opens it; if
-        // not, nothing visible happens and the manual button below is the
-        // fallback. Either way the app also re-checks entitlement when it next
-        // becomes active, so the purchase is never lost.
+        // K-01: capture the LemonSqueezy query string (license_key / order_id /
+        // product …) into memory ONCE, before anything scrubs it. The deep link
+        // is built from this snapshot so the desktop app still receives the key.
+        // Reading `window.location.search` (not `useSearchParams`) keeps this a
+        // simple client component with no Suspense/SSR bail-out.
+        const search = window.location.search;
+        const url = `${APP_SCHEME}${search}`;
+        deepLinkRef.current = url;
+
+        // Replace the https URL with a key-free one so the license key never
+        // persists in the address bar / browser history and can't ride the
+        // `Referer` on any later outbound subresource request from this page.
+        // (Analytics is a separate concern: the manual `$pageview` reads
+        // `useSearchParams`, which replaceState does NOT update, so the PostHog
+        // `before_send` hook — not this line — is what keeps the key out of
+        // analytics.) The in-memory `url` keeps the key for the hand-off below.
+        if (search) {
+            window.history.replaceState(null, "", window.location.pathname);
+        }
+
+        // Auto-attempt the hand-off. Assigning a custom scheme triggers the OS
+        // handler without navigating this document, so the cleaned URL stays put.
+        // If Zerro is installed, macOS opens it; if not, nothing visible happens
+        // and the manual button below is the fallback. Either way the app
+        // re-checks entitlement when it next becomes active, so the purchase is
+        // never lost.
         window.location.href = url;
     }, []);
+
+    // Manual fallback. The anchor's href is the key-free scheme (autocapture-safe);
+    // the real navigation uses the in-memory deep link so the app still gets the key.
+    const handleOpen = (e: React.MouseEvent<HTMLAnchorElement>) => {
+        e.preventDefault();
+        window.location.href = deepLinkRef.current;
+    };
 
     return (
         <div className="relative flex min-h-screen h-full w-full flex-col items-center justify-center gap-6 p-4">
@@ -66,7 +89,8 @@ const Page = () => {
                     </div>
 
                     <a
-                        href={deepLink}
+                        href={APP_SCHEME}
+                        onClick={handleOpen}
                         className={cn(buttonVariants(), "w-full rounded-full")}
                     >
                         Open Zerro

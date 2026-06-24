@@ -1,6 +1,6 @@
 # Zerro
 
-> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into a structured prompt for AI coding agents. Frame a region of your screen, dictate what you want, and Zerro returns a Markdown prompt ready to paste into Cursor, Windsurf, v0, or any agent. Processing is local-first and you bring your own OpenAI and Gemini keys — no servers in the middle, no account required.
+> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into a structured prompt for AI coding agents. Frame a region of your screen, dictate what you want, and Zerro returns a Markdown prompt ready to paste into Cursor, Windsurf, v0, or any agent. Audio isolation and frame downsampling always happen on your Mac first; the AI step runs in the cloud on the Managed plan, or — with BYOK — goes straight to the provider on your own key, no Zerro servers in the middle and no account required.
 
 Zerro is built for developers who already work with AI coding agents and would rather talk through a change than type out every instruction. You speak roughly 4× faster than you type; Zerro closes that gap by capturing what's on screen alongside what you say.
 

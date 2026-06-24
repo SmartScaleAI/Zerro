@@ -130,9 +130,9 @@ const steps: Step[] = [
   {
     n: "03",
     icon: Cpu,
-    title: "Zerro processes locally",
+    title: "Prepped on your Mac, then AI",
     description:
-      "Your recordings are processed securely right on your device. Advanced AI models quickly analyze your screen and voice to generate the perfect ready-to-use artifact or answer.",
+      "Your Mac handles the first pass on its own — isolating the audio, downsampling the frames, and masking detected on-screen secrets. Then a single AI call turns it into your finished result: in the cloud on the Managed plan, or straight to your own key with BYOK.",
     visual: <ProcessingVisual />,
   },
   {

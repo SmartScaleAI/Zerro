@@ -50,8 +50,9 @@ export default function PrivacyPage() {
           </li>
           <li>
             <Strong>Processing starts on your Mac.</Strong> Audio isolation,
-            frame downsampling, and secret redaction run locally before
-            anything is uploaded.
+            frame downsampling, and best-effort secret redaction run locally
+            before anything is uploaded. Redaction covers detected on-screen
+            text only — your spoken audio is uploaded as recorded.
           </li>
           <li>
             <Strong>On the BYOK plan, recordings never touch our servers.</Strong>{" "}
@@ -89,9 +90,14 @@ export default function PrivacyPage() {
           <Strong>Recordings (Managed and Trial plans).</Strong> When you start
           a recording, the app captures the screen region you select and your
           voice. Your Mac first downsamples frames, isolates audio, and masks
-          detected secrets before upload. The frames and audio are then sent
-          to our generation service, where the audio is transcribed and the
-          content is sent to the AI model you selected to produce your prompt.
+          detected secrets before upload. This masking is best-effort: it scans
+          on-screen text for common structured secrets (such as API keys and
+          tokens), so it can miss things, and it does not apply to your spoken
+          audio — your narration is uploaded and transcribed as recorded. The
+          frames and audio are then sent to our generation service, where the
+          audio is transcribed and the content is sent to the third-party AI
+          model you selected (OpenAI, Google, or Anthropic) to produce your
+          prompt.
           This data is processed transiently: frames, audio, transcripts, and
           prompts are not stored in our database. The generated output is held
           in a short-lived cache for up to 15 minutes solely so that a dropped
