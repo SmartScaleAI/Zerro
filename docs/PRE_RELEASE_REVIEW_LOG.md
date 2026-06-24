@@ -72,6 +72,8 @@ Quick triage of what currently gates go-live. Full detail in the master table.
 
 **Scorecard:** ~115 findings logged · **7 launch-blockers** (1 conditional) · ~15 cheap pre-launch one-liners · ~8 pre-launch decisions/confirmations · remainder post-launch. Nothing rated catastrophic or architectural.
 
+> **Status update (2026-06-23):** ✅ **All 7 launch-blockers fixed in code, reviewed, and being deployed to prod for a testing pass.** X-01 already live; A-04 + A-01 (Supabase), G-01 + F-01 (app build), K-01 + K-02 (Vercel) shipping now. Ops items: B-05 budget caps + A-01 yearly-config verify + K-02 wording = in progress. Next phase: the cheap pre-launch hardening list (🟡 items).
+
 ### 🔴 Launch-blockers — fix or consciously accept before release
 1. **X-01** — farmable trials × unmetered `/convert`+`/dev_transcribe` × no global spend cap → unbounded provider spend. *Fix:* meter free endpoints against the per-grant pool + a coarse org-wide daily spend cap/alert.
 2. **A-04** — generation slot reclaimed mid-flight (180s stale < ~480s hold) → cap-1 broken → concurrent overspend. *Fix:* one-line stale-window bump / heartbeat.
