@@ -43,7 +43,10 @@ jobs:
     steps:
       # ----------------------------------------------------------------------
       - name: Checkout app repo
-        uses: actions/checkout@v4
+        # Pinned to a full commit SHA (supply-chain hardening L-03). The trailing
+        # comment is the human-readable tag the SHA corresponds to; bump both
+        # together when upgrading.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           fetch-depth: 0          # tags + full history for build-number derivation
 
@@ -125,11 +128,23 @@ jobs:
       # Fetch the Sparkle CLI tools (generate_appcast, sign_update) that match
       # the app's pinned Sparkle version.
       - name: Fetch Sparkle tools
+        env:
+          # SHA-256 of the official Sparkle-2.9.2.tar.xz release asset (supply-chain
+          # hardening L-02). Source: the GitHub release-asset digest published by
+          # sparkle-project/Sparkle for tag 2.9.2, cross-checked against
+          # `shasum -a 256` of the downloaded tarball. generate_appcast below is fed
+          # the EdDSA *private* signing key on stdin, so a tampered tarball could
+          # exfiltrate it — this digest must be bumped in lockstep with
+          # SPARKLE_VERSION (env, top of file).
+          SPARKLE_SHA256: "1cb340cbbef04c6c0d162078610c25e2221031d794a3449d89f2f56f4df77c95"
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
           URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
           curl -fsSL "$URL" -o sparkle.tar.xz
+          # Integrity gate: verify the download against the pinned digest and FAIL
+          # the job on mismatch, BEFORE extracting or handing the key to it.
+          echo "${SPARKLE_SHA256}  sparkle.tar.xz" | shasum -a 256 -c -
           mkdir -p sparkle && tar -xf sparkle.tar.xz -C sparkle
           echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/sparkle/bin/generate_appcast" --version || true
@@ -140,7 +155,10 @@ jobs:
       # `posthog-cli` during the Archive step below. The macos runner ships
       # Node/npm, so a global install puts `posthog-cli` on PATH.
       - name: Install PostHog CLI
-        run: npm install -g @posthog/cli
+        # Pinned to an exact version (supply-chain hardening L-02) so a tampered or
+        # malicious newer publish can't slip into the signed-build runner. Bump
+        # deliberately. (0.7.30 is what the unpinned `latest` resolved to at pin time.)
+        run: npm install -g @posthog/cli@0.7.30
 
       # ----------------------------------------------------------------------
       # Versions are passed directly to xcodebuild below (command-line build
@@ -267,11 +285,26 @@ jobs:
       # not signed in; the public download is served from Supabase instead.
       # x-upsert overwrites Zerro.dmg so the public URL stays stable across
       # releases. Must run AFTER stapling so the stapled dmg is what ships.
+      #
+      # SECURITY — L-01 (over-privileged upload credential; remediation pending):
+      #   This step authenticates with SUPABASE_SERVICE_ROLE_KEY, which is
+      #   full backend access (bypasses all RLS). It is over-privileged for what
+      #   it does: upsert one object (downloads/Zerro.dmg). The bucket today has
+      #   ZERO RLS write policies, so service_role is currently the only path that
+      #   can write — a least-privilege swap REQUIRES a Supabase-side change.
+      #   Cleanest fix (see docs/README-backend.md → "Release DMG upload (L-01)"): a tiny edge
+      #   function mints a one-time, path-scoped, 2-hour `createSignedUploadUrl`
+      #   for downloads/Zerro.dmg; CI then PUTs to that URL holding NO Supabase key
+      #   (only a narrow RELEASE_UPLOAD_SECRET). Owner action: deploy the function +
+      #   set secrets, then switch this step (snippet in the runbook). Until then:
+      #   the key is a registered GitHub secret (auto-masked in logs) and is never
+      #   echoed — no `set -x`, no `curl -v`. ROTATE SUPABASE_SERVICE_ROLE_KEY as
+      #   part of that change.
       - name: Upload notarized dmg to Supabase Storage
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          set -euo pipefail
+          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
           curl --fail-with-body -X POST \
             "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads/${APP_NAME}.dmg" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
@@ -301,7 +334,9 @@ jobs:
 
       # ----------------------------------------------------------------------
       - name: Create GitHub Release + upload dmg
-        uses: softprops/action-gh-release@v2
+        # Pinned to a full commit SHA (supply-chain hardening L-03). Trailing
+        # comment is the tag the SHA maps to; bump both together on upgrade.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ steps.ver.outputs.marketing }}
