@@ -40,8 +40,8 @@ Claude Code against a dedicated handoff prompt; findings are triaged here.
 **Ops/manual:** B-05 provider budget caps · A-01 yearly-variant verify + test purchase · K-02 wording sign-off · L-09 EdDSA key-pair verify · Apple Developer Program License Agreement acceptance (blocking the release build at notarization).
 
 ### Pre-launch hardening list (🟡, cheap) — order
-1. ✅ **D-01** revoke anon cron RPC (migration added; deploy pending)
-2. ✅ **C-10** force RLS on `affiliate_referrals` (migration added; deploy pending) — also fixed a discovered missing `service_role` grant (**C-12**)
+1. ✅ **D-01** revoke anon cron RPC — **deployed + verified 2026-06-23** (advisor 0028/0029 cleared; anon/authenticated can't exec; postgres/cron unaffected)
+2. ✅ **C-10**(+**C-12**) force RLS + `service_role` grant on `affiliate_referrals` — **deployed + verified** (relforcerowsecurity=true; service_role INSERT=true)
 3. ✅ **E-01** checkout deeplink auto-activation (prefill+confirm; replace-confirm gate; analytics gated) — app build
 4. ✅ **H-05 / H-08** in-app privacy/redaction copy (onboarding + Settings; + paywall sweep) — pending owner wording sign-off; app build
 5. ✅ **E-02 + K-08** reconcile credits→30 + refresh `llms.txt` (decision: 30; secret already 30) — applied + verified (stale values gone, new facts present); Vercel + app-build deploy pending
@@ -62,7 +62,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 ## Master findings (by section, with current status)
 
 ### A — Payments & billing backend ✅ reviewed
-- **A-01** Payments · 🟠 fixed-in-code — `LS_VARIANT_YEARLY` empty/wrong → yearly subs labeled monthly → excluded from yearly-refresh cron → starved. `validateYearlyVariantConfig` + fail-loud `guardYearlyConfig` (500 on subscription_created/_updated, alarm). Manual: verify prod variant value + live variant + test purchase → `billing_interval='yearly'`. Deploy pending.
+- **A-01** Payments · 🟠 fixed-in-code — `LS_VARIANT_YEARLY` empty/wrong → yearly subs labeled monthly → excluded from yearly-refresh cron → starved. `validateYearlyVariantConfig` + fail-loud `guardYearlyConfig` (500 on subscription_created/_updated, alarm). Manual: verify prod variant value + live variant + test purchase → `billing_interval='yearly'`. Deploy pending. **Config VERIFIED CORRECT 2026-06-23** (digest match: `LS_VARIANT_YEARLY`=`1774512`, `LS_VARIANT_MANAGED`=`1774511,1774512` → yearly ⊆ managed; validation will pass, no `config_invalid`). **Deployed 2026-06-23** (lemonsqueezy-webhook v36). Remaining: confirm the LS yearly variant is published/purchasable + optional end-to-end test purchase.
 - **A-02** Reliability · 🟡 — billing test suite not run in CI. Add PR/main workflow (deno test + SQL tests). Reinforced by L-04/L-05.
 - **A-03** Security · 🟡 — unsigned `X-Event-Name` header trusted over signed `meta.event_name`. Derive from signed body.
 - **A-04** Cost/Reliability · ✅ fixed-in-code — slot stale-window 180s<480s hold. `slotStaleSeconds(n)` derives 600s (generate) / 360s (convert) from `PROVIDER_TIMEOUT_MS`; all 3 slot paths. Deploy pending.
