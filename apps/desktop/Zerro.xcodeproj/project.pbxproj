@@ -25,7 +25,6 @@
 /* Begin PBXFileReference section */
 		18AA00000000000000000002 /* ZerroTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZerroTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF8546CF2FC74ACC000EB1A6 /* Zerro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zerro.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FF90F6FF2FC7C36A004BFBAD /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShortcuts.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -81,7 +80,6 @@
 				FF8546D12FC74ACC000EB1A6 /* Zerro */,
 				18AA00000000000000000006 /* ZerroTests */,
 				FF8546D02FC74ACC000EB1A6 /* Products */,
-				FF90F6FE2FC7C363004BFBAD /* Shortcuts */,
 				FFD158EF2FCBA3050043FE79 /* Frameworks */,
 			);
 			sourceTree = "<group>";
@@ -93,14 +91,6 @@
 				18AA00000000000000000002 /* ZerroTests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		FF90F6FE2FC7C363004BFBAD /* Shortcuts */ = {
-			isa = PBXGroup;
-			children = (
-				FF90F6FF2FC7C36A004BFBAD /* AppShortcuts.swift */,
-			);
-			path = Shortcuts;
 			sourceTree = "<group>";
 		};
 		FFD158EF2FCBA3050043FE79 /* Frameworks */ = {
