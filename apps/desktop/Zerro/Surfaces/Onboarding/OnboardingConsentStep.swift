@@ -54,16 +54,6 @@ struct ConsentStepView: View {
                     .tint(Color.vfBrandAccent)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-
-                // Plain-language disclosure of where a recording goes (H-05).
-                // Mirrors the website's privacy/built-right wording: local prep
-                // and BYOK stay positives, but we name the third-party send and
-                // keep redaction honest (best-effort, audio never covered).
-                Text("Audio isolation, frame downsampling, and best-effort secret redaction happen on your Mac first; then, on the Managed and Trial plans, the prepped frames and your spoken narration are sent to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your result \u{2014} with your own API key, straight to that provider instead. Redaction can miss things and never covers your spoken audio.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.vfTextTertiary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         } accessory: {
             analyticsToggleRow

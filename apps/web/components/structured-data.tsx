@@ -65,11 +65,11 @@ export function SoftwareApplicationJsonLd() {
         operatingSystem: "macOS",
         url: SITE_URL,
         description:
-          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns exactly what you need — an agent prompt, a ready-to-send message, an exact code snippet, a written-up document, or a clear answer to your question. Audio isolation and frame downsampling run locally; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
+          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns exactly what you need — an agent prompt, a ready-to-send message, an exact code snippet, a written-up document, or a clear answer to your question. Processing runs locally on your Mac to prepare your recording; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
         featureList: [
           "Returns the right output for the task — agent prompt, message, snippet, document, or a plain-language answer",
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
-          "Local-first processing — audio isolation and frame downsampling run on your machine",
+          "Local-first processing — your recording is prepared locally on your machine",
           "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
           "30 free credits to start — no card, no key, no time limit",
           "3-minute recording cap keeps each request fast and predictable",

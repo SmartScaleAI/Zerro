@@ -45,7 +45,7 @@ const SelectRegionVisual = () => (
 const NarrateVisual = () => (
   <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-neutral-900 to-neutral-950 p-4">
     {/* Recording pill mockup */}
-    <div className="flex items-center gap-2 rounded-full bg-neutral-800 px-3 py-2 shadow-lg ring-1 ring-white/10">
+    <div className="flex h-9 w-44 items-center justify-center gap-2 rounded-full bg-neutral-800 px-3 shadow-lg ring-1 ring-white/10">
       <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
       <span className="font-mono text-sm text-white/90 tabular-nums">
         0:59 / 3:00
@@ -72,14 +72,14 @@ const NarrateVisual = () => (
 
 const ProcessingVisual = () => (
   <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-neutral-900 to-neutral-950 p-4">
-    <div className="flex items-center gap-2 rounded-full bg-neutral-800 px-3 py-2 shadow-lg ring-1 ring-white/10">
+    <div className="flex h-9 w-44 items-center justify-center gap-2 rounded-full bg-neutral-800 px-3 shadow-lg ring-1 ring-white/10">
       <motion.div
         animate={{ rotate: 360 }}
         transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
         className="h-3 w-3 rounded-full border-2 border-white/15 border-t-white/70"
       />
       <span className="text-sm font-medium text-white/90">
-        Generating your response…
+        Generating…
       </span>
     </div>
   </div>
@@ -132,7 +132,7 @@ const steps: Step[] = [
     icon: Cpu,
     title: "Prepped on your Mac, then AI",
     description:
-      "Your Mac handles the first pass on its own — isolating the audio, downsampling the frames, and masking detected on-screen secrets. Then a single AI call turns it into your finished result: in the cloud on the Managed plan, or straight to your own key with BYOK.",
+      "Your Mac prepares the recording and masks on-screen secrets first. Then one AI call creates the result — Managed in the cloud, or BYOK with your own key.",
     visual: <ProcessingVisual />,
   },
   {
@@ -163,9 +163,8 @@ const Feature = () => {
           Record. Speak. Copy.
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
-          Think voice dictation — but instead of plain text, you get exactly
-          what you need: a ready-to-use artifact, or a straight answer. No new
-          app to learn; the whole flow runs from the menu bar.
+          Speak what you need and get a ready-to-use artifact or answer from the
+          menu bar.
         </p>
       </div>
 

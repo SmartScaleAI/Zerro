@@ -106,7 +106,7 @@ const tiers: Tier[] = [
             yearlyTotal: "$144 billed yearly",
             // Limited-offer comparison: full price $25/mo → $300/yr.
             compareMonthly: "$25 per month",
-            compareYearlyTotal: "$300 billed yearly",
+            compareYearlyTotal: "$18 per month",
         },
         badge: "Most popular",
         limitedOffer: true,
@@ -114,7 +114,7 @@ const tiers: Tier[] = [
             "30 free credits to start",
             {
                 label: "300 credits per month",
-                note: "≈ 75 generations with Gemini 3.5 Flash, or ~30 with Claude Opus.",
+                note: "≈ 50 generations on standard models.",
             },
             "6 models to choose from — Claude, GPT & Gemini",
             "Top up anytime — Boost (200 credits, $10) or Power (500 credits, $22)",
@@ -175,14 +175,25 @@ const Pricing = () => {
                 </p>
             </div>
 
-            {/* Trial lead-in — applies to every path. Not a card, just a prominent
-                hook. Extra bottom margin lifts it clear of the Managed card's
-                "Limited offer" ribbon, which straddles the card's top edge. */}
-            <div className="relative z-10 mb-12 lg:mb-16 flex justify-center">
-                <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-1.5 text-sm font-medium text-primary">
+            {/* Primary download CTA — one cohesive, centered group lifted above the
+                cards: the button leads as the primary action, with the "Start free…"
+                line directly beneath it as supporting reassurance microcopy (rather
+                than a detached pill above). Extra bottom margin lifts it clear of the
+                Managed card's "Limited offer" ribbon, which straddles the card's top
+                edge. */}
+            <div className="relative z-10 mb-12 lg:mb-16 flex flex-col items-center gap-3.5">
+                <DownloadButton
+                    placement="pricing"
+                    className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
+                    size="lg"
+                >
+                    <AnimatedBorder />
                     <Sparkles className="h-4 w-4" strokeWidth={2} />
+                    Get your free credits
+                </DownloadButton>
+                <p className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     Start free — 30 credits. No card, no key, no time limit.
-                </span>
+                </p>
             </div>
 
             <div className="relative z-10 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2 lg:gap-6 max-w-4xl mx-auto">
@@ -311,55 +322,63 @@ const Pricing = () => {
                                                 </button>
                                             ))}
                                         </div>
-                                        <span
-                                            className={cn(
-                                                "rounded-full px-2.5 py-0.5 text-sm font-medium",
-                                                tier.highlight ? HIGHLIGHT_STYLE.saveBadge : "bg-primary/10 text-primary"
-                                            )}
-                                        >
-                                            Save ~20%
-                                        </span>
+                                        {billing === "yearly" && (
+                                            <span
+                                                className={cn(
+                                                    "rounded-full px-2.5 py-0.5 text-sm font-medium",
+                                                    tier.highlight ? HIGHLIGHT_STYLE.saveBadge : "bg-primary/10 text-primary"
+                                                )}
+                                            >
+                                                Save ~20%
+                                            </span>
+                                        )}
                                     </div>
                                 )}
 
-                                <div className="flex items-baseline gap-2 flex-wrap">
-                                    <AnimatePresence mode="popLayout" initial={false}>
-                                        <motion.span
-                                            key={price}
-                                            initial={{ opacity: 0, y: 6 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0, y: -6 }}
-                                            transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
-                                            className={cn("text-4xl lg:text-5xl font-medium tracking-tighter", tier.highlight ? HIGHLIGHT_STYLE.price : "text-foreground")}
-                                        >
-                                            {price}
-                                        </motion.span>
-                                    </AnimatePresence>
-                                    <span className={cn("text-sm", tier.highlight ? HIGHLIGHT_STYLE.cadence : "text-foreground/65")}>{cadence}</span>
-                                    {showYearly && (
-                                        <span className={cn("rounded-full px-2 py-0.5 text-sm font-medium", tier.highlight ? HIGHLIGHT_STYLE.yearlyTotal : "bg-primary/10 text-primary")}>
-                                            {tier.monthly!.yearlyTotal}
-                                        </span>
-                                    )}
-                                    {/* Limited-offer "was" price, struck through and muted so it
-                                        reads as clearly secondary to the active discounted price.
-                                        Monthly compares per-month ($25); yearly compares the full
-                                        annual total ($300 billed yearly). */}
-                                    {isSubscription &&
-                                        (showYearly
-                                            ? tier.monthly!.compareYearlyTotal
-                                            : tier.monthly!.compareMonthly) && (
-                                            <span
-                                                className={cn(
-                                                    "text-sm line-through",
-                                                    tier.highlight ? "text-foreground/45" : "text-muted-foreground/70"
-                                                )}
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex items-baseline gap-2 flex-wrap">
+                                        <AnimatePresence mode="popLayout" initial={false}>
+                                            <motion.span
+                                                key={price}
+                                                initial={{ opacity: 0, y: 6 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -6 }}
+                                                transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
+                                                className={cn("text-4xl lg:text-5xl font-medium tracking-tighter", tier.highlight ? HIGHLIGHT_STYLE.price : "text-foreground")}
                                             >
-                                                {showYearly
-                                                    ? tier.monthly!.compareYearlyTotal
-                                                    : tier.monthly!.compareMonthly}
+                                                {price}
+                                            </motion.span>
+                                        </AnimatePresence>
+                                        <span className={cn("text-sm", tier.highlight ? HIGHLIGHT_STYLE.cadence : "text-foreground/65")}>{cadence}</span>
+                                        {/* Limited-offer "was" price, struck through and muted so it
+                                            reads as clearly secondary to the active discounted price.
+                                            Sits to the right of the per-month price. Monthly compares
+                                            $25/mo; yearly compares the standard $18/mo rate. */}
+                                        {isSubscription &&
+                                            (showYearly
+                                                ? tier.monthly!.compareYearlyTotal
+                                                : tier.monthly!.compareMonthly) && (
+                                                <span
+                                                    className={cn(
+                                                        "text-sm line-through",
+                                                        tier.highlight ? "text-foreground/45" : "text-muted-foreground/70"
+                                                    )}
+                                                >
+                                                    {showYearly
+                                                        ? tier.monthly!.compareYearlyTotal
+                                                        : tier.monthly!.compareMonthly}
+                                                </span>
+                                            )}
+                                    </div>
+                                    {/* Full annual charge — sits on its own line directly below
+                                        the per-month price (yearly toggle only). */}
+                                    {showYearly && (
+                                        <div>
+                                            <span className={cn("inline-block rounded-full px-2 py-0.5 text-sm font-medium", tier.highlight ? HIGHLIGHT_STYLE.yearlyTotal : "bg-primary/10 text-primary")}>
+                                                {tier.monthly!.yearlyTotal}
                                             </span>
-                                        )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <ul className="flex flex-col gap-2.5 flex-grow">
@@ -387,31 +406,6 @@ const Pricing = () => {
                                         );
                                     })}
                                 </ul>
-
-                                <DownloadButton
-                                    placement={tier.placement}
-                                    className={cn(
-                                        "relative w-full rounded-full gap-2",
-                                        // Standard (dark) cards: filled primary CTA with the hover/blur treatment.
-                                        !tier.highlight &&
-                                            "hover:bg-muted hover:text-foreground hover:border-border hover:backdrop-blur-md dark:hover:bg-input/30 dark:hover:text-foreground dark:hover:border-input",
-                                        // Highlighted (Managed) card: a solid white CTA (see
-                                        // HIGHLIGHT_STYLE.button) so it still pops on the dark card.
-                                        tier.highlight && HIGHLIGHT_STYLE.button
-                                    )}
-                                    size="lg"
-                                    variant={tier.cta.variant === "primary" ? "default" : "outline"}
-                                >
-                                    {tier.highlight ? (
-                                        // Highlighted card: animated border tinted from the
-                                        // section gradient (blue → teal → purple), per variant.
-                                        <AnimatedBorder className={HIGHLIGHT_STYLE.animatedBorder} />
-                                    ) : (
-                                        <AnimatedBorder />
-                                    )}
-                                    <AppleIcon className="h-4 w-4" />
-                                    {tier.cta.label}
-                                </DownloadButton>
                             </Card>
                         </motion.div>
                     );

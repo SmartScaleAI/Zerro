@@ -95,7 +95,6 @@ struct ProcessingPipeline {
         "Wrangling the tokens",
         "Beep boop, thinking",
         "Whispering into the void",
-        "One sec, doing some robot stuff",
         "Pretending to think",
         "Channeling big brain energy",
         "Summoning a wizard",
@@ -112,8 +111,6 @@ struct ProcessingPipeline {
     /// "Still going" phrases, rotated in after the first starter while
     /// generation continues.
     static let thinkingContinuations: [String] = [
-        "Two secs, big computations happening",
-        "Thinking really hard, I promise",
         "Hitting it with a wrench",
         "Kicking the server",
         "Cooking with gas now",

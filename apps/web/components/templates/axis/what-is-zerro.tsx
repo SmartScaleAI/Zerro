@@ -30,11 +30,8 @@ const WhatIsZerro = () => {
 
           <div className="space-y-5 text-base leading-relaxed text-muted-foreground lg:text-lg">
             <p>
-              Zerro is a native macOS menu-bar app that turns a screen recording
-              and a few spoken words into exactly what you need — an agent
-              prompt, a message, a code snippet, or a written-up document, ready
-              to paste into any AI tool or send to a person. Or, when you just
-              want to understand something, a clear answer in plain language.
+              Zerro turns a screen recording and a few spoken words into a
+              ready-to-paste prompt, message, snippet, document, or answer.
             </p>
           </div>
         </div>

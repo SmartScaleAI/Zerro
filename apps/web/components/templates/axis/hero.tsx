@@ -1,11 +1,9 @@
 "use client"
 
-import { Button } from "@/components/ui/button"
 import { DownloadButton } from "@/components/download-button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
-import { Play, Check, Copy, X, Square, ChevronDown } from "lucide-react"
+import { Check, Copy, X, Square, ChevronDown } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
-import { track } from "@/lib/analytics"
 import { motion, AnimatePresence } from "motion/react"
 import { useEffect, useState } from "react"
 
@@ -197,18 +195,9 @@ const Hero = () => {
             <AppleIcon className="h-4 w-4" />
             Download for Mac
           </DownloadButton>
-          <Button
-            className="gap-2 rounded-full"
-            variant="outline"
-            size="lg"
-            onClick={() => track("demo_played")}
-          >
-            <Play className="h-4 w-4" />
-            Watch it work
-          </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          v1.0 · Apple Silicon · Signed &amp; notarized
+          v1.4.13 · Apple Silicon · Signed &amp; notarized
         </p>
       </section>
 

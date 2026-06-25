@@ -48,7 +48,7 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "Is my data private?",
     answer:
-      "Audio isolation, frame downsampling, and best-effort secret redaction always run on your Mac first, before anything leaves it. On the Managed and Trial plans, the prepped frames and your spoken narration are then sent to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your result. On the BYOK plan they go straight to that provider on your own key, with no Zerro servers in between. Redaction is best-effort and never covers your spoken audio.",
+      "Processing — including best-effort secret redaction — always runs on your Mac first, before anything leaves it. On the Managed and Trial plans, the prepped recording and your spoken narration are then sent to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your result. On the BYOK plan they go straight to that provider on your own key, with no Zerro servers in between. Redaction is best-effort and never covers your spoken audio.",
   },
   {
     question: "Does Zerro need an account?",

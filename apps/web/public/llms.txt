@@ -1,6 +1,6 @@
 # Zerro
 
-> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into a structured prompt for AI coding agents. Frame a region of your screen, dictate what you want, and Zerro returns a Markdown prompt ready to paste into Cursor, Windsurf, v0, or any agent. Audio isolation, frame downsampling, and best-effort secret redaction always happen on your Mac first; on the Managed plan the prepped frames and your narration go to a third-party AI provider (OpenAI, Google, or Anthropic), or — with BYOK — straight to that provider on your own key, no Zerro servers in the middle and no account required.
+> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into a structured prompt for AI coding agents. Frame a region of your screen, dictate what you want, and Zerro returns a Markdown prompt ready to paste into Cursor, Windsurf, v0, or any agent. Processing — including best-effort secret redaction — always happens on your Mac first to prepare the recording; on the Managed plan the prepped recording and your narration go to a third-party AI provider (OpenAI, Google, or Anthropic), or — with BYOK — straight to that provider on your own key, no Zerro servers in the middle and no account required.
 
 Zerro is built for developers who already work with AI coding agents and would rather talk through a change than type out every instruction. You speak roughly 4× faster than you type; Zerro closes that gap by capturing what's on screen alongside what you say.
 
@@ -8,13 +8,13 @@ Zerro is built for developers who already work with AI coding agents and would r
 
 - Hit the hotkey and drag to frame the part of your screen the agent should see.
 - Dictate what you want in plain language — up to 3 minutes per recording.
-- Zerro isolates the audio and downsamples the frames locally, then makes a single API call.
+- Zerro prepares the recording locally on your Mac, then makes a single API call.
 - A structured Markdown prompt lands on your clipboard, ready to paste into your agent.
 
 ## Key facts
 
 - Platform: native macOS app (Swift & SwiftUI, built on ScreenCaptureKit). Not Electron.
-- Processing: local-first — audio isolation and frame downsampling happen on your machine.
+- Processing: local-first — your recording is prepared on your machine.
 - Keys: bring your own OpenAI, Gemini & Anthropic keys, stored in the macOS Keychain.
 - Recording cap: 3 minutes per recording, for fast and predictable cost.
 - Distribution: signed & notarized .dmg, with Sparkle auto-updates.

@@ -16,10 +16,10 @@ instructions into a structured prompt for AI coding agents. You frame a region o
 your screen, dictate what you want in plain language, and Zerro returns a Markdown
 prompt ready to paste into Cursor, Windsurf, v0, or any agent you already use.
 
-Processing is local-first: audio isolation and frame downsampling always happen on
-your machine before the AI step turns the recording into a prompt. You can let Zerro
-handle the AI on the Managed plan — where your prepped (redacted) frames and audio
-are sent to a third-party AI provider — or bring your own OpenAI, Google, or
+Processing is local-first: your recording is prepared on your machine before the AI
+step turns it into a prompt. You can let Zerro handle the AI on the Managed plan —
+where your prepped (redacted) recording and audio are sent to a third-party AI
+provider — or bring your own OpenAI, Google, or
 Anthropic keys, stored in the macOS Keychain, so the request goes straight to the
 provider with no Zerro servers in the middle and no account required.
 
@@ -34,8 +34,8 @@ structured prompt. There's no new app to learn; the whole flow runs from the men
    want the agent to see. Native macOS crosshair, no window switching.
 2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
    Point at things, change your mind, ramble. Zerro records up to 3 minutes.
-3. **Your Mac preps it, then AI.** Audio gets isolated and frames get downsampled on
-   your machine, with detected on-screen secrets masked. Then an AI call — in the
+3. **Your Mac preps it, then AI.** The recording is prepared locally on your
+   machine, with detected on-screen secrets masked. Then an AI call — in the
    cloud on the Managed plan, or on your own key with BYOK — turns it into a
    structured prompt.
 4. **Paste the prompt.** A Markdown prompt lands on your clipboard, ready to drop
@@ -52,8 +52,8 @@ Zerro is built the way you'd build it if it were your tool.
 
 - **Native Swift & SwiftUI.** A real menu-bar app, built on ScreenCaptureKit. Not
   an Electron tab pretending to be a Mac app.
-- **Local-first processing.** Audio isolation and frame downsampling happen on your
-  machine before anything leaves it.
+- **Local-first processing.** Your recording is prepared on your machine before
+  anything leaves it.
 - **Bring your own keys.** Your OpenAI, Gemini & Anthropic keys, stored in macOS Keychain.
   No servers handling your data.
 - **Cost-bounded by design.** A 3-minute hard cap on every recording keeps each
@@ -150,10 +150,10 @@ API keys are required — is available now at $15/month, or $12/month billed yea
 ($144/year), with 300 credits per month.
 
 **Is my data private?**
-Audio isolation and frame downsampling always run locally on your Mac, and a
+Your recording is prepared locally on your Mac, and a
 best-effort pass masks the on-screen secrets it detects (it can't catch everything)
-before anything leaves your machine. On the Managed and Trial plans, those prepped,
-redacted frames and your spoken narration are sent to a third-party AI provider
+before anything leaves your machine. On the Managed and Trial plans, that prepped,
+redacted recording and your spoken narration are sent to a third-party AI provider
 (OpenAI, Google, or Anthropic) to generate the result — audio is sent as recorded
 and isn't redacted. On BYOK, the request goes straight to the provider on your own
 key, so it never touches Zerro's servers.

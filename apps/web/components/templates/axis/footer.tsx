@@ -69,16 +69,16 @@ const Footer = () => {
       {/* Support + copyright */}
       <div className="flex w-full max-w-md flex-col items-center gap-2 border-t border-border pt-4">
         <a
-          href="mailto:support@getzerro.app"
+          href="mailto:support@smartaiscaling.com"
           onClick={() =>
             track("outbound_clicked", { destination: "support_email" })
           }
           className="text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
-          support@getzerro.app
+          support@smartaiscaling.com
         </a>
         <p className="text-sm text-muted-foreground">
-          &copy; {new Date().getFullYear()} Zerro. All rights reserved.
+          &copy; {new Date().getFullYear()} SmartScale Solutions LLC. All rights reserved.
         </p>
       </div>
     </motion.footer>

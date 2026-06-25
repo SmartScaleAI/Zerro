@@ -81,7 +81,7 @@ const FinalCTA = () => {
                             Download for Mac
                         </DownloadButton>
                         <p className="text-sm text-muted-foreground">
-                            v1.0 · Apple Silicon · Signed &amp; notarized
+                            v1.4.13 · Apple Silicon · Signed &amp; notarized
                         </p>
                     </div>
                 </div>
