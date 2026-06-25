@@ -46,6 +46,31 @@ enum DevAgentOutputFormat: Equatable, Sendable {
     case text
 }
 
+/// Where an agent reads its credentials — the §5c Seatbelt wrapper's
+/// compatibility pivot (see `DevAgentRunner` for the wrap decision).
+///
+/// The Zerro wrapper (`/usr/bin/sandbox-exec`) is INCOMPATIBLE with macOS
+/// **Keychain** auth: when Zerro (a GUI app) spawns the agent under sandbox-exec,
+/// securityd denies the sandboxed child access to the login-Keychain item, so the
+/// agent gets no token and its own request 401s ("Failed to authenticate"). The
+/// Seatbelt *profile* cannot fix this — Keychain access is a securityd ACL policy,
+/// not a file-write rule (live-verified June 2026: every filesystem/env variation
+/// of the profile — full repo writes, all of `$HOME`, the scrubbed env, a detached
+/// tty — still reads the Keychain fine from a shell; only the GUI-app spawn under
+/// the sandbox trips it, and no `(allow …)` rule addresses it).
+///
+/// Agents that read a **file** token (Codex `~/.codex/auth.json`, Cursor
+/// `~/.cursor`) are unaffected — the sandbox permits the read (reads are open and
+/// each dir is in the profile's allow list) — so they KEEP the wrapper and its
+/// OS-hard filesystem fence + §8 egress filter. Only the Keychain path falls back
+/// to the spec-sanctioned §5c posture ("changes are tracked and reversible").
+enum DevAgentCredentialStore: Equatable, Sendable {
+    /// macOS Keychain (securityd) — Claude Code. NOT wrappable under sandbox-exec.
+    case keychain
+    /// A token file under the agent's own config dir — sandbox-compatible.
+    case file
+}
+
 /// The unattended permission posture for a run. Edits-only is the Phase 1
 /// default (design §11 ★): the agent changes files but cannot run shell
 /// commands without supervision. "Allow commands" is an opt-in for users who
@@ -101,6 +126,14 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     let promptDelivery: DevAgentPromptDelivery
     let outputFormat: DevAgentOutputFormat
 
+    /// Where the agent reads its credentials (§5c wrapper compatibility). A
+    /// `.keychain` agent (Claude Code) is NEVER wrapped — `sandbox-exec` denies a
+    /// GUI-spawned child's securityd Keychain access (→ the agent's own 401), and
+    /// the Seatbelt profile can't grant it. `.file` agents (Codex / Cursor) read a
+    /// token off disk, which the sandbox permits, so they keep the wrapper. See
+    /// `DevAgentRunner.run`.
+    let credentialStore: DevAgentCredentialStore
+
     /// Flags that are always passed, before the per-run permission flags.
     let baseArgs: [String]
     /// Flags appended for `.editsOnly` (files yes, shell no).
@@ -140,13 +173,15 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         installed: Bool,
         absolutePath: URL?,
         modelFlagName: String? = nil,
-        mcpDisableArgs: [String] = []
+        mcpDisableArgs: [String] = [],
+        credentialStore: DevAgentCredentialStore = .file
     ) {
         self.id = id
         self.displayName = displayName
         self.executableName = executableName
         self.promptDelivery = promptDelivery
         self.outputFormat = outputFormat
+        self.credentialStore = credentialStore
         self.baseArgs = baseArgs
         self.editsOnlyArgs = editsOnlyArgs
         self.allowCommandsArgs = allowCommandsArgs
@@ -259,7 +294,17 @@ enum DevAgentRegistry {
             // init event reports `mcp_servers: []` with no `mcp__*` tools, whereas
             // the default run lists the user's connectors. Dropped for
             // `.unrestricted` (MCP stays enabled).
-            mcpDisableArgs: ["--mcp-config", "{\"mcpServers\":{}}", "--strict-mcp-config"]
+            mcpDisableArgs: ["--mcp-config", "{\"mcpServers\":{}}", "--strict-mcp-config"],
+            // Claude Code stores its OAuth token in the macOS Keychain (the
+            // `Claude Code-credentials` login-keychain item), NOT a config file. So
+            // it CANNOT be wrapped in the §5c `sandbox-exec` fence: a GUI-spawned
+            // child under sandbox-exec is denied securityd Keychain access, leaving
+            // claude with no token → its own request 401s ("Failed to
+            // authenticate"). The Seatbelt profile can't fix it (securityd policy,
+            // not a file rule — live-verified). The fenced tiers therefore run
+            // Claude UNWRAPPED, with §5a + §5b + the git checkpoint as containment
+            // (spec §5c "changes are tracked and reversible"). See `DevAgentRunner`.
+            credentialStore: .keychain
         )
     }
 
@@ -303,7 +348,21 @@ enum DevAgentRegistry {
             modelFlagName: "--model",
             // No-MCP fence (§5a): `--ignore-user-config` ignores `~/.codex/config.toml`,
             // so no user MCP servers load. Dropped for `.unrestricted`.
-            mcpDisableArgs: ["--ignore-user-config"]
+            //
+            // AUTH IS PRESERVED (live-verified, codex-cli 0.140.0, June 2026):
+            // `--ignore-user-config` skips `config.toml` but `auth.json` STILL loads
+            // from `CODEX_HOME` — `codex exec --help` states "auth still uses
+            // CODEX_HOME", and a fenced `codex exec` reaches the backend
+            // AUTHENTICATED (it returns an account-level usage-limit error, not a
+            // login error). So Codex does NOT 401 under the fence. (The targeted
+            // alternative `-c mcp_servers={}` was rejected: verified via
+            // `codex mcp list` that it does NOT clear the config.toml MCP servers,
+            // whereas `--ignore-user-config` does.)
+            mcpDisableArgs: ["--ignore-user-config"],
+            // Codex reads its token from `~/.codex/auth.json` (a file), so the §5c
+            // Seatbelt wrapper is compatible — verified a fenced `codex exec` under
+            // `sandbox-exec` still authenticates. Codex keeps the wrapper.
+            credentialStore: .file
         )
     }
 
@@ -392,7 +451,12 @@ enum DevAgentRegistry {
             //     would let us close it directly.
             // Hence nothing to append: fenced vs `.unrestricted` argv match for
             // Cursor; only the env-scrub (§5b) differs.
-            mcpDisableArgs: []
+            mcpDisableArgs: [],
+            // Cursor reads a file token from `~/.cursor`, so the §5c Seatbelt
+            // wrapper is compatible (live-verified: a fenced Cursor run reads its
+            // token and authenticates under `sandbox-exec`). Cursor keeps the
+            // wrapper. (Contrast Claude Code's Keychain auth, which does not.)
+            credentialStore: .file
         )
     }
 }

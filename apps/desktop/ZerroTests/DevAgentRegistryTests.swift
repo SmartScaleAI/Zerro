@@ -25,6 +25,36 @@ final class DevAgentRegistryTests: XCTestCase {
         XCTAssertNotNil(DevAgentRegistry.entry(id: DevAgentRegistry.cursorID))
     }
 
+    func testCredentialStorePerAgentDrivesTheSeatbeltCarveOut() throws {
+        // The §5c wrapper compatibility pivot (the 401 fix). Claude Code reads its
+        // token from the macOS Keychain → securityd denies a sandbox-exec'd
+        // GUI-child → it must run UNWRAPPED. Codex (~/.codex/auth.json) and Cursor
+        // (~/.cursor) read file tokens the sandbox permits → they KEEP the wrapper.
+        let claude = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.claudeCodeID))
+        let codex = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        let cursor = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.cursorID))
+        XCTAssertEqual(claude.credentialStore, .keychain,
+                       "Claude Code authenticates via the Keychain — not wrappable under sandbox-exec")
+        XCTAssertEqual(codex.credentialStore, .file)
+        XCTAssertEqual(cursor.credentialStore, .file)
+    }
+
+    func testCodexFencedKeepsIgnoreUserConfig() throws {
+        // §5a no-MCP for Codex stays `--ignore-user-config` on the fenced tiers,
+        // dropped for Unrestricted. This pins ONLY the argv flag.
+        //
+        // (EMPIRICAL, NOT asserted here — verified manually against codex-cli 0.140.0,
+        // June 2026: the flag ignores config.toml's MCP servers but does NOT drop auth
+        // — `auth.json` still loads from CODEX_HOME, so a fenced run does NOT 401. The
+        // task's hypothesis that it drops auth was disproven; the targeted alternative
+        // `-c mcp_servers={}` was rejected after `codex mcp list` showed it left the
+        // config.toml servers loaded. These are CLI behaviors a unit test can't reach.)
+        let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        XCTAssertTrue(entry.arguments(tier: .askPermission).contains("--ignore-user-config"))
+        XCTAssertTrue(entry.arguments(tier: .autoApprove).contains("--ignore-user-config"))
+        XCTAssertFalse(entry.arguments(tier: .unrestricted).contains("--ignore-user-config"))
+    }
+
     func testCodexCLIContract() throws {
         let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
         XCTAssertEqual(entry.displayName, "Codex")

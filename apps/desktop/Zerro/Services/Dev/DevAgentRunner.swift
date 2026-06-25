@@ -316,10 +316,35 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         // tiers already guarantee (Claude: bypassPermissions/none; Codex:
         // danger-full-access; Cursor: --force). Pairing the wrapper with an agent's
         // own Seatbelt sandbox would fail with "Operation not permitted".
+        //
+        // KEYCHAIN CARVE-OUT: an agent that authenticates via the macOS Keychain
+        // (`credentialStore == .keychain` — Claude Code) is NOT wrapped. When Zerro
+        // (a GUI app) spawns the agent under sandbox-exec, securityd denies the
+        // sandboxed child access to the login-Keychain item, so the agent gets no
+        // token and its OWN request 401s ("Failed to authenticate"). The Seatbelt
+        // profile cannot fix this (it's a securityd ACL policy, not a file-write
+        // rule — live-verified: every filesystem/env variation of the profile still
+        // reads the Keychain fine from a shell; only the GUI-app sandbox spawn trips
+        // it). For that agent, containment falls back to the spec-sanctioned §5c
+        // posture "changes are tracked and reversible": §5a no-MCP + §5b env-scrub
+        // (both applied independently of the wrapper — see `arguments(tier:)` and
+        // `spawnEnvironment`) + the git checkpoint. File-token agents (Codex
+        // ~/.codex, Cursor ~/.cursor) read auth off disk, which the sandbox permits,
+        // so they KEEP the wrapper + its §8 egress filter.
+        //
+        // §8 PROXY on the unwrapped path: the network egress filter is SKIPPED for
+        // the Keychain path (it's nested in this block). Its enforcement REQUIRES
+        // the Seatbelt egress rule to force traffic through the proxy — an env-var
+        // proxy alone is advisory/bypassable — so without the wrapper it adds no
+        // real containment and only risks the auth path. The Keychain path runs with
+        // OPEN network (the 1.4.13 posture); §5a + §5b remain the egress safeguard.
         var spawnExecutableURL = executableURL
         var spawnArguments = argv
         var proxyURL: String?
-        if tier.isFenced && !DevSeatbeltSandbox.isWrapperDisabled() {
+        let wrapInSeatbelt = tier.isFenced
+            && entry.credentialStore != .keychain
+            && !DevSeatbeltSandbox.isWrapperDisabled()
+        if wrapInSeatbelt {
             // Fail CLOSED: if sandbox-exec is missing (or the safety valve is off
             // but the binary vanished), abort — never silently drop the fence.
             guard DevSeatbeltSandbox.isAvailable() else {
@@ -1218,6 +1243,11 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// unrelated `*_API_KEY`/`*_TOKEN`) is stripped.
     nonisolated private static func agentAuthEnvKeys(for executableName: String) -> Set<String> {
         switch executableName {
+        // NB: Claude Code normally authenticates via the macOS Keychain (the
+        // `Claude Code-credentials` item — see `DevAgentEntry.credentialStore`), NOT
+        // this env var. `ANTHROPIC_API_KEY` is only an OVERRIDE path; keep it in the
+        // allowlist when present so a key-based user isn't broken, but it is not the
+        // primary credential (which is why the §5c wrapper's Keychain denial 401s it).
         case "claude":       return ["ANTHROPIC_API_KEY"]
         case "codex":        return ["OPENAI_API_KEY", "CODEX_API_KEY"]
         case "cursor-agent": return ["CURSOR_API_KEY"]

@@ -131,6 +131,23 @@ is: **disable each agent's own sandbox and wrap the process in one Zerro-owned
 > filesystem confinement. If 5c is deferred past launch, word the UI as
 > *"changes are tracked and reversible"* rather than *"physically confined."*
 
+> **Keychain carve-out (post-launch, June 2026).** The wrapper is INCOMPATIBLE with
+> agents that authenticate via the macOS **Keychain**. When Zerro (a GUI app) spawns the
+> agent under `sandbox-exec`, securityd denies the sandboxed child access to the
+> login-Keychain item, so the agent gets no token and its own API request returns **401
+> "Failed to authenticate."** This is a securityd ACL policy, not a file-write deny — the
+> Seatbelt *profile cannot fix it* (live-verified: every filesystem/env variation of the
+> profile — full repo writes, all of `$HOME`, the scrubbed env, a detached tty — still
+> reads the Keychain fine from a shell; only the GUI-app sandbox spawn trips it). So a
+> Keychain agent (**Claude Code**, the `Claude Code-credentials` item) runs **UNWRAPPED**
+> on the fenced tiers, with §5a + §5b + the git checkpoint as containment (exactly this
+> "changes are tracked and reversible" posture) and **network left open** (the §8 egress
+> filter rides on the wrapper's Seatbelt rule, so it's skipped too — an env-var-only proxy
+> is bypassable and would only risk the auth path). Agents that read a **file** token
+> (**Codex** `~/.codex/auth.json`, **Cursor** `~/.cursor`) are unaffected — the sandbox
+> permits the read — so they KEEP the wrapper + egress filter. The pivot is
+> `DevAgentEntry.credentialStore` (`DevAgentRunner.run`).
+
 ---
 
 ## 6. Per-agent CLI mapping

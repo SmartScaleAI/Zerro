@@ -769,6 +769,34 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
     }
 
+    /// A fake agent that dumps its spawn environment to `env.txt` in its cwd (the
+    /// project dir) so a test can assert the §5b allowlist held. Emits a terminal
+    /// `result` so the run resolves `.succeeded`.
+    private func makeEnvDumpProbe(_ name: String) throws -> URL {
+        try makeScript(name, """
+        #!/bin/sh
+        /usr/bin/env > "$PWD/env.txt"
+        echo '{"type":"result"}'
+        exit 0
+        """)
+    }
+
+    /// Pin the seatbelt-wrapper valve to a known value for `body`, restoring the
+    /// prior `UserDefaults.standard` state after. The runner reads the standard
+    /// domain, so without this a value left on the machine (or leaked from another
+    /// test) can silently flip the wrap decision and make a wrapper test pass for
+    /// the wrong reason.
+    private func withWrapperValve(disabled: Bool, _ body: () async throws -> Void) async rethrows {
+        let key = DevSeatbeltSandbox.wrapperDisabledDefaultsKey
+        let prior = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(disabled, forKey: key)
+        defer {
+            if let prior { UserDefaults.standard.set(prior, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        try await body()
+    }
+
     func testFencedRunIsWrappedAndDeniesWriteOutsideProject() async throws {
         try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(),
                           "sandbox-exec unavailable — the fenced spawn would fail closed")
@@ -848,6 +876,100 @@ final class DevAgentRunnerTests: XCTestCase {
             "ESCAPED", "the safety valve disables the wrapper even for a fenced tier")
     }
 
+    func testFencedKeychainAgentIsNotWrappedSoItCanWriteOutsideProject() async throws {
+        // The Keychain carve-out (the 401 fix): an agent that authenticates via the
+        // macOS Keychain (`credentialStore: .keychain` — Claude Code) must spawn
+        // DIRECTLY even on a FENCED tier, because under sandbox-exec a GUI-spawned
+        // child is denied securityd Keychain access (→ the agent's own 401). Proven
+        // by the SAME escape probe writing OUTSIDE the project SUCCEEDING (ESCAPED)
+        // — the OS fence is absent — the mirror of a `.file` agent's DENIED.
+        //
+        // The valve is PINNED OFF (wrapper ON) so ESCAPED is attributable SOLELY to
+        // the credentialStore clause: an unwrapped run could also escape because the
+        // valve is set or the tier isn't fenced — pinning rules both out, so the
+        // test would FAIL if the `credentialStore != .keychain` clause were removed
+        // (a file agent here would be wrapped → DENIED). Without this pin a value
+        // left in UserDefaults.standard on the machine would let it pass for the
+        // wrong reason. No sandbox-exec ⇒ no XCTSkip; §8 proxy block skipped ⇒ no net.
+        try await withWrapperValve(disabled: false) {
+            try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(),
+                              "needs sandbox-exec so a .file agent WOULD be wrapped — the contrast under test")
+            let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
+            defer { try? FileManager.default.removeItem(atPath: escape) }
+            let bin = try makeEscapeProbe("keychainprobe", escapeTarget: escape)
+
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+
+            XCTAssertEqual(result, .succeeded(summary: nil))
+            XCTAssertEqual(
+                try String(contentsOf: scratch.appendingPathComponent("result.txt"), encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                "ESCAPED",
+                "a fenced Keychain-auth agent must NOT be wrapped (else securityd denies its Keychain → 401)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: escape),
+                          "the unwrapped Keychain run actually created the outside file")
+        }
+    }
+
+    func testFencedKeychainAgentSkipsProxySoBrokenProxyDoesNotFailClosed() async throws {
+        // The genuinely-new behavior of the carve-out: the §8 network proxy is nested
+        // inside the wrapper block, so a Keychain agent SKIPS it entirely. A proxy
+        // that CAN'T start must therefore NOT fail the run closed (the run succeeds),
+        // the mirror of testFencedRunFailsClosedWhenNetworkProxyCannotStart for a
+        // .file agent. Valve PINNED OFF so success is attributable to the keychain
+        // clause: with the clause removed, this fenced run WOULD enter the block,
+        // hit the simulated proxy failure, and return .spawnFailed → the test fails.
+        try await withWrapperValve(disabled: false) {
+            let bin = try makeScript("keychainnoproxy", """
+            #!/bin/sh
+            echo ran > "$PWD/in-repo.txt"
+            echo '{"type":"result"}'
+            exit 0
+            """)
+            let runner = ClaudeCodeAgentRunner()
+            runner.makeNetworkProxy = { DevNetworkProxy(simulateStartFailure: true) }
+            let result = await runner.run(
+                entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+
+            XCTAssertEqual(result, .succeeded(summary: nil),
+                           "a Keychain agent must skip the proxy, so a broken proxy can't fail it closed")
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: scratch.appendingPathComponent("in-repo.txt").path),
+                "the Keychain agent should have run despite the simulated proxy-start failure")
+        }
+    }
+
+    func testFencedKeychainAgentStillGetsScrubbedEnvThroughRun() async throws {
+        // §5b containment must hold on the UNWRAPPED keychain path: run() applies the
+        // env-scrub independent of the wrapper (spawnEnvironment is keyed on
+        // tier.isFenced, not wrapInSeatbelt), so a fenced .keychain agent still
+        // receives the allowlist — NOT the full environment. Detected via an
+        // xctest-injected var the §5b allowlist does NOT keep: its ABSENCE in the
+        // spawned env proves the scrub ran through run() (a future refactor that
+        // gated the scrub on the wrapper would leak it → this fails). Skipped if the
+        // host env carries no such non-allowlisted var to detect a leak with.
+        let leakKey = "XCTestConfigurationFilePath"
+        try XCTSkipUnless(ProcessInfo.processInfo.environment[leakKey] != nil,
+                          "needs an xctest-injected non-allowlisted var to detect a scrub leak")
+        let bin = try makeEnvDumpProbe("keychainenvprobe")
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
+            tier: .askPermission, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        let env = try String(contentsOf: scratch.appendingPathComponent("env.txt"), encoding: .utf8)
+        XCTAssertFalse(env.contains(leakKey),
+                       "§5b env-scrub must strip non-allowlisted vars even on the unwrapped keychain path")
+        XCTAssertTrue(env.contains("PATH="), "the §5b allowlist keeps PATH")
+        XCTAssertTrue(env.contains("HOME="), "the §5b allowlist keeps HOME")
+    }
+
     func testFencedRunFailsClosedWhenNetworkProxyCannotStart() async throws {
         try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(), "needs sandbox-exec")
         // The network filter proxy can't start → the fenced run must ABORT (never
@@ -882,12 +1004,13 @@ final class DevAgentRunnerTests: XCTestCase {
         DevRunTimeouts(stall: 30, killGrace: 1)
     }
 
-    private func entry(path: URL, format: DevAgentOutputFormat) -> DevAgentEntry {
+    private func entry(path: URL, format: DevAgentOutputFormat,
+                       credentialStore: DevAgentCredentialStore = .file) -> DevAgentEntry {
         DevAgentEntry(
             id: "fake", displayName: "Fake", executableName: path.lastPathComponent,
             promptDelivery: .stdin, outputFormat: format,
             baseArgs: [], editsOnlyArgs: [], allowCommandsArgs: [],
-            installed: true, absolutePath: path
+            installed: true, absolutePath: path, credentialStore: credentialStore
         )
     }
 
