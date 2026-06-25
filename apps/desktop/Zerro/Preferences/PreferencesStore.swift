@@ -76,6 +76,10 @@ final class PreferencesStore {
         /// (true → `.askPermission`). Read only by the one-time migration in
         /// `init`; no longer written.
         static let legacyDevReviewBeforeApply = "vf.dev.reviewBeforeApply"
+        /// §7 — once the user checks "Don't show again" on the Unrestricted
+        /// record-time warning AND proceeds, this Bool suppresses that warning from
+        /// then on. Default `false` (warns every record until suppressed). Resettable.
+        static let devUnrestrictedWarningSuppressed = "vf.dev.unrestrictedWarningSuppressed"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -98,6 +102,7 @@ final class PreferencesStore {
             devPermissionTier,
             legacyDevPermissionMode,
             legacyDevReviewBeforeApply,
+            devUnrestrictedWarningSuppressed,
         ]
     }
 
@@ -259,6 +264,13 @@ final class PreferencesStore {
         didSet { defaults.set(devPermissionTier.rawValue, forKey: Keys.devPermissionTier) }
     }
 
+    /// §7 — whether the Unrestricted record-time warning is suppressed. Set `true`
+    /// only when the user checks "Don't show again" AND proceeds (a checked box is
+    /// ignored on Cancel). Default `false`. Read fresh at the record-time gate.
+    var devUnrestrictedWarningSuppressed: Bool {
+        didSet { defaults.set(devUnrestrictedWarningSuppressed, forKey: Keys.devUnrestrictedWarningSuppressed) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -316,6 +328,10 @@ final class PreferencesStore {
         } else {
             self.devPermissionTier = .askPermission
         }
+        // §7 default OFF: the Unrestricted record-time warning shows every record
+        // until the user checks "Don't show again". `bool(forKey:)`'s
+        // false-for-missing IS the desired default.
+        self.devUnrestrictedWarningSuppressed = defaults.bool(forKey: Keys.devUnrestrictedWarningSuppressed)
     }
 
     // MARK: - Reset
@@ -344,5 +360,6 @@ final class PreferencesStore {
         devAutoDetectProject = false
         hasShownLocalhostDenialNote = false
         devPermissionTier = .askPermission
+        devUnrestrictedWarningSuppressed = false
     }
 }

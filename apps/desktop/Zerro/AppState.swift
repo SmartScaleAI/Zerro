@@ -808,6 +808,15 @@ final class AppState {
     // which matches what the server resolves for an absent field (D1).
     @ObservationIgnored weak var preferences: PreferencesStore?
 
+    /// §7 — presents the Unrestricted record-time warning and returns the user's
+    /// choice. Defaults to the app-modal `NSAlert`; overridable so tests can drive
+    /// the record-time gate without a modal (the `startRecording` path is otherwise
+    /// untestable — it spins up a real `RecordingSession`).
+    @ObservationIgnored
+    var presentUnrestrictedWarning: @MainActor () -> DevUnrestrictedWarning.Decision = {
+        DevUnrestrictedWarning.runModal()
+    }
+
     // Phase F (billing): the server-funded trial-credits layer, wired by
     // `ZerroApp.init`. Used as the proxy's token provider for a trial generation
     // and read for trial-credit display. Weak — owned by ZerroApp @State for the
@@ -1045,6 +1054,25 @@ final class AppState {
             // no user content.
             Log.state.notice("startRecording ignored — state is \(String(describing: self.state), privacy: .public)")
             return
+        }
+        // §7 Unrestricted record-time warning. The MOMENT a Dev Mode recording is
+        // initiated in the `.unrestricted` tier (and the warning isn't suppressed),
+        // confirm BEFORE anything starts — every record until the user suppresses
+        // it. Placed first so a Cancel leaves the app pristine (state stays `.idle`,
+        // nothing cleaned up). The fenced tiers never trigger it; this is separate
+        // from the Ask Permission review gate (post-recording, pre-dispatch).
+        if devMode != nil,
+           DevUnrestrictedWarning.shouldShow(
+               tier: preferences?.devPermissionTier ?? .askPermission,
+               suppressed: preferences?.devUnrestrictedWarningSuppressed ?? false) {
+            let decision = presentUnrestrictedWarning()
+            let proceed = applyUnrestrictedWarningDecision(decision)
+            guard proceed else {
+                Analytics.capture("dev_unrestricted_warning", ["decision": "cancel"])
+                return  // Cancel ⇒ abort; the recording does NOT start.
+            }
+            Analytics.capture("dev_unrestricted_warning",
+                              ["decision": "proceed", "suppressed": String(decision.dontShowAgain)])
         }
         // Phase 10: pre-flight free-space check. Refuse upfront with the
         // existing .diskFull copy ("Your Mac is out of storage — free up
@@ -3136,6 +3164,20 @@ final class AppState {
     /// agent id is unknown (it always is set for a dev recording).
     var devReviewAgentName: String {
         recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName } ?? "the agent"
+    }
+
+    /// Applies the §7 Unrestricted-warning `decision`: persists the suppression
+    /// flag iff the user PROCEEDED with the checkbox checked (a checked box is
+    /// ignored on Cancel), and returns whether to proceed with the recording.
+    /// Pulled out of `startRecording` so the proceed/cancel + flag-persist wiring is
+    /// unit-testable without spinning up a real `RecordingSession`. Returns `true`
+    /// to start recording, `false` to abort.
+    @discardableResult
+    func applyUnrestrictedWarningDecision(_ decision: DevUnrestrictedWarning.Decision) -> Bool {
+        if DevUnrestrictedWarning.shouldSuppressAfter(decision) {
+            preferences?.devUnrestrictedWarningSuppressed = true
+        }
+        return decision.proceed
     }
 
     /// The dispatch's Ask Permission review gate — the SOLE pre-edit checkpoint.
