@@ -293,9 +293,42 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
             argv.append(prompt)
         }
 
+        // §5c filesystem confinement: the FENCED tiers run the agent under a
+        // Zerro-owned Seatbelt profile (`sandbox-exec`) that physically blocks
+        // file-writes outside the project dir; `.unrestricted` spawns the agent
+        // DIRECTLY (today's behavior), no wrapper. Everything else (cwd = project,
+        // the §5b scrubbed env keyed on the REAL agent, the stdin prompt + close)
+        // is identical either way — sandbox-exec exec's into the agent in the same
+        // PID, inheriting stdin/stdout/stderr, so stream-json parsing is unchanged.
+        //
+        // NO NESTING (spec §10): Seatbelt sandboxes can't nest, so this wrapper
+        // REQUIRES each agent's own native sandbox to be OFF — which the fenced
+        // tiers already guarantee (Claude: bypassPermissions/none; Codex:
+        // danger-full-access; Cursor: --force). Pairing the wrapper with an agent's
+        // own Seatbelt sandbox would fail with "Operation not permitted".
+        var spawnExecutableURL = executableURL
+        var spawnArguments = argv
+        if tier.isFenced && !DevSeatbeltSandbox.isWrapperDisabled() {
+            // Fail CLOSED: if sandbox-exec is missing (or the safety valve is off
+            // but the binary vanished), abort — never silently drop the fence.
+            guard DevSeatbeltSandbox.isAvailable() else {
+                Log.dev.error("Dev agent run aborted — \(DevSeatbeltSandbox.sandboxExecPath, privacy: .public) unavailable; refusing to run a fenced-tier agent unsandboxed")
+                return .failed(.spawnFailed(
+                    "filesystem sandbox unavailable — \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
+            }
+            let wrapped = DevSeatbeltSandbox.wrap(
+                executableURL: executableURL, arguments: argv, projectDirectory: projectURL)
+            spawnExecutableURL = wrapped.executableURL
+            spawnArguments = wrapped.arguments
+        }
+
         let execution = DevAgentProcessExecution(
-            executableURL: executableURL,
-            arguments: argv,
+            executableURL: spawnExecutableURL,
+            // The env-scrub (§5b) + PATH fixup key off the REAL agent binary, not
+            // the sandbox-exec wrapper — its basename picks the auth var to keep
+            // and its dir is prepended to PATH.
+            agentExecutableURL: executableURL,
+            arguments: spawnArguments,
             prompt: prompt,
             deliverPromptViaStdin: deliverPromptViaStdin,
             projectURL: projectURL,
@@ -421,6 +454,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
     nonisolated init(
         executableURL: URL,
+        agentExecutableURL: URL? = nil,
         arguments: [String],
         prompt: String,
         deliverPromptViaStdin: Bool = true,
@@ -448,8 +482,12 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         // §5b env-scrub: the fenced tiers get an allowlist (no DB/cloud creds);
-        // `.unrestricted` forwards the full environment.
-        process.environment = DevAgentProcessExecution.spawnEnvironment(for: executableURL, tier: tier)
+        // `.unrestricted` forwards the full environment. Keyed on the REAL agent
+        // binary (`agentExecutableURL`), NOT `executableURL` — under the §5c
+        // wrapper the latter is `/usr/bin/sandbox-exec`, whose basename would pick
+        // the wrong auth var + PATH dir. Defaults to `executableURL` when unwrapped.
+        process.environment = DevAgentProcessExecution.spawnEnvironment(
+            for: agentExecutableURL ?? executableURL, tier: tier)
     }
 
     nonisolated func start(completion: @escaping (DevRunResult) -> Void) {

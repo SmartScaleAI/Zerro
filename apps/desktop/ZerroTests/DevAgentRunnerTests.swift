@@ -749,6 +749,105 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertNil(ClaudeCodeAgentRunner.parseResultErrorForTesting(""))
     }
 
+    // MARK: - Seatbelt wrapper (§5c filesystem confinement)
+
+    /// A fake agent that ATTEMPTS to write `escapeTarget` (outside the project) and
+    /// records ESCAPED/DENIED into `result.txt` in its cwd (the project dir, always
+    /// writable). Also writes an in-repo marker to prove it ran. Emits a terminal
+    /// `result` so the run resolves `.succeeded`.
+    private func makeEscapeProbe(_ name: String, escapeTarget: String) throws -> URL {
+        try makeScript(name, """
+        #!/bin/sh
+        if echo blocked > "\(escapeTarget)" 2>/dev/null; then
+          echo ESCAPED > "$PWD/result.txt"
+        else
+          echo DENIED > "$PWD/result.txt"
+        fi
+        echo ran > "$PWD/in-repo.txt"
+        echo '{"type":"result"}'
+        exit 0
+        """)
+    }
+
+    func testFencedRunIsWrappedAndDeniesWriteOutsideProject() async throws {
+        try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(),
+                          "sandbox-exec unavailable — the fenced spawn would fail closed")
+        // /private/var/tmp is writable normally but is NOT in the wrapper's allow
+        // list (the profile allows /private/var/folders, not /private/var/tmp), so
+        // a fenced run must be DENIED writing there — proving sandbox-exec wraps it.
+        let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: escape) }
+        let bin = try makeEscapeProbe("fencedprobe", escapeTarget: escape)
+
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .askPermission, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        // The agent ran (in-repo write succeeded under the fence)…
+        XCTAssertEqual(
+            try String(contentsOf: scratch.appendingPathComponent("in-repo.txt"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "ran", "an in-repo write must succeed under the wrapper")
+        // …but the outside-repo write was blocked by the OS.
+        XCTAssertEqual(
+            try String(contentsOf: scratch.appendingPathComponent("result.txt"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "DENIED", "the wrapper must deny a write outside the project dir")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: escape),
+                       "the escape file must NOT exist — the fence held")
+    }
+
+    func testUnrestrictedRunIsNotWrappedAndCanWriteOutsideProject() async throws {
+        // The SAME probe under `.unrestricted` must spawn the agent DIRECTLY (no
+        // sandbox-exec), so the outside-repo write SUCCEEDS — the contrast that
+        // proves the wrapper is fenced-tiers-only and `.unrestricted` is unchanged.
+        let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: escape) }
+        let bin = try makeEscapeProbe("unrestrictedprobe", escapeTarget: escape)
+
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .unrestricted, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        XCTAssertEqual(
+            try String(contentsOf: scratch.appendingPathComponent("result.txt"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "ESCAPED", "an unrestricted (unwrapped) run can write outside the project")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: escape),
+                      "the unwrapped run actually created the outside file")
+    }
+
+    func testSafetyValveDisablesWrapperSoFencedRunCanWriteOutside() async throws {
+        // The hidden safety valve: with the wrapper disabled, even a FENCED tier
+        // spawns directly (escape hatch for a bad profile). Set on the SAME
+        // UserDefaults the spawn path reads (`.standard`), and restore after.
+        let key = DevSeatbeltSandbox.wrapperDisabledDefaultsKey
+        let prior = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let prior { UserDefaults.standard.set(prior, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: escape) }
+        let bin = try makeEscapeProbe("valveprobe", escapeTarget: escape)
+
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .askPermission, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        XCTAssertEqual(
+            try String(contentsOf: scratch.appendingPathComponent("result.txt"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "ESCAPED", "the safety valve disables the wrapper even for a fenced tier")
+    }
+
     // MARK: - Helpers
 
     private func parse(_ line: String) -> DevAgentEvent? {

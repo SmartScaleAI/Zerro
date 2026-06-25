@@ -80,6 +80,12 @@ final class PreferencesStore {
         /// record-time warning AND proceeds, this Bool suppresses that warning from
         /// then on. Default `false` (warns every record until suppressed). Resettable.
         static let devUnrestrictedWarningSuppressed = "vf.dev.unrestrictedWarningSuppressed"
+        /// §5c hidden safety valve — when `true`, the Seatbelt filesystem-confinement
+        /// wrapper is disabled and fenced tiers spawn the agent directly (an escape
+        /// hatch if a bad profile bricks Dev Mode during rollout). Default `false`
+        /// ⇒ wrapper ON. No UI; read at spawn time by `DevSeatbeltSandbox` (the
+        /// canonical key lives there). Resettable.
+        static let devSeatbeltWrapperDisabled = DevSeatbeltSandbox.wrapperDisabledDefaultsKey
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -103,6 +109,7 @@ final class PreferencesStore {
             legacyDevPermissionMode,
             legacyDevReviewBeforeApply,
             devUnrestrictedWarningSuppressed,
+            devSeatbeltWrapperDisabled,
         ]
     }
 
@@ -271,6 +278,15 @@ final class PreferencesStore {
         didSet { defaults.set(devUnrestrictedWarningSuppressed, forKey: Keys.devUnrestrictedWarningSuppressed) }
     }
 
+    /// §5c hidden safety valve — when `true`, disables the Seatbelt
+    /// filesystem-confinement wrapper so fenced tiers spawn the agent directly.
+    /// Default `false` (wrapper ON). No UI surface; exposed here only so it's
+    /// resettable and discoverable. The spawn path reads the same UserDefaults key
+    /// directly via `DevSeatbeltSandbox.isWrapperDisabled()`.
+    var devSeatbeltWrapperDisabled: Bool {
+        didSet { defaults.set(devSeatbeltWrapperDisabled, forKey: Keys.devSeatbeltWrapperDisabled) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -332,6 +348,9 @@ final class PreferencesStore {
         // until the user checks "Don't show again". `bool(forKey:)`'s
         // false-for-missing IS the desired default.
         self.devUnrestrictedWarningSuppressed = defaults.bool(forKey: Keys.devUnrestrictedWarningSuppressed)
+        // §5c default OFF (wrapper ON): `bool(forKey:)`'s false-for-missing means
+        // the Seatbelt wrapper is enabled until a user explicitly flips this valve.
+        self.devSeatbeltWrapperDisabled = defaults.bool(forKey: Keys.devSeatbeltWrapperDisabled)
     }
 
     // MARK: - Reset
@@ -361,5 +380,6 @@ final class PreferencesStore {
         hasShownLocalhostDenialNote = false
         devPermissionTier = .askPermission
         devUnrestrictedWarningSuppressed = false
+        devSeatbeltWrapperDisabled = false
     }
 }
