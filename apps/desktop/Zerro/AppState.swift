@@ -2422,11 +2422,30 @@ final class AppState {
                     "model": self.generationModelID ?? "unknown"
                 ])
                 if Self.shouldCapture(reason) {
+                    // Provider-RETURNED failures (5xx/429/422) now reach the
+                    // error tracker carrying the HTTP status + a short, bounded
+                    // server message, so they're triageable instead of an opaque
+                    // `error 0`. Those get a reason+status fingerprint so an
+                    // outage collapses into a single issue. The reasons that were
+                    // ALREADY captured here before this change (.providerError,
+                    // .artifactUnreadable) have no provider HTTP detail, so they
+                    // get NO explicit fingerprint — PostHog keeps their existing
+                    // automatic grouping untouched (we only regroup the new
+                    // provider cases, not the pre-existing signal).
+                    var ctx = ["errorCode": Self.errorCodeString(reason)]
+                    let httpDetail = Self.providerHTTPDetail(from: error)
+                    if let httpDetail {
+                        ctx["providerStatus"] = String(httpDetail.status)
+                        if let body = httpDetail.body { ctx["providerMessage"] = body }
+                    }
                     CrashReporting.capture(
                         error,
                         message: "Proxy generation failed",
                         stage: "proxyGeneration",
-                        context: ["errorCode": Self.errorCodeString(reason)]
+                        context: ctx,
+                        fingerprint: httpDetail.map {
+                            ["proxyGeneration", Self.errorCodeString(reason), String($0.status)]
+                        }
                     )
                 }
                 // Carry the real error for the expanded failure card BEFORE
@@ -2574,7 +2593,9 @@ final class AppState {
         case .rateLimited:
             return .rateLimited
         case .providerUnavailable:
-            // 502/503 from the proxy or OpenAI — weather, not captured.
+            // 502/503 from the proxy or OpenAI. Now captured for triage (with
+            // HTTP status + bounded body + a reason+status fingerprint at the
+            // generation catch site) so a real outage is visible and grouped.
             return .providerUnavailable
         case .responseTruncated:
             // 422 — output-token truncation; partial prompt withheld
@@ -2622,7 +2643,9 @@ final class AppState {
         case .rateLimited:
             return .rateLimited
         case .providerUnavailable:
-            // 502/503 — proxy/OpenAI weather, retryable, not captured.
+            // 502/503 — proxy/OpenAI, retryable. Now captured for triage (with
+            // HTTP status + bounded body + a reason+status fingerprint at the
+            // generation catch site) so a real outage is visible and grouped.
             return .providerUnavailable
         case .responseTruncated:
             // 422 — the server's chat hit the output-token limit; the partial
@@ -2753,10 +2776,14 @@ final class AppState {
                 Log.transcription.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 let reason = Self.failureReason(from: error)
-                // Phase 13B: transcription-stage failures worth triaging
-                // (provider decode failures, unreadable local artifacts)
-                // reach the error tracker; user/environment failures AND provider
-                // 5xx outages are gated out by shouldCapture.
+                // Phase 13B: transcription-stage failures worth triaging reach
+                // the error tracker. Captured: provider decode failures
+                // (.providerError), unreadable local artifacts, and — since the
+                // shared shouldCapture gate was widened — provider 5xx
+                // (.providerUnavailable) and 429 (.rateLimited). Gated OUT:
+                // user/environment failures and .networkOffline. This BYOK path
+                // carries no providerStatus/fingerprint (that enrichment is only
+                // attached to ManagedGenerationError at the managed/trial site).
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -2868,8 +2895,13 @@ final class AppState {
                 ])
                 // Phase 13B: report engineering-signal failures to the error
                 // tracker. .providerError here is decode failures / empty
-                // content — contract drift we want to triage. 5xx outages map
-                // to .providerUnavailable and are gated out by shouldCapture.
+                // content — contract drift we want to triage. Since the shared
+                // shouldCapture gate was widened, provider 5xx
+                // (.providerUnavailable), 429 (.rateLimited) and 422-truncation
+                // (.responseTooLong) are now ALSO captured here — as plain
+                // reason-coded errors, with no providerStatus/fingerprint (that
+                // enrichment is only attached to ManagedGenerationError at the
+                // managed/trial site).
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -3879,23 +3911,29 @@ final class AppState {
     /// NOT captured: reasons that are user- or environment-driven and
     /// already surfaced to the user with actionable copy (permission
     /// revoked, no microphone connected, disk full, recording too short,
-    /// missing/invalid API key, network offline, provider rate-limit,
-    /// provider 5xx outage). Reporting those would be noise — they're
-    /// not bugs in Zerro, and an upstream outage must not be able to
-    /// flood the dashboard.
+    /// missing/invalid API key, network offline). Reporting those would be
+    /// noise — they're not bugs in Zerro.
+    ///
+    /// Provider-RETURNED failures (5xx / 429 / 422-truncation) ARE captured
+    /// (the `true` arm): they're an HTTP response from the proxy/provider worth
+    /// triaging. The managed/trial capture site attaches the HTTP status + a
+    /// short server message and a reason+status fingerprint, so a single
+    /// upstream outage collapses into ONE error-tracking issue rather than
+    /// flooding the dashboard. `.networkOffline` stays OUT — it's local
+    /// connectivity with no provider response to triage.
     private static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
              .processingFailed, .artifactUnreadable,
-             .providerError:
+             .providerError,
+             .rateLimited, .providerUnavailable, .responseTooLong:
             return true
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneDisconnected,
              .microphoneUnavailable,
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull,
-             .apiKeyMissing, .apiAuth, .networkOffline, .rateLimited,
-             .providerUnavailable, .responseTooLong,
+             .apiKeyMissing, .apiAuth, .networkOffline,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -3909,6 +3947,33 @@ final class AppState {
     /// bounded value with zero user content.
     private static func errorCodeString(_ reason: RecordingFailureReason) -> String {
         String(describing: reason)
+    }
+
+    /// HTTP status + short server message for a provider-RETURNED
+    /// `ManagedGenerationError` (the proxy/provider's own 5xx/429/422 response),
+    /// used to enrich + group the error-tracker capture at the managed/trial
+    /// generation site. Returns `nil` for anything that isn't a provider
+    /// response — transport (`network`), billing/entitlement
+    /// (`outOfCredits`/`notEntitled`), contract
+    /// (`malformedResponse`/`inputRejected`/`authFailed`), local I/O
+    /// (`artifactUnreadable`), and any non-managed error — so only genuine
+    /// provider responses carry a `providerStatus`/fingerprint. `body` is
+    /// already bounded (≤80, single line) at the throw site; it's a
+    /// transport/server message, NEVER content.
+    static func providerHTTPDetail(from error: Error) -> (status: Int, body: String?)? {
+        guard let managed = error as? ManagedGenerationError else { return nil }
+        switch managed {
+        case .rateLimited(let status, let body):
+            return (status, body)
+        case .providerUnavailable(let status, let body):
+            return (status, body)
+        case .responseTruncated:
+            // Always HTTP 422 (the value-less case predates carrying a status).
+            return (422, nil)
+        case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
+             .network, .malformedResponse, .artifactUnreadable:
+            return nil
+        }
     }
 
     // MARK: - Generation analytics helpers (Tier 1)
@@ -4014,7 +4079,10 @@ final class AppState {
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:
-                // 5xx — provider weather, not captured.
+                // 5xx — provider outage. Now captured (the shared shouldCapture
+                // gate lets `.providerUnavailable` through). This BYOK path
+                // carries no providerStatus/fingerprint — that enrichment is only
+                // attached to ManagedGenerationError at the managed/trial site.
                 return .providerUnavailable
             case .decodeFailure:
                 // Response contract broke — captured.
@@ -4029,7 +4097,10 @@ final class AppState {
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:
-                // 5xx — provider weather, not captured.
+                // 5xx — provider outage. Now captured (the shared shouldCapture
+                // gate lets `.providerUnavailable` through). This BYOK path
+                // carries no providerStatus/fingerprint — that enrichment is only
+                // attached to ManagedGenerationError at the managed/trial site.
                 return .providerUnavailable
             case .decodeFailure, .emptyContent:
                 // Response contract broke — captured.
@@ -4102,7 +4173,8 @@ final class AppState {
     ///   • URLError, offline-class  → `.networkOffline` (user's
     ///     connectivity; not captured)
     ///   • URLError, anything else  → `.providerUnavailable` (transport
-    ///     weather between us and the provider; not captured)
+    ///     weather between us and the provider; now captured for triage,
+    ///     un-fingerprinted on this BYOK path)
     ///   • not a URLError           → `.artifactUnreadable` (local I/O on
     ///     files Zerro wrote — `Data(contentsOf:)` throws CocoaErrors,
     ///     never URLErrors; captured under its own errorCode)

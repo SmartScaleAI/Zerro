@@ -57,7 +57,10 @@ enum ManagedGenerationError: Error, Equatable {
     /// or the session resolved to nothing. Routes the user back to the paywall.
     case notEntitled
     /// `429` — per-subscriber rate limit or concurrency cap hit. Retryable.
-    case rateLimited
+    /// Carries the HTTP status (always 429 today, kept for symmetry) and a
+    /// short, pre-truncated server message so the failure is triageable in
+    /// error tracking rather than an opaque `error 0`.
+    case rateLimited(status: Int, body: String?)
     /// `401` even AFTER a fresh-token retry — a real auth problem, not a
     /// routine mid-use expiry (those are refreshed transparently).
     case authFailed
@@ -65,7 +68,10 @@ enum ManagedGenerationError: Error, Equatable {
     /// real recording can't trip this; treated as a provider-class error.
     case inputRejected(String)
     /// `502`/`503`/`5xx` — the proxy or OpenAI is unavailable. Retryable.
-    case providerUnavailable
+    /// Carries the HTTP status (e.g. 502/503) and a short, pre-truncated
+    /// server message so a provider outage is triageable in error tracking
+    /// (grouped by reason+status) instead of an opaque `error 0`.
+    case providerUnavailable(status: Int, body: String?)
     /// `422` — the server's chat completed but was cut off at the output-token
     /// limit (`stop_reason`/`finishReason`/`finish_reason` truncation). The
     /// server withholds the half-formed prompt rather than returning a partial
@@ -322,7 +328,8 @@ final class ManagedProxyClient {
         } catch ManagedSessionError.notEntitled {
             throw ManagedGenerationError.notEntitled
         } catch ManagedSessionError.rateLimited {
-            throw ManagedGenerationError.rateLimited
+            // Session-mint 429 — no response body is surfaced at this layer.
+            throw ManagedGenerationError.rateLimited(status: 429, body: nil)
         } catch {
             throw ManagedGenerationError.authFailed
         }
@@ -592,14 +599,14 @@ final class ManagedProxyClient {
             // half-formed prompt (handoff-artifact-fence-leak).
             throw ManagedGenerationError.responseTruncated
         case 429:
-            throw ManagedGenerationError.rateLimited
+            throw ManagedGenerationError.rateLimited(status: status, body: Self.shortBody(data))
         case 400, 413, 415:
             let reason = String(data: data, encoding: .utf8) ?? "input_rejected"
             throw ManagedGenerationError.inputRejected(reason)
         case 500...599:
-            throw ManagedGenerationError.providerUnavailable
+            throw ManagedGenerationError.providerUnavailable(status: status, body: Self.shortBody(data))
         default:
-            throw ManagedGenerationError.providerUnavailable
+            throw ManagedGenerationError.providerUnavailable(status: status, body: Self.shortBody(data))
         }
     }
 
@@ -624,12 +631,27 @@ final class ManagedProxyClient {
         case 401:
             throw ManagedGenerationError.authFailed
         case 429:
-            throw ManagedGenerationError.rateLimited
+            throw ManagedGenerationError.rateLimited(status: status, body: Self.shortBody(data))
         case 400, 413, 415:
             let reason = String(data: data, encoding: .utf8) ?? "input_rejected"
             throw ManagedGenerationError.inputRejected(reason)
         default:
-            throw ManagedGenerationError.providerUnavailable
+            throw ManagedGenerationError.providerUnavailable(status: status, body: Self.shortBody(data))
         }
+    }
+
+    /// The server error body, collapsed to a single line and capped at 80 chars
+    /// for safe telemetry. ERROR PATH ONLY — this is a transport/server error
+    /// message, NEVER transcript or model-response content. Truncating here (at
+    /// the throw site, not just at the reporting site) is what keeps the value
+    /// within the `CrashReporting` scrubber's 80-char limit. Returns `nil` when
+    /// the body is empty.
+    private static func shortBody(_ data: Data) -> String? {
+        guard let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        // Collapse internal whitespace/newlines so a multi-line body stays a
+        // single readable line in the telemetry property.
+        let collapsed = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return String(collapsed.prefix(80))
     }
 }

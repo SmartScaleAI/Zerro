@@ -86,7 +86,8 @@ enum CrashReporting {
         _ error: Error,
         message: StaticString,
         stage: String,
-        context: [String: String] = [:]
+        context: [String: String] = [:],
+        fingerprint: [String]? = nil
     ) -> String? {
         guard isEnabled else { return nil }
 
@@ -98,6 +99,18 @@ enum CrashReporting {
         ]
         for (key, value) in scrubContext(context) {
             properties[key] = value
+        }
+        // Custom error-tracking grouping. PostHog honors `$exception_fingerprint`
+        // on the `$exception` event — the SDK passes additional properties
+        // through verbatim (see `PostHogSDK.captureException`), so the backend
+        // does the grouping. We join the caller's components into one stable key
+        // so every event sharing them collapses into a single issue (e.g. one
+        // provider 503 outage → one issue, flood control). A bare String is the
+        // most broadly-attested shape across PostHog SDKs; we standardize on it
+        // to avoid array-encoding ambiguity. Setting it takes priority over
+        // PostHog's server-side grouping rules and automatic fingerprinting.
+        if let fingerprint, !fingerprint.isEmpty {
+            properties["$exception_fingerprint"] = fingerprint.joined(separator: ":")
         }
 
         PostHogSDK.shared.captureException(error, properties: properties)
@@ -115,7 +128,9 @@ enum CrashReporting {
         "modelName",            // "gpt-5.4-mini" — never the key
         "networkReachable",     // "true" / "false"
         "frameCount",           // integer as string
-        "durationSecondsBucket" // bucketed, not raw seconds
+        "durationSecondsBucket", // bucketed, not raw seconds
+        "providerStatus",       // provider HTTP status, e.g. "503"
+        "providerMessage"       // short (≤80, scrubbed) server error message
     ]
 
     private static func scrubContext(_ ctx: [String: String]) -> [String: String] {

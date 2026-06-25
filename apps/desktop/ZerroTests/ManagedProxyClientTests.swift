@@ -158,7 +158,7 @@ final class ManagedProxyClientTests: XCTestCase {
     func testServerErrorIsRetryableProviderUnavailable() async throws {
         let (session, gen) = freshStubs(genStatus: 503, genBody: #"{"error":"openai_unavailable","retryable":true}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-        await assertThrows(.providerUnavailable) {
+        await assertThrows(.providerUnavailable(status: 503, body: #"{"error":"openai_unavailable","retryable":true}"#)) {
             _ = try await proxy.generate(audioURL: ManagedFixtures.tempFile(), frames: self.frames(), durationSeconds: nil)
         }
     }
@@ -389,7 +389,7 @@ final class ManagedProxyClientTests: XCTestCase {
     func testDevTranscribeMapsRateLimited() async {
         let (session, gen) = freshStubs(genStatus: 429, genBody: #"{"error":"rate_limited"}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
-        await assertThrows(.rateLimited) {
+        await assertThrows(.rateLimited(status: 429, body: #"{"error":"rate_limited"}"#)) {
             _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
         }
     }
@@ -418,5 +418,123 @@ final class ManagedProxyClientTests: XCTestCase {
         } catch {
             XCTFail("unexpected error \(error)", file: file, line: line)
         }
+    }
+
+    // MARK: - Provider error detail (status + bounded body) for error tracking
+
+    /// A 5xx now carries the HTTP status + a short server body, so the failure
+    /// is triageable in error tracking instead of an opaque `error 0`.
+    func testProviderUnavailableCarriesStatusAndBody() {
+        do {
+            _ = try ManagedProxyClient.parse(data: Data(#"{"error":"upstream_down"}"#.utf8), status: 503)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(status, body) {
+            XCTAssertEqual(status, 503)
+            XCTAssertEqual(body, #"{"error":"upstream_down"}"#)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    /// An unmapped status still falls through to `providerUnavailable`, but
+    /// keeps its REAL status code (a 418 isn't reported as a generic 500).
+    func testUnmappedStatusKeepsItsCode() {
+        do {
+            _ = try ManagedProxyClient.parse(data: Data("teapot".utf8), status: 418)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(status, body) {
+            XCTAssertEqual(status, 418)
+            XCTAssertEqual(body, "teapot")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    /// The server body is capped at 80 chars at the throw site — that cap is
+    /// what keeps it inside the CrashReporting scrubber's limit, so it must
+    /// hold here at the source.
+    func testProviderBodyTruncatedTo80() {
+        let huge = String(repeating: "E", count: 250)
+        do {
+            _ = try ManagedProxyClient.parse(data: Data(huge.utf8), status: 500)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(_, body) {
+            XCTAssertEqual(body?.count, 80)
+            XCTAssertEqual(body, String(huge.prefix(80)))
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    /// A whitespace-padded / multi-line body collapses to a single line so the
+    /// telemetry value stays readable.
+    func testProviderBodyCollapsesWhitespace() {
+        do {
+            _ = try ManagedProxyClient.parse(data: Data("  upstream\n  timed   out \n".utf8), status: 502)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(status, body) {
+            XCTAssertEqual(status, 502)
+            XCTAssertEqual(body, "upstream timed out")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    /// An empty body yields a nil message rather than an empty string.
+    func testProviderEmptyBodyIsNil() {
+        do {
+            _ = try ManagedProxyClient.parse(data: Data(), status: 503)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(status, body) {
+            XCTAssertEqual(status, 503)
+            XCTAssertNil(body)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    /// Call 1 (`parseTranscribe`) carries the same status + body on a 5xx.
+    func testTranscribeProviderUnavailableCarriesStatusAndBody() {
+        do {
+            _ = try ManagedProxyClient.parseTranscribe(data: Data("gateway down".utf8), status: 502)
+            XCTFail("expected providerUnavailable")
+        } catch let ManagedGenerationError.providerUnavailable(status, body) {
+            XCTAssertEqual(status, 502)
+            XCTAssertEqual(body, "gateway down")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    // MARK: - providerHTTPDetail (AppState capture-site mapping)
+
+    /// Only provider-RETURNED responses (5xx/429/422) surface a (status, body);
+    /// truncation synthesizes 422; everything else (transport, billing,
+    /// contract, local I/O, non-managed errors) returns nil, so it carries no
+    /// providerStatus/fingerprint into error tracking.
+    func testProviderHTTPDetailMapping() {
+        let pu = AppState.providerHTTPDetail(from: ManagedGenerationError.providerUnavailable(status: 503, body: "x"))
+        XCTAssertEqual(pu?.status, 503)
+        XCTAssertEqual(pu?.body, "x")
+
+        let rl = AppState.providerHTTPDetail(from: ManagedGenerationError.rateLimited(status: 429, body: nil))
+        XCTAssertEqual(rl?.status, 429)
+        XCTAssertNil(rl?.body)
+
+        // responseTruncated is value-less → synthesized as 422 with no body.
+        let truncated = AppState.providerHTTPDetail(from: ManagedGenerationError.responseTruncated)
+        XCTAssertEqual(truncated?.status, 422)
+        XCTAssertNil(truncated?.body)
+
+        // Not provider responses → nil (no status / no fingerprint).
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.outOfCredits))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.notEntitled))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.authFailed))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.malformedResponse))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.inputRejected("nope")))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.network("offline")))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.artifactUnreadable))
+        // Non-managed error → nil.
+        XCTAssertNil(AppState.providerHTTPDetail(from: URLError(.timedOut)))
     }
 }
