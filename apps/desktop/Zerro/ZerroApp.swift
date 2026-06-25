@@ -359,8 +359,44 @@ struct ZerroApp: App {
                 .background(OnboardingOpenerRegistrar())
                 .background(PaywallOpenerRegistrar())
                 .background(TrialEmailOpenerRegistrar())
+                .background(ActivateKeyOpenerRegistrar())
+                .background(SettingsDismissRegistrar())
         }
         .menuBarExtraStyle(.window)
+
+        // Activation anchor (root-cause fix for the spurious-Settings-window bug).
+        //
+        // AppKit auto-materializes the FIRST-declared `Window` scene whenever this
+        // accessory (LSUIElement) app is brought to the foreground via an
+        // activation — e.g. a `zerro://` checkout-return deep link reactivating it
+        // from the browser. `.defaultLaunchBehavior(.suppressed)` only suppresses a
+        // normal background launch, NOT this activation path, so whatever Window is
+        // declared first pops on screen. The Settings window used to be first, which
+        // is exactly how three windows (Settings + paywall + activate) ended up
+        // visible after a purchase (confirmed via os_log: the Settings window
+        // mounted on activation BEFORE the deep-link handler ran, and there was no
+        // saved-state on disk — so it was scene materialization, not restoration).
+        //
+        // This invisible, suppressed window claims the first-scene slot so the
+        // framework materializes nothing the user can see. It's fully transparent
+        // (alpha 0), click-through, single-pixel, carries no Dock-icon visibility,
+        // and is not a `qualifyingWindowID`, so it can never affect the policy flip
+        // or be raised. It only ever materializes on the same activation that would
+        // otherwise have popped Settings.
+        Window("", id: ActivationAnchorScene.windowID) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .disablesWindowRestoration()
+                .background(WindowConfigurator { window in
+                    window.alphaValue = 0
+                    window.ignoresMouseEvents = true
+                    window.isExcludedFromWindowsMenu = true
+                })
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
 
         // Phase 11 (revision 2): replaced the stock `Settings { ... }`
         // scene with a custom Window so the dark surface can bleed up
@@ -445,6 +481,22 @@ struct ZerroApp: App {
         Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
             PaywallView()
                 .dockIconVisibility(windowID: PaywallScene.windowID)
+                .disablesWindowRestoration()
+                .environment(entitlements)
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+
+        // Dedicated post-purchase "Activate your key" window. Mirrors the paywall
+        // window's modifiers (single-instance, content-sized, `.suppressed` so it
+        // NEVER auto-presents at launch). Brought forward only by the checkout-
+        // return deep link via `AppDelegate.openActivateKey()` when the link
+        // carries an issued key — the key lands PREFILLED and the user explicitly
+        // taps Activate (E-01); the full paywall is no longer opened for that flow.
+        Window("Activate your key", id: ActivateKeyScene.windowID) {
+            ActivateKeyView()
+                .dockIconVisibility(windowID: ActivateKeyScene.windowID)
                 .disablesWindowRestoration()
                 .environment(entitlements)
         }
@@ -740,10 +792,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user's first server-funded generation (Phase F). Mirrors the two above.
     nonisolated(unsafe) static var requestOpenTrialEmail: (() -> Void)?
 
+    /// Set by `ActivateKeyOpenerRegistrar`. Used by `openActivateKey` to bring the
+    /// dedicated "Activate your key" window forward when a checkout-return deep
+    /// link carries an issued key. Mirrors the three above.
+    nonisolated(unsafe) static var requestOpenActivateKey: (() -> Void)?
+
     /// Set by `PaywallOpenerRegistrar` alongside the opener. Used by the
     /// checkout-return deep link to dismiss the paywall for an already-activated
     /// buyer (a Managed top-up that updated credits silently).
     nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
+
+    /// Set by `SettingsDismissRegistrar`. Used by the checkout-return deep link's
+    /// key-prefill branch to dismiss the Settings window if AppKit happened to
+    /// materialize it on the deep-link reactivation, so only the Activate window
+    /// remains (belt-and-suspenders alongside the activation-anchor scene).
+    nonisolated(unsafe) static var requestDismissSettings: (() -> Void)?
 
     /// One-shot: the Settings category to preselect the next time the Settings
     /// window opens. Set right before `openWindow(id: SettingsScene.windowID)` —
@@ -843,13 +906,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     struct CheckoutReturnEffects {
         var bringAppForward: () -> Void
         var dismissPaywall: () -> Void
+        /// Dismisses the Settings window. The key-prefill branch calls it so a
+        /// Settings window AppKit may have materialized on the deep-link
+        /// reactivation is cleared, leaving only the Activate window. A no-op when
+        /// Settings isn't open.
+        var dismissSettings: () -> Void
         var openPaywall: () -> Void
+        /// Opens the dedicated "Activate your key" window. The post-purchase
+        /// key-prefill branch routes here instead of the full paywall.
+        var openActivateKey: () -> Void
         var capture: (_ event: String, _ properties: [String: Any]) -> Void
 
         static let live = CheckoutReturnEffects(
             bringAppForward: { NSApp.activate(ignoringOtherApps: true) },
             dismissPaywall: { AppDelegate.requestDismissPaywall?() },
+            dismissSettings: { AppDelegate.requestDismissSettings?() },
             openPaywall: { AppDelegate.openPaywall() },
+            openActivateKey: { AppDelegate.openActivateKey() },
             capture: { Analytics.capture($0, $1) }
         )
     }
@@ -929,17 +1002,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // E-01: do NOT auto-activate an externally-supplied key. Route it into the
-        // activation card PREFILLED + focused so the user explicitly taps Activate
-        // — the same confirm path a failed auto-activation already used. The
-        // "replace a present license?" guard lives in `LicenseService.activate`,
+        // dedicated "Activate your key" window PREFILLED + focused so the user
+        // explicitly taps Activate — the same confirm path a failed auto-activation
+        // already used, now on its own clean surface instead of the full paywall.
+        // The "replace a present license?" guard lives in `LicenseService.activate`,
         // and `purchase_activated` is emitted only when the user actually
         // confirms (see `PaywallActivationModel`), never from this handler. No
         // network call, no Keychain write, no analytics happen here.
         entitlements.prefillLicenseKey = key
         entitlements.paywallTrigger = .manage
         entitlements.focusActivationFieldOnOpen = true
-        effects.openPaywall()
-        Log.billing.notice("deep link: key received — prefilled activation field for explicit confirmation")
+        // Window hygiene: the user arrives here from the in-paywall "buy" flow, so
+        // the paywall is open; and AppKit may have materialized the Settings window
+        // on this reactivation (see the activation-anchor scene). Dismiss both
+        // BEFORE opening Activate so only the Activate window is left on screen —
+        // no visible stack. Both are safe no-ops when the window isn't open.
+        effects.dismissPaywall()
+        effects.dismissSettings()
+        effects.openActivateKey()
+        Log.billing.notice("deep link: key received — prefilled activate-key window for explicit confirmation")
         return .prefilled
     }
 
@@ -1073,6 +1154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.ui.error("openTrialEmailCapture() called but requestOpenTrialEmail is nil — registrar didn't mount")
         }
     }
+
+    /// Brings the dedicated "Activate your key" window forward. Mirrors
+    /// `openPaywall()`: activate the app first (so the window surfaces in front in
+    /// this .accessory-policy app), then invoke the captured opener. Called by the
+    /// checkout-return deep link when an issued key is prefilled for explicit
+    /// activation (E-01) — in place of opening the full paywall.
+    @MainActor
+    static func openActivateKey() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let opener = requestOpenActivateKey {
+            opener()
+        } else {
+            Log.ui.error("openActivateKey() called but requestOpenActivateKey is nil — registrar didn't mount")
+        }
+    }
 }
 
 // MARK: - OnboardingOpenerRegistrar
@@ -1144,6 +1240,53 @@ private struct TrialEmailOpenerRegistrar: View {
             .onAppear {
                 AppDelegate.requestOpenTrialEmail = {
                     openWindow(id: TrialEmailScene.windowID)
+                }
+            }
+    }
+}
+
+// MARK: - ActivateKeyOpenerRegistrar
+//
+// Twin of PaywallOpenerRegistrar for the dedicated "Activate your key" window.
+// Captures `openWindow` into AppDelegate.requestOpenActivateKey at launch so the
+// checkout-return deep link can bring the (suppressed-at-launch) window forward
+// even though the Window scene's content (and its onAppear) only mounts when the
+// window is actually on screen. Mounted in the MenuBarExtra label, the one
+// always-present View.
+
+private struct ActivateKeyOpenerRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.requestOpenActivateKey = {
+                    openWindow(id: ActivateKeyScene.windowID)
+                }
+            }
+    }
+}
+
+// MARK: - SettingsDismissRegistrar
+//
+// Captures `dismissWindow` for the Settings scene into
+// AppDelegate.requestDismissSettings at launch — mirroring how
+// PaywallOpenerRegistrar captures requestDismissPaywall. The checkout-return
+// deep link's key-prefill branch calls it (a safe no-op when Settings isn't
+// open) so a Settings window AppKit may have materialized on the reactivation is
+// cleared, leaving only the Activate window. Mounted in the MenuBarExtra label,
+// the one always-present View.
+
+private struct SettingsDismissRegistrar: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.requestDismissSettings = {
+                    dismissWindow(id: SettingsScene.windowID)
                 }
             }
     }

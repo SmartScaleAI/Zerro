@@ -31,14 +31,18 @@ final class CheckoutReturnTests: XCTestCase {
     private final class EffectsSpy {
         var broughtForward = 0
         var dismissed = 0
+        var dismissedSettings = 0
         var openedPaywall = 0
+        var openedActivateKey = 0
         var captures: [(event: String, properties: [String: Any])] = []
 
         func make() -> AppDelegate.CheckoutReturnEffects {
             AppDelegate.CheckoutReturnEffects(
                 bringAppForward: { self.broughtForward += 1 },
                 dismissPaywall: { self.dismissed += 1 },
+                dismissSettings: { self.dismissedSettings += 1 },
                 openPaywall: { self.openedPaywall += 1 },
+                openActivateKey: { self.openedActivateKey += 1 },
                 capture: { self.captures.append((event: $0, properties: $1)) }
             )
         }
@@ -183,8 +187,15 @@ final class CheckoutReturnTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome, .prefilled)
-        // The paywall opens focused on the activation field with the key prefilled.
-        XCTAssertEqual(spy.openedPaywall, 1)
+        // The DEDICATED activate-key window opens (not the full paywall), focused
+        // on the field with the key prefilled.
+        XCTAssertEqual(spy.openedActivateKey, 1)
+        XCTAssertEqual(spy.openedPaywall, 0)
+        // Window hygiene: the paywall (the user came from the in-paywall buy flow)
+        // and any Settings window AppKit materialized on the reactivation are
+        // dismissed so ONLY the Activate window remains.
+        XCTAssertEqual(spy.dismissed, 1)
+        XCTAssertEqual(spy.dismissedSettings, 1)
         XCTAssertEqual(store.prefillLicenseKey, sampleKey)
         XCTAssertEqual(store.paywallTrigger, .manage)
         XCTAssertTrue(store.focusActivationFieldOnOpen)
@@ -221,7 +232,12 @@ final class CheckoutReturnTests: XCTestCase {
 
         XCTAssertEqual(outcome, .prefilled)
         XCTAssertEqual(store.prefillLicenseKey, attackerKey)
-        XCTAssertEqual(spy.openedPaywall, 1)
+        // Routed to the dedicated activate-key window, never the full paywall, with
+        // the paywall + any materialized Settings window dismissed.
+        XCTAssertEqual(spy.openedActivateKey, 1)
+        XCTAssertEqual(spy.openedPaywall, 0)
+        XCTAssertEqual(spy.dismissed, 1)
+        XCTAssertEqual(spy.dismissedSettings, 1)
         // The existing license A is untouched: no POST, Keychain still holds A,
         // and the user is still .byok-entitled.
         XCTAssertEqual(transport.callCount, 0)
@@ -252,10 +268,14 @@ final class CheckoutReturnTests: XCTestCase {
         XCTAssertEqual(outcome, .alreadyActive)
         // No re-activation: the LemonSqueezy /activate endpoint was never hit.
         XCTAssertEqual(transport.callCount, 0)
-        // Already-active is still a success → shows the confirmation.
+        // Already-active is still a success → shows the confirmation. This branch
+        // is left exactly as before: the success hosts in the paywall, NOT the new
+        // activate-key window (only the fresh-key prefill branch reroutes).
         XCTAssertEqual(store.purchaseSuccess, .byok)
         XCTAssertEqual(spy.openedPaywall, 1)
+        XCTAssertEqual(spy.openedActivateKey, 0)
         XCTAssertEqual(spy.dismissed, 0)
+        XCTAssertEqual(spy.dismissedSettings, 0)
         // E-01: the handler no longer fires `purchase_activated` — a deep link
         // never counts as a purchase outcome. The success SCREEN being shown is
         // still recorded (and this branch isn't spoofable: it requires THIS
@@ -287,7 +307,9 @@ final class CheckoutReturnTests: XCTestCase {
         XCTAssertEqual(outcome, .silentRefresh)
         XCTAssertEqual(spy.broughtForward, 1)
         XCTAssertEqual(spy.dismissed, 1)
+        XCTAssertEqual(spy.dismissedSettings, 0)
         XCTAssertEqual(spy.openedPaywall, 0)
+        XCTAssertEqual(spy.openedActivateKey, 0)
         // No analytics on the no-key path (parity with prior behavior).
         XCTAssertTrue(spy.captures.isEmpty)
     }
@@ -306,7 +328,11 @@ final class CheckoutReturnTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome, .openedPaywallNoKey)
+        // The no-key "brand-new buyer must paste" branch is unchanged: it still
+        // opens the full paywall, NOT the dedicated activate-key window.
         XCTAssertEqual(spy.openedPaywall, 1)
+        XCTAssertEqual(spy.openedActivateKey, 0)
+        XCTAssertEqual(spy.dismissedSettings, 0)
         XCTAssertEqual(store.paywallTrigger, .manage)
         XCTAssertTrue(store.focusActivationFieldOnOpen)
         XCTAssertNil(store.prefillLicenseKey)
@@ -419,7 +445,9 @@ final class CheckoutReturnTests: XCTestCase {
         XCTAssertEqual(outcome, .topupConfirmed)
         XCTAssertEqual(store.purchaseSuccess, .topup(added: 20, total: 30))
         XCTAssertEqual(spy.openedPaywall, 1)
+        XCTAssertEqual(spy.openedActivateKey, 0)
         XCTAssertEqual(spy.dismissed, 0)
+        XCTAssertEqual(spy.dismissedSettings, 0)
         XCTAssertEqual(spy.successShown?.method, "deeplink")
         XCTAssertEqual(spy.successShown?.plan, "topup")
     }

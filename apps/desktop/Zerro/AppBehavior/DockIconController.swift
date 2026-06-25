@@ -43,6 +43,7 @@ final class DockIconController {
         SettingsScene.windowID,
         OnboardingScene.windowID,
         PaywallScene.windowID,
+        ActivateKeyScene.windowID,
         TrialEmailScene.windowID,
         FeedbackScene.windowID,
     ]
