@@ -12,6 +12,7 @@ const uses = [
   "Grab the exact formula or snippet you need",
   "Turn messy notes into a clean write-up",
   "Get a confusing screen, error, or chart explained",
+  "Make changes to your website in real time using Dev Mode",
 ];
 
 const WhatIsZerro = () => {
@@ -31,7 +32,8 @@ const WhatIsZerro = () => {
           <div className="space-y-5 text-base leading-relaxed text-muted-foreground lg:text-lg">
             <p>
               Zerro turns a screen recording and a few spoken words into a
-              ready-to-paste prompt, message, snippet, document, or answer.
+              ready-to-paste prompt, message, snippet, document, or answer — or
+              makes changes to your website or application in real time.
             </p>
           </div>
         </div>

@@ -73,7 +73,7 @@ const rows: Row[] = [
   {
     label: "Pricing model",
     sub: "Pay once, own it forever.",
-    zerro: "One-time ($69)",
+    zerro: "Subscription / One-time",
     wispr: "Subscription",
     loom: "Subscription",
   },

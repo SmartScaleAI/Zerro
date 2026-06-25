@@ -1,8 +1,9 @@
 "use client"
 
 import { DownloadButton } from "@/components/download-button"
+import { Button } from "@/components/ui/button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
-import { Check, Copy, X, Square, ChevronDown } from "lucide-react"
+import { Check, Copy, X, Square, ChevronDown, PlayCircle } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
 import { motion, AnimatePresence } from "motion/react"
 import { useEffect, useState } from "react"
@@ -183,7 +184,8 @@ const Hero = () => {
         <p className="max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
           Record your screen, dictate what you want, and Zerro turns it into
           exactly what you need — an agent prompt, a message, a snippet, a
-          written-up document, or simply a clear answer to your question.
+          written-up document, or even real-time updates to your website or
+          application.
         </p>
         <div className="flex flex-row flex-wrap items-center justify-center gap-3">
           <DownloadButton
@@ -195,9 +197,19 @@ const Hero = () => {
             <AppleIcon className="h-4 w-4" />
             Download for Mac
           </DownloadButton>
+          <Button
+            variant="outline"
+            size="lg"
+            className="gap-2 rounded-full"
+            nativeButton={false}
+            render={<a href="#how-it-works" />}
+          >
+            <PlayCircle className="h-4 w-4" />
+            How it works
+          </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          v1.4.13 · Apple Silicon · Signed &amp; notarized
+          v1.4.16 · Apple Silicon · Signed &amp; notarized
         </p>
       </section>
 

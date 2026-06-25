@@ -81,6 +81,8 @@ type Tier = {
     };
     price?: string;
     cadence?: string;
+    // One-time "was" price, struck through beside the live price (BYOK limited offer).
+    comparePrice?: string;
     badge?: string;
     // Renders a "Limited offer" urgency badge on the card (highlighted tier only).
     limitedOffer?: boolean;
@@ -104,9 +106,11 @@ const tiers: Tier[] = [
             price: "$15",
             yearlyMonthly: "$12",
             yearlyTotal: "$144 billed yearly",
-            // Limited-offer comparison: full price $25/mo → $300/yr.
-            compareMonthly: "$25 per month",
-            compareYearlyTotal: "$18 per month",
+            // Limited-offer comparison: full price $25/mo → $300/yr. Bare
+            // dollar amounts so the enlarged strike-through stays clean beside
+            // the live "per month" price.
+            compareMonthly: "$25",
+            compareYearlyTotal: "$18",
         },
         badge: "Most popular",
         limitedOffer: true,
@@ -116,7 +120,7 @@ const tiers: Tier[] = [
                 label: "300 credits per month",
                 note: "≈ 50 generations on standard models.",
             },
-            "6 models to choose from — Claude, GPT & Gemini",
+            "5 models to choose from — Claude, GPT & Gemini",
             "Top up anytime — Boost (200 credits, $10) or Power (500 credits, $22)",
             "We manage all token usage — no API keys",
             "Cancel anytime",
@@ -130,11 +134,13 @@ const tiers: Tier[] = [
         blurb: "Bring your own keys. No Zerro servers in between.",
         price: "$69",
         cadence: "one-time",
+        comparePrice: "$99",
+        limitedOffer: true,
         features: [
             "30 free credits to start",
             "Includes 1 year of updates — your installed version keeps working after",
             "Bring your own OpenAI, Gemini & Anthropic API keys",
-            "All 6 models — Claude, GPT & Gemini",
+            "All 5 models — Claude, GPT & Gemini",
             "Keys stored in your macOS Keychain",
             "Recordings never pass through Zerro's servers",
             "No subscription, no account",
@@ -178,10 +184,8 @@ const Pricing = () => {
             {/* Primary download CTA — one cohesive, centered group lifted above the
                 cards: the button leads as the primary action, with the "Start free…"
                 line directly beneath it as supporting reassurance microcopy (rather
-                than a detached pill above). Extra bottom margin lifts it clear of the
-                Managed card's "Limited offer" ribbon, which straddles the card's top
-                edge. */}
-            <div className="relative z-10 mb-12 lg:mb-16 flex flex-col items-center gap-3.5">
+                than a detached pill above). */}
+            <div className="relative z-10 mb-8 lg:mb-10 flex flex-col items-center gap-3.5">
                 <DownloadButton
                     placement="pricing"
                     className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
@@ -196,7 +200,18 @@ const Pricing = () => {
                 </p>
             </div>
 
-            <div className="relative z-10 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2 lg:gap-6 max-w-4xl mx-auto">
+            {/* Cards. Both plans share the same promotion, so each card carries its
+                own "Limited offer" badge straddling its top edge (half above, half
+                on the card) rather than a single detached badge above the pair. The
+                wrapper's top margin reserves room for the badges' overhang. */}
+            <div className="relative z-10 mt-10 lg:mt-12 max-w-4xl mx-auto">
+                {/* Stacked on mobile, the BYOK card's "Limited offer" badge
+                    straddles its top edge and would smush against the Managed
+                    card above with only gap-4 between them — so the single-column
+                    vertical gap is widened to clear the badge's overhang. Side by
+                    side at lg the badges overhang into the wrapper's top margin,
+                    so the tighter lg:gap-6 (horizontal) is unaffected. */}
+                <div className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-2 lg:gap-6">
                 {tiers.map((tier, i) => {
                     const isSubscription = !!tier.monthly;
                     const showYearly = isSubscription && billing === "yearly";
@@ -209,6 +224,14 @@ const Pricing = () => {
                             : tier.monthly!.price
                         : tier.price;
                     const cadence = isSubscription ? "per month" : tier.cadence;
+                    // Limited-offer "was" price, struck through beside the live
+                    // price. Subscriptions compare per-month rates (monthly vs.
+                    // yearly); the one-time BYOK tier compares its flat price.
+                    const compareValue = isSubscription
+                        ? showYearly
+                            ? tier.monthly!.compareYearlyTotal
+                            : tier.monthly!.compareMonthly
+                        : tier.comparePrice;
 
                     return (
                         <motion.div
@@ -224,22 +247,26 @@ const Pricing = () => {
                             className={cn(
                                 tier.highlight
                                     ? "relative z-10 h-full lg:scale-[1.04]"
-                                    : "z-0 h-full"
+                                    : "relative z-0 h-full"
                             )}
                         >
-                            {/* Limited-offer ribbon — lives on the wrapper (not the Card,
-                                which is overflow-hidden) so it can straddle the top edge:
-                                centered, half above the card and half over its border. */}
+                            {/* "Limited offer" badge — straddles the card's top edge
+                                (half above, half on the card). Sibling of the Card so
+                                it isn't clipped by the Card's overflow-hidden. */}
                             {tier.limitedOffer && (
-                                <span
-                                    className={cn(
-                                        "absolute left-1/2 top-0 z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full px-3 py-1 text-sm font-semibold uppercase tracking-wider shadow-lg",
-                                        HIGHLIGHT_STYLE.limitedBadge
-                                    )}
-                                >
-                                    Limited offer
-                                </span>
+                                <div className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
+                                    <span
+                                        className={cn(
+                                            "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-semibold uppercase tracking-wider shadow-lg",
+                                            HIGHLIGHT_STYLE.limitedBadge
+                                        )}
+                                    >
+                                        <Sparkles className="h-3.5 w-3.5" strokeWidth={2.4} />
+                                        Limited offer
+                                    </span>
+                                </div>
                             )}
+
                             <Card
                                 className={cn(
                                     "relative flex h-full flex-col gap-5 p-6",
@@ -337,6 +364,20 @@ const Pricing = () => {
 
                                 <div className="flex flex-col gap-2">
                                     <div className="flex items-baseline gap-2 flex-wrap">
+                                        {/* Limited-offer "was" price, struck through and muted so it
+                                            reads as clearly secondary to the active discounted price.
+                                            Sits to the left of the live price, sized to match it so
+                                            the discount reads at a glance. */}
+                                        {compareValue && (
+                                            <span
+                                                className={cn(
+                                                    "text-4xl lg:text-5xl font-medium tracking-tighter line-through",
+                                                    tier.highlight ? "text-foreground/45" : "text-muted-foreground/70"
+                                                )}
+                                            >
+                                                {compareValue}
+                                            </span>
+                                        )}
                                         <AnimatePresence mode="popLayout" initial={false}>
                                             <motion.span
                                                 key={price}
@@ -350,25 +391,6 @@ const Pricing = () => {
                                             </motion.span>
                                         </AnimatePresence>
                                         <span className={cn("text-sm", tier.highlight ? HIGHLIGHT_STYLE.cadence : "text-foreground/65")}>{cadence}</span>
-                                        {/* Limited-offer "was" price, struck through and muted so it
-                                            reads as clearly secondary to the active discounted price.
-                                            Sits to the right of the per-month price. Monthly compares
-                                            $25/mo; yearly compares the standard $18/mo rate. */}
-                                        {isSubscription &&
-                                            (showYearly
-                                                ? tier.monthly!.compareYearlyTotal
-                                                : tier.monthly!.compareMonthly) && (
-                                                <span
-                                                    className={cn(
-                                                        "text-sm line-through",
-                                                        tier.highlight ? "text-foreground/45" : "text-muted-foreground/70"
-                                                    )}
-                                                >
-                                                    {showYearly
-                                                        ? tier.monthly!.compareYearlyTotal
-                                                        : tier.monthly!.compareMonthly}
-                                                </span>
-                                            )}
                                     </div>
                                     {/* Full annual charge — sits on its own line directly below
                                         the per-month price (yearly toggle only). */}
@@ -410,6 +432,7 @@ const Pricing = () => {
                         </motion.div>
                     );
                 })}
+                </div>
             </div>
 
             {/* Honest privacy distinction — a genuine selling point, not buried.

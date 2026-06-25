@@ -180,14 +180,20 @@ function DevModeFlow() {
     // breakpoints; `left` is a width-relative %. The flow: drag the marquee
     // corner → circle the middle card while talking → move up to the Stop button
     // in the pill (landing there ends step 2) → drag back down onto the card.
+    // The Stop button lives in the centered, fixed-width status pill, so its
+    // position is a constant pixel offset from the mock's horizontal center —
+    // NOT a fixed % of the mock's width. The reach phase therefore parks the
+    // cursor at the center (left 50%) and pushes it right by a fixed `x` offset
+    // so the tip lands on Stop at every breakpoint (a width-relative % like
+    // "64%" only lined up on the wide desktop mock and fell short on mobile).
     const cursorPos =
         id === "select"
-            ? { left: ["3%", "95%"], top: ["104px", "246px"] }
+            ? { left: ["3%", "95%"], top: ["104px", "246px"], x: 0 }
             : id === "describe" || id === "spec"
-              ? { left: "50%", top: "176px" }
+              ? { left: "50%", top: "176px", x: 0 }
               : id === "reach"
-                ? { left: "64%", top: "20px" }
-                : { left: "50%", top: "176px" }; // apply, done — dragged back down
+                ? { left: "50%", top: "20px", x: 92 }
+                : { left: "50%", top: "176px", x: 0 }; // apply, done — dragged back down
     // The select drag is a slow sweep; the trip up to Stop and the drag back down
     // are deliberate moves; every other reposition is a quick glide.
     const cursorTransition =
