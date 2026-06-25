@@ -175,7 +175,7 @@ protocol DevAgentRunner: AnyObject, Sendable {
     /// Returns the terminal result.
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
@@ -196,12 +196,12 @@ extension DevAgentRunner {
     /// default model — used by simple test paths).
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void
     ) async -> DevRunResult {
-        await run(entry: entry, permission: permission, prompt: prompt,
+        await run(entry: entry, tier: tier, prompt: prompt,
                   projectURL: projectURL, timeouts: .default, model: nil,
                   onEvent: onEvent, onStall: { _ in })
     }
@@ -209,13 +209,13 @@ extension DevAgentRunner {
     /// Convenience: explicit timeouts, no model, no stall handler.
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void
     ) async -> DevRunResult {
-        await run(entry: entry, permission: permission, prompt: prompt,
+        await run(entry: entry, tier: tier, prompt: prompt,
                   projectURL: projectURL, timeouts: timeouts, model: nil,
                   onEvent: onEvent, onStall: { _ in })
     }
@@ -224,14 +224,14 @@ extension DevAgentRunner {
     /// that asserts argv/model threading without exercising the stall prompt).
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
         model: String?,
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void
     ) async -> DevRunResult {
-        await run(entry: entry, permission: permission, prompt: prompt,
+        await run(entry: entry, tier: tier, prompt: prompt,
                   projectURL: projectURL, timeouts: timeouts, model: model,
                   onEvent: onEvent, onStall: { _ in })
     }
@@ -258,7 +258,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     // via `queue.sync`; all process I/O is off-main on `queue`.
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,
@@ -287,7 +287,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         // STDIN (`.stdin`); Codex takes it as a POSITIONAL argument (`.argument`)
         // — appended last, after the flags — and reads stdin only when piped, so
         // for `.argument` we write nothing and just close stdin (EOF).
-        var argv = entry.arguments(permission: permission, model: model)
+        var argv = entry.arguments(tier: tier, model: model)
         let deliverPromptViaStdin = entry.promptDelivery == .stdin
         if entry.promptDelivery == .argument {
             argv.append(prompt)
@@ -300,6 +300,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
             deliverPromptViaStdin: deliverPromptViaStdin,
             projectURL: projectURL,
             outputFormat: entry.outputFormat,
+            tier: tier,
             timeouts: timeouts,
             queue: queue,
             onEvent: onEvent,
@@ -344,6 +345,18 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     /// Testing seam for the question-stripping pass applied to dev summaries.
     nonisolated static func summaryDroppingQuestionsForTesting(_ text: String) -> String? {
         DevAgentProcessExecution.summaryDroppingQuestions(text)
+    }
+
+    /// Testing seam for the §5b env-scrub allowlist (`DevAgentProcessExecution` is
+    /// private). `baseEnvironment` is injected so a test can plant a `DATABASE_URL`
+    /// and assert the fenced tiers strip it while keeping PATH + the agent's auth.
+    nonisolated static func spawnEnvironmentForTesting(
+        for executableURL: URL,
+        tier: DevPermissionTier,
+        baseEnvironment: [String: String]
+    ) -> [String: String] {
+        DevAgentProcessExecution.spawnEnvironment(
+            for: executableURL, tier: tier, baseEnvironment: baseEnvironment)
     }
 }
 
@@ -413,6 +426,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         deliverPromptViaStdin: Bool = true,
         projectURL: URL,
         outputFormat: DevAgentOutputFormat,
+        tier: DevPermissionTier,
         timeouts: DevRunTimeouts,
         queue: DispatchQueue,
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void,
@@ -433,7 +447,9 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
-        process.environment = DevAgentProcessExecution.spawnEnvironment(for: executableURL)
+        // §5b env-scrub: the fenced tiers get an allowlist (no DB/cloud creds);
+        // `.unrestricted` forwards the full environment.
+        process.environment = DevAgentProcessExecution.spawnEnvironment(for: executableURL, tier: tier)
     }
 
     nonisolated func start(completion: @escaping (DevRunResult) -> Void) {
@@ -1031,16 +1047,27 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
     // MARK: - Spawn environment
 
-    /// Forward the user's environment, but guarantee a usable PATH: GUI apps
-    /// inherit a stripped PATH, and Claude Code (a Node CLI) shells out to
-    /// `node` and friends. Prefer the LOGIN-SHELL PATH captured during detection
+    /// The spawn environment for the agent process. Always guarantees a usable
+    /// PATH: GUI apps inherit a stripped PATH, and the CLIs (Node etc.) shell out
+    /// to `node` and friends. Prefer the LOGIN-SHELL PATH captured during detection
     /// (`DevAgentBinaryResolver`) — it contains the version-manager `node` dir
-    /// (nvm/asdf) that a hand-built list would miss — falling back to a static
-    /// list only when detection hasn't warmed it. The binary's own dir is always
+    /// (nvm/asdf) that a hand-built list would miss — falling back to a static list
+    /// only when detection hasn't warmed it. The binary's own dir is always
     /// prepended. The CLIs read their own auth config (~/.claude, …), readable
     /// since we're non-sandboxed.
-    nonisolated static func spawnEnvironment(for executableURL: URL) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    ///
+    /// §5b ENV-SCRUB: for the FENCED tiers (`.askPermission` / `.autoApprove`) the
+    /// result is an ALLOWLIST — only PATH, a handful of locale/shell vars, and the
+    /// ACTIVE agent's own auth var (if present) survive; everything else (DB URLs,
+    /// cloud creds, unrelated `*_SECRET`/`*_TOKEN`/`*_API_KEY`) is stripped, so a
+    /// command has no credentials to mutate an external system. For `.unrestricted`
+    /// the FULL environment is forwarded (today's behavior), PATH fixed up.
+    /// `baseEnvironment` is injectable for tests; production passes the process env.
+    nonisolated static func spawnEnvironment(
+        for executableURL: URL,
+        tier: DevPermissionTier,
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
         let binDir = executableURL.deletingLastPathComponent().path
         let home = FileManager.default.homeDirectoryForCurrentUser.path
 
@@ -1054,14 +1081,45 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
                 "/usr/bin", "/bin", "/usr/sbin", "/sbin",
             ]
         }
-        let inherited = env["PATH"]?.split(separator: ":").map(String.init) ?? []
+        let inherited = baseEnvironment["PATH"]?.split(separator: ":").map(String.init) ?? []
         // De-dupe while preserving order (binDir first so the agent's own
         // toolchain dir wins, then the login PATH, then anything inherited).
         var seen = Set<String>()
-        let merged = ([binDir] + base + inherited)
+        let path = ([binDir] + base + inherited)
             .filter { seen.insert($0).inserted }
             .joined(separator: ":")
-        env["PATH"] = merged
+
+        // Unrestricted: forward the FULL environment (today's behavior), PATH fixed up.
+        guard tier.isFenced else {
+            var env = baseEnvironment
+            env["PATH"] = path
+            return env
+        }
+
+        // Fenced: ALLOWLIST. Keep PATH + what node/npm + a shell need, plus the
+        // active agent's own auth var only. Everything else is dropped.
+        var env: [String: String] = ["PATH": path]
+        let keepExact: Set<String> = ["HOME", "USER", "SHELL", "LANG", "TMPDIR", "TERM"]
+        let authKeys = agentAuthEnvKeys(for: executableURL.lastPathComponent)
+        for (key, value) in baseEnvironment {
+            if keepExact.contains(key) || key.hasPrefix("LC_") || authKeys.contains(key) {
+                env[key] = value
+            }
+        }
         return env
+    }
+
+    /// The auth env var names the ACTIVE agent reads, derived from the executable's
+    /// basename — kept under the §5b allowlist only if present (most agents read
+    /// auth from their own config dir: ~/.claude, ~/.codex, ~/.cursor, so these are
+    /// usually absent). An agent's own key is kept; every OTHER agent's key (and any
+    /// unrelated `*_API_KEY`/`*_TOKEN`) is stripped.
+    nonisolated private static func agentAuthEnvKeys(for executableName: String) -> Set<String> {
+        switch executableName {
+        case "claude":       return ["ANTHROPIC_API_KEY"]
+        case "codex":        return ["OPENAI_API_KEY", "CODEX_API_KEY"]
+        case "cursor-agent": return ["CURSOR_API_KEY"]
+        default:             return []
+        }
     }
 }

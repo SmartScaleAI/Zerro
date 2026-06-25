@@ -194,7 +194,7 @@ final class DevDispatchCoordinator {
         prompt: String,
         projectURL: URL,
         agent: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         // Phase 2: the selected `--model` id, or nil to run the agent's own
         // default. Forwarded to the runner, which appends `--model <id>` only
         // when non-nil AND the agent declares a model flag.
@@ -275,7 +275,7 @@ final class DevDispatchCoordinator {
         onPhase(.dispatching)
         let runResult = await runner.run(
             entry: agent,
-            permission: permission,
+            tier: tier,
             prompt: Self.promptWithDevModeGuards(prompt),
             projectURL: projectURL,
             timeouts: .default,

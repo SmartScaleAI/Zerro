@@ -80,7 +80,7 @@ public enum RecordingState: Equatable {
     /// resolves to `.idle` on success or back to `.devFailed` if revert failed.
     case devReverting
     /// The Ask Permission pre-edit gate — the SOLE pre-edit checkpoint. When
-    /// `PreferencesStore.devPermissionMode` is `.askPermission`, the dispatch
+    /// `PreferencesStore.devPermissionTier` is `.askPermission`, the dispatch
     /// pauses here AFTER `devCheckpointing` and BEFORE `devAgentDispatching`: the
     /// pill shows the exact generated prompt (+ the resolved target label(s) + the
     /// agent) for a look-before-apply. The agent runs ONLY on Approve; Cancel
@@ -3028,9 +3028,11 @@ final class AppState {
                 prompt: body,
                 projectURL: projectURL,
                 agent: agent,
-                // Phase 1 default — edits-only (design §11). The opt-in
-                // "allow commands" toggle is a later phase.
-                permission: .editsOnly,
+                // The permission tier (spec §6) — read fresh at dispatch. Drives
+                // the agent's argv (MCP fence) + the env scrub; the review gate is
+                // applied separately via `confirmGate`. Fail-safe to the fenced,
+                // review-gated default when preferences aren't wired.
+                tier: self.preferences?.devPermissionTier ?? .askPermission,
                 // Phase 2 — the model captured at record-start. nil ⇒ the agent's
                 // own default; the runner appends `--model <id>` only when set.
                 model: recordingAgentModelID,
@@ -3145,9 +3147,10 @@ final class AppState {
     /// tests can drive it directly.)
     func awaitReviewApproval(gen: Int, prompt: String) async -> Bool {
         guard devDispatchGeneration == gen else { return false }
-        // Auto Approve ⇒ instant pass: no `.reviewingPrompt` state, no card — the
-        // dispatch proceeds exactly as today.
-        guard preferences?.devPermissionMode == .askPermission else { return true }
+        // Only Ask Permission runs the review gate. Auto-Approve and Unrestricted
+        // ⇒ instant pass: no `.reviewingPrompt` state, no card — the dispatch
+        // proceeds exactly as the auto-apply path does.
+        guard preferences?.devPermissionTier.reviewsBeforeDispatch == true else { return true }
         devReviewPromptText = prompt
         state = .reviewingPrompt
         let proceed = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in

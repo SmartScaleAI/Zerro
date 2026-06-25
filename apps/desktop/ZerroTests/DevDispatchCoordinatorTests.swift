@@ -49,7 +49,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let coordinator = DevDispatchCoordinator(runner: runner)
 
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { _ in }
         )
 
@@ -81,7 +81,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let coordinator = DevDispatchCoordinator(runner: runner)
 
         let outcome = await coordinator.dispatch(
-            prompt: "make it teal", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "make it teal", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { _ in }
         )
 
@@ -109,7 +109,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let coordinator = DevDispatchCoordinator(runner: runner)
 
         _ = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             model: "claude-opus-4-8",
             onPhase: { _ in }
         )
@@ -129,7 +129,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
 
         let spec = "Goal: recolor the button\n\nChanges:\n1. blue -> teal"
         _ = await coordinator.dispatch(
-            prompt: spec, projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: spec, projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { _ in }
         )
 
@@ -164,7 +164,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { _ in }
         )
 
@@ -197,7 +197,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let coordinator = DevDispatchCoordinator(runner: runner)
 
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { _ in }
         )
 
@@ -229,7 +229,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
             XCTAssertTrue(sawCheckpoint.value, "checkpoint must be surfaced before the agent runs")
         })
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onCheckpoint: { _, _ in sawCheckpoint.set(true) },
             onPhase: { order.append($0) }
         )
@@ -247,7 +247,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         // would run) — the run must be skipped, but the checkpoint must ride
         // back so the caller can revert/teardown uniformly.
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onCheckpoint: { _, _ in coordinator.cancel() },
             onPhase: { _ in }
         )
@@ -273,7 +273,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         // NEVER runs.
         var checkpointSurfaced = false
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onCheckpoint: { _, _ in checkpointSurfaced = true },
             confirmGate: {
                 XCTAssertTrue(checkpointSurfaced, "the gate runs AFTER the checkpoint (§8)")
@@ -297,7 +297,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let runner = FakeRunner(result: .succeeded(summary: nil))
         let coordinator = DevDispatchCoordinator(runner: runner)
         let outcome = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             confirmGate: { true }, // user confirmed
             onPhase: { _ in }
         )
@@ -314,7 +314,7 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         let phases = PhaseRecorder()
         let coordinator = DevDispatchCoordinator(runner: FakeRunner(result: .succeeded(summary: nil)))
         _ = await coordinator.dispatch(
-            prompt: "go", projectURL: repo, agent: agentEntry(), permission: .editsOnly,
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
             onPhase: { phases.append($0) }
         )
         let seen = phases.values()
@@ -382,7 +382,7 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
 
     func run(
         entry: DevAgentEntry,
-        permission: DevAgentPermission,
+        tier: DevPermissionTier,
         prompt: String,
         projectURL: URL,
         timeouts: DevRunTimeouts,

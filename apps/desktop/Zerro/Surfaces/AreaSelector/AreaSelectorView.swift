@@ -701,9 +701,10 @@ struct AreaSelectorView: View {
     /// line) stays well within a typical `visibleFrame`. The Agent section stays
     /// full height (it's only ~3 rows — no need to scroll it).
     static let maxVisibleModelRows = 5
-    /// The Permissions section's fixed row count (Ask Permission / Auto Approve) —
-    /// the dev-settings menu's permission-mode picker, between Model and Project.
-    static let devPermissionRowCount = DevPermissionMode.allCases.count
+    /// The Permissions section's fixed row count (Ask Permission / Auto-Approve /
+    /// Unrestricted) — the dev-settings menu's permission-tier picker, between
+    /// Model and Project.
+    static let devPermissionRowCount = DevPermissionTier.allCases.count
 
     // MARK: Auto-Detect Project toggle row (Project section)
     //
@@ -746,7 +747,7 @@ struct AreaSelectorView: View {
     /// Custom-tooltip copy for the Permissions info icon. Shown via `tooltipInfo`/
     /// `toolbarTooltip` (NOT `.help`, which can't fire through the overlay).
     static let permissionInfoTooltip =
-        "Ask Permission shows the generated prompt for you to review before the agent edits any files. Auto Approve applies changes immediately."
+        "Ask Permission shows the generated plan for you to review before the agent runs. Auto-Approve runs immediately. Both keep the agent inside this project (no connectors, no credentials). Unrestricted removes those limits — it can act outside the project, so it confirms each time you record."
 
     static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, fullScreen: Bool = false) -> CGRect {
         let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
@@ -1224,13 +1225,14 @@ struct AreaSelectorView: View {
 
                     devMenuDivider
 
-                    // Permissions section: how a Dev Mode dispatch handles the
-                    // pre-edit checkpoint — Ask Permission (review the prompt first)
-                    // or Auto Approve (dispatch immediately). The SOLE pre-edit gate.
-                    // The header's info icon explains both modes (no per-row text).
+                    // Permissions section: the single trust dial — Ask Permission
+                    // (review the plan first), Auto-Approve (run immediately, still
+                    // fenced), or Unrestricted (fences off). The header's info icon
+                    // explains the tiers; Unrestricted carries a ⚠ caption.
                     devPermissionsSectionHeader
                     devPermissionRow(.askPermission, index: 0)
                     devPermissionRow(.autoApprove, index: 1)
+                    devPermissionRow(.unrestricted, index: 2)
 
                     devMenuDivider
 
@@ -1387,36 +1389,67 @@ struct AreaSelectorView: View {
         .frame(height: Self.menuSectionHeaderHeight, alignment: .bottom)
     }
 
-    /// One Permissions-section row: green checkmark on the active mode, a mode
+    /// One Permissions-section row: green checkmark on the active tier, a tier
     /// icon, the title. Mirrors `devAgentRow` / `devModelRow` (CleanShot style).
-    /// What each mode does is explained by the section header's info-icon tooltip
-    /// (no per-row descriptor). `index` matches the controller's
-    /// `devSettingsPermissionRowIndex` hit-test, so render == hit-test.
-    private func devPermissionRow(_ mode: DevPermissionMode, index: Int) -> some View {
-        let active = state.devPermissionMode == mode
+    /// What each tier does is explained by the section header's info-icon tooltip;
+    /// Unrestricted additionally carries a small ⚠ caption (spec §4 — the
+    /// record-time warning dialog itself is a later phase). The row keeps the
+    /// uniform `devMenuRowHeight`, so render == the `devSettingsPermissionRowIndex`
+    /// hit-test (a two-line cell fits within the 38pt band).
+    private func devPermissionRow(_ tier: DevPermissionTier, index: Int) -> some View {
+        let active = state.devPermissionTier == tier
         let highlighted = state.highlightedDevPermissionIndex == index || active
         return HStack(spacing: 8) {
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.vfDevAccent)   // green check on the active mode
+                .foregroundStyle(Color.vfDevAccent)   // green check on the active tier
                 .opacity(active ? 1 : 0)
                 .frame(width: 16)
-            Image(systemName: mode == .askPermission ? "hand.raised" : "bolt")
+            Image(systemName: Self.devPermissionIcon(tier))
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
-                // Fixed width so the two differently-sized glyphs (hand vs bolt)
-                // don't shift their labels — "Ask Permission"/"Auto Approve" align.
+                // Fixed width so the differently-sized glyphs don't shift labels.
                 .frame(width: 16)
-            Text(mode == .askPermission ? "Ask Permission" : "Auto Approve")
-                .font(.system(size: 13, weight: active ? .semibold : .regular))
-                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.devPermissionTitle(tier))
+                    .font(.system(size: 13, weight: active ? .semibold : .regular))
+                    .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                    .lineLimit(1)
+                if tier == .unrestricted {
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9))
+                        Text("Confirms each time you record.")
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(Color.vfWarningAmber)
+                }
+            }
             Spacer(minLength: 6)
         }
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(menuRowHighlight(highlighted))
+    }
+
+    /// SF Symbol for a permission tier's row glyph.
+    private static func devPermissionIcon(_ tier: DevPermissionTier) -> String {
+        switch tier {
+        case .askPermission: return "hand.raised"
+        case .autoApprove:   return "bolt"
+        case .unrestricted:  return "lock.open"
+        }
+    }
+
+    /// Row label for a permission tier.
+    private static func devPermissionTitle(_ tier: DevPermissionTier) -> String {
+        switch tier {
+        case .askPermission: return "Ask Permission"
+        case .autoApprove:   return "Auto-Approve"
+        case .unrestricted:  return "Unrestricted"
+        }
     }
 
     /// The Auto-Detect Project toggle row: the label, an info icon (custom-tooltip

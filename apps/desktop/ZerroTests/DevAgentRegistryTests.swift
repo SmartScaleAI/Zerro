@@ -126,6 +126,107 @@ final class DevAgentRegistryTests: XCTestCase {
         XCTAssertEqual(DevAgentPermission.default, .editsOnly)
     }
 
+    // MARK: - Permission tiers (spec §6)
+
+    func testTierSemantics() {
+        // Fences apply to the two non-unrestricted tiers; only Ask Permission reviews.
+        XCTAssertTrue(DevPermissionTier.askPermission.isFenced)
+        XCTAssertTrue(DevPermissionTier.autoApprove.isFenced)
+        XCTAssertFalse(DevPermissionTier.unrestricted.isFenced)
+        XCTAssertTrue(DevPermissionTier.askPermission.reviewsBeforeDispatch)
+        XCTAssertFalse(DevPermissionTier.autoApprove.reviewsBeforeDispatch)
+        XCTAssertFalse(DevPermissionTier.unrestricted.reviewsBeforeDispatch)
+        // Every tier runs commands enabled (containment is the fences, not the shell).
+        for tier in DevPermissionTier.allCases {
+            XCTAssertEqual(tier.agentPermission, .allowCommands)
+        }
+        // allCases order is the picker's row order.
+        XCTAssertEqual(DevPermissionTier.allCases, [.askPermission, .autoApprove, .unrestricted])
+    }
+
+    func testClaudeTierFlags() throws {
+        let e = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.claudeCodeID))
+        let ask = e.arguments(tier: .askPermission)
+        let auto = e.arguments(tier: .autoApprove)
+        let unrestricted = e.arguments(tier: .unrestricted)
+
+        // Ask Permission and Auto-Approve are CLI-identical (they differ only by the
+        // Zerro-side review gate).
+        XCTAssertEqual(ask, auto, "fenced tiers must produce identical argv")
+
+        // Commands enabled in every tier; never the old edits-only flags.
+        for args in [ask, auto, unrestricted] {
+            XCTAssertEqual(Array(args.prefix(4)), ["-p", "--output-format", "stream-json", "--verbose"])
+            assertFlag(args, "--permission-mode", value: "bypassPermissions")
+            XCTAssertFalse(args.contains("acceptEdits"), "tiers run commands enabled")
+            XCTAssertFalse(args.contains("--disallowedTools"), "tiers do not deny the shell")
+        }
+
+        // No-MCP fence (§5a) made certain: fenced tiers pass an explicit EMPTY
+        // --mcp-config alongside --strict-mcp-config so ZERO servers load from any
+        // source (user ~/.claude.json, project .mcp.json, claude.ai connectors).
+        // Unrestricted passes neither.
+        XCTAssertTrue(ask.contains("--strict-mcp-config"), "fenced ⇒ strict MCP config")
+        assertFlag(ask, "--mcp-config", value: "{\"mcpServers\":{}}")
+        // --mcp-config must come BEFORE --strict-mcp-config (strict reads the config).
+        XCTAssertLessThan(try XCTUnwrap(ask.firstIndex(of: "--mcp-config")),
+                          try XCTUnwrap(ask.firstIndex(of: "--strict-mcp-config")))
+        XCTAssertFalse(unrestricted.contains("--strict-mcp-config"), "unrestricted ⇒ MCP enabled")
+        XCTAssertFalse(unrestricted.contains("--mcp-config"), "unrestricted passes no MCP config")
+    }
+
+    func testCodexTierFlags() throws {
+        let e = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        let ask = e.arguments(tier: .askPermission)
+        let auto = e.arguments(tier: .autoApprove)
+        let unrestricted = e.arguments(tier: .unrestricted)
+
+        XCTAssertEqual(ask, auto, "fenced tiers must produce identical argv")
+
+        // Commands enabled (danger-full-access keeps network on for npm install);
+        // never the edits-only workspace-write.
+        for args in [ask, auto, unrestricted] {
+            assertFlag(args, "--sandbox", value: "danger-full-access")
+            XCTAssertFalse(args.contains("workspace-write"), "tiers run commands enabled")
+        }
+
+        // No-MCP fence (§5a): fenced tiers add --ignore-user-config; unrestricted does not.
+        XCTAssertTrue(ask.contains("--ignore-user-config"), "fenced ⇒ user MCP config ignored")
+        XCTAssertFalse(unrestricted.contains("--ignore-user-config"), "unrestricted ⇒ user config (MCP) honored")
+    }
+
+    func testCursorTierFlags() throws {
+        let e = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.cursorID))
+        let ask = e.arguments(tier: .askPermission)
+        let auto = e.arguments(tier: .autoApprove)
+        let unrestricted = e.arguments(tier: .unrestricted)
+
+        // Cursor has no positive MCP-disable flag, so all three tiers are argv-
+        // identical — the env-scrub fence (§5b) is what differs.
+        XCTAssertEqual(ask, auto)
+        XCTAssertEqual(ask, unrestricted)
+
+        for args in [ask, auto, unrestricted] {
+            XCTAssertEqual(Array(args.prefix(4)), ["-p", "--output-format", "stream-json", "--trust"])
+            // --force runs the shell (commands enabled) in every tier.
+            XCTAssertTrue(args.contains("--force"), "tiers run commands enabled")
+            // The no-MCP fence for Cursor is the ABSENCE of --approve-mcps.
+            XCTAssertFalse(args.contains("--approve-mcps"), "Cursor never auto-approves MCP")
+            XCTAssertFalse(args.contains("--sandbox"))
+        }
+    }
+
+    func testTierModelFlagThreadsLast() throws {
+        // The --model flag rides last, exactly like arguments(permission:model:).
+        let e = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.claudeCodeID))
+        let args = e.arguments(tier: .askPermission, model: "claude-opus-4-8")
+        assertFlag(args, "--model", value: "claude-opus-4-8")
+        XCTAssertEqual(args.suffix(2), ["--model", "claude-opus-4-8"])
+        // Empty/nil model ⇒ no flag (the agent's own default).
+        XCTAssertFalse(e.arguments(tier: .askPermission, model: "").contains("--model"))
+        XCTAssertFalse(e.arguments(tier: .askPermission).contains("--model"))
+    }
+
     // MARK: - Helpers
 
     /// Asserts `flag` is present and immediately followed by `value`.

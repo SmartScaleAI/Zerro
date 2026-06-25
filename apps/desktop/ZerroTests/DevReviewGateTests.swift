@@ -3,8 +3,9 @@
 //  ZerroTests
 //
 //  Dev Mode — the Ask Permission review gate (the SOLE pre-edit checkpoint). Pins:
-//   • `devPermissionMode` defaults `.autoApprove`, persists, is resettable, and
-//     migrates the legacy `devReviewBeforeApply` Bool (true → .askPermission).
+//   • `devPermissionTier` defaults `.askPermission` for everyone, persists, is
+//     resettable, and migrates the old two-tier `devPermissionMode` raw value
+//     (askPermission/autoApprove 1:1) + the legacy `devReviewBeforeApply` Bool.
 //   • `.autoApprove` ⇒ `awaitReviewApproval` returns true WITHOUT entering
 //     `.reviewingPrompt` (the auto-apply path is byte-identical to before).
 //   • `.askPermission` ⇒ enters `.reviewingPrompt`; Approve → dispatch proceeds;
@@ -24,47 +25,60 @@ final class DevReviewGateTests: XCTestCase {
 
     // MARK: - Preference
 
-    func testPermissionModeDefaultsAutoApprovePersistsAndResets() {
+    func testPermissionTierDefaultsAskPermissionPersistsAndResets() {
         let defaults = UserDefaults.ephemeralPreview()
         let prefs = PreferencesStore(defaults: defaults)
-        // Default Auto Approve is the whole point — the headline auto-apply path is intact.
-        XCTAssertEqual(prefs.devPermissionMode, .autoApprove, "permission mode defaults to Auto Approve")
-        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.devPermissionMode))
+        // §4: fresh install starts on Ask Permission for EVERYONE (the safe,
+        // fenced, review-gated tier).
+        XCTAssertEqual(prefs.devPermissionTier, .askPermission, "permission tier defaults to Ask Permission")
+        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.devPermissionTier))
 
-        prefs.devPermissionMode = .askPermission
-        // Persists across stores over the same defaults.
-        XCTAssertEqual(PreferencesStore(defaults: defaults).devPermissionMode, .askPermission, "the mode persists")
+        // The last-used tier is remembered (persists across stores over the same defaults).
+        prefs.devPermissionTier = .unrestricted
+        XCTAssertEqual(PreferencesStore(defaults: defaults).devPermissionTier, .unrestricted, "the tier persists")
 
         prefs.resetToDefaults()
-        XCTAssertEqual(prefs.devPermissionMode, .autoApprove, "reset restores default Auto Approve")
+        XCTAssertEqual(prefs.devPermissionTier, .askPermission, "reset restores default Ask Permission")
     }
 
-    func testMigratesLegacyReviewBeforeApplyBool() {
-        // A store that only ever wrote the old Bool (true) migrates to Ask Permission.
+    func testMigratesLegacyPermissionModeAndReviewBool() {
+        // The old two-tier `devPermissionMode` raw values map 1:1 onto the new tier.
+        let askDefaults = UserDefaults.ephemeralPreview()
+        askDefaults.set("askPermission", forKey: PreferencesStore.Keys.legacyDevPermissionMode)
+        XCTAssertEqual(PreferencesStore(defaults: askDefaults).devPermissionTier, .askPermission,
+                       "legacy mode askPermission → .askPermission")
+
+        let autoDefaults = UserDefaults.ephemeralPreview()
+        autoDefaults.set("autoApprove", forKey: PreferencesStore.Keys.legacyDevPermissionMode)
+        XCTAssertEqual(PreferencesStore(defaults: autoDefaults).devPermissionTier, .autoApprove,
+                       "legacy mode autoApprove → .autoApprove (preserved, not reset to the new default)")
+
+        // The even-older review-before-apply Bool: true → Ask Permission, false → Auto-Approve.
         let onDefaults = UserDefaults.ephemeralPreview()
         onDefaults.set(true, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
-        XCTAssertEqual(PreferencesStore(defaults: onDefaults).devPermissionMode, .askPermission,
-                       "legacy true → .askPermission")
+        XCTAssertEqual(PreferencesStore(defaults: onDefaults).devPermissionTier, .askPermission,
+                       "legacy bool true → .askPermission")
 
-        // The old Bool false → Auto Approve (the default behavior).
         let offDefaults = UserDefaults.ephemeralPreview()
         offDefaults.set(false, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
-        XCTAssertEqual(PreferencesStore(defaults: offDefaults).devPermissionMode, .autoApprove,
-                       "legacy false → .autoApprove")
+        XCTAssertEqual(PreferencesStore(defaults: offDefaults).devPermissionTier, .autoApprove,
+                       "legacy bool false → .autoApprove")
 
-        // The NEW key wins over a stale legacy Bool when both are present.
+        // The NEW tier key wins over BOTH legacy keys when present.
         let bothDefaults = UserDefaults.ephemeralPreview()
         bothDefaults.set(true, forKey: PreferencesStore.Keys.legacyDevReviewBeforeApply)
-        bothDefaults.set(DevPermissionMode.autoApprove.rawValue, forKey: PreferencesStore.Keys.devPermissionMode)
-        XCTAssertEqual(PreferencesStore(defaults: bothDefaults).devPermissionMode, .autoApprove,
-                       "the explicit new value wins over the legacy Bool")
+        bothDefaults.set("autoApprove", forKey: PreferencesStore.Keys.legacyDevPermissionMode)
+        bothDefaults.set(DevPermissionTier.unrestricted.rawValue, forKey: PreferencesStore.Keys.devPermissionTier)
+        XCTAssertEqual(PreferencesStore(defaults: bothDefaults).devPermissionTier, .unrestricted,
+                       "the explicit new tier wins over the legacy keys")
     }
 
     // MARK: - Auto Approve (no behavior change)
 
     func testAutoApproveReturnsTrueWithoutEnteringReview() async {
         let app = AppState()
-        let prefs = PreferencesStore(defaults: .ephemeralPreview()) // .autoApprove by default
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        prefs.devPermissionTier = .autoApprove
         app.preferences = prefs
 
         let proceed = await app.awaitReviewApproval(gen: 0, prompt: "do X")
@@ -72,6 +86,19 @@ final class DevReviewGateTests: XCTestCase {
         XCTAssertNotEqual(app.state, .reviewingPrompt, "Auto Approve must never enter the review state")
         XCTAssertTrue(app.devReviewPromptText.isEmpty, "Auto Approve must not stash the prompt")
         _ = prefs // keep the weakly-held store alive for the call
+    }
+
+    func testUnrestrictedReturnsTrueWithoutEnteringReview() async {
+        // Unrestricted skips the review gate too (only Ask Permission reviews).
+        let app = AppState()
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        prefs.devPermissionTier = .unrestricted
+        app.preferences = prefs
+
+        let proceed = await app.awaitReviewApproval(gen: 0, prompt: "do X")
+        XCTAssertTrue(proceed, "Unrestricted ⇒ instant pass")
+        XCTAssertNotEqual(app.state, .reviewingPrompt, "Unrestricted must never enter the review state")
+        _ = prefs
     }
 
     func testGateWithNilPreferencesReturnsTrue() async {
@@ -133,7 +160,8 @@ final class DevReviewGateTests: XCTestCase {
 
     func testLowConfidenceAnchorUnderAutoApproveDoesNotPause() async {
         let app = AppState()
-        let prefs = PreferencesStore(defaults: .ephemeralPreview()) // .autoApprove
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        prefs.devPermissionTier = .autoApprove
         app.preferences = prefs
         // A low-confidence anchor used to force a separate confirm gate; it must
         // now resolve and dispatch with no pre-edit pause.
@@ -222,7 +250,7 @@ final class DevReviewGateTests: XCTestCase {
 
     private func askPrefs() -> PreferencesStore {
         let prefs = PreferencesStore(defaults: .ephemeralPreview())
-        prefs.devPermissionMode = .askPermission
+        prefs.devPermissionTier = .askPermission
         return prefs
     }
 

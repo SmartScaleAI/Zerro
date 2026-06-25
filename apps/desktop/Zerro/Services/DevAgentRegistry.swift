@@ -57,6 +57,36 @@ enum DevAgentPermission: Equatable, Sendable {
     static let `default`: DevAgentPermission = .editsOnly
 }
 
+/// The single "how much do I trust the agent" dial for a Dev Mode dispatch
+/// (permission-tiers spec §2–§3). Collapses two older axes into one control:
+/// the Zerro-side **review gate** (was `DevPermissionMode.askPermission` vs
+/// `.autoApprove`) and the **containment fences** of §5 (no MCP + scrubbed env).
+/// Persisted by `PreferencesStore.devPermissionTier`; `allCases` order is the
+/// dev-settings picker's row order. The `DevAgentPermission` posture is derived
+/// from this — every tier runs commands enabled.
+enum DevPermissionTier: String, CaseIterable, Sendable {
+    /// Review gate ON (Zerro pauses to show the plan + approve before dispatch),
+    /// fenced (no MCP + env allowlist).
+    case askPermission
+    /// Review gate OFF (runs live), fenced.
+    case autoApprove
+    /// Review gate OFF, UNfenced — MCP stays enabled and the full environment is
+    /// forwarded. Gated behind a record-time warning (a later phase).
+    case unrestricted
+
+    /// The §5 fences (no-MCP flags + the env allowlist) apply to every tier
+    /// EXCEPT `.unrestricted`, which removes them.
+    var isFenced: Bool { self != .unrestricted }
+
+    /// Only `.askPermission` runs the Zerro-side review gate (pause to show the
+    /// plan + approve before the agent is dispatched). Read at the dispatch gate.
+    var reviewsBeforeDispatch: Bool { self == .askPermission }
+
+    /// The derived shell posture: every tier runs commands enabled (the headline
+    /// "npm install" path keeps working); containment comes from the fences.
+    var agentPermission: DevAgentPermission { .allowCommands }
+}
+
 // MARK: - DevAgentEntry
 
 /// One dispatchable agent. Declarative — no I/O beyond the `installed` /
@@ -77,6 +107,12 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     let editsOnlyArgs: [String]
     /// Flags appended for `.allowCommands` (full access).
     let allowCommandsArgs: [String]
+    /// Flags appended for the FENCED tiers (`.askPermission` / `.autoApprove`)
+    /// that disable MCP servers (spec §5a) — e.g. Claude's `--strict-mcp-config`,
+    /// Codex's `--ignore-user-config`. Empty when the no-MCP fence needs no
+    /// positive flag (Cursor: the fence is the ABSENCE of `--approve-mcps` plus a
+    /// config without `mcp.json`). NOT appended for `.unrestricted` (MCP stays on).
+    let mcpDisableArgs: [String]
 
     /// Whether the executable resolved on PATH this launch.
     let installed: Bool
@@ -90,8 +126,8 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     /// AND this is non-nil (no flag ⇒ the agent's own default).
     let modelFlagName: String?
 
-    /// Explicit memberwise init with `modelFlagName` defaulted to nil so the
-    /// pre-Phase-2 construction sites (tests) compile unchanged.
+    /// Explicit memberwise init with `modelFlagName` / `mcpDisableArgs` defaulted
+    /// so the pre-existing construction sites (tests) compile unchanged.
     init(
         id: String,
         displayName: String,
@@ -103,7 +139,8 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         allowCommandsArgs: [String],
         installed: Bool,
         absolutePath: URL?,
-        modelFlagName: String? = nil
+        modelFlagName: String? = nil,
+        mcpDisableArgs: [String] = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -113,6 +150,7 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         self.baseArgs = baseArgs
         self.editsOnlyArgs = editsOnlyArgs
         self.allowCommandsArgs = allowCommandsArgs
+        self.mcpDisableArgs = mcpDisableArgs
         self.installed = installed
         self.absolutePath = absolutePath
         self.modelFlagName = modelFlagName
@@ -127,6 +165,24 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         switch permission {
         case .editsOnly:     args = baseArgs + editsOnlyArgs
         case .allowCommands: args = baseArgs + allowCommandsArgs
+        }
+        if let model, !model.isEmpty, let flag = modelFlagName {
+            args += [flag, model]
+        }
+        return args
+    }
+
+    /// Full argv (excluding the prompt) for a run at `tier` (spec §6). Every tier
+    /// runs with commands ENABLED (`allowCommandsArgs` — the headline "npm install"
+    /// path); the FENCED tiers (`.askPermission` / `.autoApprove`) additionally
+    /// append `mcpDisableArgs` (the §5a no-MCP flags), while `.unrestricted`
+    /// leaves MCP enabled. `--model <id>` is appended last, on the same condition
+    /// as `arguments(permission:model:)`. Ask Permission and Auto-Approve produce
+    /// IDENTICAL argv — they differ only by the Zerro-side review gate.
+    func arguments(tier: DevPermissionTier, model: String? = nil) -> [String] {
+        var args = baseArgs + allowCommandsArgs
+        if tier.isFenced {
+            args += mcpDisableArgs
         }
         if let model, !model.isEmpty, let flag = modelFlagName {
             args += [flag, model]
@@ -183,15 +239,27 @@ enum DevAgentRegistry {
             // so the agent can't run commands unattended (design §11). The git
             // checkpoint is the containment for the edits it IS allowed to make.
             editsOnlyArgs: ["--permission-mode", "acceptEdits", "--disallowedTools", "Bash"],
-            // Allow-commands opt-in: full unattended access (adds deps, runs
-            // builds, can self-verify). Heavier trust; off by default.
+            // Every tier runs commands enabled — `bypassPermissions` won't hang
+            // headless and lets the shell run; the Zerro fences (no-MCP + env
+            // scrub + future wrapper) provide the containment (spec §6).
             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
             installed: path != nil,
             absolutePath: path,
             // Claude Code's `--model` accepts an alias or a full model id (e.g.
             // `claude-opus-4-8`), exactly the strings the anthropic manifest
             // serves. Verified against `claude --help` (June 2026).
-            modelFlagName: "--model"
+            modelFlagName: "--model",
+            // No-MCP fence (§5a) — made CERTAIN. `--strict-mcp-config` says "use
+            // ONLY servers from --mcp-config", so we ALSO pass an explicit EMPTY
+            // config: the fenced tiers then load zero servers from EVERY source —
+            // user `~/.claude.json`, project `.mcp.json`, and the claude.ai
+            // connectors (Supabase/Notion/Gmail/…). `--mcp-config` accepts an inline
+            // JSON STRING (not just a file), verified against `claude --help`
+            // (2.1.179), so nothing needs shipping. Live-verified: a fenced run's
+            // init event reports `mcp_servers: []` with no `mcp__*` tools, whereas
+            // the default run lists the user's connectors. Dropped for
+            // `.unrestricted` (MCP stays enabled).
+            mcpDisableArgs: ["--mcp-config", "{\"mcpServers\":{}}", "--strict-mcp-config"]
         )
     }
 
@@ -225,10 +293,17 @@ enum DevAgentRegistry {
             outputFormat: .text,
             baseArgs: ["exec", "--skip-git-repo-check", "--color", "never"],
             editsOnlyArgs: ["--sandbox", "workspace-write"],
+            // Every tier runs commands enabled. `danger-full-access` (vs
+            // `workspace-write`) keeps network on so `npm install` can fetch under
+            // the Zerro fences/wrapper (spec §6 / §10 — workspace-write forces
+            // network off on macOS).
             allowCommandsArgs: ["--sandbox", "danger-full-access"],
             installed: path != nil,
             absolutePath: path,
-            modelFlagName: "--model"
+            modelFlagName: "--model",
+            // No-MCP fence (§5a): `--ignore-user-config` ignores `~/.codex/config.toml`,
+            // so no user MCP servers load. Dropped for `.unrestricted`.
+            mcpDisableArgs: ["--ignore-user-config"]
         )
     }
 
@@ -290,11 +365,34 @@ enum DevAgentRegistry {
             // Edits-only IS the default `-p` posture (shell rejected) — there's no
             // deny-shell flag to add, so this is empty. See the NUANCE above.
             editsOnlyArgs: [],
-            // Allow-commands opt-in: --force (== --yolo) runs everything unsandboxed.
+            // Every tier runs commands enabled: --force (== --yolo) runs the shell
+            // unsandboxed (plain `-p` rejects shell, which would block npm install).
+            // Containment comes from the Zerro fences (spec §6).
             allowCommandsArgs: ["--force"],
             installed: path != nil,
             absolutePath: path,
-            modelFlagName: "--model"
+            modelFlagName: "--model",
+            // No-MCP fence (§5a) — cursor-agent (2026.06.24) offers NO clean per-run
+            // lever, so the fence is best-effort. What was verified against the live
+            // CLI:
+            //   • We never pass `--approve-mcps`. An unapproved server (project or
+            //     `~/.cursor/mcp.json`) reports "not loaded (needs approval)" and is
+            //     NOT loaded in headless `-p` — so withholding the flag genuinely
+            //     blocks every UN-approved server (not a no-op).
+            //   • There is NO `--mcp-config` / `--config-dir` flag, and an isolated
+            //     `HOME` (the only way to escape `~/.cursor/mcp.json` + the approved
+            //     list) BREAKS auth — the login token is keyed to the real HOME
+            //     (verified: isolated HOME ⇒ "Not logged in"). `mcp disable` and a
+            //     `permissions.deny:["Mcp(*:*)"]` rule only exist by MUTATING the
+            //     user's global `~/.cursor/cli-config.json`, which we must not do.
+            //   • RESIDUAL: a server the user PRE-approved would still auto-load.
+            //     That residual is covered by the §5b env-scrub (the MCP subprocess
+            //     inherits the scrubbed env — no creds) and, later, the §5c Seatbelt
+            //     wrapper (blocks its spawns/egress). A future cursor-agent `--no-mcp`
+            //     would let us close it directly.
+            // Hence nothing to append: fenced vs `.unrestricted` argv match for
+            // Cursor; only the env-scrub (§5b) differs.
+            mcpDisableArgs: []
         )
     }
 }

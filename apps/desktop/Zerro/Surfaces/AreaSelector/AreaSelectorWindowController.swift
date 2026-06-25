@@ -147,7 +147,7 @@ final class AreaSelectorWindowController {
         // menu's switch reflects the persisted opt-in.
         state.setAutoDetectProjectEnabled(preferences.devAutoDetectProject)
         // Seed the Permissions section's checkmark from the persisted mode.
-        state.setDevPermissionMode(preferences.devPermissionMode)
+        state.setDevPermissionTier(preferences.devPermissionTier)
         if preferences.devModeEnabled {
             beginAgentDetection(for: state)
             // Verify the remembered folder is still a git repo (Milestone 7).
@@ -893,17 +893,17 @@ final class AreaSelectorWindowController {
         state.setSelectedDevModelID(item.id)
     }
 
-    /// Act on a dev-settings menu Permissions row: persist the chosen mode and
-    /// checkmark it. Row order matches `DevPermissionMode.allCases` (0 = Ask
-    /// Permission, 1 = Auto Approve), the same order the view renders + the
-    /// hit-test indexes. The menu stays open after the pick.
+    /// Act on a dev-settings menu Permissions row: persist the chosen tier and
+    /// checkmark it. Row order matches `DevPermissionTier.allCases` (0 = Ask
+    /// Permission, 1 = Auto-Approve, 2 = Unrestricted), the same order the view
+    /// renders + the hit-test indexes. The menu stays open after the pick.
     private func selectDevPermission(at index: Int, state: AreaSelectorState) {
-        let modes = DevPermissionMode.allCases
-        guard index >= 0, index < modes.count else { return }
-        let mode = modes[index]
-        preferences?.devPermissionMode = mode
-        state.setDevPermissionMode(mode)
-        Analytics.capture("dev_permission_mode_selected", ["mode": mode.rawValue])
+        let tiers = DevPermissionTier.allCases
+        guard index >= 0, index < tiers.count else { return }
+        let tier = tiers[index]
+        preferences?.devPermissionTier = tier
+        state.setDevPermissionTier(tier)
+        Analytics.capture("dev_permission_tier_selected", ["tier": tier.rawValue])
     }
 
     /// Flip the dev-settings "Auto-Detect Project" toggle (Project section). The

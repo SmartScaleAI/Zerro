@@ -46,7 +46,7 @@ final class DevAgentRunnerTests: XCTestCase {
         // deterministically by testParseStreamJSONLine.
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -65,7 +65,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -74,7 +74,9 @@ final class DevAgentRunnerTests: XCTestCase {
 
     func testArgumentDeliveryAppendsPromptToArgvAndClosesStdin() async throws {
         // Codex-style `.argument` delivery: the prompt rides as the LAST argv
-        // element (after the flags + --model) and stdin is closed empty.
+        // element (after the tier flags + --model) and stdin is closed empty. Every
+        // tier maps to commands-enabled, so the posture flags live in
+        // `allowCommandsArgs`; `.unrestricted` adds no MCP-disable flags.
         let bin = try makeScript("argcap", """
         #!/bin/sh
         printf '%s\\n' "$@" > "$PWD/argv.txt"
@@ -85,18 +87,18 @@ final class DevAgentRunnerTests: XCTestCase {
             id: "codexlike", displayName: "X", executableName: bin.lastPathComponent,
             promptDelivery: .argument, outputFormat: .text,
             baseArgs: ["exec", "--skip-git-repo-check"],
-            editsOnlyArgs: ["--sandbox", "workspace-write"], allowCommandsArgs: [],
+            editsOnlyArgs: [], allowCommandsArgs: ["--sandbox", "danger-full-access"],
             installed: true, absolutePath: bin, modelFlagName: "--model"
         )
         let result = await ClaudeCodeAgentRunner().run(
-            entry: e, permission: .editsOnly, prompt: "make it teal",
+            entry: e, tier: .unrestricted, prompt: "make it teal",
             projectURL: scratch, timeouts: fastTimeouts(), model: "gpt-5.5",
             onEvent: { _ in }
         )
         XCTAssertEqual(result, .succeeded(summary: nil))
         let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(argv, ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--model", "gpt-5.5", "make it teal"])
+        XCTAssertEqual(argv, ["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-5.5", "make it teal"])
         let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
         XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
     }
@@ -109,7 +111,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -128,7 +130,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """#)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -155,7 +157,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """#)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -175,7 +177,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """#)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -193,7 +195,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .text),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -212,7 +214,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .text),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -228,7 +230,7 @@ final class DevAgentRunnerTests: XCTestCase {
         """)
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(),
             onEvent: { _ in }
         )
@@ -254,7 +256,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let start = Date()
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: DevRunTimeouts(stall: 1, killGrace: 1), model: nil,
             onEvent: { _ in },
             onStall: { stalls.append($0) }
@@ -280,7 +282,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let stalls = StallRecorder()
         let result = await ClaudeCodeAgentRunner().run(
             entry: entry(path: bin, format: .streamJSON),
-            permission: .editsOnly, prompt: "go", projectURL: scratch,
+            tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: DevRunTimeouts(stall: 1, killGrace: 1), model: nil,
             onEvent: { _ in },
             onStall: { stalls.append($0) }
@@ -300,14 +302,14 @@ final class DevAgentRunnerTests: XCTestCase {
         let e = entry(path: bin, format: .streamJSON)
 
         async let first = runner.run(
-            entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
+            entry: e, tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: DevRunTimeouts(stall: 30, killGrace: 1),
             onEvent: { _ in }
         )
         // Let the first run acquire the cap-1 flag.
         try await Task.sleep(nanoseconds: 250_000_000)
         let second = await runner.run(
-            entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
+            entry: e, tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(), onEvent: { _ in }
         )
         XCTAssertEqual(second, .failed(.busy))
@@ -327,7 +329,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let start = Date()
 
         async let runResult = runner.run(
-            entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
+            entry: e, tier: .askPermission, prompt: "go", projectURL: scratch,
             // Long stall threshold so the watchdog never even notifies — the
             // cancel must be what ends it.
             timeouts: DevRunTimeouts(stall: 60, killGrace: 1),
@@ -358,7 +360,7 @@ final class DevAgentRunnerTests: XCTestCase {
             installed: false, absolutePath: nil
         )
         let result = await ClaudeCodeAgentRunner().run(
-            entry: e, permission: .editsOnly, prompt: "go", projectURL: scratch,
+            entry: e, tier: .askPermission, prompt: "go", projectURL: scratch,
             onEvent: { _ in }
         )
         guard case .failed(.spawnFailed) = result else {
@@ -498,7 +500,7 @@ final class DevAgentRunnerTests: XCTestCase {
             installed: true, absolutePath: bin, modelFlagName: "--model"
         )
         let result = await ClaudeCodeAgentRunner().run(
-            entry: e, permission: .allowCommands, prompt: "make this button bigger",
+            entry: e, tier: .autoApprove, prompt: "make this button bigger",
             projectURL: scratch, timeouts: fastTimeouts(), model: "claude-opus-4-8-high",
             onEvent: { _ in }
         )
@@ -509,6 +511,93 @@ final class DevAgentRunnerTests: XCTestCase {
                               "--model", "claude-opus-4-8-high", "make this button bigger"])
         let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
         XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
+    }
+
+    // MARK: - Env scrub (§5b)
+
+    /// A representative "leaky" environment a developer machine carries — secrets
+    /// the fenced tiers must strip, plus the keep-list vars.
+    private func leakyEnv(extra: [String: String] = [:]) -> [String: String] {
+        var env: [String: String] = [
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/Users/dev", "USER": "dev", "SHELL": "/bin/zsh",
+            "LANG": "en_US.UTF-8", "LC_CTYPE": "en_US.UTF-8",
+            "TMPDIR": "/tmp/x", "TERM": "xterm-256color",
+            // Secrets / unrelated creds that MUST NOT reach the agent process.
+            "DATABASE_URL": "postgres://u:p@host/db",
+            "AWS_ACCESS_KEY_ID": "AKIAEXAMPLE",
+            "AWS_SECRET_ACCESS_KEY": "shhh",
+            "GCP_PROJECT": "proj", "GOOGLE_APPLICATION_CREDENTIALS": "/c.json",
+            "STRIPE_SECRET_KEY": "sk_live_x",
+            "SOME_SERVICE_TOKEN": "tok", "OTHER_API_KEY": "k", "MY_SECRET": "s",
+        ]
+        env.merge(extra) { _, new in new }
+        return env
+    }
+
+    private func claudeURL() -> URL { URL(fileURLWithPath: "/opt/homebrew/bin/claude") }
+
+    func testFencedTierAllowlistsEnvAndStripsSecrets() {
+        // A planted DATABASE_URL (+ cloud creds + generic *_SECRET/*_TOKEN/*_API_KEY)
+        // is stripped under a fenced tier; PATH + locale/shell vars survive.
+        let env = ClaudeCodeAgentRunner.spawnEnvironmentForTesting(
+            for: claudeURL(), tier: .askPermission,
+            baseEnvironment: leakyEnv(extra: ["ANTHROPIC_API_KEY": "sk-ant-x"]))
+
+        // Kept.
+        XCTAssertNotNil(env["PATH"])
+        XCTAssertTrue(env["PATH"]!.contains("/opt/homebrew/bin"), "binDir is prepended onto PATH")
+        for k in ["HOME", "USER", "SHELL", "LANG", "LC_CTYPE", "TMPDIR", "TERM"] {
+            XCTAssertNotNil(env[k], "\(k) must survive the allowlist")
+        }
+        // The active agent's own auth var is kept (only because it's present).
+        XCTAssertEqual(env["ANTHROPIC_API_KEY"], "sk-ant-x")
+
+        // Stripped — the whole point of §5b.
+        for k in ["DATABASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                  "GCP_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS", "STRIPE_SECRET_KEY",
+                  "SOME_SERVICE_TOKEN", "OTHER_API_KEY", "MY_SECRET"] {
+            XCTAssertNil(env[k], "\(k) must be stripped under a fenced tier")
+        }
+    }
+
+    func testAutoApproveIsFencedToo() {
+        // Auto-Approve gets the SAME allowlist as Ask Permission (both fenced).
+        let env = ClaudeCodeAgentRunner.spawnEnvironmentForTesting(
+            for: claudeURL(), tier: .autoApprove, baseEnvironment: leakyEnv())
+        XCTAssertNil(env["DATABASE_URL"], "Auto-Approve is fenced — DB URL stripped")
+        XCTAssertNotNil(env["PATH"])
+    }
+
+    func testUnrestrictedForwardsFullEnvironment() {
+        // Unrestricted removes the fence: the full environment rides through
+        // (PATH still rebuilt with the binary dir prepended).
+        let env = ClaudeCodeAgentRunner.spawnEnvironmentForTesting(
+            for: claudeURL(), tier: .unrestricted, baseEnvironment: leakyEnv())
+        XCTAssertEqual(env["DATABASE_URL"], "postgres://u:p@host/db", "Unrestricted forwards everything")
+        XCTAssertEqual(env["STRIPE_SECRET_KEY"], "sk_live_x")
+        XCTAssertTrue(env["PATH"]!.contains("/opt/homebrew/bin"))
+    }
+
+    func testFencedKeepsOnlyTheActiveAgentsAuthVar() {
+        // Codex keeps OPENAI_API_KEY / CODEX_API_KEY; a stray ANTHROPIC_API_KEY
+        // (another agent's) is NOT the active agent's, so it's stripped.
+        let base = leakyEnv(extra: [
+            "OPENAI_API_KEY": "sk-openai", "CODEX_API_KEY": "cdx",
+            "ANTHROPIC_API_KEY": "sk-ant-x",
+        ])
+        let codex = ClaudeCodeAgentRunner.spawnEnvironmentForTesting(
+            for: URL(fileURLWithPath: "/opt/homebrew/bin/codex"), tier: .askPermission, baseEnvironment: base)
+        XCTAssertEqual(codex["OPENAI_API_KEY"], "sk-openai")
+        XCTAssertEqual(codex["CODEX_API_KEY"], "cdx")
+        XCTAssertNil(codex["ANTHROPIC_API_KEY"], "another agent's auth var is stripped")
+
+        // Cursor keeps CURSOR_API_KEY; the OpenAI/Anthropic keys are stripped.
+        let cursor = ClaudeCodeAgentRunner.spawnEnvironmentForTesting(
+            for: URL(fileURLWithPath: "/opt/homebrew/bin/cursor-agent"), tier: .askPermission,
+            baseEnvironment: leakyEnv(extra: ["CURSOR_API_KEY": "cur", "OPENAI_API_KEY": "sk-openai"]))
+        XCTAssertEqual(cursor["CURSOR_API_KEY"], "cur")
+        XCTAssertNil(cursor["OPENAI_API_KEY"], "another agent's auth var is stripped")
     }
 
     func testParseResultSummary() {

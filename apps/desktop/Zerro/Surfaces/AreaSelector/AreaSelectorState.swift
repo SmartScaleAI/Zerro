@@ -520,13 +520,13 @@ final class AreaSelectorState {
 
     // MARK: - Permissions section
 
-    /// The checkmarked permission mode in the Permissions section — mirrors
-    /// `PreferencesStore.devPermissionMode`. Seeded from prefs when the overlay is
+    /// The checkmarked permission tier in the Permissions section — mirrors
+    /// `PreferencesStore.devPermissionTier`. Seeded from prefs when the overlay is
     /// built; updated when a Permissions row is selected.
-    private(set) var devPermissionMode: DevPermissionMode = .autoApprove
+    private(set) var devPermissionTier: DevPermissionTier = .askPermission
 
-    func setDevPermissionMode(_ mode: DevPermissionMode) {
-        if devPermissionMode != mode { devPermissionMode = mode }
+    func setDevPermissionTier(_ tier: DevPermissionTier) {
+        if devPermissionTier != tier { devPermissionTier = tier }
     }
 
     /// Row under the cursor while the Permissions section is hovered; nil otherwise.
