@@ -492,27 +492,31 @@ final class AreaSelectorState {
             closeModelMenu()
             closeMicMenu()
             closeUpgradePopup()
+            // Compact by default: all three sections (Agent / Model / Permissions)
+            // start collapsed to summary rows.
+            expandedDevSection = nil
             // Open on the selected model so a deep pick isn't hidden.
             resetDevModelScrollToSelection()
         } else {
-            highlightedDevAgentIndex = nil
-            highlightedDevModelIndex = nil
-            highlightedDevPermissionIndex = nil
-            isAutoDetectInfoHovered = false
-            isPermissionInfoHovered = false
-            hoveredPermissionTrailingIndex = nil
-            localhostNotice = nil
+            clearDevMenuTransientState()
         }
     }
 
     func closeDevSettingsMenu() {
         isDevSettingsMenuOpen = false
+        clearDevMenuTransientState()
+    }
+
+    /// Reset the dev-menu's transient hover / highlight / expansion state.
+    private func clearDevMenuTransientState() {
         highlightedDevAgentIndex = nil
         highlightedDevModelIndex = nil
         highlightedDevPermissionIndex = nil
         isAutoDetectInfoHovered = false
-        isPermissionInfoHovered = false
-        hoveredPermissionTrailingIndex = nil
+        isPermissionSafetyHovered = false
+        hoveredPermissionOptionSafety = nil
+        hoveredDevSummary = nil
+        expandedDevSection = nil
         localhostNotice = nil
     }
 
@@ -782,24 +786,62 @@ final class AreaSelectorState {
         if isAutoDetectInfoHovered != hovered { isAutoDetectInfoHovered = hovered }
     }
 
-    /// Hover state for the Permissions header's info icon, driving its custom
-    /// tooltip (the overlay is hit-test-disabled, so `.help` never fires). Set by
-    /// the controller's mouse-move hit-test; cleared when the menu closes.
-    private(set) var isPermissionInfoHovered: Bool = false
+    /// Hover state for the Permissions SUMMARY row's safety icon (git-shield / ⚠),
+    /// driving its custom tooltip (the overlay is hit-test-disabled, so `.help`
+    /// never fires). Set by the controller's mouse-move hit-test; cleared when the
+    /// menu closes. Does NOT affect the row's open/close click.
+    private(set) var isPermissionSafetyHovered: Bool = false
 
-    func setPermissionInfoHovered(_ hovered: Bool) {
-        if isPermissionInfoHovered != hovered { isPermissionInfoHovered = hovered }
+    func setPermissionSafetyHovered(_ hovered: Bool) {
+        if isPermissionSafetyHovered != hovered { isPermissionSafetyHovered = hovered }
     }
 
-    /// Which permission row's trailing indicator (git-shield / ⚠) is hovered, or
-    /// nil. Drives that row's custom tooltip (the overlay is hit-test-disabled, so
-    /// `.help` never fires). Set by the controller's mouse-move hit-test; cleared
-    /// when the menu closes. Does NOT affect tier selection (the whole row is the
-    /// click target).
-    private(set) var hoveredPermissionTrailingIndex: Int? = nil
+    /// Which EXPANDED permission option row's safety icon is hovered (0 = Ask
+    /// Permission … 2 = Unrestricted), or nil. Drives that option's custom tooltip;
+    /// hover-only, never affects selection. Cleared when the menu closes.
+    private(set) var hoveredPermissionOptionSafety: Int? = nil
 
-    func setHoveredPermissionTrailingIndex(_ index: Int?) {
-        if hoveredPermissionTrailingIndex != index { hoveredPermissionTrailingIndex = index }
+    func setHoveredPermissionOptionSafety(_ index: Int?) {
+        if hoveredPermissionOptionSafety != index { hoveredPermissionOptionSafety = index }
+    }
+
+    // MARK: Dev-settings accordion (compact summary rows)
+
+    /// The three collapsible dev-settings sections. Each renders as a single
+    /// summary row showing the current selection; clicking it expands that
+    /// section's full option list (one open at a time).
+    enum DevMenuSection: Equatable, Sendable { case agent, model, permissions }
+
+    /// Which dev-settings section is currently expanded, or nil when all three are
+    /// collapsed to summary rows (the default). Drives both the renderer and the
+    /// hit-test geometry, so it MUST be passed to the layout helpers.
+    private(set) var expandedDevSection: DevMenuSection? = nil
+
+    /// Toggle a section's expansion (collapsing any other). Expanding Model resets
+    /// its scroll to the current selection so a deep pick isn't hidden.
+    func toggleDevSection(_ section: DevMenuSection) {
+        if expandedDevSection == section {
+            expandedDevSection = nil
+        } else {
+            expandedDevSection = section
+            // A freshly expanded section's option hover starts clear.
+            highlightedDevAgentIndex = nil
+            highlightedDevModelIndex = nil
+            highlightedDevPermissionIndex = nil
+            if section == .model { resetDevModelScrollToSelection() }
+        }
+    }
+
+    /// Collapse all sections back to summary rows (e.g. ESC while a section is open).
+    func collapseDevSections() {
+        if expandedDevSection != nil { expandedDevSection = nil }
+    }
+
+    /// Which summary row is hovered (for its highlight), or nil. Purely cosmetic.
+    private(set) var hoveredDevSummary: DevMenuSection? = nil
+
+    func setHoveredDevSummary(_ section: DevMenuSection?) {
+        if hoveredDevSummary != section { hoveredDevSummary = section }
     }
 
     /// A one-time, non-blocking `.denied` note (after the user denies the

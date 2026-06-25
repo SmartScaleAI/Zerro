@@ -441,45 +441,60 @@ final class AreaSelectorWindowController {
                 if state.isDevSettingsMenuOpen, let rect = selectionRect {
                     let agentCount = state.devAgentMenuItems.count
                     let modelCount = state.devModelMenuItems.count
+                    let expanded = state.expandedDevSection
+                    // Option-row highlights (only meaningful while the section is
+                    // expanded — the helpers return nil otherwise).
                     state.setHighlightedDevAgentIndex(AreaSelectorView.devSettingsAgentRowIndex(
                         at: point, forSelection: rect, in: size,
-                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                     ))
                     state.setHighlightedDevModelIndex(AreaSelectorView.devSettingsModelRowIndex(
                         at: point, forSelection: rect, in: size,
                         agentCount: agentCount, modelCount: modelCount,
-                        scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
+                        scrollOffset: state.devModelScrollOffset, expanded: expanded, fullScreen: fullScreen
                     ))
                     state.setHighlightedDevPermissionIndex(AreaSelectorView.devSettingsPermissionRowIndex(
                         at: point, forSelection: rect, in: size,
-                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                     ))
+                    // Collapsed summary-row hover highlight (cosmetic).
+                    var hoveredSummary: AreaSelectorState.DevMenuSection? = nil
+                    for section in [AreaSelectorState.DevMenuSection.agent, .model, .permissions] {
+                        let frame = AreaSelectorView.devSettingsSummaryRowFrame(
+                            section, forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+                        if frame.contains(point) { hoveredSummary = section; break }
+                    }
+                    state.setHoveredDevSummary(hoveredSummary)
                     // Auto-Detect info-icon hover → drives the custom tooltip (the
                     // glyph's `.help` can't fire through the hit-test-disabled tree).
                     let infoIcon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(
                         forSelection: rect, in: size,
-                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                     )
                     state.setAutoDetectInfoHovered(infoIcon.contains(point))
-                    // Permissions header info-icon hover → its custom tooltip.
-                    let permInfoIcon = AreaSelectorView.devSettingsPermissionInfoIconRect(
+                    // Permissions summary-row safety icon (git-shield / ⚠) hover →
+                    // its custom tooltip. Hover-only: non-interactive, so it never
+                    // affects the row's open/close click.
+                    let safetyIcon = AreaSelectorView.devSettingsPermissionSafetyIconRect(
                         forSelection: rect, in: size,
-                        agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                        agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                     )
-                    state.setPermissionInfoHovered(permInfoIcon.contains(point))
-                    // A permission row's trailing indicator (git-shield / ⚠) hover →
-                    // that row's custom tooltip. Hover-only: the icon is non-interactive,
-                    // so this never affects which tier a click selects.
-                    var hoveredTrailing: Int? = nil
-                    for row in 0..<AreaSelectorView.devPermissionRowCount {
-                        let iconRect = AreaSelectorView.devSettingsPermissionTrailingIconRect(
-                            forSelection: rect, in: size,
-                            agentCount: agentCount, modelCount: modelCount,
-                            rowIndex: row, fullScreen: fullScreen
-                        )
-                        if iconRect.contains(point) { hoveredTrailing = row; break }
+                    state.setPermissionSafetyHovered(safetyIcon.contains(point))
+                    // Per-tier safety icons on the EXPANDED option rows → each shows
+                    // its own tooltip on hover (same copy as the summary icon would
+                    // for that tier).
+                    var optionSafety: Int? = nil
+                    if expanded == .permissions {
+                        for row in 0..<AreaSelectorView.devPermissionRowCount {
+                            let r = AreaSelectorView.devSettingsPermissionOptionSafetyIconRect(
+                                forSelection: rect, in: size,
+                                agentCount: agentCount, modelCount: modelCount,
+                                rowIndex: row, expanded: expanded, fullScreen: fullScreen)
+                            if r.contains(point) { optionSafety = row; break }
+                        }
                     }
-                    state.setHoveredPermissionTrailingIndex(hoveredTrailing)
+                    state.setHoveredPermissionOptionSafety(optionSafety)
                 }
             }
 
@@ -606,47 +621,72 @@ final class AreaSelectorWindowController {
                     state.closeMicMenu()
                     return nil
                 }
-                // Dev-settings menu open — an agent row picks that agent (or, for
-                // a not-installed agent, opens its install docs); the project row
-                // opens the folder picker; a click elsewhere dismisses. The menu
-                // stays open after a row action so the user can finish setup.
+                // Dev-settings menu open. Compact accordion: a section's SUMMARY row
+                // toggles that section open/closed; an OPTION row (only present while
+                // its section is expanded) selects + collapses back. The Project rows
+                // toggle Auto-Detect / open the folder picker. A click elsewhere
+                // dismisses. The menu stays open after a row action so setup can
+                // continue.
                 if state.isDevSettingsMenuOpen {
                     if let rect = selectionRect {
                         let agentCount = state.devAgentMenuItems.count
                         let modelCount = state.devModelMenuItems.count
+                        let expanded = state.expandedDevSection
+
+                        func summary(_ section: AreaSelectorState.DevMenuSection) -> CGRect {
+                            AreaSelectorView.devSettingsSummaryRowFrame(
+                                section, forSelection: rect, in: size,
+                                agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+                        }
+
+                        // Agent: summary toggles; option selects + collapses.
+                        if summary(.agent).contains(point) {
+                            state.toggleDevSection(.agent); return nil
+                        }
                         if let idx = AreaSelectorView.devSettingsAgentRowIndex(
                             at: point, forSelection: rect, in: size,
-                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                            agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                         ) {
                             self?.selectDevAgent(at: idx, state: state)
+                            state.collapseDevSections()
                             return nil
+                        }
+                        // Model.
+                        if summary(.model).contains(point) {
+                            state.toggleDevSection(.model); return nil
                         }
                         if let idx = AreaSelectorView.devSettingsModelRowIndex(
                             at: point, forSelection: rect, in: size,
                             agentCount: agentCount, modelCount: modelCount,
-                            scrollOffset: state.devModelScrollOffset, fullScreen: fullScreen
+                            scrollOffset: state.devModelScrollOffset, expanded: expanded, fullScreen: fullScreen
                         ) {
                             self?.selectDevModel(at: idx, state: state)
+                            state.collapseDevSections()
                             return nil
+                        }
+                        // Permissions.
+                        if summary(.permissions).contains(point) {
+                            state.toggleDevSection(.permissions); return nil
                         }
                         if let idx = AreaSelectorView.devSettingsPermissionRowIndex(
                             at: point, forSelection: rect, in: size,
-                            agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                            agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                         ) {
                             self?.selectDevPermission(at: idx, state: state)
+                            state.collapseDevSections()
                             return nil
                         }
                         // Auto-Detect Project toggle row (Project section, above
                         // "Change…") — clicking anywhere on it flips the opt-in.
                         let autoDetectRow = AreaSelectorView.devSettingsAutoDetectRowFrame(
-                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                         )
                         if autoDetectRow.contains(point) {
                             self?.toggleAutoDetectProject(state: state)
                             return nil
                         }
                         let projectRow = AreaSelectorView.devSettingsProjectRowFrame(
-                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+                            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen
                         )
                         if projectRow.contains(point) {
                             self?.presentFolderPicker(window: window, state: state)
@@ -710,6 +750,12 @@ final class AreaSelectorWindowController {
                     return nil
                 }
                 if state.isDevSettingsMenuOpen {
+                    // ESC first collapses an expanded accordion section, then (next
+                    // press) closes the menu, then cancels the overlay.
+                    if state.expandedDevSection != nil {
+                        state.collapseDevSections()
+                        return nil
+                    }
                     state.closeDevSettingsMenu()
                     return nil
                 }
@@ -959,9 +1005,11 @@ final class AreaSelectorWindowController {
     ) -> Bool {
         let modelCount = state.devModelMenuItems.count
         guard modelCount > AreaSelectorView.maxVisibleModelRows else { return false }   // nothing to scroll
+        guard state.expandedDevSection == .model else { return false }                  // only scroll the open Model list
         let agentCount = state.devAgentMenuItems.count
         let viewport = AreaSelectorView.devSettingsModelViewportRect(
-            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
+            forSelection: rect, in: size, agentCount: agentCount, modelCount: modelCount,
+            expanded: state.expandedDevSection, fullScreen: fullScreen
         )
         guard viewport.contains(point) else { return false }
 

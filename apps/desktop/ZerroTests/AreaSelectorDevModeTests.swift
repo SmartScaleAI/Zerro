@@ -90,317 +90,242 @@ final class AreaSelectorDevModeTests: XCTestCase {
                           "no icon-button-sized control sits between mic and Record in Artifact mode")
     }
 
-    // MARK: - Dev-settings menu geometry
+    // MARK: - Dev-settings accordion geometry (compact summary rows)
 
-    func testDevSettingsMenuCentersUnderIconAndHitTestsAgentRows() {
-        let agentCount = 3
-        let modelCount = 2
+    /// Collapsed by default: centers under the icon; the three summary rows
+    /// (Agent / Model / Permissions) stack above the Project section; NO option row
+    /// is hit-testable until its section is expanded.
+    func testDevMenuCollapsedSummaryRowsAndNoOptions() {
+        let a = 3, m = 2
         let icon = AreaSelectorView.devSettingsIconFrame(forSelection: selection, in: bounds)
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m)
         XCTAssertEqual(menu.midX, icon.midX, accuracy: 0.001)
         XCTAssertGreaterThan(menu.minY, icon.maxY)
-        XCTAssertEqual(menu.width, AreaSelectorView.devMenuWidth)
 
-        let rowsTop = menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
-        let row0 = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.devMenuRowHeight / 2)
-        XCTAssertEqual(
-            AreaSelectorView.devSettingsAgentRowIndex(at: row0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            0
-        )
-        let rowLast = CGPoint(x: menu.midX, y: rowsTop + AreaSelectorView.devMenuRowHeight * (CGFloat(agentCount) - 0.5))
-        XCTAssertEqual(
-            AreaSelectorView.devSettingsAgentRowIndex(at: rowLast, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            agentCount - 1
-        )
-    }
-
-    func testDevSettingsModelRowsAreBelowAgentSectionAndHitTestDisjoint() {
-        let agentCount = 3
-        let modelCount = 3
-        // The first Model row sits after the Agent header + rows + divider + the
-        // Model header.
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        let modelRowsTop = menu.minY + AreaSelectorView.menuVPad
-            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
-            + AreaSelectorView.devMenuDividerBand
-            + AreaSelectorView.menuSectionHeaderHeight
-        let model0 = CGPoint(x: menu.midX, y: modelRowsTop + AreaSelectorView.devMenuRowHeight / 2)
-        XCTAssertEqual(
-            AreaSelectorView.devSettingsModelRowIndex(at: model0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            0
-        )
-        // A model row is NOT an agent row, and vice-versa (sections are disjoint).
-        XCTAssertNil(
-            AreaSelectorView.devSettingsAgentRowIndex(at: model0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "a model row must not register as an agent row"
-        )
-        let agentRow0 = CGPoint(x: menu.midX,
-            y: menu.minY + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight + AreaSelectorView.devMenuRowHeight / 2)
-        XCTAssertNil(
-            AreaSelectorView.devSettingsModelRowIndex(at: agentRow0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "an agent row must not register as a model row"
-        )
-    }
-
-    func testDevSettingsPermissionRowsSitBetweenModelAndProjectAndHitTestDisjoint() {
-        let agentCount = 3
-        let modelCount = 2
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        // The Permissions section sits after Agent + divider + Model + divider + its
-        // own header — between Model and Project.
-        let permTop = menu.minY + AreaSelectorView.menuVPad
-            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
-            + AreaSelectorView.devMenuDividerBand
-            + AreaSelectorView.menuSectionHeaderHeight + CGFloat(modelCount) * AreaSelectorView.devMenuRowHeight
-            + AreaSelectorView.devMenuDividerBand
-            + AreaSelectorView.menuSectionHeaderHeight
-        // Both rows hit-test to their index (0 = Ask Permission, 1 = Auto Approve).
-        let row0 = CGPoint(x: menu.midX, y: permTop + AreaSelectorView.devMenuRowHeight / 2)
-        let row1 = CGPoint(x: menu.midX, y: permTop + AreaSelectorView.devMenuRowHeight * 1.5)
-        XCTAssertEqual(
-            AreaSelectorView.devSettingsPermissionRowIndex(at: row0, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            0
-        )
-        XCTAssertEqual(
-            AreaSelectorView.devSettingsPermissionRowIndex(at: row1, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            1
-        )
-        // A permission row is NOT an agent/model/project row (sections are disjoint).
-        for p in [row0, row1] {
-            XCTAssertNil(AreaSelectorView.devSettingsAgentRowIndex(at: p, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-                         "a permission row must not register as an agent row")
-            XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: p, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-                         "a permission row must not register as a model row")
+        let agent = AreaSelectorView.devSettingsSummaryRowFrame(.agent, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil)
+        let model = AreaSelectorView.devSettingsSummaryRowFrame(.model, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil)
+        let perms = AreaSelectorView.devSettingsSummaryRowFrame(.permissions, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil)
+        // Agent leads directly under the top inset (no section header now).
+        XCTAssertEqual(agent.minY, menu.minY + AreaSelectorView.menuVPad, accuracy: 0.001)
+        for s in [agent, model, perms] {
+            XCTAssertEqual(s.height, AreaSelectorView.devMenuRowHeight, accuracy: 0.001)
+            XCTAssertEqual(s.width, menu.width, accuracy: 0.001)
         }
-        // The Project section's Auto-Detect row must sit BELOW the Permissions rows.
-        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        XCTAssertGreaterThanOrEqual(auto.minY, permTop + CGFloat(AreaSelectorView.devPermissionRowCount) * AreaSelectorView.devMenuRowHeight)
-        XCTAssertNil(AreaSelectorView.devSettingsPermissionRowIndex(at: CGPoint(x: auto.midX, y: auto.midY), forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-                     "the Auto-Detect row must not register as a permission row")
+        // One rowHeight + divider apart, in order.
+        XCTAssertEqual(model.minY, agent.maxY + AreaSelectorView.devMenuDividerBand, accuracy: 0.001)
+        XCTAssertEqual(perms.minY, model.maxY + AreaSelectorView.devMenuDividerBand, accuracy: 0.001)
+        // Collapsed → no option rows are hit-testable.
+        for s in [agent, model, perms] {
+            let p = CGPoint(x: s.midX, y: s.midY)
+            XCTAssertNil(AreaSelectorView.devSettingsAgentRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil))
+            XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil))
+            XCTAssertNil(AreaSelectorView.devSettingsPermissionRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil))
+        }
     }
 
-    func testDevSettingsProjectRowIsBelowModelSectionAndDisjoint() {
-        let agentCount = 3
-        let modelCount = 2
-        let projectRow = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        // A click in the project row is NOT an agent row nor a model row.
-        let mid = CGPoint(x: projectRow.midX, y: projectRow.midY)
-        XCTAssertNil(
-            AreaSelectorView.devSettingsAgentRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "the project row must not register as an agent row"
-        )
-        XCTAssertNil(
-            AreaSelectorView.devSettingsModelRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "the project row must not register as a model row"
-        )
-        // And it sits below the whole agent + model section.
-        let modelSectionBottom = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount).minY
-            + AreaSelectorView.menuVPad + AreaSelectorView.menuSectionHeaderHeight
-            + CGFloat(agentCount) * AreaSelectorView.devMenuRowHeight
-            + AreaSelectorView.devMenuDividerBand
-            + AreaSelectorView.menuSectionHeaderHeight
-            + CGFloat(modelCount) * AreaSelectorView.devMenuRowHeight
-        XCTAssertGreaterThanOrEqual(projectRow.minY, modelSectionBottom)
-    }
-
-    // MARK: - Auto-Detect Project toggle row (Project section)
-
-    /// The Project section is two rows (Auto-Detect toggle + Change…), so the menu
-    /// height must reserve `header + 2 * rowHeight` for it. The Project section is
-    /// now the LAST section — the bottom git-reassurance line was removed (it moved
-    /// to a per-row trailing shield icon), so the height ends right after Project.
-    /// Pins the reconstructed height in lockstep with `devSettingsMenuFrame`.
-    func testDevSettingsMenuAccountsForProjectToggleRow() {
-        let agentCount = 3, modelCount = 2
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+    /// Collapsed height = vPad + 3 summary rows + 3 dividers + Project (header + 2
+    /// rows) + vPad — and independent of agent/model counts (sections collapsed).
+    func testDevMenuCollapsedHeightIsCompactAndCountIndependent() {
         let v = AreaSelectorView.self
+        let menu = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: 3, modelCount: 2)
         let expected = v.menuVPad
-            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight             // Agent
-            + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + CGFloat(modelCount) * v.devMenuRowHeight              // Model (≤ cap)
-            + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + CGFloat(v.devPermissionRowCount) * v.devMenuRowHeight // Permissions
-            + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                               // Project: toggle + Change… (last section)
+            + v.devMenuRowHeight + v.devMenuDividerBand           // Agent summary
+            + v.devMenuRowHeight + v.devMenuDividerBand           // Model summary
+            + v.devMenuRowHeight + v.devMenuDividerBand           // Permissions summary
+            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight  // Project
             + v.menuVPad
         XCTAssertEqual(menu.height, expected, accuracy: 0.001)
+        let bigger = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: 9, modelCount: 40)
+        XCTAssertEqual(menu.height, bigger.height, accuracy: 0.001, "collapsed menu doesn't grow with more agents/models")
     }
 
-    /// The toggle row leads the Project section; the Change… row sits directly
-    /// below it; neither registers as an agent/model row; both fit in the menu.
-    func testDevSettingsAutoDetectRowSitsAboveChangeRowAndDisjoint() {
-        let agentCount = 3, modelCount = 2
-        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        XCTAssertEqual(project.minY, auto.maxY, accuracy: 0.001, "Change… is directly below the toggle row")
-        XCTAssertEqual(auto.height, AreaSelectorView.devMenuRowHeight, accuracy: 0.001)
-        XCTAssertEqual(auto.width, project.width, accuracy: 0.001)
-
-        let mid = CGPoint(x: auto.midX, y: auto.midY)
-        XCTAssertNil(
-            AreaSelectorView.devSettingsAgentRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "the toggle row must not register as an agent row"
-        )
-        XCTAssertNil(
-            AreaSelectorView.devSettingsModelRowIndex(at: mid, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "the toggle row must not register as a model row"
-        )
-
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        XCTAssertGreaterThanOrEqual(auto.minY, menu.minY)
-        XCTAssertLessThanOrEqual(project.maxY, menu.maxY, "both Project rows fit within the bounded menu")
+    /// Expanding Agent reveals agentCount option rows under the Agent summary; the
+    /// Model summary shifts down; options are disjoint from the model section.
+    func testDevMenuExpandedAgentHitTestsOptions() {
+        let a = 3, m = 2
+        let exp = AreaSelectorState.DevMenuSection.agent
+        let agentSummary = AreaSelectorView.devSettingsSummaryRowFrame(.agent, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+        for i in 0..<a {
+            let p = CGPoint(x: agentSummary.midX, y: agentSummary.maxY + (CGFloat(i) + 0.5) * AreaSelectorView.devMenuRowHeight)
+            XCTAssertEqual(AreaSelectorView.devSettingsAgentRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp), i)
+            XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp))
+        }
+        let model = AreaSelectorView.devSettingsSummaryRowFrame(.model, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+        XCTAssertGreaterThanOrEqual(model.minY, agentSummary.maxY + CGFloat(a) * AreaSelectorView.devMenuRowHeight)
+        // The summary row itself is not an option row.
+        XCTAssertNil(AreaSelectorView.devSettingsAgentRowIndex(at: CGPoint(x: agentSummary.midX, y: agentSummary.midY), forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp))
     }
 
-    /// The info-icon hover sub-rect sits inside the toggle row, immediately after
-    /// the reserved label width, vertically centered.
-    func testDevSettingsAutoDetectInfoIconWithinRowAfterLabel() {
-        let agentCount = 3, modelCount = 2
-        let row = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        let icon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        XCTAssertTrue(row.contains(icon), "the info-icon sub-rect must sit within the toggle row")
-        XCTAssertEqual(icon.minX, row.minX + AreaSelectorView.devMenuRowHPad + AreaSelectorView.autoDetectLabelWidth + AreaSelectorView.autoDetectInfoGap, accuracy: 0.001)
-        XCTAssertEqual(icon.midY, row.midY, accuracy: 0.001)
-        XCTAssertEqual(icon.width, AreaSelectorView.autoDetectInfoIconSize, accuracy: 0.001)
+    /// Expanding Permissions reveals the 3 tier rows under the Permissions summary;
+    /// each hit-tests to its tier index; disjoint from the summary + Project.
+    func testDevMenuExpandedPermissionsHitTestsTiers() {
+        let a = 3, m = 2
+        let exp = AreaSelectorState.DevMenuSection.permissions
+        let summary = AreaSelectorView.devSettingsSummaryRowFrame(.permissions, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+        for i in 0..<AreaSelectorView.devPermissionRowCount {
+            let p = CGPoint(x: summary.midX, y: summary.maxY + (CGFloat(i) + 0.5) * AreaSelectorView.devMenuRowHeight)
+            XCTAssertEqual(AreaSelectorView.devSettingsPermissionRowIndex(at: p, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp), i)
+        }
+        XCTAssertNil(AreaSelectorView.devSettingsPermissionRowIndex(at: CGPoint(x: summary.midX, y: summary.midY), forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp))
+        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+        XCTAssertGreaterThanOrEqual(auto.minY, summary.maxY + CGFloat(AreaSelectorView.devPermissionRowCount) * AreaSelectorView.devMenuRowHeight)
     }
 
-    /// Hovering the info icon while the dev-settings menu is open resolves the
-    /// explanation copy anchored to the icon (the multi-line variant); not hovering
-    /// resolves nothing.
-    func testAutoDetectInfoTooltipResolvesWhenHoveredInOpenMenu() {
-        let state = AreaSelectorState()
-        state.setDevMode(true)
-        state.toggleDevSettingsMenu()
-        XCTAssertTrue(state.isDevSettingsMenuOpen)
-        state.setAutoDetectInfoHovered(true)
-
-        let view = AreaSelectorView(state: state)
-        let info = view.tooltipInfo(forSelection: selection, in: bounds)
-        XCTAssertEqual(info?.text, AreaSelectorView.autoDetectInfoTooltip)
-        XCTAssertNotNil(info?.maxWidth, "the info tooltip uses the multi-line variant")
-        let expectedAnchor = AreaSelectorView.devSettingsAutoDetectInfoIconRect(
-            forSelection: selection, in: bounds,
-            agentCount: state.devAgentMenuItems.count, modelCount: state.devModelMenuItems.count
-        )
-        XCTAssertEqual(info?.anchor, expectedAnchor)
-
-        state.setAutoDetectInfoHovered(false)
-        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
-                     "no tooltip while the menu is open and the icon isn't hovered")
-    }
-
-    /// The Permissions info-icon hover sub-rect sits inside the Permissions header
-    /// band (between the Model section and the first permission row), immediately
-    /// after the reserved label width.
-    func testDevSettingsPermissionInfoIconWithinHeaderAfterLabel() {
-        let agentCount = 3, modelCount = 2
+    /// Only the expanded section grows the menu (by its option count); the others
+    /// stay one summary row.
+    func testDevMenuOnlyExpandedSectionGrows() {
         let v = AreaSelectorView.self
-        let frame = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        let visibleModelRows = min(modelCount, v.maxVisibleModelRows)
-        let headerTop = frame.minY + v.menuVPad
-            + v.menuSectionHeaderHeight + CGFloat(agentCount) * v.devMenuRowHeight
-            + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + CGFloat(visibleModelRows) * v.devMenuRowHeight
-            + v.devMenuDividerBand
-        let icon = v.devSettingsPermissionInfoIconRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        XCTAssertEqual(icon.minX, frame.minX + v.devMenuRowHPad + v.permissionsHeaderLabelWidth + v.autoDetectInfoGap, accuracy: 0.001)
-        XCTAssertEqual(icon.width, v.autoDetectInfoIconSize, accuracy: 0.001)
-        XCTAssertGreaterThanOrEqual(icon.minY, headerTop, "the icon sits within the header band")
-        XCTAssertLessThanOrEqual(icon.maxY, headerTop + v.menuSectionHeaderHeight, "…and not into the first permission row")
-        // It must NOT register as a permission row (the header is above the rows).
-        XCTAssertNil(
-            v.devSettingsPermissionRowIndex(at: CGPoint(x: icon.midX, y: icon.midY), forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount),
-            "the header info icon must not hit-test as a permission row"
-        )
+        let a = 3, m = 2
+        let collapsed = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil).height
+        let agentOpen = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: .agent).height
+        let permsOpen = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: .permissions).height
+        XCTAssertEqual(agentOpen - collapsed, CGFloat(a) * v.devMenuRowHeight, accuracy: 0.001)
+        XCTAssertEqual(permsOpen - collapsed, CGFloat(v.devPermissionRowCount) * v.devMenuRowHeight, accuracy: 0.001)
     }
 
-    /// Hovering the Permissions info icon while the menu is open resolves the
-    /// both-modes explanation anchored to the icon (multi-line variant); not
-    /// hovering resolves nothing.
-    func testPermissionInfoTooltipResolvesWhenHoveredInOpenMenu() {
-        let state = AreaSelectorState()
-        state.setDevMode(true)
-        state.toggleDevSettingsMenu()
-        XCTAssertTrue(state.isDevSettingsMenuOpen)
-        state.setPermissionInfoHovered(true)
+    // MARK: - Permissions summary safety icon (git-shield / ⚠)
 
-        let view = AreaSelectorView(state: state)
-        let info = view.tooltipInfo(forSelection: selection, in: bounds)
-        XCTAssertEqual(info?.text, AreaSelectorView.permissionInfoTooltip)
-        XCTAssertNotNil(info?.maxWidth, "the info tooltip uses the multi-line variant")
-        let expectedAnchor = AreaSelectorView.devSettingsPermissionInfoIconRect(
-            forSelection: selection, in: bounds,
-            agentCount: state.devAgentMenuItems.count, modelCount: state.devModelMenuItems.count
-        )
-        XCTAssertEqual(info?.anchor, expectedAnchor)
-
-        state.setPermissionInfoHovered(false)
-        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
-                     "no tooltip while the menu is open and the icon isn't hovered")
-    }
-
-    // MARK: - Permission row trailing indicators (git-shield / ⚠)
-
-    /// Each permission row's trailing-icon hover sub-rect sits at the row's right
-    /// inset edge, vertically centered, the configured size — and still hit-tests as
-    /// that permission row (so clicking the icon selects the tier).
-    func testPermissionTrailingIconRectsAlignToRowsAndStaySelectable() {
-        let agentCount = 3, modelCount = 2
+    /// The safety icon sits on the Permissions SUMMARY row, to the LEFT of the
+    /// disclosure chevron, vertically centered — present collapsed AND expanded,
+    /// and never registers as a tier option (it's hover-only).
+    func testDevMenuPermissionSafetyIconOnSummaryRow() {
         let v = AreaSelectorView.self
-        let frame = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        for row in 0..<v.devPermissionRowCount {
-            let icon = v.devSettingsPermissionTrailingIconRect(
-                forSelection: selection, in: bounds,
-                agentCount: agentCount, modelCount: modelCount, rowIndex: row)
+        let a = 3, m = 2
+        for exp in [nil, AreaSelectorState.DevMenuSection.permissions] {
+            let summary = v.devSettingsSummaryRowFrame(.permissions, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+            let icon = v.devSettingsPermissionSafetyIconRect(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
             XCTAssertEqual(icon.width, v.permissionTrailingIconSize, accuracy: 0.001)
-            XCTAssertEqual(icon.height, v.permissionTrailingIconSize, accuracy: 0.001)
-            // Right inset edge: maxX == row right edge (frame.maxX - hPad).
-            XCTAssertEqual(icon.maxX, frame.maxX - v.devMenuRowHPad, accuracy: 0.001)
-            // Vertically centered on its row (the row that hit-tests the icon center).
-            let hit = v.devSettingsPermissionRowIndex(
-                at: CGPoint(x: icon.midX, y: icon.midY),
-                forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-            XCTAssertEqual(hit, row, "clicking the trailing icon must still select its tier (row \(row))")
+            XCTAssertTrue(summary.contains(icon), "safety icon within the summary row")
+            // Right edge == chevron-left (one chevron + gap inside the right inset).
+            XCTAssertEqual(icon.maxX, summary.maxX - v.devMenuRowHPad - v.devSummaryChevronWidth - v.devSummaryTrailingGap, accuracy: 0.001)
+            XCTAssertEqual(icon.midY, summary.midY, accuracy: 0.001)
+            XCTAssertNil(v.devSettingsPermissionRowIndex(at: CGPoint(x: icon.midX, y: icon.midY), forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp))
         }
     }
 
-    /// Hovering a fenced tier's trailing icon resolves the git-snapshot copy;
-    /// hovering Unrestricted's resolves the can't-undo warning; both anchor to the
-    /// icon (multi-line variant). Not hovering resolves nothing.
-    func testPermissionTrailingTooltipResolvesPerTier() {
+    /// Hovering the safety icon resolves the current tier's copy: git-snapshot for
+    /// the fenced tiers, the can't-undo warning for Unrestricted; anchored to the
+    /// icon (multi-line). Not hovering → nothing.
+    func testDevMenuPermissionSafetyTooltipPerTier() {
         let state = AreaSelectorState()
         state.setDevMode(true)
         state.toggleDevSettingsMenu()
         let view = AreaSelectorView(state: state)
         let v = AreaSelectorView.self
-        let aCount = state.devAgentMenuItems.count, mCount = state.devModelMenuItems.count
+        let a = state.devAgentMenuItems.count, m = state.devModelMenuItems.count
 
-        // Row 0 (Ask Permission) + Row 1 (Auto-Approve) → git-snapshot copy.
-        for fenced in [0, 1] {
-            state.setHoveredPermissionTrailingIndex(fenced)
+        for tier in [DevPermissionTier.askPermission, .autoApprove] {
+            state.setDevPermissionTier(tier)
+            state.setPermissionSafetyHovered(true)
             let info = view.tooltipInfo(forSelection: selection, in: bounds)
             XCTAssertEqual(info?.text, v.permissionGitSnapshotTooltip)
-            XCTAssertNotNil(info?.maxWidth, "trailing tooltip uses the multi-line variant")
-            XCTAssertEqual(info?.anchor, v.devSettingsPermissionTrailingIconRect(
-                forSelection: selection, in: bounds, agentCount: aCount, modelCount: mCount, rowIndex: fenced))
+            XCTAssertNotNil(info?.maxWidth, "safety tooltip uses the multi-line variant")
+            XCTAssertEqual(info?.anchor, v.devSettingsPermissionSafetyIconRect(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: state.expandedDevSection))
         }
+        state.setDevPermissionTier(.unrestricted)
+        XCTAssertEqual(view.tooltipInfo(forSelection: selection, in: bounds)?.text, v.permissionUnrestrictedTooltip)
 
-        // Row 2 (Unrestricted) → the warning copy.
-        state.setHoveredPermissionTrailingIndex(2)
-        let warn = view.tooltipInfo(forSelection: selection, in: bounds)
-        XCTAssertEqual(warn?.text, v.permissionUnrestrictedTooltip)
-        XCTAssertNotEqual(warn?.text, v.permissionGitSnapshotTooltip)
-
-        // Not hovering → nothing (menu open, no icon under the cursor).
-        state.setHoveredPermissionTrailingIndex(nil)
+        state.setPermissionSafetyHovered(false)
         XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text)
     }
 
-    /// The bottom git-reassurance copy now lives ONLY as the fenced rows' trailing
+    /// When Permissions is expanded, EACH option row's safety icon (a) column-aligns
+    /// with the summary safety icon and (b) resolves ITS OWN tier's tooltip on hover.
+    func testDevMenuExpandedOptionSafetyIconsAlignAndTooltip() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        state.toggleDevSection(.permissions)
+        let view = AreaSelectorView(state: state)
+        let v = AreaSelectorView.self
+        let a = state.devAgentMenuItems.count, m = state.devModelMenuItems.count
+        let exp = AreaSelectorState.DevMenuSection.permissions
+        let summaryIcon = v.devSettingsPermissionSafetyIconRect(forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp)
+
+        for row in 0..<v.devPermissionRowCount {
+            let icon = v.devSettingsPermissionOptionSafetyIconRect(forSelection: selection, in: bounds, agentCount: a, modelCount: m, rowIndex: row, expanded: exp)
+            // Same column as the summary icon; one rowHeight apart down the list.
+            XCTAssertEqual(icon.minX, summaryIcon.minX, accuracy: 0.001, "option icon shares the summary icon's column")
+            XCTAssertEqual(icon.width, v.permissionTrailingIconSize, accuracy: 0.001)
+            // Hovering it resolves THAT tier's copy, anchored to the icon.
+            state.setHoveredPermissionOptionSafety(row)
+            let info = view.tooltipInfo(forSelection: selection, in: bounds)
+            let expected = DevPermissionTier.allCases[row] == .unrestricted ? v.permissionUnrestrictedTooltip : v.permissionGitSnapshotTooltip
+            XCTAssertEqual(info?.text, expected, "row \(row) tooltip copy")
+            XCTAssertEqual(info?.anchor, icon)
+            XCTAssertNotNil(info?.maxWidth)
+            // The hover icon is non-interactive: its center still hit-tests as the
+            // tier option (clicking it selects the tier).
+            XCTAssertEqual(v.devSettingsPermissionRowIndex(at: CGPoint(x: icon.midX, y: icon.midY), forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: exp), row)
+        }
+        state.setHoveredPermissionOptionSafety(nil)
+        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text)
+    }
+
+    /// The bottom git-reassurance copy now lives ONLY as the Permissions safety
     /// tooltip — verbatim the old line — so the wording didn't silently change.
     func testGitSnapshotCopyPreservedVerbatim() {
         XCTAssertEqual(AreaSelectorView.permissionGitSnapshotTooltip,
                        "Snapshots with git before each change — undo anything.")
     }
+
+    // MARK: - Accordion behavior (state)
+
+    /// Toggling a section expands it (collapsing any other); toggling again — or
+    /// collapseDevSections() — resets to summary rows. Opening the menu starts
+    /// collapsed.
+    func testDevMenuAccordionTogglesOneSectionAtATime() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        XCTAssertNil(state.expandedDevSection, "menu opens collapsed")
+        state.toggleDevSection(.agent)
+        XCTAssertEqual(state.expandedDevSection, .agent)
+        state.toggleDevSection(.permissions)
+        XCTAssertEqual(state.expandedDevSection, .permissions, "expanding one collapses the other")
+        state.toggleDevSection(.permissions)
+        XCTAssertNil(state.expandedDevSection, "toggling the open section collapses it")
+        state.toggleDevSection(.model)
+        state.collapseDevSections()
+        XCTAssertNil(state.expandedDevSection)
+    }
+
+    // MARK: - Auto-Detect / Project rows (Project section, unchanged)
+
+    /// Auto-Detect leads the Project section (below the 3 summary rows); Change…
+    /// sits directly below; the info icon lands after the label, centered.
+    func testDevMenuProjectRowsBelowSummariesWithInfoIcon() {
+        let a = 3, m = 2
+        let auto = AreaSelectorView.devSettingsAutoDetectRowFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m)
+        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: a, modelCount: m)
+        XCTAssertEqual(project.minY, auto.maxY, accuracy: 0.001, "Change… directly below Auto-Detect")
+        XCTAssertEqual(auto.height, AreaSelectorView.devMenuRowHeight, accuracy: 0.001)
+        let perms = AreaSelectorView.devSettingsSummaryRowFrame(.permissions, forSelection: selection, in: bounds, agentCount: a, modelCount: m, expanded: nil)
+        XCTAssertGreaterThan(auto.minY, perms.maxY)
+        let icon = AreaSelectorView.devSettingsAutoDetectInfoIconRect(forSelection: selection, in: bounds, agentCount: a, modelCount: m)
+        XCTAssertTrue(auto.contains(icon))
+        XCTAssertEqual(icon.minX, auto.minX + AreaSelectorView.devMenuRowHPad + AreaSelectorView.autoDetectLabelWidth + AreaSelectorView.autoDetectInfoGap, accuracy: 0.001)
+        XCTAssertEqual(icon.midY, auto.midY, accuracy: 0.001)
+    }
+
+    /// Hovering the Auto-Detect info icon resolves its copy anchored to the icon.
+    func testAutoDetectInfoTooltipResolvesWhenHoveredInOpenMenu() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        state.setAutoDetectInfoHovered(true)
+        let view = AreaSelectorView(state: state)
+        let info = view.tooltipInfo(forSelection: selection, in: bounds)
+        XCTAssertEqual(info?.text, AreaSelectorView.autoDetectInfoTooltip)
+        XCTAssertNotNil(info?.maxWidth)
+        XCTAssertEqual(info?.anchor, AreaSelectorView.devSettingsAutoDetectInfoIconRect(
+            forSelection: selection, in: bounds,
+            agentCount: state.devAgentMenuItems.count, modelCount: state.devModelMenuItems.count,
+            expanded: state.expandedDevSection))
+        state.setAutoDetectInfoHovered(false)
+        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text)
+    }
+
 
     // MARK: - Scrollable Model section (long lists, e.g. Cursor)
 
@@ -408,14 +333,15 @@ final class AreaSelectorDevModeTests: XCTestCase {
         (0..<n).map { .init(id: "m\($0)", name: "Model \($0)") }
     }
 
-    func testDevSettingsMenuHeightIsBoundedForLongModelList() {
+    /// When the Model section is EXPANDED, its option list caps at
+    /// `maxVisibleModelRows` (scrolls beyond), so a long list can't push the panel
+    /// off-screen.
+    func testDevSettingsExpandedModelHeightIsBoundedForLongList() {
         let agentCount = 3
         let cap = AreaSelectorView.maxVisibleModelRows
-        let atCap = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap)
-        let huge = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap + 50)
-        // Beyond the cap the Model section stops growing — the panel height is bounded.
-        XCTAssertEqual(atCap.height, huge.height, accuracy: 0.001)
-        // Which is the whole point: it fits on screen.
+        let atCap = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap, expanded: .model)
+        let huge = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: cap + 50, expanded: .model)
+        XCTAssertEqual(atCap.height, huge.height, accuracy: 0.001, "the expanded Model list stops growing at the cap")
         XCTAssertGreaterThanOrEqual(huge.minY, 0)
         XCTAssertLessThanOrEqual(huge.maxY, bounds.height)
     }
@@ -424,42 +350,45 @@ final class AreaSelectorDevModeTests: XCTestCase {
         let agentCount = 3, modelCount = 20
         let cap = AreaSelectorView.maxVisibleModelRows
         let rowH = AreaSelectorView.devMenuRowHeight
-        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model)
         XCTAssertEqual(viewport.height, CGFloat(cap) * rowH, accuracy: 0.001, "viewport is capped at maxVisibleModelRows")
 
         let top = CGPoint(x: viewport.midX, y: viewport.minY + rowH / 2)
         // The SAME screen position maps to offset+0 as the list scrolls under it.
-        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0), 0)
-        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 5), 5)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0, expanded: .model), 0)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: top, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 5, expanded: .model), 5)
         // Last visible row at max offset → the last model (in-bounds, clamped).
         let maxOffset = modelCount - cap
         let last = CGPoint(x: viewport.midX, y: viewport.minY + rowH * (CGFloat(cap) - 0.5))
-        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: last, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: maxOffset), modelCount - 1)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: last, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: maxOffset, expanded: .model), modelCount - 1)
     }
 
     func testDevSettingsModelHitTestRejectsBelowViewport() {
         let agentCount = 3, modelCount = 20
-        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
-        // A point just below the capped viewport is Project/git territory now.
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model)
+        // A point just below the capped viewport is Permissions/Project territory.
         let below = CGPoint(x: viewport.midX, y: viewport.maxY + 1)
-        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: below, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0))
-        // And the Project row sits at/below the capped viewport, not below all 20 rows.
-        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: below, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, scrollOffset: 0, expanded: .model))
+        // The Project row sits below the capped viewport, not below all 20 rows.
+        let project = AreaSelectorView.devSettingsProjectRowFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model)
         XCTAssertGreaterThanOrEqual(project.minY, viewport.maxY)
-        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model)
         XCTAssertLessThanOrEqual(project.maxY, menu.maxY, "the project row is reachable within the bounded menu")
     }
 
-    func testDevSettingsShortModelListBehavesAsBefore() {
-        // ≤ cap: viewport is exactly modelCount rows, offset 0, hit-test unchanged.
+    func testDevSettingsShortModelListShowsAllRowsWhenExpanded() {
+        // ≤ cap: the expanded viewport is exactly modelCount rows, offset 0.
         let agentCount = 3, modelCount = 3
         let rowH = AreaSelectorView.devMenuRowHeight
-        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        let viewport = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model)
         XCTAssertEqual(viewport.height, CGFloat(modelCount) * rowH, accuracy: 0.001)
         let row2 = CGPoint(x: viewport.midX, y: viewport.minY + rowH * 2.5)
-        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: row2, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount), 2)
+        XCTAssertEqual(AreaSelectorView.devSettingsModelRowIndex(at: row2, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model), 2)
         let past = CGPoint(x: viewport.midX, y: viewport.minY + rowH * CGFloat(modelCount) + 1)
-        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: past, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount))
+        XCTAssertNil(AreaSelectorView.devSettingsModelRowIndex(at: past, forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: .model))
+        // Collapsed → the viewport is empty (no model options shown).
+        let collapsed = AreaSelectorView.devSettingsModelViewportRect(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: nil)
+        XCTAssertEqual(collapsed.height, 0, accuracy: 0.001)
     }
 
     func testDevModelScrollOffsetClampsToRange() {

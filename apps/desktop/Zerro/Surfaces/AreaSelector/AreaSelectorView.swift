@@ -703,14 +703,23 @@ struct AreaSelectorView: View {
     /// Unrestricted) — the dev-settings menu's permission-tier picker, between
     /// Model and Project.
     static let devPermissionRowCount = DevPermissionTier.allCases.count
-    /// Size of the non-interactive trailing indicator (git-shield / ⚠) on each
-    /// permission row, and its hover sub-rect (`devSettingsPermissionTrailingIconRect`).
+    /// Size of the non-interactive safety indicator (git-shield / ⚠) on the
+    /// collapsed Permissions SUMMARY row, and its hover sub-rect
+    /// (`devSettingsPermissionSafetyIconRect`). It sits to the LEFT of the chevron.
     static let permissionTrailingIconSize: CGFloat = 16
-    /// Hover-tooltip copy for the fenced tiers' trailing git-shield (verbatim the
-    /// old bottom-row reassurance line).
+    /// Hover-tooltip copy for the fenced tiers' git-shield (verbatim the old
+    /// bottom-row reassurance line).
     static let permissionGitSnapshotTooltip = "Snapshots with git before each change — undo anything."
-    /// Hover-tooltip copy for the Unrestricted row's trailing ⚠.
+    /// Hover-tooltip copy for the Unrestricted ⚠.
     static let permissionUnrestrictedTooltip = "Can make changes outside the git snapshot that Zerro may not be able to undo."
+    /// Width of the disclosure chevron box on each collapsed summary row (Agent /
+    /// Model / Permissions). The chevron is the RIGHTMOST trailing element, pinned
+    /// to the row's right inset edge; shared by the renderer and the safety-icon
+    /// hit-test so both agree on where the safety icon lands (to the chevron's left).
+    static let devSummaryChevronWidth: CGFloat = 12
+    /// Spacing between trailing summary-row elements (the HStack spacing): label↔
+    /// value, value↔safety-icon, safety-icon↔chevron all use this.
+    static let devSummaryTrailingGap: CGFloat = 6
 
     // MARK: Auto-Detect Project toggle row (Project section)
     //
@@ -738,101 +747,140 @@ struct AreaSelectorView: View {
     static let autoDetectInfoTooltip =
         "Auto-matches your project folder to the localhost site you’re recording, by reading your browser’s address. Turning this on asks for browser permission once."
 
-    // MARK: Permissions section header info icon
+    // MARK: Dev-settings accordion layout (compact summary rows)
     //
-    // The "Permissions" header carries an info glyph after its label (the same
-    // custom-tooltip mechanism as the Auto-Detect icon) explaining both modes in
-    // one place, so the rows themselves stay label-only.
-    static let permissionsHeaderLabel = "Permissions"
-    /// Width reserved for the "Permissions" header label (measured at the section-
-    /// header font, +2pt), shared by the renderer and the info-icon hit-test so the
-    /// glyph lands on its hover sub-rect.
-    static let permissionsHeaderLabelWidth: CGFloat =
-        ((permissionsHeaderLabel as NSString)
-            .size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width).rounded(.up) + 2
-    /// Custom-tooltip copy for the Permissions info icon. Shown via `tooltipInfo`/
-    /// `toolbarTooltip` (NOT `.help`, which can't fire through the overlay).
-    static let permissionInfoTooltip =
-        "Ask Permission shows the generated plan for you to review before the agent runs. Auto-Approve runs immediately. Both keep the agent inside this project (no connectors, no credentials). Unrestricted removes those limits — it can act outside the project, so it confirms each time you record."
+    // Agent / Model / Permissions each collapse to ONE summary row; clicking opens
+    // that section's option list inline (one open at a time). `DevMenuLayout` is the
+    // SINGLE source of truth for every vertical anchor — the height calc AND every
+    // hit-test offset derive from it, so the top-down render and the AppKit hit-test
+    // stay in lockstep across the collapsed/expanded states.
 
-    static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, fullScreen: Bool = false) -> CGRect {
-        let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
-        // The Model section is CAPPED at `maxVisibleModelRows` (it scrolls beyond
-        // that) so a long list (Cursor) can't push the panel off-screen. Every
-        // place that advances past the Model section must use the same capped
-        // count — see `devSettingsProjectRowFrame` / `devSettingsModelViewportRect`.
-        let visibleModelRows = min(modelCount, maxVisibleModelRows)
-        let height = menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight             // Agent section
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight        // Model section (capped)
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(devPermissionRowCount) * devMenuRowHeight   // Permissions section
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + 2 * devMenuRowHeight                                // Project section (Auto-Detect toggle + Change…)
-            + menuVPad
-        return anchoredMenuFrame(under: icon, width: devMenuWidth, height: height, in: bounds)
+    /// Vertical anchors of the dev-settings menu for a given expansion state.
+    struct DevMenuLayout {
+        let frame: CGRect
+        let agentSummaryTop: CGFloat
+        let agentOptionsTop: CGFloat
+        let agentOptionRows: Int       // 0 unless Agent is expanded
+        let modelSummaryTop: CGFloat
+        let modelOptionsTop: CGFloat
+        let modelOptionRows: Int       // 0 unless Model is expanded (capped)
+        let permissionsSummaryTop: CGFloat
+        let permissionsOptionsTop: CGFloat
+        let permissionOptionRows: Int  // 0 unless Permissions is expanded
+        let projectHeaderTop: CGFloat
+        let autoDetectTop: CGFloat
+        let projectRowTop: CGFloat
     }
 
-    /// Index of the Agent row under `point`, or nil if `point` is outside the
-    /// Agent section.
-    static func devSettingsAgentRowIndex(
-        at point: CGPoint,
+    /// Compute the menu's frame + all section anchors for `expanded`. The Model
+    /// option list is CAPPED at `maxVisibleModelRows` (scrolls beyond).
+    static func devMenuLayout(
         forSelection rect: CGRect,
         in bounds: CGSize,
         agentCount: Int,
         modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection?,
         fullScreen: Bool = false
+    ) -> DevMenuLayout {
+        let agentOpt = expanded == .agent ? agentCount : 0
+        let modelOpt = expanded == .model ? min(modelCount, maxVisibleModelRows) : 0
+        let permOpt = expanded == .permissions ? devPermissionRowCount : 0
+        let rowH = devMenuRowHeight
+
+        let height = menuVPad
+            + rowH + CGFloat(agentOpt) * rowH        // Agent summary (+ options)
+            + devMenuDividerBand
+            + rowH + CGFloat(modelOpt) * rowH         // Model summary (+ options)
+            + devMenuDividerBand
+            + rowH + CGFloat(permOpt) * rowH          // Permissions summary (+ options)
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + 2 * rowH       // Project (header + Auto-Detect + Change…)
+            + menuVPad
+        let icon = devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+        let frame = anchoredMenuFrame(under: icon, width: devMenuWidth, height: height, in: bounds)
+
+        let agentSummaryTop = frame.minY + menuVPad
+        let modelSummaryTop = agentSummaryTop + rowH + CGFloat(agentOpt) * rowH + devMenuDividerBand
+        let permissionsSummaryTop = modelSummaryTop + rowH + CGFloat(modelOpt) * rowH + devMenuDividerBand
+        let projectHeaderTop = permissionsSummaryTop + rowH + CGFloat(permOpt) * rowH + devMenuDividerBand
+        return DevMenuLayout(
+            frame: frame,
+            agentSummaryTop: agentSummaryTop,
+            agentOptionsTop: agentSummaryTop + rowH,
+            agentOptionRows: agentOpt,
+            modelSummaryTop: modelSummaryTop,
+            modelOptionsTop: modelSummaryTop + rowH,
+            modelOptionRows: modelOpt,
+            permissionsSummaryTop: permissionsSummaryTop,
+            permissionsOptionsTop: permissionsSummaryTop + rowH,
+            permissionOptionRows: permOpt,
+            projectHeaderTop: projectHeaderTop,
+            autoDetectTop: projectHeaderTop + menuSectionHeaderHeight,
+            projectRowTop: projectHeaderTop + menuSectionHeaderHeight + rowH
+        )
+    }
+
+    /// The anchored menu frame (thin wrapper over `devMenuLayout`). `expanded`
+    /// defaults to nil (all collapsed) so non-render call sites stay terse.
+    static func devSettingsMenuFrame(forSelection rect: CGRect, in bounds: CGSize, agentCount: Int, modelCount: Int, expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false) -> CGRect {
+        devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen).frame
+    }
+
+    /// Full-width frame of a collapsed section's SUMMARY row (always present),
+    /// whose click toggles that section's expansion.
+    static func devSettingsSummaryRowFrame(
+        _ section: AreaSelectorState.DevMenuSection,
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection?, fullScreen: Bool = false
+    ) -> CGRect {
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        let top: CGFloat
+        switch section {
+        case .agent:       top = l.agentSummaryTop
+        case .model:       top = l.modelSummaryTop
+        case .permissions: top = l.permissionsSummaryTop
+        }
+        return CGRect(x: l.frame.minX, y: top, width: l.frame.width, height: devMenuRowHeight)
+    }
+
+    /// Index of the Agent OPTION row under `point` (only when Agent is expanded),
+    /// else nil.
+    static func devSettingsAgentRowIndex(
+        at point: CGPoint, forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> Int? {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        guard frame.contains(point) else { return nil }
-        let localY = point.y - frame.minY - menuVPad - menuSectionHeaderHeight
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        guard l.agentOptionRows > 0 else { return nil }
+        let localY = point.y - l.agentOptionsTop
         guard localY >= 0 else { return nil }
         let idx = Int(localY / devMenuRowHeight)
-        guard idx >= 0, idx < agentCount else { return nil }
+        guard idx >= 0, idx < l.agentOptionRows else { return nil }
         return idx
     }
 
-    /// The Model section's visible viewport rect — the scrollable band of (up to
-    /// `maxVisibleModelRows`) rows, below the Agent section + divider + Model
-    /// header. The single source of truth for the Model band geometry: both the
-    /// hit-test (`devSettingsModelRowIndex`) and the scroll-wheel region check use
-    /// it, so the renderer and the controller can't drift. Height is the CAPPED
-    /// row count, matching `devSettingsMenuFrame`.
+    /// The Model OPTION viewport rect (only non-empty when Model is expanded) — the
+    /// scrollable band of up to `maxVisibleModelRows` rows. Single source of truth
+    /// for both the hit-test and the scroll-wheel region.
     static func devSettingsModelViewportRect(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> CGRect {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        let top = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight   // skip Agent header + rows
-            + devMenuDividerBand                                                 // skip divider
-            + menuSectionHeaderHeight                                            // skip Model header
-        let visibleCount = min(modelCount, maxVisibleModelRows)
-        return CGRect(x: frame.minX, y: top, width: frame.width, height: CGFloat(visibleCount) * devMenuRowHeight)
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        return CGRect(x: l.frame.minX, y: l.modelOptionsTop, width: l.frame.width, height: CGFloat(l.modelOptionRows) * devMenuRowHeight)
     }
 
-    /// Index of the Model row under `point` (an ABSOLUTE index into the model
-    /// list), or nil if `point` is outside the visible Model viewport. The
-    /// viewport shows `min(modelCount, maxVisibleModelRows)` rows starting at
-    /// `scrollOffset`; a point below the viewport is now Project/git territory →
-    /// nil. The returned index folds in the scroll offset so a scrolled-into-view
-    /// row maps to its real model. Defaults to `scrollOffset: 0` so a short list
-    /// (≤ cap) and the existing call sites behave exactly as before.
+    /// ABSOLUTE index of the Model OPTION row under `point` (only when Model is
+    /// expanded), folding in `scrollOffset`; nil outside the viewport.
     static func devSettingsModelRowIndex(
-        at point: CGPoint,
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        scrollOffset: Int = 0,
-        fullScreen: Bool = false
+        at point: CGPoint, forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int, scrollOffset: Int = 0,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> Int? {
-        let viewport = devSettingsModelViewportRect(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        guard viewport.contains(point) else { return nil }
+        let viewport = devSettingsModelViewportRect(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        guard viewport.height > 0, viewport.contains(point) else { return nil }
         let visibleCount = min(modelCount, maxVisibleModelRows)
         let visibleIndex = Int((point.y - viewport.minY) / devMenuRowHeight)
         guard visibleIndex >= 0, visibleIndex < visibleCount else { return nil }
@@ -841,145 +889,88 @@ struct AreaSelectorView: View {
         return index
     }
 
-    /// Index of the Permissions row under `point` (0 = Ask Permission, 1 = Auto
-    /// Approve), or nil if `point` is outside the Permissions section. The section
-    /// sits between Model and Project: below the Agent section + divider + CAPPED
-    /// Model viewport + divider + the Permissions header.
+    /// Index of the Permissions OPTION row under `point` (0 = Ask Permission …
+    /// 2 = Unrestricted), only when Permissions is expanded, else nil.
     static func devSettingsPermissionRowIndex(
-        at point: CGPoint,
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
+        at point: CGPoint, forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> Int? {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        let visibleModelRows = min(modelCount, maxVisibleModelRows)
-        let top = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
-            + devMenuDividerBand
-            + menuSectionHeaderHeight                                                  // Permissions header
-        let localY = point.y - top
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        guard l.permissionOptionRows > 0 else { return nil }
+        let localY = point.y - l.permissionsOptionsTop
         guard localY >= 0 else { return nil }
         let idx = Int(localY / devMenuRowHeight)
-        guard idx >= 0, idx < devPermissionRowCount else { return nil }
+        guard idx >= 0, idx < l.permissionOptionRows else { return nil }
         return idx
     }
 
-    /// The non-interactive trailing-icon hover sub-rect inside permission row
-    /// `rowIndex` (0 = Ask Permission … 2 = Unrestricted): a `permissionTrailingIconSize`
-    /// box pinned to the row's RIGHT inset edge, vertically centered. The controller
-    /// hit-tests this on mouse-move to drive the row's custom tooltip (the glyph's
-    /// `.help` can't fire through the overlay). The x uses the SAME right-inset math
-    /// (`frame.maxX - devMenuRowHPad - size`) the renderer lays the icon out with, so
-    /// the rect and the drawn glyph stay in lockstep. It does NOT affect row
-    /// selection — clicks anywhere on the row band still pick the tier.
-    static func devSettingsPermissionTrailingIconRect(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        rowIndex: Int,
-        fullScreen: Bool = false
+    /// The non-interactive safety-icon hover sub-rect on the Permissions SUMMARY
+    /// row: a `permissionTrailingIconSize` box sitting to the LEFT of the disclosure
+    /// chevron at the row's right inset edge, vertically centered. Uses the SAME
+    /// trailing math the renderer lays the icon out with, so the rect and the drawn
+    /// glyph stay in lockstep. Hover-only — it never affects the row's toggle click.
+    static func devSettingsPermissionSafetyIconRect(
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> CGRect {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        let visibleModelRows = min(modelCount, maxVisibleModelRows)
-        let rowsTop = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
-            + devMenuDividerBand
-            + menuSectionHeaderHeight                                                  // Permissions header
-        let rowTop = rowsTop + CGFloat(rowIndex) * devMenuRowHeight
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
         let size = permissionTrailingIconSize
-        let x = frame.maxX - devMenuRowHPad - size
+        // chevron occupies the rightmost slot; the safety icon sits to its left.
+        let x = l.frame.maxX - devMenuRowHPad - devSummaryChevronWidth - devSummaryTrailingGap - size
+        let y = l.permissionsSummaryTop + (devMenuRowHeight - size) / 2
+        return CGRect(x: x, y: y, width: size, height: size)
+    }
+
+    /// The per-tier safety-icon hover sub-rect on EXPANDED permission OPTION row
+    /// `rowIndex` (0 = Ask Permission … 2 = Unrestricted). Column-aligned with the
+    /// summary row's safety icon (the option icon is trailing-padded by chevron +
+    /// gap), so the rect and the drawn glyph stay in lockstep. Only meaningful when
+    /// Permissions is expanded; hover-only — it never affects tier selection.
+    static func devSettingsPermissionOptionSafetyIconRect(
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int, rowIndex: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
+    ) -> CGRect {
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        let size = permissionTrailingIconSize
+        let rowTop = l.permissionsOptionsTop + CGFloat(rowIndex) * devMenuRowHeight
+        let x = l.frame.maxX - devMenuRowHPad - devSummaryChevronWidth - devSummaryTrailingGap - size
         let y = rowTop + (devMenuRowHeight - size) / 2
         return CGRect(x: x, y: y, width: size, height: size)
     }
 
-    /// The info-icon hover sub-rect inside the Permissions HEADER: immediately after
-    /// the (measured) "Permissions" label. The controller hit-tests this on
-    /// mouse-move to drive the custom tooltip explaining both modes. The x uses the
-    /// SAME `permissionsHeaderLabelWidth` the renderer reserves, so the rect and the
-    /// drawn glyph stay in lockstep.
-    static func devSettingsPermissionInfoIconRect(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
-    ) -> CGRect {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        let visibleModelRows = min(modelCount, maxVisibleModelRows)
-        // Top of the Permissions header band.
-        let headerTop = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
-            + devMenuDividerBand
-        let x = frame.minX + devMenuRowHPad + permissionsHeaderLabelWidth + autoDetectInfoGap
-        // The header label is bottom-aligned in its band (4pt bottom inset); center
-        // the icon on the label's vertical band.
-        let y = headerTop + menuSectionHeaderHeight - 4 - autoDetectInfoIconSize
-        return CGRect(x: x, y: y, width: autoDetectInfoIconSize, height: autoDetectInfoIconSize)
-    }
-
-    /// Frame of the Auto-Detect Project toggle row — the FIRST row of the Project
-    /// section, directly under the "Project" header (above the folder/"Change…"
-    /// row). Clicking it flips `devAutoDetectProject`. Sits below the CAPPED Model
-    /// viewport + the Permissions section (header + 2 rows) + their dividers.
+    /// Frame of the Auto-Detect Project toggle row (first Project row).
     static func devSettingsAutoDetectRowFrame(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> CGRect {
-        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        let visibleModelRows = min(modelCount, maxVisibleModelRows)
-        let y = frame.minY + menuVPad
-            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight             // Agent
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight        // Model (capped)
-            + devMenuDividerBand
-            + menuSectionHeaderHeight + CGFloat(devPermissionRowCount) * devMenuRowHeight   // Permissions
-            + devMenuDividerBand
-            + menuSectionHeaderHeight                                                       // Project header
-        return CGRect(x: frame.minX, y: y, width: frame.width, height: devMenuRowHeight)
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        return CGRect(x: l.frame.minX, y: l.autoDetectTop, width: l.frame.width, height: devMenuRowHeight)
     }
 
-    /// The info-icon hover sub-rect inside the Auto-Detect row: immediately after
-    /// the (measured) label. The controller hit-tests this on mouse-move to drive
-    /// the custom tooltip (the glyph's `.help` can't fire through the overlay). The
-    /// x uses the SAME `autoDetectLabelWidth` the renderer reserves for the label,
-    /// so the rect and the drawn glyph stay in lockstep.
+    /// The info-icon hover sub-rect inside the Auto-Detect row (unchanged copy/UX).
     static func devSettingsAutoDetectInfoIconRect(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> CGRect {
-        let row = devSettingsAutoDetectRowFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let row = devSettingsAutoDetectRowFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
         let x = row.minX + devMenuRowHPad + autoDetectLabelWidth + autoDetectInfoGap
         let y = row.midY - autoDetectInfoIconSize / 2
         return CGRect(x: x, y: y, width: autoDetectInfoIconSize, height: autoDetectInfoIconSize)
     }
 
     /// Frame of the Project ("Change…") row — clicking it opens the folder picker.
-    /// nil-free: always returns the row's rect within the menu. Sits directly below
-    /// the Auto-Detect toggle row (the Project section's first row).
     static func devSettingsProjectRowFrame(
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        agentCount: Int,
-        modelCount: Int,
-        fullScreen: Bool = false
+        forSelection rect: CGRect, in bounds: CGSize,
+        agentCount: Int, modelCount: Int,
+        expanded: AreaSelectorState.DevMenuSection? = nil, fullScreen: Bool = false
     ) -> CGRect {
-        let auto = devSettingsAutoDetectRowFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
-        return CGRect(x: auto.minX, y: auto.maxY, width: auto.width, height: devMenuRowHeight)
+        let l = devMenuLayout(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fullScreen)
+        return CGRect(x: l.frame.minX, y: l.projectRowTop, width: l.frame.width, height: devMenuRowHeight)
     }
 
     // MARK: - CleanShot-style dropdown chrome
@@ -1238,45 +1229,55 @@ struct AreaSelectorView: View {
         if state.isDevSettingsMenuOpen, state.isDevMode, let rect = state.confirmableSelectionRect {
             let agents = state.devAgentMenuItems
             let models = state.devModelMenuItems
+            let expanded = state.expandedDevSection
             let icon = Self.devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen)
-            let frame = Self.devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agents.count, modelCount: models.count, fullScreen: state.mode == .fullScreen)
+            let frame = Self.devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agents.count, modelCount: models.count, expanded: expanded, fullScreen: state.mode == .fullScreen)
             let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
 
             menuPanel(frame: frame) {
                 VStack(spacing: 0) {
-                    // Agent section.
-                    menuSectionHeader("Agent")
-                    ForEach(Array(agents.enumerated()), id: \.element.id) { index, item in
-                        devAgentRow(item, highlighted: state.highlightedDevAgentIndex == index || item.id == state.selectedAgentID)
+                    // Compact accordion: Agent / Model / Permissions each collapse to
+                    // a single summary row showing the current selection; clicking
+                    // expands that section's option list (one open at a time).
+
+                    // Agent.
+                    devSummaryRow(.agent, label: "Agent",
+                                  value: agents.first { $0.id == state.selectedAgentID }?.name ?? "Select")
+                    if expanded == .agent {
+                        ForEach(Array(agents.enumerated()), id: \.element.id) { index, item in
+                            devAgentRow(item, highlighted: state.highlightedDevAgentIndex == index || item.id == state.selectedAgentID)
+                        }
                     }
 
                     devMenuDivider
 
-                    // Model section (Phase 2) — the selected agent's models,
-                    // newest-first, checkmark on the current pick. Capped to a
-                    // scrollable viewport (the list can be long — Cursor).
-                    menuSectionHeader("Model")
-                    devModelViewport(models)
+                    // Model — the selected agent's models, checkmark on the current
+                    // pick. Capped to a scrollable viewport (the list can be long).
+                    devSummaryRow(.model, label: "Model",
+                                  value: models.first { $0.id == state.selectedDevModelID }?.name ?? "Default")
+                    if expanded == .model {
+                        devModelViewport(models)
+                    }
 
                     devMenuDivider
 
-                    // Permissions section: the single trust dial — Ask Permission
-                    // (review the plan first), Auto-Approve (run immediately, still
-                    // fenced), or Unrestricted (fences off). The header's info icon
-                    // explains the tiers; Unrestricted carries a ⚠ caption.
-                    devPermissionsSectionHeader
-                    devPermissionRow(.askPermission, index: 0)
-                    devPermissionRow(.autoApprove, index: 1)
-                    devPermissionRow(.unrestricted, index: 2)
+                    // Permissions: the single trust dial — Ask Permission / Auto-Approve
+                    // (fenced) / Unrestricted (fences off). The summary row carries the
+                    // current tier's safety icon (green shield / amber ⚠) + tooltip.
+                    devSummaryRow(.permissions, label: "Permissions",
+                                  value: Self.devPermissionTitle(state.devPermissionTier))
+                    if expanded == .permissions {
+                        devPermissionRow(.askPermission, index: 0)
+                        devPermissionRow(.autoApprove, index: 1)
+                        devPermissionRow(.unrestricted, index: 2)
+                    }
 
                     devMenuDivider
 
                     // Project section: the Auto-Detect toggle (the opt-in that
-                    // requests browser permission) leads, then the folder / "Change…"
-                    // row beneath it. (The git-snapshot reassurance moved to a
-                    // per-row trailing shield icon + hover tooltip on the fenced
-                    // tiers — see `devPermissionRow`.)
-                    menuSectionHeader("Project")
+                    // requests browser permission) leads, then the folder /
+                    // "Change…" row beneath it.
+                    devProjectSectionHeader
                     devAutoDetectToggleRow
                     devProjectRow
                 }
@@ -1285,6 +1286,60 @@ struct AreaSelectorView: View {
 
             menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
         }
+    }
+
+    /// A collapsed section's summary row: "[label] [current selection] … [safety
+    /// icon (permissions only)] [chevron]". The whole row is one click target
+    /// (`devSettingsSummaryRowFrame`) that toggles the section's expansion; the
+    /// safety icon adds only a hover sub-rect (`devSettingsPermissionSafetyIconRect`)
+    /// for its custom tooltip (the glyph's `.help` can't fire through the overlay).
+    /// Trailing layout (HStack spacing == `devSummaryTrailingGap`) keeps the safety
+    /// icon + chevron exactly where the hit-test math expects them.
+    private func devSummaryRow(_ section: AreaSelectorState.DevMenuSection, label: String, value: String) -> some View {
+        let expandedHere = state.expandedDevSection == section
+        let highlighted = state.hoveredDevSummary == section
+        return HStack(spacing: Self.devSummaryTrailingGap) {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.vfTextTertiary)
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.vfTextPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+            if section == .permissions {
+                let unrestricted = state.devPermissionTier == .unrestricted
+                Image(systemName: unrestricted ? "exclamationmark.triangle.fill" : "checkmark.shield")
+                    .font(.system(size: 12))
+                    .foregroundStyle(unrestricted ? Color.vfWarningAmber : Color.vfDevAccent)
+                    .frame(width: Self.permissionTrailingIconSize, height: Self.permissionTrailingIconSize)
+            }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.vfTextTertiary)
+                .rotationEffect(.degrees(expandedHere ? 180 : 0))
+                .frame(width: Self.devSummaryChevronWidth, height: Self.devSummaryChevronWidth)
+        }
+        .padding(.horizontal, Self.devMenuRowHPad)
+        .frame(height: Self.devMenuRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(menuRowHighlight(highlighted))
+    }
+
+    /// The "Project" section header. Matches the collapsed summary rows' label
+    /// style (size 13, `vfTextTertiary`) rather than the smaller shared
+    /// `menuSectionHeader` (11pt) so the four section labels read consistently. The
+    /// fixed `menuSectionHeaderHeight` band is unchanged, so the hit-test math is
+    /// untouched.
+    private var devProjectSectionHeader: some View {
+        Text("Project")
+            .font(.system(size: 13))
+            .foregroundStyle(Color.vfTextTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Self.devMenuRowHPad)
+            .padding(.bottom, 4)
+            .frame(height: Self.menuSectionHeaderHeight, alignment: .bottom)
     }
 
     /// The Model section as a fixed-height, clipped viewport: shows the
@@ -1397,39 +1452,14 @@ struct AreaSelectorView: View {
         .background(menuRowHighlight(highlighted))
     }
 
-    /// The "Permissions" section header with a trailing info glyph. Same
-    /// fixed-height frame as `menuSectionHeader` (the row hit-test math below
-    /// depends on it), with the label pinned to `permissionsHeaderLabelWidth` so
-    /// the glyph lands on its hover sub-rect (`devSettingsPermissionInfoIconRect`).
-    /// The glyph's `.help` can't fire through the overlay, so hover drives the
-    /// custom tooltip via the controller (mirrors the Auto-Detect info icon).
-    private var devPermissionsSectionHeader: some View {
-        HStack(spacing: 0) {
-            Text(Self.permissionsHeaderLabel)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.vfTextTertiary)
-                .frame(width: Self.permissionsHeaderLabelWidth, alignment: .leading)
-            Image(systemName: "info.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .frame(width: Self.autoDetectInfoIconSize, height: Self.autoDetectInfoIconSize)
-                .padding(.leading, Self.autoDetectInfoGap)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Self.devMenuRowHPad)
-        .padding(.bottom, 4)
-        .frame(height: Self.menuSectionHeaderHeight, alignment: .bottom)
-    }
-
-    /// One Permissions-section row: green checkmark on the active tier, a tier
-    /// icon, the title, and a non-interactive TRAILING indicator on the right —
-    /// the fenced tiers (Ask Permission / Auto-Approve) show a green git-shield
-    /// (hover: the snapshot-reassurance copy), Unrestricted shows an amber ⚠
-    /// (hover: the can't-undo warning). The whole row is one click target
-    /// (`devSettingsPermissionRowIndex`), so clicking the icon still selects the
-    /// tier; the icon only adds a hover sub-rect (`devSettingsPermissionTrailingIconRect`)
-    /// that drives the custom tooltip (the glyph's `.help` can't fire through the
-    /// hit-test-disabled overlay). Uniform `devMenuRowHeight` keeps render == hit-test.
+    /// One Permissions OPTION row (shown when the Permissions section is expanded):
+    /// green checkmark on the active tier, the per-tier type icon (hand / lightning
+    /// / unlock), the title, and the per-tier SAFETY icon (green shield for the
+    /// fenced tiers / amber ⚠ for Unrestricted) at the trailing edge. The trailing
+    /// icon is column-aligned with the collapsed summary row's safety icon (it sits
+    /// where the chevron would be reserved). Non-interactive — the whole row selects
+    /// the tier (`devSettingsPermissionRowIndex`); uniform `devMenuRowHeight` keeps
+    /// render == hit-test.
     private func devPermissionRow(_ tier: DevPermissionTier, index: Int) -> some View {
         let active = state.devPermissionTier == tier
         let highlighted = state.highlightedDevPermissionIndex == index || active
@@ -1450,13 +1480,13 @@ struct AreaSelectorView: View {
                 .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
                 .lineLimit(1)
             Spacer(minLength: 6)
-            // Trailing indicator. Drawn at the right inset edge in a fixed
-            // `permissionTrailingIconSize` box so it lands exactly on the
-            // `devSettingsPermissionTrailingIconRect` hover sub-rect.
+            // Per-tier safety icon, trailing-padded by (chevron + gap) so it lines
+            // up with the summary row's safety-icon column above.
             Image(systemName: unrestricted ? "exclamationmark.triangle.fill" : "checkmark.shield")
                 .font(.system(size: 12))
                 .foregroundStyle(unrestricted ? Color.vfWarningAmber : Color.vfDevAccent)
                 .frame(width: Self.permissionTrailingIconSize, height: Self.permissionTrailingIconSize)
+                .padding(.trailing, Self.devSummaryChevronWidth + Self.devSummaryTrailingGap)
         }
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
@@ -1723,43 +1753,40 @@ struct AreaSelectorView: View {
         let dev = state.isDevMode
 
         // While the dev-settings menu is open, the only tooltips are the in-menu
-        // info icons' (Permissions header + Auto-Detect toggle) — the toolbar
-        // control tooltips are suppressed (they'd collide with the open menu).
+        // icons' (the Permissions safety icon + the Auto-Detect info icon) — the
+        // toolbar control tooltips are suppressed (they'd collide with the open menu).
         if state.isDevSettingsMenuOpen {
             guard dev else { return nil }
-            // A permission row's trailing indicator is hovered → its reassurance /
-            // warning copy, anchored to the icon (multi-line variant). Fenced tiers
-            // (Ask Permission / Auto-Approve) show the git-snapshot copy; Unrestricted
-            // shows the can't-undo warning.
-            if let row = state.hoveredPermissionTrailingIndex,
-               row >= 0, row < DevPermissionTier.allCases.count {
-                let anchor = Self.devSettingsPermissionTrailingIconRect(
+            let agentCount = state.devAgentMenuItems.count
+            let modelCount = state.devModelMenuItems.count
+            let expanded = state.expandedDevSection
+            // The Permissions summary row's safety icon is hovered → the current
+            // tier's reassurance / warning copy, anchored to the icon (multi-line).
+            if state.isPermissionSafetyHovered {
+                let anchor = Self.devSettingsPermissionSafetyIconRect(
                     forSelection: rect, in: bounds,
-                    agentCount: state.devAgentMenuItems.count,
-                    modelCount: state.devModelMenuItems.count,
-                    rowIndex: row, fullScreen: fs
-                )
+                    agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fs)
+                let copy = state.devPermissionTier == .unrestricted
+                    ? Self.permissionUnrestrictedTooltip
+                    : Self.permissionGitSnapshotTooltip
+                return (copy, anchor, 240)
+            }
+            // An EXPANDED option row's safety icon is hovered → THAT tier's copy,
+            // anchored to its icon.
+            if let row = state.hoveredPermissionOptionSafety,
+               row >= 0, row < DevPermissionTier.allCases.count {
+                let anchor = Self.devSettingsPermissionOptionSafetyIconRect(
+                    forSelection: rect, in: bounds,
+                    agentCount: agentCount, modelCount: modelCount, rowIndex: row, expanded: expanded, fullScreen: fs)
                 let copy = DevPermissionTier.allCases[row] == .unrestricted
                     ? Self.permissionUnrestrictedTooltip
                     : Self.permissionGitSnapshotTooltip
                 return (copy, anchor, 240)
             }
-            if state.isPermissionInfoHovered {
-                let anchor = Self.devSettingsPermissionInfoIconRect(
-                    forSelection: rect, in: bounds,
-                    agentCount: state.devAgentMenuItems.count,
-                    modelCount: state.devModelMenuItems.count,
-                    fullScreen: fs
-                )
-                return (Self.permissionInfoTooltip, anchor, 240)
-            }
             guard state.isAutoDetectInfoHovered else { return nil }
             let anchor = Self.devSettingsAutoDetectInfoIconRect(
                 forSelection: rect, in: bounds,
-                agentCount: state.devAgentMenuItems.count,
-                modelCount: state.devModelMenuItems.count,
-                fullScreen: fs
-            )
+                agentCount: agentCount, modelCount: modelCount, expanded: expanded, fullScreen: fs)
             return (Self.autoDetectInfoTooltip, anchor, 240)
         }
 
