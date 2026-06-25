@@ -86,6 +86,12 @@ final class PreferencesStore {
         /// ⇒ wrapper ON. No UI; read at spawn time by `DevSeatbeltSandbox` (the
         /// canonical key lives there). Resettable.
         static let devSeatbeltWrapperDisabled = DevSeatbeltSandbox.wrapperDisabledDefaultsKey
+        /// §8 hidden safety valve — when `true`, the network egress filter (loopback
+        /// allowlisting proxy + Seatbelt egress lockdown) is disabled and a fenced
+        /// run keeps OPEN egress (the filesystem fence still applies). Default
+        /// `false` ⇒ filter ON. No UI; read at spawn time by `DevNetworkProxy` (the
+        /// canonical key lives there). Resettable.
+        static let devNetworkFilterDisabled = DevNetworkProxy.filterDisabledDefaultsKey
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -110,6 +116,7 @@ final class PreferencesStore {
             legacyDevReviewBeforeApply,
             devUnrestrictedWarningSuppressed,
             devSeatbeltWrapperDisabled,
+            devNetworkFilterDisabled,
         ]
     }
 
@@ -287,6 +294,15 @@ final class PreferencesStore {
         didSet { defaults.set(devSeatbeltWrapperDisabled, forKey: Keys.devSeatbeltWrapperDisabled) }
     }
 
+    /// §8 hidden safety valve — when `true`, disables the network egress filter so
+    /// a fenced run keeps open network (the filesystem fence still applies).
+    /// Default `false` (filter ON). No UI surface; exposed here only so it's
+    /// resettable and discoverable. The spawn path reads the same UserDefaults key
+    /// directly via `DevNetworkProxy.isFilterDisabled()`.
+    var devNetworkFilterDisabled: Bool {
+        didSet { defaults.set(devNetworkFilterDisabled, forKey: Keys.devNetworkFilterDisabled) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -351,6 +367,9 @@ final class PreferencesStore {
         // §5c default OFF (wrapper ON): `bool(forKey:)`'s false-for-missing means
         // the Seatbelt wrapper is enabled until a user explicitly flips this valve.
         self.devSeatbeltWrapperDisabled = defaults.bool(forKey: Keys.devSeatbeltWrapperDisabled)
+        // §8 default OFF (filter ON): same false-for-missing default — the network
+        // egress filter is enabled until a user explicitly flips this valve.
+        self.devNetworkFilterDisabled = defaults.bool(forKey: Keys.devNetworkFilterDisabled)
     }
 
     // MARK: - Reset
@@ -381,5 +400,6 @@ final class PreferencesStore {
         devPermissionTier = .askPermission
         devUnrestrictedWarningSuppressed = false
         devSeatbeltWrapperDisabled = false
+        devNetworkFilterDisabled = false
     }
 }

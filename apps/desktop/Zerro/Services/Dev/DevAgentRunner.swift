@@ -251,6 +251,10 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     /// never fire, and the continuation would never resume (run() would hang).
     nonisolated(unsafe) private var activeExecution: DevAgentProcessExecution?
 
+    /// Factory for the §8 network filter proxy. Defaults to the real one; a test can
+    /// substitute a proxy that fails to start to exercise the fail-closed path.
+    nonisolated(unsafe) var makeNetworkProxy: @Sendable () -> DevNetworkProxy = { DevNetworkProxy() }
+
     nonisolated init() {}
 
     // Matches the protocol requirement's isolation (the module defaults to
@@ -278,6 +282,12 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         }
         // Release the cap-1 flag AND drop the execution retention on exit.
         defer { queue.sync { isRunning = false; activeExecution = nil } }
+
+        // §8 network filter proxy: started below for a network-filtered fenced run
+        // and ALWAYS torn down here (run() awaits the agent to completion before
+        // returning, so this fires after the agent exits — including cancel/quit).
+        var networkProxy: DevNetworkProxy?
+        defer { networkProxy?.stop() }
 
         guard let executableURL = entry.absolutePath else {
             return .failed(.spawnFailed("agent '\(entry.id)' has no resolved executable path"))
@@ -308,6 +318,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         // own Seatbelt sandbox would fail with "Operation not permitted".
         var spawnExecutableURL = executableURL
         var spawnArguments = argv
+        var proxyURL: String?
         if tier.isFenced && !DevSeatbeltSandbox.isWrapperDisabled() {
             // Fail CLOSED: if sandbox-exec is missing (or the safety valve is off
             // but the binary vanished), abort — never silently drop the fence.
@@ -316,8 +327,32 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
                 return .failed(.spawnFailed(
                     "filesystem sandbox unavailable — \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
             }
+
+            // §8 network egress filter: start a loopback host-allowlisting proxy and
+            // lock the Seatbelt profile's egress to its port (the agent's ONLY net
+            // path). Requires the Seatbelt wrapper (above) to be active — egress is
+            // enforced by Seatbelt — so it's nested inside this block. The Phase 3
+            // valve can disable it (keeps the fs fence, opens the network).
+            var proxyPort: UInt16?
+            if !DevNetworkProxy.isFilterDisabled() {
+                let proxy = makeNetworkProxy()
+                do {
+                    let port = try proxy.start()
+                    networkProxy = proxy            // retained → torn down by the defer
+                    proxyPort = port
+                    proxyURL = "http://127.0.0.1:\(port)"
+                } catch {
+                    // Fail CLOSED: never run a fenced agent with OPEN egress.
+                    proxy.stop()
+                    Log.dev.error("Dev agent run aborted — network filter proxy failed to start: \(String(describing: error), privacy: .public)")
+                    return .failed(.spawnFailed(
+                        "network egress filter unavailable — \(String(describing: error)). Refusing to run with open network in this tier."))
+                }
+            }
+
             let wrapped = DevSeatbeltSandbox.wrap(
-                executableURL: executableURL, arguments: argv, projectDirectory: projectURL)
+                executableURL: executableURL, arguments: argv,
+                projectDirectory: projectURL, proxyPort: proxyPort)
             spawnExecutableURL = wrapped.executableURL
             spawnArguments = wrapped.arguments
         }
@@ -329,6 +364,9 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
             // and its dir is prepended to PATH.
             agentExecutableURL: executableURL,
             arguments: spawnArguments,
+            // §8: when network-filtered, the agent's egress is routed through the
+            // loopback proxy via these env vars; nil ⇒ network open.
+            proxyURL: proxyURL,
             prompt: prompt,
             deliverPromptViaStdin: deliverPromptViaStdin,
             projectURL: projectURL,
@@ -383,13 +421,15 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     /// Testing seam for the §5b env-scrub allowlist (`DevAgentProcessExecution` is
     /// private). `baseEnvironment` is injected so a test can plant a `DATABASE_URL`
     /// and assert the fenced tiers strip it while keeping PATH + the agent's auth.
+    /// `proxyURL` (§8) exercises the egress-proxy env injection.
     nonisolated static func spawnEnvironmentForTesting(
         for executableURL: URL,
         tier: DevPermissionTier,
+        proxyURL: String? = nil,
         baseEnvironment: [String: String]
     ) -> [String: String] {
         DevAgentProcessExecution.spawnEnvironment(
-            for: executableURL, tier: tier, baseEnvironment: baseEnvironment)
+            for: executableURL, tier: tier, proxyURL: proxyURL, baseEnvironment: baseEnvironment)
     }
 }
 
@@ -456,6 +496,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         executableURL: URL,
         agentExecutableURL: URL? = nil,
         arguments: [String],
+        proxyURL: String? = nil,
         prompt: String,
         deliverPromptViaStdin: Bool = true,
         projectURL: URL,
@@ -486,8 +527,9 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         // binary (`agentExecutableURL`), NOT `executableURL` — under the §5c
         // wrapper the latter is `/usr/bin/sandbox-exec`, whose basename would pick
         // the wrong auth var + PATH dir. Defaults to `executableURL` when unwrapped.
+        // §8: `proxyURL` (when set) injects the egress-proxy env vars.
         process.environment = DevAgentProcessExecution.spawnEnvironment(
-            for: agentExecutableURL ?? executableURL, tier: tier)
+            for: agentExecutableURL ?? executableURL, tier: tier, proxyURL: proxyURL)
     }
 
     nonisolated func start(completion: @escaping (DevRunResult) -> Void) {
@@ -1101,9 +1143,16 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// command has no credentials to mutate an external system. For `.unrestricted`
     /// the FULL environment is forwarded (today's behavior), PATH fixed up.
     /// `baseEnvironment` is injectable for tests; production passes the process env.
+    ///
+    /// §8 PROXY ROUTING: for a network-filtered fenced run, `proxyURL`
+    /// (`http://127.0.0.1:<port>`) is injected as the standard proxy vars so the
+    /// agent + npm route ALL egress through the Dev network filter proxy (the
+    /// Seatbelt egress rule denies every other destination). nil ⇒ no proxy vars
+    /// (network open). `.unrestricted` never receives a proxy.
     nonisolated static func spawnEnvironment(
         for executableURL: URL,
         tier: DevPermissionTier,
+        proxyURL: String? = nil,
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
         let binDir = executableURL.deletingLastPathComponent().path
@@ -1143,6 +1192,21 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             if keepExact.contains(key) || key.hasPrefix("LC_") || authKeys.contains(key) {
                 env[key] = value
             }
+        }
+
+        // §8: route ALL egress through the Dev network filter proxy. The standard
+        // proxy vars (upper + lower case) cover curl/git/the agent's HTTP client;
+        // `npm_config_*` covers npm explicitly. `NO_PROXY` is set EMPTY so nothing
+        // bypasses the filter (a bypassed host would be denied by the Seatbelt
+        // egress rule anyway, but empty NO_PROXY keeps intent unambiguous).
+        if let proxyURL, !proxyURL.isEmpty {
+            for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                        "ALL_PROXY", "all_proxy",
+                        "npm_config_proxy", "npm_config_https_proxy"] {
+                env[key] = proxyURL
+            }
+            env["NO_PROXY"] = ""
+            env["no_proxy"] = ""
         }
         return env
     }

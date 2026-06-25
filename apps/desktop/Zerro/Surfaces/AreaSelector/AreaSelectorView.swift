@@ -692,19 +692,25 @@ struct AreaSelectorView: View {
     static let devMenuWidth: CGFloat = 300
     /// A section divider + its surrounding breathing room.
     static let devMenuDividerBand: CGFloat = 13
-    /// The wrapped two-line git-reassurance line at the menu's foot.
-    static let devMenuGitLineHeight: CGFloat = 48
     /// The Model section caps at this many visible rows; beyond it the section
     /// becomes a scrollable viewport. Cursor lists ~25–30 curated models, which
     /// would otherwise push the menu off the bottom of the screen. Kept compact so
-    /// the whole panel (Agent + capped Model viewport + Permissions + Project + git
-    /// line) stays well within a typical `visibleFrame`. The Agent section stays
-    /// full height (it's only ~3 rows — no need to scroll it).
+    /// the whole panel (Agent + capped Model viewport + Permissions + Project) stays
+    /// well within a typical `visibleFrame`. The Agent section stays full height
+    /// (it's only ~3 rows — no need to scroll it).
     static let maxVisibleModelRows = 5
     /// The Permissions section's fixed row count (Ask Permission / Auto-Approve /
     /// Unrestricted) — the dev-settings menu's permission-tier picker, between
     /// Model and Project.
     static let devPermissionRowCount = DevPermissionTier.allCases.count
+    /// Size of the non-interactive trailing indicator (git-shield / ⚠) on each
+    /// permission row, and its hover sub-rect (`devSettingsPermissionTrailingIconRect`).
+    static let permissionTrailingIconSize: CGFloat = 16
+    /// Hover-tooltip copy for the fenced tiers' trailing git-shield (verbatim the
+    /// old bottom-row reassurance line).
+    static let permissionGitSnapshotTooltip = "Snapshots with git before each change — undo anything."
+    /// Hover-tooltip copy for the Unrestricted row's trailing ⚠.
+    static let permissionUnrestrictedTooltip = "Can make changes outside the git snapshot that Zerro may not be able to undo."
 
     // MARK: Auto-Detect Project toggle row (Project section)
     //
@@ -764,8 +770,6 @@ struct AreaSelectorView: View {
             + menuSectionHeaderHeight + CGFloat(devPermissionRowCount) * devMenuRowHeight   // Permissions section
             + devMenuDividerBand
             + menuSectionHeaderHeight + 2 * devMenuRowHeight                                // Project section (Auto-Detect toggle + Change…)
-            + devMenuDividerBand
-            + devMenuGitLineHeight
             + menuVPad
         return anchoredMenuFrame(under: icon, width: devMenuWidth, height: height, in: bounds)
     }
@@ -862,6 +866,37 @@ struct AreaSelectorView: View {
         let idx = Int(localY / devMenuRowHeight)
         guard idx >= 0, idx < devPermissionRowCount else { return nil }
         return idx
+    }
+
+    /// The non-interactive trailing-icon hover sub-rect inside permission row
+    /// `rowIndex` (0 = Ask Permission … 2 = Unrestricted): a `permissionTrailingIconSize`
+    /// box pinned to the row's RIGHT inset edge, vertically centered. The controller
+    /// hit-tests this on mouse-move to drive the row's custom tooltip (the glyph's
+    /// `.help` can't fire through the overlay). The x uses the SAME right-inset math
+    /// (`frame.maxX - devMenuRowHPad - size`) the renderer lays the icon out with, so
+    /// the rect and the drawn glyph stay in lockstep. It does NOT affect row
+    /// selection — clicks anywhere on the row band still pick the tier.
+    static func devSettingsPermissionTrailingIconRect(
+        forSelection rect: CGRect,
+        in bounds: CGSize,
+        agentCount: Int,
+        modelCount: Int,
+        rowIndex: Int,
+        fullScreen: Bool = false
+    ) -> CGRect {
+        let frame = devSettingsMenuFrame(forSelection: rect, in: bounds, agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen)
+        let visibleModelRows = min(modelCount, maxVisibleModelRows)
+        let rowsTop = frame.minY + menuVPad
+            + menuSectionHeaderHeight + CGFloat(agentCount) * devMenuRowHeight        // Agent
+            + devMenuDividerBand
+            + menuSectionHeaderHeight + CGFloat(visibleModelRows) * devMenuRowHeight   // Model (capped)
+            + devMenuDividerBand
+            + menuSectionHeaderHeight                                                  // Permissions header
+        let rowTop = rowsTop + CGFloat(rowIndex) * devMenuRowHeight
+        let size = permissionTrailingIconSize
+        let x = frame.maxX - devMenuRowHPad - size
+        let y = rowTop + (devMenuRowHeight - size) / 2
+        return CGRect(x: x, y: y, width: size, height: size)
     }
 
     /// The info-icon hover sub-rect inside the Permissions HEADER: immediately after
@@ -1238,15 +1273,12 @@ struct AreaSelectorView: View {
 
                     // Project section: the Auto-Detect toggle (the opt-in that
                     // requests browser permission) leads, then the folder / "Change…"
-                    // row beneath it.
+                    // row beneath it. (The git-snapshot reassurance moved to a
+                    // per-row trailing shield icon + hover tooltip on the fenced
+                    // tiers — see `devPermissionRow`.)
                     menuSectionHeader("Project")
                     devAutoDetectToggleRow
                     devProjectRow
-
-                    devMenuDivider
-
-                    // Git reassurance.
-                    devGitReassuranceRow
                 }
                 .padding(.vertical, Self.menuVPad)
             }
@@ -1390,15 +1422,18 @@ struct AreaSelectorView: View {
     }
 
     /// One Permissions-section row: green checkmark on the active tier, a tier
-    /// icon, the title. Mirrors `devAgentRow` / `devModelRow` (CleanShot style).
-    /// What each tier does is explained by the section header's info-icon tooltip;
-    /// Unrestricted additionally carries a small ⚠ caption (spec §4 — the
-    /// record-time warning dialog itself is a later phase). The row keeps the
-    /// uniform `devMenuRowHeight`, so render == the `devSettingsPermissionRowIndex`
-    /// hit-test (a two-line cell fits within the 38pt band).
+    /// icon, the title, and a non-interactive TRAILING indicator on the right —
+    /// the fenced tiers (Ask Permission / Auto-Approve) show a green git-shield
+    /// (hover: the snapshot-reassurance copy), Unrestricted shows an amber ⚠
+    /// (hover: the can't-undo warning). The whole row is one click target
+    /// (`devSettingsPermissionRowIndex`), so clicking the icon still selects the
+    /// tier; the icon only adds a hover sub-rect (`devSettingsPermissionTrailingIconRect`)
+    /// that drives the custom tooltip (the glyph's `.help` can't fire through the
+    /// hit-test-disabled overlay). Uniform `devMenuRowHeight` keeps render == hit-test.
     private func devPermissionRow(_ tier: DevPermissionTier, index: Int) -> some View {
         let active = state.devPermissionTier == tier
         let highlighted = state.highlightedDevPermissionIndex == index || active
+        let unrestricted = tier == .unrestricted
         return HStack(spacing: 8) {
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .semibold))
@@ -1410,23 +1445,18 @@ struct AreaSelectorView: View {
                 .foregroundStyle(Color.vfTextSecondary)
                 // Fixed width so the differently-sized glyphs don't shift labels.
                 .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(Self.devPermissionTitle(tier))
-                    .font(.system(size: 13, weight: active ? .semibold : .regular))
-                    .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
-                    .lineLimit(1)
-                if tier == .unrestricted {
-                    HStack(spacing: 3) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9))
-                        Text("Confirms each time you record.")
-                            .font(.system(size: 10))
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(Color.vfWarningAmber)
-                }
-            }
+            Text(Self.devPermissionTitle(tier))
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .lineLimit(1)
             Spacer(minLength: 6)
+            // Trailing indicator. Drawn at the right inset edge in a fixed
+            // `permissionTrailingIconSize` box so it lands exactly on the
+            // `devSettingsPermissionTrailingIconRect` hover sub-rect.
+            Image(systemName: unrestricted ? "exclamationmark.triangle.fill" : "checkmark.shield")
+                .font(.system(size: 12))
+                .foregroundStyle(unrestricted ? Color.vfWarningAmber : Color.vfDevAccent)
+                .frame(width: Self.permissionTrailingIconSize, height: Self.permissionTrailingIconSize)
         }
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
@@ -1532,21 +1562,6 @@ struct AreaSelectorView: View {
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var devGitReassuranceRow: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfDevAccent)
-            Text("Snapshots with git before each change — undo anything.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: Self.devMenuGitLineHeight, alignment: .center)
     }
 
     private var devMenuDivider: some View {
@@ -1712,6 +1727,23 @@ struct AreaSelectorView: View {
         // control tooltips are suppressed (they'd collide with the open menu).
         if state.isDevSettingsMenuOpen {
             guard dev else { return nil }
+            // A permission row's trailing indicator is hovered → its reassurance /
+            // warning copy, anchored to the icon (multi-line variant). Fenced tiers
+            // (Ask Permission / Auto-Approve) show the git-snapshot copy; Unrestricted
+            // shows the can't-undo warning.
+            if let row = state.hoveredPermissionTrailingIndex,
+               row >= 0, row < DevPermissionTier.allCases.count {
+                let anchor = Self.devSettingsPermissionTrailingIconRect(
+                    forSelection: rect, in: bounds,
+                    agentCount: state.devAgentMenuItems.count,
+                    modelCount: state.devModelMenuItems.count,
+                    rowIndex: row, fullScreen: fs
+                )
+                let copy = DevPermissionTier.allCases[row] == .unrestricted
+                    ? Self.permissionUnrestrictedTooltip
+                    : Self.permissionGitSnapshotTooltip
+                return (copy, anchor, 240)
+            }
             if state.isPermissionInfoHovered {
                 let anchor = Self.devSettingsPermissionInfoIconRect(
                     forSelection: rect, in: bounds,
@@ -2224,8 +2256,9 @@ private struct PulseLoginBackdrop: View {
 }
 
 /// Dev Mode with the dev-settings menu open (the Part 3 deliverable): Agent
-/// section with the green-checked Claude Code + Detected badge, Project row with
-/// the folder path + Change…, and the green git-shield reassurance line.
+/// section with the green-checked Claude Code + Detected badge, the Permissions
+/// rows with their trailing git-shield / ⚠ indicators, and the Project row with
+/// the folder path + Change….
 #Preview("Dev Mode — settings menu open") {
     ZStack {
         PulseLoginBackdrop()

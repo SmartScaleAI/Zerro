@@ -81,15 +81,21 @@ enum DevSeatbeltSandbox {
     ///
     /// argv shape:
     ///   /usr/bin/sandbox-exec  -p <profile>  <agent-abs-path>  <agent args…>
+    ///
+    /// `proxyPort` (§8 Phase 3): when non-nil, the profile ALSO locks down network
+    /// egress to that single loopback port (the Dev network filter proxy) — every
+    /// other IP destination, including a user's local DB, is denied. nil keeps
+    /// network open (Phase 2 behavior / network-filter valve off).
     nonisolated static func wrap(
         executableURL agent: URL,
         arguments: [String],
         projectDirectory: URL,
+        proxyPort: UInt16? = nil,
         home: String = FileManager.default.homeDirectoryForCurrentUser.path,
         temporaryDirectory: String? = ProcessInfo.processInfo.environment["TMPDIR"]
     ) -> WrappedInvocation {
         let prof = profile(
-            projectDirectory: projectDirectory, home: home,
+            projectDirectory: projectDirectory, proxyPort: proxyPort, home: home,
             temporaryDirectory: temporaryDirectory)
         // `-p` takes the profile as an inline STRING argument (no temp file to
         // manage / clean up). Everything after the agent path is the agent's argv.
@@ -107,11 +113,13 @@ enum DevSeatbeltSandbox {
     // MARK: - Profile
 
     /// Generate the Seatbelt profile that confines file-writes to the project
-    /// (plus temp + `/dev` + the agents'/toolchain's own state dirs). Paths are
-    /// canonicalized (realpath) and escaped. `home`/`temporaryDirectory` are
-    /// injectable for tests.
+    /// (plus temp + `/dev` + the agents'/toolchain's own state dirs) and — when
+    /// `proxyPort` is given (§8 Phase 3) — locks network egress to that single
+    /// loopback port. Paths are canonicalized (realpath) and escaped.
+    /// `home`/`temporaryDirectory`/`proxyPort` are injectable for tests.
     nonisolated static func profile(
         projectDirectory: URL,
+        proxyPort: UInt16? = nil,
         home: String = FileManager.default.homeDirectoryForCurrentUser.path,
         temporaryDirectory: String? = ProcessInfo.processInfo.environment["TMPDIR"]
     ) -> String {
@@ -154,6 +162,22 @@ enum DevSeatbeltSandbox {
             lines.append(allowWrite([
                 "\(home)/.npm", "\(home)/.cache", "\(home)/Library/Caches",
             ]))
+        }
+
+        // §8 egress lockdown (network filter ON): deny ALL outbound IP traffic
+        // EXCEPT to the loopback filter proxy's port. This is scoped to `(remote
+        // ip)`, so unix-domain sockets stay open (the agent needs them to start —
+        // mDNSResponder, logging, …); only IP egress is restricted. A user's LOCAL
+        // service on another port (e.g. a DB on 127.0.0.1:5432) is therefore also
+        // denied — the agent's only network path is THROUGH the proxy, which
+        // host-allowlists. Seatbelt's `remote ip` host must be `*` or `localhost`,
+        // so the rule is `localhost:<port>` (covers 127.0.0.1 / ::1 loopback). The
+        // agent passes hostnames to the proxy, so it needs no DNS — UDP/53 stays
+        // denied (no DNS-tunnel residual). The Zerro dev server runs OUTSIDE the
+        // sandbox, so the agent never needs localhost access to it.
+        if let proxyPort {
+            lines.append("(deny network-outbound (remote ip))")
+            lines.append("(allow network-outbound (remote ip \"localhost:\(proxyPort)\"))")
         }
 
         return lines.joined(separator: "\n") + "\n"

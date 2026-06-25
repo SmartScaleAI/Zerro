@@ -467,6 +467,19 @@ final class AreaSelectorWindowController {
                         agentCount: agentCount, modelCount: modelCount, fullScreen: fullScreen
                     )
                     state.setPermissionInfoHovered(permInfoIcon.contains(point))
+                    // A permission row's trailing indicator (git-shield / ⚠) hover →
+                    // that row's custom tooltip. Hover-only: the icon is non-interactive,
+                    // so this never affects which tier a click selects.
+                    var hoveredTrailing: Int? = nil
+                    for row in 0..<AreaSelectorView.devPermissionRowCount {
+                        let iconRect = AreaSelectorView.devSettingsPermissionTrailingIconRect(
+                            forSelection: rect, in: size,
+                            agentCount: agentCount, modelCount: modelCount,
+                            rowIndex: row, fullScreen: fullScreen
+                        )
+                        if iconRect.contains(point) { hoveredTrailing = row; break }
+                    }
+                    state.setHoveredPermissionTrailingIndex(hoveredTrailing)
                 }
             }
 

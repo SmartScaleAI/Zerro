@@ -205,9 +205,11 @@ final class AreaSelectorDevModeTests: XCTestCase {
 
     // MARK: - Auto-Detect Project toggle row (Project section)
 
-    /// The Project section is now two rows (Auto-Detect toggle + Change…), so the
-    /// menu height must reserve `header + 2 * rowHeight` for it. Pins the +1 row in
-    /// lockstep with `devSettingsMenuFrame`.
+    /// The Project section is two rows (Auto-Detect toggle + Change…), so the menu
+    /// height must reserve `header + 2 * rowHeight` for it. The Project section is
+    /// now the LAST section — the bottom git-reassurance line was removed (it moved
+    /// to a per-row trailing shield icon), so the height ends right after Project.
+    /// Pins the reconstructed height in lockstep with `devSettingsMenuFrame`.
     func testDevSettingsMenuAccountsForProjectToggleRow() {
         let agentCount = 3, modelCount = 2
         let menu = AreaSelectorView.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
@@ -219,9 +221,7 @@ final class AreaSelectorDevModeTests: XCTestCase {
             + v.devMenuDividerBand
             + v.menuSectionHeaderHeight + CGFloat(v.devPermissionRowCount) * v.devMenuRowHeight // Permissions
             + v.devMenuDividerBand
-            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                               // Project: toggle + Change…
-            + v.devMenuDividerBand
-            + v.devMenuGitLineHeight
+            + v.menuSectionHeaderHeight + 2 * v.devMenuRowHeight                               // Project: toggle + Change… (last section)
             + v.menuVPad
         XCTAssertEqual(menu.height, expected, accuracy: 0.001)
     }
@@ -336,6 +336,70 @@ final class AreaSelectorDevModeTests: XCTestCase {
         state.setPermissionInfoHovered(false)
         XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text,
                      "no tooltip while the menu is open and the icon isn't hovered")
+    }
+
+    // MARK: - Permission row trailing indicators (git-shield / ⚠)
+
+    /// Each permission row's trailing-icon hover sub-rect sits at the row's right
+    /// inset edge, vertically centered, the configured size — and still hit-tests as
+    /// that permission row (so clicking the icon selects the tier).
+    func testPermissionTrailingIconRectsAlignToRowsAndStaySelectable() {
+        let agentCount = 3, modelCount = 2
+        let v = AreaSelectorView.self
+        let frame = v.devSettingsMenuFrame(forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+        for row in 0..<v.devPermissionRowCount {
+            let icon = v.devSettingsPermissionTrailingIconRect(
+                forSelection: selection, in: bounds,
+                agentCount: agentCount, modelCount: modelCount, rowIndex: row)
+            XCTAssertEqual(icon.width, v.permissionTrailingIconSize, accuracy: 0.001)
+            XCTAssertEqual(icon.height, v.permissionTrailingIconSize, accuracy: 0.001)
+            // Right inset edge: maxX == row right edge (frame.maxX - hPad).
+            XCTAssertEqual(icon.maxX, frame.maxX - v.devMenuRowHPad, accuracy: 0.001)
+            // Vertically centered on its row (the row that hit-tests the icon center).
+            let hit = v.devSettingsPermissionRowIndex(
+                at: CGPoint(x: icon.midX, y: icon.midY),
+                forSelection: selection, in: bounds, agentCount: agentCount, modelCount: modelCount)
+            XCTAssertEqual(hit, row, "clicking the trailing icon must still select its tier (row \(row))")
+        }
+    }
+
+    /// Hovering a fenced tier's trailing icon resolves the git-snapshot copy;
+    /// hovering Unrestricted's resolves the can't-undo warning; both anchor to the
+    /// icon (multi-line variant). Not hovering resolves nothing.
+    func testPermissionTrailingTooltipResolvesPerTier() {
+        let state = AreaSelectorState()
+        state.setDevMode(true)
+        state.toggleDevSettingsMenu()
+        let view = AreaSelectorView(state: state)
+        let v = AreaSelectorView.self
+        let aCount = state.devAgentMenuItems.count, mCount = state.devModelMenuItems.count
+
+        // Row 0 (Ask Permission) + Row 1 (Auto-Approve) → git-snapshot copy.
+        for fenced in [0, 1] {
+            state.setHoveredPermissionTrailingIndex(fenced)
+            let info = view.tooltipInfo(forSelection: selection, in: bounds)
+            XCTAssertEqual(info?.text, v.permissionGitSnapshotTooltip)
+            XCTAssertNotNil(info?.maxWidth, "trailing tooltip uses the multi-line variant")
+            XCTAssertEqual(info?.anchor, v.devSettingsPermissionTrailingIconRect(
+                forSelection: selection, in: bounds, agentCount: aCount, modelCount: mCount, rowIndex: fenced))
+        }
+
+        // Row 2 (Unrestricted) → the warning copy.
+        state.setHoveredPermissionTrailingIndex(2)
+        let warn = view.tooltipInfo(forSelection: selection, in: bounds)
+        XCTAssertEqual(warn?.text, v.permissionUnrestrictedTooltip)
+        XCTAssertNotEqual(warn?.text, v.permissionGitSnapshotTooltip)
+
+        // Not hovering → nothing (menu open, no icon under the cursor).
+        state.setHoveredPermissionTrailingIndex(nil)
+        XCTAssertNil(view.tooltipInfo(forSelection: selection, in: bounds)?.text)
+    }
+
+    /// The bottom git-reassurance copy now lives ONLY as the fenced rows' trailing
+    /// tooltip — verbatim the old line — so the wording didn't silently change.
+    func testGitSnapshotCopyPreservedVerbatim() {
+        XCTAssertEqual(AreaSelectorView.permissionGitSnapshotTooltip,
+                       "Snapshots with git before each change — undo anything.")
     }
 
     // MARK: - Scrollable Model section (long lists, e.g. Cursor)

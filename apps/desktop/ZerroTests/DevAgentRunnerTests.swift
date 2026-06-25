@@ -848,6 +848,30 @@ final class DevAgentRunnerTests: XCTestCase {
             "ESCAPED", "the safety valve disables the wrapper even for a fenced tier")
     }
 
+    func testFencedRunFailsClosedWhenNetworkProxyCannotStart() async throws {
+        try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(), "needs sandbox-exec")
+        // The network filter proxy can't start → the fenced run must ABORT (never
+        // spawn with open egress). The fake agent would write a marker if it ran; it
+        // must NOT, and the result must be .spawnFailed.
+        let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: escape) }
+        let bin = try makeEscapeProbe("failclosedprobe", escapeTarget: escape)
+
+        let runner = ClaudeCodeAgentRunner()
+        runner.makeNetworkProxy = { DevNetworkProxy(simulateStartFailure: true) }
+        let result = await runner.run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .askPermission, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+
+        guard case .failed(.spawnFailed) = result else {
+            return XCTFail("expected .spawnFailed (fail-closed), got \(result)")
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: scratch.appendingPathComponent("in-repo.txt").path),
+            "the agent must NOT have run when the egress filter failed to start")
+    }
+
     // MARK: - Helpers
 
     private func parse(_ line: String) -> DevAgentEvent? {

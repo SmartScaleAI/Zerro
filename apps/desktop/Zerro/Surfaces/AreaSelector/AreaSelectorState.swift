@@ -500,6 +500,7 @@ final class AreaSelectorState {
             highlightedDevPermissionIndex = nil
             isAutoDetectInfoHovered = false
             isPermissionInfoHovered = false
+            hoveredPermissionTrailingIndex = nil
             localhostNotice = nil
         }
     }
@@ -511,6 +512,7 @@ final class AreaSelectorState {
         highlightedDevPermissionIndex = nil
         isAutoDetectInfoHovered = false
         isPermissionInfoHovered = false
+        hoveredPermissionTrailingIndex = nil
         localhostNotice = nil
     }
 
@@ -787,6 +789,17 @@ final class AreaSelectorState {
 
     func setPermissionInfoHovered(_ hovered: Bool) {
         if isPermissionInfoHovered != hovered { isPermissionInfoHovered = hovered }
+    }
+
+    /// Which permission row's trailing indicator (git-shield / ⚠) is hovered, or
+    /// nil. Drives that row's custom tooltip (the overlay is hit-test-disabled, so
+    /// `.help` never fires). Set by the controller's mouse-move hit-test; cleared
+    /// when the menu closes. Does NOT affect tier selection (the whole row is the
+    /// click target).
+    private(set) var hoveredPermissionTrailingIndex: Int? = nil
+
+    func setHoveredPermissionTrailingIndex(_ index: Int?) {
+        if hoveredPermissionTrailingIndex != index { hoveredPermissionTrailingIndex = index }
     }
 
     /// A one-time, non-blocking `.denied` note (after the user denies the
