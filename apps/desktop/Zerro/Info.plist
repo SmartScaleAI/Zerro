@@ -13,8 +13,16 @@
 	<string>phc_tW2QmWsUwgn2pAAq7ynDWTxcHiP97vG5LdQfRtXD9dAy</string>
 	<key>POSTHOG_HOST</key>
 	<string>https://us.i.posthog.com</string>
+	<!-- Managed backend base URL. Wired to the per-configuration
+	     ZERRO_FUNCTIONS_BASE_URL build setting (see apps/desktop/Config/*.xcconfig)
+	     so the Staging build talks to the staging Supabase project while the
+	     production build stays pinned to prod. Read by ManagedBackend. -->
+	<key>ZerroFunctionsBaseURL</key>
+	<string>$(ZERRO_FUNCTIONS_BASE_URL)</string>
+	<!-- Sparkle appcast. Wired to the per-configuration SU_FEED_URL build
+	     setting so each build checks its own update feed. -->
 	<key>SUFeedURL</key>
-	<string>https://getzerro.app/appcast.xml</string>
+	<string>$(SU_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>IV0J9TIWJpe/dL5A/8NvDhfmsjZatlrJA1NPnmX2xiE=</string>
 	<!-- Billing: the `zerro://` scheme LemonSqueezy bounces back to after a

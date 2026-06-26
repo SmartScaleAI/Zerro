@@ -1,0 +1,17 @@
+// Staging.xcconfig
+// Build settings for the side-by-side "Zerro Staging" app. Wired to the Staging
+// configuration of the app target (see Zerro.xcodeproj). A distinct bundle id
+// and product name let Staging install and run alongside the production Zerro;
+// the backend URL points at the staging Supabase project.
+//
+// NOTE on URLs: xcconfig treats `//` as a comment, which would swallow the
+// `https://` scheme. The `$()` between the scheme's slashes is an empty
+// variable reference — it parses without starting a comment and expands to
+// nothing, so the resolved value is a normal `https://…` URL.
+//
+// SU_FEED_URL is provisional here — finalized in the staging release step.
+
+ZERRO_FUNCTIONS_BASE_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/functions/v1
+SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml
+PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
+PRODUCT_NAME = Zerro Staging
