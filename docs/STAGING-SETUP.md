@@ -70,11 +70,21 @@ Two git branches drive everything: `staging` (→ Supabase staging branch + stag
 app) and `main` (→ production + prod app). You work in feature branches off
 `staging`.
 
-**Stage 0 — Local (fast inner loop).** `git checkout staging && git checkout -b
-feature/x`. Write Swift + migrations + functions. One command (`make dev` /
-`justfile`) boots `supabase start` + `functions serve`; a DEBUG build points at
-`127.0.0.1`. Generate migrations with `supabase db diff`, not by hand. *Nothing to
-deploy — all local.*
+**Stage 0 — Local dev against staging (no Docker).** `git checkout staging &&
+git checkout -b feature/x`. Your DEBUG build runs in Xcode pointed at the
+**staging branch** (`ZERRO_FUNCTIONS_BASE_URL =
+https://waripvlpcpwdmacpjiqc.supabase.co/functions/v1` in the scheme) — **no
+local Supabase / Docker stack.**
+- **App / Swift changes:** just Run (Cmd-R) — nothing to deploy.
+- **Backend changes** (a function or a migration): push only that change to
+  staging with one command — `supabase functions deploy <name> --project-ref
+  waripvlpcpwdmacpjiqc` or `supabase db push --project-ref waripvlpcpwdmacpjiqc`
+  — and your local app sees it immediately. Generate migrations with
+  `supabase db diff`.
+- *Trade-offs you've accepted:* a backend change needs that one deploy command
+  (vs instant locally), staging is **shared with your friend**, and dev needs a
+  network connection. You can still spin up Docker ad hoc if you ever want full
+  isolation, but the default loop is staging.
 
 **Stage 1 — Open a PR into `staging`.** *Automated:*
 - Supabase spins up an **ephemeral preview branch** for the PR — applies
@@ -176,8 +186,11 @@ App / CI:
 - [ ] Release automation: auto-tag `app-v*` on `staging → main` merge (keep the PR approval as the gate).
 - [ ] Add `staging` long-lived git branch + branch-protection (PRs required).
 
-Local DX:
-- [ ] `make dev` / `justfile` to boot the local stack + serve in one command.
+Local DX (no Docker):
+- [ ] Local DEBUG build points at staging by default (`ZERRO_FUNCTIONS_BASE_URL`
+      in the Xcode scheme) — local Supabase/Docker stack retired.
+- [ ] Seed a test license / trial into the staging DB so signed-in flows
+      (generation, billing) work, since the branch starts empty.
 
 ---
 
@@ -211,6 +224,9 @@ Local DX:
 - **AI-Agency:** ✅ pause before upgrading.
 - **Deploy workflow:** ✅ **GitHub-integrated** (Supabase integration + GitHub
   Actions) — full automation; supersedes the earlier CLI-managed choice.
+- **Local dev:** ✅ runs against the **staging branch, no local Docker** — backend
+  changes pushed with one `--project-ref` deploy command; staging doubles as the
+  shared dev + test environment.
 
 Still open:
 - **Phase 1 first, then Phase 2?** (start testing on a DEBUG build while we build
