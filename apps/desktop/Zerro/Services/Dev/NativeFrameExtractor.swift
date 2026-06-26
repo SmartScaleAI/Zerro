@@ -31,7 +31,21 @@ enum NativeFrameExtractor {
     /// Extract the source frame nearest `seconds` at NATIVE resolution (no
     /// downsampling). Tight tolerance — the anchor moment is precise, so the
     /// marker + OCR land on the exact frame the user was pointing at.
-    static func frame(atSeconds seconds: Double, from videoURL: URL) async throws -> CGImage {
+    ///
+    /// `@concurrent nonisolated` is load-bearing for off-main execution. The
+    /// target builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so an
+    /// un-annotated `static func` is `@MainActor` and runs this AVFoundation work
+    /// (the synchronous preferred-track-transform load + decode) on the main
+    /// thread — the Thread Performance Checker flags it and it can jank the UI in
+    /// production (`DevAnchorPipeline` awaits this from the main actor). Note that
+    /// `nonisolated` ALONE is NOT enough here: the target also sets
+    /// `SWIFT_APPROACHABLE_CONCURRENCY = YES`, which enables
+    /// `NonisolatedNonsendingByDefault` (SE-0461) — under it a plain
+    /// `nonisolated async` func runs on the *caller's* executor, so a MainActor
+    /// caller would keep this on main. `@concurrent` forces the body onto the
+    /// global concurrent pool regardless of caller. No call-site change (callers
+    /// already `await`).
+    @concurrent nonisolated static func frame(atSeconds seconds: Double, from videoURL: URL) async throws -> CGImage {
         let asset = AVURLAsset(url: videoURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -57,7 +71,7 @@ enum NativeFrameExtractor {
     /// exactly center after edge-clamping), so M5 places the marker + orders OCR
     /// against the true in-crop point. Used to bound OCR + marker + vision-token
     /// cost.
-    static func crop(
+    nonisolated static func crop(
         _ image: CGImage,
         around point: (x: Double, y: Double),
         cropSize: Int
@@ -87,7 +101,7 @@ enum NativeFrameExtractor {
 
     /// Encode a CGImage to JPEG bytes (for shipping a cropped native-res anchor
     /// frame to the generation call). nil on failure.
-    static func jpegData(_ image: CGImage, quality: CGFloat = 0.9) -> Data? {
+    nonisolated static func jpegData(_ image: CGImage, quality: CGFloat = 0.9) -> Data? {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else {
             return nil

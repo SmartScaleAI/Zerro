@@ -83,7 +83,16 @@ final class NativeFrameExtractorTests: XCTestCase {
     }
 
     /// Write a short solid-color H.264 video at exactly `width`×`height`.
-    private func makeSolidVideo(width: Int, height: Int) async throws -> URL {
+    ///
+    /// `@concurrent nonisolated` keeps the `AVAssetWriter` setup + per-frame
+    /// `adaptor.append(...)` off the main thread. The test target builds with
+    /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so an un-annotated helper runs
+    /// on the main actor and trips the Thread Performance Checker ("should not be
+    /// called on the main thread") on those AVFoundation calls — exactly the
+    /// warning this test was flagged for. (Plain `nonisolated` is not enough under
+    /// this target's `SWIFT_APPROACHABLE_CONCURRENCY = YES`; see the same note on
+    /// `NativeFrameExtractor.frame`.)
+    @concurrent nonisolated private func makeSolidVideo(width: Int, height: Int) async throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("native-src-\(UUID().uuidString).mov")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -120,7 +129,8 @@ final class NativeFrameExtractorTests: XCTestCase {
         return url
     }
 
-    private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
+    // `nonisolated` so the off-main `makeSolidVideo` can call it synchronously.
+    nonisolated private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
         var pb: CVPixelBuffer?
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault, width, height, kCVPixelFormatType_32ARGB,

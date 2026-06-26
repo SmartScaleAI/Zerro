@@ -485,6 +485,16 @@ final class DevAgentRunnerTests: XCTestCase {
         // The Cursor entry's contract, end-to-end through the runner: prompt rides
         // as the LAST argv element (positional `.argument`), stdin is closed empty,
         // and --force (allow-commands) + --model are threaded in order.
+        //
+        // Run under `.unrestricted` (matching the Codex `.argument` twin above).
+        // This test asserts ONLY the argv/stdin contract, which is tier-independent
+        // for this entry: `allowCommandsArgs` (`--force`) is appended at EVERY tier
+        // and `mcpDisableArgs` is empty, so `.autoApprove` and `.unrestricted`
+        // produce identical argv here. A FENCED tier would additionally spin up the
+        // real Seatbelt wrapper + network-filter proxy (sandbox-exec + a bound
+        // loopback port) inside this unit test — heavyweight, host-dependent, and
+        // not what's under test; the fenced wrap is covered by the `testFencedRun…`
+        // tests (which gate on sandbox availability and inject a fake proxy).
         let bin = try makeScript("cursorlike", """
         #!/bin/sh
         printf '%s\\n' "$@" > "$PWD/argv.txt"
@@ -500,7 +510,7 @@ final class DevAgentRunnerTests: XCTestCase {
             installed: true, absolutePath: bin, modelFlagName: "--model"
         )
         let result = await ClaudeCodeAgentRunner().run(
-            entry: e, tier: .autoApprove, prompt: "make this button bigger",
+            entry: e, tier: .unrestricted, prompt: "make this button bigger",
             projectURL: scratch, timeouts: fastTimeouts(), model: "claude-opus-4-8-high",
             onEvent: { _ in }
         )
