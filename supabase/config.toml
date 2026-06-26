@@ -90,3 +90,6 @@ verify_jwt = false
 # code (IP hashing + short retention), so the gateway gate is OFF.
 [functions.affiliate]
 verify_jwt = false
+
+[remotes.staging]
+project_id = "waripvlpcpwdmacpjiqc"
