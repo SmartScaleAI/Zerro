@@ -71,6 +71,30 @@ enum DevAgentCredentialStore: Equatable, Sendable {
     case file
 }
 
+/// HOW a fenced-tier agent's actions are confined to the project (spec §5c). Two
+/// strategies, chosen per-agent by what its auth survives — modeled EXPLICITLY
+/// rather than re-derived from `credentialStore` at the spawn site:
+///
+///  • `.zerroSeatbelt` — Zerro wraps the whole agent process in `/usr/bin/sandbox-exec`
+///    (`DevSeatbeltSandbox`) and routes egress through the §8 loopback proxy
+///    (`DevNetworkProxy`). Used by FILE-token agents (Codex `~/.codex`, Cursor
+///    `~/.cursor`), whose auth survives a sandboxed child.
+///
+///  • `.claudeNative` — do NOT sandbox-exec-wrap. Instead enable Claude Code's OWN
+///    built-in sandbox (Bash + child processes) plus permission deny/allow rules
+///    via a transient `--settings` file (`DevClaudeNativeSandbox`), leaving the
+///    main `claude` process UNSANDBOXED so its macOS-Keychain auth keeps working
+///    (no securityd denial, no prompt). Network egress is confined by the native
+///    sandbox's own allowlist (mirrors `DevNetworkAllowlist.production`), so the §8
+///    proxy is NOT used on this path. Used by Claude Code, whose Keychain auth
+///    BREAKS under sandbox-exec (see `DevAgentCredentialStore`).
+///
+/// `.unrestricted` runs are never confined either way (today's direct spawn).
+enum DevAgentConfinement: Equatable, Sendable {
+    case zerroSeatbelt
+    case claudeNative
+}
+
 /// The unattended permission posture for a run. Edits-only is the Phase 1
 /// default (design §11 ★): the agent changes files but cannot run shell
 /// commands without supervision. "Allow commands" is an opt-in for users who
@@ -134,6 +158,14 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     /// `DevAgentRunner.run`.
     let credentialStore: DevAgentCredentialStore
 
+    /// HOW this agent is confined on a fenced tier (spec §5c): `.zerroSeatbelt`
+    /// (Codex / Cursor — `sandbox-exec` + the §8 proxy) or `.claudeNative` (Claude
+    /// Code — its own built-in sandbox + permission rules via a transient
+    /// `--settings` file, so the main process stays unsandboxed and Keychain auth
+    /// survives). The spawn site (`DevAgentRunner.run`) branches on THIS, not
+    /// `credentialStore`.
+    let confinement: DevAgentConfinement
+
     /// Flags that are always passed, before the per-run permission flags.
     let baseArgs: [String]
     /// Flags appended for `.editsOnly` (files yes, shell no).
@@ -152,6 +184,14 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
     /// Absolute path to the executable (GUI PATH is stripped, so the runner
     /// spawns this directly), or nil when not installed.
     let absolutePath: URL?
+
+    /// The agent's `--version` output (first line), captured ONCE during detection
+    /// (`DevAgentBinaryResolver.versionOutput`) and cached on the entry so the
+    /// runner never re-spawns `--version` per dispatch. nil when not installed or
+    /// the probe failed/timed out. Only populated for Claude Code today — it gates
+    /// the `.claudeNative` minimum-version fence (`DevClaudeNativeSandbox`); other
+    /// agents leave it nil.
+    let detectedVersion: String?
 
     /// The flag name used to select a model (Phase 2), or nil when the agent
     /// has no model picker. Claude Code / Codex / Cursor all use `--model`; the
@@ -174,7 +214,9 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         absolutePath: URL?,
         modelFlagName: String? = nil,
         mcpDisableArgs: [String] = [],
-        credentialStore: DevAgentCredentialStore = .file
+        credentialStore: DevAgentCredentialStore = .file,
+        confinement: DevAgentConfinement = .zerroSeatbelt,
+        detectedVersion: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -182,6 +224,8 @@ struct DevAgentEntry: Identifiable, Equatable, Sendable {
         self.promptDelivery = promptDelivery
         self.outputFormat = outputFormat
         self.credentialStore = credentialStore
+        self.confinement = confinement
+        self.detectedVersion = detectedVersion
         self.baseArgs = baseArgs
         self.editsOnlyArgs = editsOnlyArgs
         self.allowCommandsArgs = allowCommandsArgs
@@ -274,9 +318,13 @@ enum DevAgentRegistry {
             // so the agent can't run commands unattended (design §11). The git
             // checkpoint is the containment for the edits it IS allowed to make.
             editsOnlyArgs: ["--permission-mode", "acceptEdits", "--disallowedTools", "Bash"],
-            // Every tier runs commands enabled — `bypassPermissions` won't hang
-            // headless and lets the shell run; the Zerro fences (no-MCP + env
-            // scrub + future wrapper) provide the containment (spec §6).
+            // The allow-commands base posture. `.unrestricted` uses this as-is
+            // (`bypassPermissions` won't hang headless and lets the shell run). The
+            // FENCED tiers do NOT: on the `.claudeNative` path the runner STRIPS
+            // this `--permission-mode bypassPermissions` and substitutes
+            // `--permission-mode dontAsk` + the native-sandbox `--settings`
+            // (`DevClaudeNativeSandbox.arguments`) — bypass would disable the
+            // permission rules the fence now relies on (spec §6).
             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
             installed: path != nil,
             absolutePath: path,
@@ -301,10 +349,21 @@ enum DevAgentRegistry {
             // child under sandbox-exec is denied securityd Keychain access, leaving
             // claude with no token → its own request 401s ("Failed to
             // authenticate"). The Seatbelt profile can't fix it (securityd policy,
-            // not a file rule — live-verified). The fenced tiers therefore run
-            // Claude UNWRAPPED, with §5a + §5b + the git checkpoint as containment
-            // (spec §5c "changes are tracked and reversible"). See `DevAgentRunner`.
-            credentialStore: .keychain
+            // not a file rule — live-verified). So Claude is NOT sandbox-exec-wrapped
+            // (`confinement: .claudeNative`). See `DevAgentRunner`.
+            credentialStore: .keychain,
+            // §5c via Claude Code's OWN built-in sandbox + permission rules (a
+            // transient `--settings` file), NOT Zerro's sandbox-exec wrapper: the
+            // built-in sandbox confines the Bash tool + children while the main
+            // process stays unsandboxed, so Keychain auth works with no prompt.
+            // Edit/Write (main process) are fenced by permission rules instead. See
+            // `DevClaudeNativeSandbox` + `DevAgentRunner.run`.
+            confinement: .claudeNative,
+            // Captured ONCE here (this runs off-main inside `DevAgentDetection`'s
+            // warm) and cached on the entry, so the runner's minimum-version gate
+            // never spawns `--version` per dispatch. nil ⇒ not installed / probe
+            // failed ⇒ the gate degrades Claude to unwrapped (no hard failure).
+            detectedVersion: path.flatMap { DevAgentBinaryResolver.versionOutput(forName: "claude", at: $0) }
         )
     }
 
@@ -362,7 +421,10 @@ enum DevAgentRegistry {
             // Codex reads its token from `~/.codex/auth.json` (a file), so the §5c
             // Seatbelt wrapper is compatible — verified a fenced `codex exec` under
             // `sandbox-exec` still authenticates. Codex keeps the wrapper.
-            credentialStore: .file
+            credentialStore: .file,
+            // File-token auth survives sandbox-exec, so Codex keeps Zerro's wrapper
+            // (+ the §8 egress proxy) — unchanged by the Claude native-sandbox work.
+            confinement: .zerroSeatbelt
         )
     }
 
@@ -456,7 +518,10 @@ enum DevAgentRegistry {
             // wrapper is compatible (live-verified: a fenced Cursor run reads its
             // token and authenticates under `sandbox-exec`). Cursor keeps the
             // wrapper. (Contrast Claude Code's Keychain auth, which does not.)
-            credentialStore: .file
+            credentialStore: .file,
+            // File-token auth survives sandbox-exec, so Cursor keeps Zerro's wrapper
+            // (+ the §8 egress proxy) — unchanged by the Claude native-sandbox work.
+            confinement: .zerroSeatbelt
         )
     }
 }
