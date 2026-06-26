@@ -151,3 +151,34 @@ jobs:
       # (deno test auto-discovers *_test.ts, so no explicit file list is needed.)
       - name: Run edge-function tests
         run: deno test --allow-env --allow-read
+
+  # ---------------------------------------------------------------------------
+  # Aggregate gate. THIS is the single job to mark as the required status check
+  # in branch protection — never swift-tests / edge-tests directly. Because
+  # those two are path-gated, a PR that doesn't touch apps/desktop (or
+  # supabase/functions) leaves the corresponding job `skipped`; a `skipped`
+  # required check never resolves and would block the PR forever. This job
+  # always runs (`if: always()`) and treats `skipped` as OK, so it goes green on
+  # such PRs — while still failing if a job that DID run failed or was cancelled.
+  ci-passed:
+    needs: [swift-tests, edge-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs passed (skipped is OK)
+        run: |
+          set -euo pipefail
+          swift='${{ needs.swift-tests.result }}'
+          edge='${{ needs.edge-tests.result }}'
+          echo "swift-tests: $swift"
+          echo "edge-tests:  $edge"
+          # A path-gated job that didn't run is `skipped` — that's fine. Anything
+          # else that isn't a clean `success` (i.e. failure or cancelled) fails
+          # the gate.
+          for r in "$swift" "$edge"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;
+            esac
+          done
+          echo "All required CI jobs passed (or were correctly skipped)."
