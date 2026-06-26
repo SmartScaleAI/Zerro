@@ -94,3 +94,5 @@ verify_jwt = false
 
 [remotes.staging]
 project_id = "waripvlpcpwdmacpjiqc"
+
+# staging auto-deploy test
