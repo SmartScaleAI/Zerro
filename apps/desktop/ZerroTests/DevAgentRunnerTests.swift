@@ -886,30 +886,29 @@ final class DevAgentRunnerTests: XCTestCase {
             "ESCAPED", "the safety valve disables the wrapper even for a fenced tier")
     }
 
-    func testFencedKeychainAgentIsNotWrappedSoItCanWriteOutsideProject() async throws {
-        // The Keychain carve-out (the 401 fix): an agent that authenticates via the
-        // macOS Keychain (`credentialStore: .keychain` — Claude Code) must spawn
-        // DIRECTLY even on a FENCED tier, because under sandbox-exec a GUI-spawned
-        // child is denied securityd Keychain access (→ the agent's own 401). Proven
-        // by the SAME escape probe writing OUTSIDE the project SUCCEEDING (ESCAPED)
-        // — the OS fence is absent — the mirror of a `.file` agent's DENIED.
+    func testFencedClaudeNativeAgentIsNotSeatbeltWrappedSoBashCanWriteOutside() async throws {
+        // `.claudeNative` confinement (Claude Code, the 401 fix): the runner must NOT
+        // sandbox-exec-wrap it even on a FENCED tier — under sandbox-exec a GUI-spawned
+        // child is denied securityd Keychain access (→ the agent's own 401). The REAL
+        // containment for Bash is Claude Code's OWN built-in sandbox, configured via
+        // the injected `--settings` file, which a fake shell "agent" doesn't honor —
+        // so here the escape probe WRITES OUTSIDE (ESCAPED), proving ONLY that Zerro's
+        // sandbox-exec wrapper is absent (the native sandbox's real OS enforcement is
+        // covered by live validation, not this unit). The mirror of a `.zerroSeatbelt`
+        // agent's DENIED.
         //
-        // The valve is PINNED OFF (wrapper ON) so ESCAPED is attributable SOLELY to
-        // the credentialStore clause: an unwrapped run could also escape because the
-        // valve is set or the tier isn't fenced — pinning rules both out, so the
-        // test would FAIL if the `credentialStore != .keychain` clause were removed
-        // (a file agent here would be wrapped → DENIED). Without this pin a value
-        // left in UserDefaults.standard on the machine would let it pass for the
-        // wrong reason. No sandbox-exec ⇒ no XCTSkip; §8 proxy block skipped ⇒ no net.
+        // The Seatbelt valve is PINNED OFF (wrapper ON) so ESCAPED is attributable
+        // SOLELY to `.claudeNative`: a `.zerroSeatbelt` agent here WOULD be wrapped →
+        // DENIED, so the test FAILS if Claude's confinement regressed to .zerroSeatbelt.
         try await withWrapperValve(disabled: false) {
             try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(),
-                              "needs sandbox-exec so a .file agent WOULD be wrapped — the contrast under test")
+                              "needs sandbox-exec so a .zerroSeatbelt agent WOULD be wrapped — the contrast under test")
             let escape = "/private/var/tmp/zerro-sb-escape-\(UUID().uuidString)"
             defer { try? FileManager.default.removeItem(atPath: escape) }
-            let bin = try makeEscapeProbe("keychainprobe", escapeTarget: escape)
+            let bin = try makeEscapeProbe("claudenativeprobe", escapeTarget: escape)
 
             let result = await ClaudeCodeAgentRunner().run(
-                entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative),
                 tier: .askPermission, prompt: "go", projectURL: scratch,
                 timeouts: fastTimeouts(), onEvent: { _ in })
 
@@ -918,57 +917,54 @@ final class DevAgentRunnerTests: XCTestCase {
                 try String(contentsOf: scratch.appendingPathComponent("result.txt"), encoding: .utf8)
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                 "ESCAPED",
-                "a fenced Keychain-auth agent must NOT be wrapped (else securityd denies its Keychain → 401)")
+                "a .claudeNative agent must NOT be sandbox-exec-wrapped (else securityd denies its Keychain → 401)")
             XCTAssertTrue(FileManager.default.fileExists(atPath: escape),
-                          "the unwrapped Keychain run actually created the outside file")
+                          "the unwrapped .claudeNative run created the outside file (real fence is Claude's native sandbox)")
         }
     }
 
-    func testFencedKeychainAgentSkipsProxySoBrokenProxyDoesNotFailClosed() async throws {
-        // The genuinely-new behavior of the carve-out: the §8 network proxy is nested
-        // inside the wrapper block, so a Keychain agent SKIPS it entirely. A proxy
-        // that CAN'T start must therefore NOT fail the run closed (the run succeeds),
-        // the mirror of testFencedRunFailsClosedWhenNetworkProxyCannotStart for a
-        // .file agent. Valve PINNED OFF so success is attributable to the keychain
-        // clause: with the clause removed, this fenced run WOULD enter the block,
-        // hit the simulated proxy failure, and return .spawnFailed → the test fails.
-        try await withWrapperValve(disabled: false) {
-            let bin = try makeScript("keychainnoproxy", """
-            #!/bin/sh
-            echo ran > "$PWD/in-repo.txt"
-            echo '{"type":"result"}'
-            exit 0
-            """)
-            let runner = ClaudeCodeAgentRunner()
-            runner.makeNetworkProxy = { DevNetworkProxy(simulateStartFailure: true) }
-            let result = await runner.run(
-                entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
-                tier: .askPermission, prompt: "go", projectURL: scratch,
-                timeouts: fastTimeouts(), onEvent: { _ in })
+    func testFencedClaudeNativeAgentSkipsProxySoBrokenProxyDoesNotFailClosed() async throws {
+        // `.claudeNative` never enters the §8-proxy block (that's the .zerroSeatbelt
+        // branch), so a proxy that CAN'T start must NOT fail the run closed — the
+        // mirror of testFencedRunFailsClosedWhenNetworkProxyCannotStart for a
+        // .zerroSeatbelt agent. (Claude's egress is confined by its native sandbox's
+        // own allowlist, not the loopback proxy.) The makeNetworkProxy factory must
+        // never even be invoked here.
+        let bin = try makeScript("claudenativenoproxy", """
+        #!/bin/sh
+        echo ran > "$PWD/in-repo.txt"
+        echo '{"type":"result"}'
+        exit 0
+        """)
+        let runner = ClaudeCodeAgentRunner()
+        runner.makeNetworkProxy = { DevNetworkProxy(simulateStartFailure: true) }
+        let result = await runner.run(
+            entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative),
+            tier: .askPermission, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
 
-            XCTAssertEqual(result, .succeeded(summary: nil),
-                           "a Keychain agent must skip the proxy, so a broken proxy can't fail it closed")
-            XCTAssertTrue(
-                FileManager.default.fileExists(atPath: scratch.appendingPathComponent("in-repo.txt").path),
-                "the Keychain agent should have run despite the simulated proxy-start failure")
-        }
+        XCTAssertEqual(result, .succeeded(summary: nil),
+                       "a .claudeNative agent must skip the proxy, so a broken proxy can't fail it closed")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: scratch.appendingPathComponent("in-repo.txt").path),
+            "the .claudeNative agent should have run despite the simulated proxy-start failure")
     }
 
-    func testFencedKeychainAgentStillGetsScrubbedEnvThroughRun() async throws {
-        // §5b containment must hold on the UNWRAPPED keychain path: run() applies the
-        // env-scrub independent of the wrapper (spawnEnvironment is keyed on
-        // tier.isFenced, not wrapInSeatbelt), so a fenced .keychain agent still
-        // receives the allowlist — NOT the full environment. Detected via an
-        // xctest-injected var the §5b allowlist does NOT keep: its ABSENCE in the
-        // spawned env proves the scrub ran through run() (a future refactor that
-        // gated the scrub on the wrapper would leak it → this fails). Skipped if the
-        // host env carries no such non-allowlisted var to detect a leak with.
+    func testFencedClaudeNativeAgentStillGetsScrubbedEnvThroughRun() async throws {
+        // §5b containment must hold on the `.claudeNative` path: run() applies the
+        // env-scrub independent of the confinement mode (spawnEnvironment is keyed on
+        // tier.isFenced), so a fenced .claudeNative agent still receives the
+        // allowlist — NOT the full environment. Detected via an xctest-injected var
+        // the §5b allowlist does NOT keep: its ABSENCE in the spawned env proves the
+        // scrub ran through run() (a future refactor that gated the scrub on the
+        // wrapper would leak it → this fails). Skipped if the host env carries no
+        // such non-allowlisted var to detect a leak with.
         let leakKey = "XCTestConfigurationFilePath"
         try XCTSkipUnless(ProcessInfo.processInfo.environment[leakKey] != nil,
                           "needs an xctest-injected non-allowlisted var to detect a scrub leak")
-        let bin = try makeEnvDumpProbe("keychainenvprobe")
+        let bin = try makeEnvDumpProbe("claudenativeenvprobe")
         let result = await ClaudeCodeAgentRunner().run(
-            entry: entry(path: bin, format: .streamJSON, credentialStore: .keychain),
+            entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative),
             tier: .askPermission, prompt: "go", projectURL: scratch,
             timeouts: fastTimeouts(), onEvent: { _ in })
 
@@ -1010,17 +1006,251 @@ final class DevAgentRunnerTests: XCTestCase {
         ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(line)
     }
 
+    // MARK: - Claude native sandbox (.claudeNative confinement)
+
+    /// A fake Claude agent that records its full argv to `argv.txt` (one per line —
+    /// empty args preserved via the trailing-newline convention) and copies the
+    /// `--settings` file's CONTENT to `captured-settings.json` in its cwd (proving
+    /// the file existed during the run), writes an in-repo marker, and exits `code`.
+    private func makeClaudeSettingsProbe(_ name: String, exit code: Int = 0) throws -> URL {
+        try makeScript(name, """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$PWD/argv.txt"
+        prev=""
+        for a in "$@"; do
+          if [ "$prev" = "--settings" ]; then cp "$a" "$PWD/captured-settings.json"; fi
+          prev="$a"
+        done
+        echo ran > "$PWD/in-repo.txt"
+        echo '{"type":"result"}'
+        exit \(code)
+        """)
+    }
+
+    /// Read the argv the probe recorded, preserving an empty argument (the
+    /// `--setting-sources ""` value) and dropping only the trailing-newline blank.
+    private func readArgv(_ dir: URL) throws -> [String] {
+        var lines = try String(contentsOf: dir.appendingPathComponent("argv.txt"), encoding: .utf8)
+            .components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        return lines
+    }
+
+    /// The value after `--settings` in a recorded argv (the transient file path).
+    private func settingsPath(in argv: [String]) -> String? {
+        guard let i = argv.firstIndex(of: "--settings"), i + 1 < argv.count else { return nil }
+        return argv[i + 1]
+    }
+
+    /// Pin the `.claudeNative` valve for `body`, restoring `UserDefaults.standard`
+    /// after (mirrors `withWrapperValve`).
+    private func withClaudeNativeValve(disabled: Bool, _ body: () async throws -> Void) async rethrows {
+        let key = DevClaudeNativeSandbox.disabledDefaultsKey
+        let prior = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(disabled, forKey: key)
+        defer {
+            if let prior { UserDefaults.standard.set(prior, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        try await body()
+    }
+
+    func testClaudeNativeFencedRunInjectsSettingsAndStripsBypass() async throws {
+        // The core of the native-sandbox path: a fenced `.claudeNative` run STRIPS the
+        // registry's `bypassPermissions`, substitutes `--permission-mode dontAsk`,
+        // loads NO user/project/local settings (`--setting-sources ""`), and points
+        // `--settings` at a transient file whose content enables the native sandbox +
+        // permission fence. That file is deleted after the run (success path).
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativeargv")
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"]),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil))
+
+            let argv = try readArgv(scratch)
+            XCTAssertFalse(argv.contains("bypassPermissions"), "fenced .claudeNative must strip bypassPermissions")
+            let pmIdx = try XCTUnwrap(argv.firstIndex(of: "--permission-mode"))
+            XCTAssertEqual(argv[pmIdx + 1], "dontAsk", "must run in dontAsk")
+            let ssIdx = try XCTUnwrap(argv.firstIndex(of: "--setting-sources"))
+            XCTAssertEqual(argv[ssIdx + 1], "", "--setting-sources value must be empty (load none)")
+            let path = try XCTUnwrap(settingsPath(in: argv))
+            XCTAssertTrue(path.hasSuffix(".json"))
+
+            // The settings file existed during the run (the probe copied it)…
+            let captured = try String(
+                contentsOf: scratch.appendingPathComponent("captured-settings.json"), encoding: .utf8)
+            let json = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: Data(captured.utf8)) as? [String: Any])
+            let sandbox = try XCTUnwrap(json["sandbox"] as? [String: Any])
+            XCTAssertEqual(sandbox["enabled"] as? Bool, true)
+            XCTAssertEqual(sandbox["failIfUnavailable"] as? Bool, true)
+            XCTAssertEqual(sandbox["allowUnsandboxedCommands"] as? Bool, false)
+            let net = try XCTUnwrap(sandbox["network"] as? [String: Any])
+            XCTAssertEqual(net["allowLocalBinding"] as? Bool, true)
+            let domains = try XCTUnwrap(net["allowedDomains"] as? [String])
+            XCTAssertTrue(domains.contains("anthropic.com"))
+            XCTAssertTrue(domains.contains("*.npmjs.org"), "production allowlist + subdomain wildcard")
+            let perms = try XCTUnwrap(json["permissions"] as? [String: Any])
+            XCTAssertEqual(perms["defaultMode"] as? String, "dontAsk")
+            let allow = try XCTUnwrap(perms["allow"] as? [String])
+            XCTAssertTrue(allow.contains("Bash"))
+            XCTAssertTrue(allow.contains { $0.hasPrefix("Edit(//") && $0.hasSuffix("/**)") },
+                          "in-repo Edit is allow-scoped with the //-absolute form")
+            let deny = try XCTUnwrap(perms["deny"] as? [String])
+            XCTAssertTrue(deny.contains("Read(~/.ssh/**)"), "sensitive-path Read deny")
+
+            // …and was deleted after the run (the defer cleanup).
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path),
+                           "the transient --settings file must be deleted after a successful run")
+        }
+    }
+
+    func testClaudeNativeSettingsFileDeletedOnFailure() async throws {
+        // Cleanup must fire on EVERY exit path — here a non-zero exit.
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativefail", exit: 1)
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            guard case .failed = result else { return XCTFail("expected .failed, got \(result)") }
+            let path = try XCTUnwrap(settingsPath(in: try readArgv(scratch)))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path),
+                           "the transient --settings file must be deleted even when the run fails")
+        }
+    }
+
+    func testClaudeNativeDegradesToUnwrappedWhenSettingsBuildFails() async throws {
+        // GRACEFUL DEGRADE: a settings-build/write failure must fall back to today's
+        // unwrapped Claude — the run still succeeds, no --settings is injected, and
+        // the base bypassPermissions posture is left intact (never a 401/crash/hang).
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativedegrade")
+            let runner = ClaudeCodeAgentRunner()
+            struct Boom: Error {}
+            runner.makeClaudeNativeSettingsURL = { _ in throw Boom() }
+            let result = await runner.run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"]),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil), "settings-build failure must degrade, not fail")
+            let argv = try readArgv(scratch)
+            XCTAssertFalse(argv.contains("--settings"), "degraded run must not inject --settings")
+            XCTAssertTrue(argv.contains("bypassPermissions"), "degraded run keeps today's unwrapped posture")
+        }
+    }
+
+    func testClaudeNativeValveDisablesNativeSandboxSoRunIsUnwrapped() async throws {
+        // The hidden safety valve: with it set, a fenced .claudeNative run spawns
+        // directly (no --settings) — the escape hatch for a bad settings build.
+        try await withClaudeNativeValve(disabled: true) {
+            let bin = try makeClaudeSettingsProbe("claudenativevalve")
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"]),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil))
+            let argv = try readArgv(scratch)
+            XCTAssertFalse(argv.contains("--settings"), "valve disabled ⇒ native sandbox off ⇒ no --settings")
+            XCTAssertTrue(argv.contains("bypassPermissions"), "valve disabled ⇒ unwrapped Claude")
+        }
+    }
+
+    func testClaudeNativeUnrestrictedTierIsNotConfined() async throws {
+        // `.unrestricted` is never fenced, so even a .claudeNative agent spawns
+        // directly with no --settings (today's behavior).
+        let bin = try makeClaudeSettingsProbe("claudenativeunrestricted")
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                         allowCommandsArgs: ["--permission-mode", "bypassPermissions"]),
+            tier: .unrestricted, prompt: "go", projectURL: scratch,
+            timeouts: fastTimeouts(), onEvent: { _ in })
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        let argv = try readArgv(scratch)
+        XCTAssertFalse(argv.contains("--settings"), "unrestricted ⇒ no native sandbox")
+        XCTAssertTrue(argv.contains("bypassPermissions"), "unrestricted keeps the base posture")
+    }
+
+    // MARK: - Claude native sandbox — minimum-version gate
+
+    func testClaudeNativeAtMinimumVersionAppliesNativeSettings() async throws {
+        // Boundary: a version EQUAL to the minimum is supported → native flags applied.
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativeminver")
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
+                             detectedVersion: DevClaudeNativeSandbox.minimumSupportedVersionString + " (Claude Code)"),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil))
+            let argv = try readArgv(scratch)
+            XCTAssertTrue(argv.contains("--settings"), "version == min ⇒ native settings applied")
+            XCTAssertTrue(argv.contains("--setting-sources"))
+            XCTAssertFalse(argv.contains("bypassPermissions"))
+        }
+    }
+
+    func testClaudeNativeBelowMinimumVersionRunsUnwrapped() async throws {
+        // An OLDER Claude (below the floor) would reject our flags → degrade to
+        // unwrapped (no --settings, base posture intact), and the run still succeeds.
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativeoldver")
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
+                             detectedVersion: "2.1.0 (Claude Code)"),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil), "old version must degrade, not fail")
+            let argv = try readArgv(scratch)
+            XCTAssertFalse(argv.contains("--settings"), "below-min ⇒ no native settings")
+            XCTAssertFalse(argv.contains("--setting-sources"))
+            XCTAssertTrue(argv.contains("bypassPermissions"), "below-min ⇒ unwrapped Claude")
+        }
+    }
+
+    func testClaudeNativeUndetectableVersionRunsUnwrapped() async throws {
+        // Version unknown (probe failed / unparseable) → degrade to unwrapped, no failure.
+        try await withClaudeNativeValve(disabled: false) {
+            let bin = try makeClaudeSettingsProbe("claudenativenover")
+            let result = await ClaudeCodeAgentRunner().run(
+                entry: entry(path: bin, format: .streamJSON, confinement: .claudeNative,
+                             allowCommandsArgs: ["--permission-mode", "bypassPermissions"],
+                             detectedVersion: nil),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: fastTimeouts(), onEvent: { _ in })
+            XCTAssertEqual(result, .succeeded(summary: nil), "undetectable version must degrade, not fail")
+            let argv = try readArgv(scratch)
+            XCTAssertFalse(argv.contains("--settings"), "undetectable ⇒ no native settings")
+            XCTAssertTrue(argv.contains("bypassPermissions"), "undetectable ⇒ unwrapped Claude")
+        }
+    }
+
     private func fastTimeouts() -> DevRunTimeouts {
         DevRunTimeouts(stall: 30, killGrace: 1)
     }
 
     private func entry(path: URL, format: DevAgentOutputFormat,
-                       credentialStore: DevAgentCredentialStore = .file) -> DevAgentEntry {
+                       credentialStore: DevAgentCredentialStore = .file,
+                       confinement: DevAgentConfinement = .zerroSeatbelt,
+                       allowCommandsArgs: [String] = [],
+                       // Defaults to a clearly-supported version so `.claudeNative`
+                       // tests exercise the native path; the version-gate tests pass
+                       // an explicit below-min / nil value.
+                       detectedVersion: String? = "9999.0.0") -> DevAgentEntry {
         DevAgentEntry(
             id: "fake", displayName: "Fake", executableName: path.lastPathComponent,
             promptDelivery: .stdin, outputFormat: format,
-            baseArgs: [], editsOnlyArgs: [], allowCommandsArgs: [],
-            installed: true, absolutePath: path, credentialStore: credentialStore
+            baseArgs: [], editsOnlyArgs: [], allowCommandsArgs: allowCommandsArgs,
+            installed: true, absolutePath: path,
+            credentialStore: credentialStore, confinement: confinement,
+            detectedVersion: detectedVersion
         )
     }
 

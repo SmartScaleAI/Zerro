@@ -255,6 +255,14 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
     /// substitute a proxy that fails to start to exercise the fail-closed path.
     nonisolated(unsafe) var makeNetworkProxy: @Sendable () -> DevNetworkProxy = { DevNetworkProxy() }
 
+    /// Builds + writes the transient `--settings` file for a `.claudeNative` fenced
+    /// spawn, returning its URL (the runner appends `--settings <path>` and deletes
+    /// the file in a defer). Defaults to the real builder; a test can substitute one
+    /// that throws to exercise the graceful-degrade-to-unwrapped path.
+    nonisolated(unsafe) var makeClaudeNativeSettingsURL: @Sendable (_ projectURL: URL) throws -> URL = {
+        try DevClaudeNativeSandbox.writeTransientSettings(projectDirectory: $0)
+    }
+
     nonisolated init() {}
 
     // Matches the protocol requirement's isolation (the module defaults to
@@ -289,6 +297,14 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         var networkProxy: DevNetworkProxy?
         defer { networkProxy?.stop() }
 
+        // §5c (.claudeNative): the transient `--settings` file written below for a
+        // fenced Claude run. ALWAYS deleted here — run() awaits the agent to
+        // completion before returning, so this fires after the process exits on
+        // EVERY exit path (success, non-zero exit, spawnFailed, cancel, quit). Set
+        // only after a successful write, so it's a no-op on the other paths.
+        var settingsFileURL: URL?
+        defer { if let settingsFileURL { try? FileManager.default.removeItem(at: settingsFileURL) } }
+
         guard let executableURL = entry.absolutePath else {
             return .failed(.spawnFailed("agent '\(entry.id)' has no resolved executable path"))
         }
@@ -303,83 +319,112 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
             argv.append(prompt)
         }
 
-        // §5c filesystem confinement: the FENCED tiers run the agent under a
-        // Zerro-owned Seatbelt profile (`sandbox-exec`) that physically blocks
-        // file-writes outside the project dir; `.unrestricted` spawns the agent
-        // DIRECTLY (today's behavior), no wrapper. Everything else (cwd = project,
-        // the §5b scrubbed env keyed on the REAL agent, the stdin prompt + close)
-        // is identical either way — sandbox-exec exec's into the agent in the same
-        // PID, inheriting stdin/stdout/stderr, so stream-json parsing is unchanged.
-        //
-        // NO NESTING (spec §10): Seatbelt sandboxes can't nest, so this wrapper
-        // REQUIRES each agent's own native sandbox to be OFF — which the fenced
-        // tiers already guarantee (Claude: bypassPermissions/none; Codex:
-        // danger-full-access; Cursor: --force). Pairing the wrapper with an agent's
-        // own Seatbelt sandbox would fail with "Operation not permitted".
-        //
-        // KEYCHAIN CARVE-OUT: an agent that authenticates via the macOS Keychain
-        // (`credentialStore == .keychain` — Claude Code) is NOT wrapped. When Zerro
-        // (a GUI app) spawns the agent under sandbox-exec, securityd denies the
-        // sandboxed child access to the login-Keychain item, so the agent gets no
-        // token and its OWN request 401s ("Failed to authenticate"). The Seatbelt
-        // profile cannot fix this (it's a securityd ACL policy, not a file-write
-        // rule — live-verified: every filesystem/env variation of the profile still
-        // reads the Keychain fine from a shell; only the GUI-app sandbox spawn trips
-        // it). For that agent, containment falls back to the spec-sanctioned §5c
-        // posture "changes are tracked and reversible": §5a no-MCP + §5b env-scrub
-        // (both applied independently of the wrapper — see `arguments(tier:)` and
-        // `spawnEnvironment`) + the git checkpoint. File-token agents (Codex
-        // ~/.codex, Cursor ~/.cursor) read auth off disk, which the sandbox permits,
-        // so they KEEP the wrapper + its §8 egress filter.
-        //
-        // §8 PROXY on the unwrapped path: the network egress filter is SKIPPED for
-        // the Keychain path (it's nested in this block). Its enforcement REQUIRES
-        // the Seatbelt egress rule to force traffic through the proxy — an env-var
-        // proxy alone is advisory/bypassable — so without the wrapper it adds no
-        // real containment and only risks the auth path. The Keychain path runs with
-        // OPEN network (the 1.4.13 posture); §5a + §5b remain the egress safeguard.
+        // §5c CONFINEMENT — fenced tiers only; `.unrestricted` spawns the agent
+        // DIRECTLY (today's behavior). Two strategies, chosen by `entry.confinement`
+        // (NOT re-derived from `credentialStore` here). Everything else (cwd =
+        // project, the §5b scrubbed env keyed on the REAL agent, the stdin prompt +
+        // close) is identical across paths, so stream-json parsing is unchanged.
         var spawnExecutableURL = executableURL
         var spawnArguments = argv
         var proxyURL: String?
-        let wrapInSeatbelt = tier.isFenced
-            && entry.credentialStore != .keychain
-            && !DevSeatbeltSandbox.isWrapperDisabled()
-        if wrapInSeatbelt {
-            // Fail CLOSED: if sandbox-exec is missing (or the safety valve is off
-            // but the binary vanished), abort — never silently drop the fence.
-            guard DevSeatbeltSandbox.isAvailable() else {
-                Log.dev.error("Dev agent run aborted — \(DevSeatbeltSandbox.sandboxExecPath, privacy: .public) unavailable; refusing to run a fenced-tier agent unsandboxed")
-                return .failed(.spawnFailed(
-                    "filesystem sandbox unavailable — \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
+
+        switch entry.confinement {
+        // ── Codex / Cursor: Zerro's sandbox-exec wrapper + §8 egress proxy ──
+        // File-token auth survives a sandboxed child, so the whole process is wrapped.
+        // NO NESTING (spec §10): Seatbelt sandboxes can't nest, so this REQUIRES the
+        // agent's own native sandbox OFF — the fenced CLI mapping guarantees it
+        // (Codex: danger-full-access; Cursor: --force). FAIL CLOSED if the sandbox or
+        // proxy is unavailable — never run a fenced agent unsandboxed / open-egress.
+        case .zerroSeatbelt:
+            let wrapInSeatbelt = tier.isFenced && !DevSeatbeltSandbox.isWrapperDisabled()
+            if wrapInSeatbelt {
+                guard DevSeatbeltSandbox.isAvailable() else {
+                    Log.dev.error("Dev agent run aborted — \(DevSeatbeltSandbox.sandboxExecPath, privacy: .public) unavailable; refusing to run a fenced-tier agent unsandboxed")
+                    return .failed(.spawnFailed(
+                        "filesystem sandbox unavailable — \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
+                }
+
+                // §8 network egress filter: start a loopback host-allowlisting proxy
+                // and lock the Seatbelt profile's egress to its port (the agent's ONLY
+                // net path). Requires the Seatbelt wrapper — egress is enforced by
+                // Seatbelt — so it's nested here. The valve can disable it (keeps the
+                // fs fence, opens the network).
+                var proxyPort: UInt16?
+                if !DevNetworkProxy.isFilterDisabled() {
+                    let proxy = makeNetworkProxy()
+                    do {
+                        let port = try proxy.start()
+                        networkProxy = proxy            // retained → torn down by the defer
+                        proxyPort = port
+                        proxyURL = "http://127.0.0.1:\(port)"
+                    } catch {
+                        // Fail CLOSED: never run a fenced agent with OPEN egress.
+                        proxy.stop()
+                        Log.dev.error("Dev agent run aborted — network filter proxy failed to start: \(String(describing: error), privacy: .public)")
+                        return .failed(.spawnFailed(
+                            "network egress filter unavailable — \(String(describing: error)). Refusing to run with open network in this tier."))
+                    }
+                }
+
+                let wrapped = DevSeatbeltSandbox.wrap(
+                    executableURL: executableURL, arguments: argv,
+                    projectDirectory: projectURL, proxyPort: proxyPort)
+                spawnExecutableURL = wrapped.executableURL
+                spawnArguments = wrapped.arguments
             }
 
-            // §8 network egress filter: start a loopback host-allowlisting proxy and
-            // lock the Seatbelt profile's egress to its port (the agent's ONLY net
-            // path). Requires the Seatbelt wrapper (above) to be active — egress is
-            // enforced by Seatbelt — so it's nested inside this block. The Phase 3
-            // valve can disable it (keeps the fs fence, opens the network).
-            var proxyPort: UInt16?
-            if !DevNetworkProxy.isFilterDisabled() {
-                let proxy = makeNetworkProxy()
-                do {
-                    let port = try proxy.start()
-                    networkProxy = proxy            // retained → torn down by the defer
-                    proxyPort = port
-                    proxyURL = "http://127.0.0.1:\(port)"
-                } catch {
-                    // Fail CLOSED: never run a fenced agent with OPEN egress.
-                    proxy.stop()
-                    Log.dev.error("Dev agent run aborted — network filter proxy failed to start: \(String(describing: error), privacy: .public)")
-                    return .failed(.spawnFailed(
-                        "network egress filter unavailable — \(String(describing: error)). Refusing to run with open network in this tier."))
+        // ── Claude Code: its OWN built-in sandbox + permission fence ──
+        // Do NOT sandbox-exec-wrap (a GUI-spawned child under sandbox-exec is denied
+        // securityd Keychain access → the agent's own 401). Instead enable Claude
+        // Code's built-in sandbox + permission rules via a transient `--settings`
+        // file: the built-in sandbox confines the Bash tool + children while the main
+        // process stays UNSANDBOXED (Keychain auth works, no prompt), and Edit/Write
+        // are fenced by permission rules. The native sandbox carries its OWN network
+        // allowlist, so the §8 proxy is NOT used here (proxyURL stays nil). The
+        // transient file is deleted by the `settingsFileURL` defer above. GRACEFUL
+        // DEGRADE: the native path is taken ONLY when (a) the tier is fenced, (b) the
+        // hidden valve is off, and (c) the installed Claude is new enough
+        // (`supportsNativeSandbox` — an OLDER claude rejects our flags/settings and
+        // would hard-fail). Any other case, or a settings-build failure, falls back
+        // to today's UNWRAPPED Claude — never a 401, crash, or hang (main is already
+        // unwrapped, so degrading is no worse).
+        case .claudeNative:
+            if tier.isFenced && !DevClaudeNativeSandbox.isDisabled() {
+                if DevClaudeNativeSandbox.supportsNativeSandbox(version: entry.detectedVersion) {
+                    do {
+                        let url = try makeClaudeNativeSettingsURL(projectURL)
+                        settingsFileURL = url            // → deleted by the defer above
+                        spawnArguments = DevClaudeNativeSandbox.arguments(
+                            base: argv, settingsFilePath: url.path)
+                    } catch {
+                        // Degrade: leave argv unwrapped; settingsFileURL stays nil so the
+                        // defer is a no-op and no half-written file lingers.
+                        Log.dev.error("Dev agent native sandbox setup failed — degrading to unwrapped Claude: \(String(describing: error), privacy: .public)")
+                        Analytics.capture("dev_claude_native_degraded", [
+                            "reason": "settings_build_failed",
+                            "minimum_version": DevClaudeNativeSandbox.minimumSupportedVersionString,
+                        ])
+                    }
+                } else {
+                    // Minimum-version gate: an OLDER (or undetectable) Claude Code would
+                    // reject our flags/settings and hard-fail. Run UNWRAPPED instead
+                    // (today's behavior). Signal it (metadata only) so a broad silent
+                    // fallback — e.g. after a Claude Code update changes the flags — is
+                    // noticeable across users. `detected` is a COARSE bucket, not PII.
+                    let detected: String
+                    if let v = DevClaudeNativeSandbox.parseVersion(entry.detectedVersion) {
+                        detected = "\(v.major).\(v.minor).\(v.patch)"
+                    } else {
+                        detected = entry.detectedVersion == nil ? "unknown" : "unparseable"
+                    }
+                    Log.dev.notice("Dev agent native sandbox skipped — Claude version \(detected, privacy: .public) < min \(DevClaudeNativeSandbox.minimumSupportedVersionString, privacy: .public); running unwrapped")
+                    Analytics.capture("dev_claude_native_degraded", [
+                        "reason": "unsupported_version",
+                        "detected_version": detected,
+                        "minimum_version": DevClaudeNativeSandbox.minimumSupportedVersionString,
+                    ])
                 }
             }
-
-            let wrapped = DevSeatbeltSandbox.wrap(
-                executableURL: executableURL, arguments: argv,
-                projectDirectory: projectURL, proxyPort: proxyPort)
-            spawnExecutableURL = wrapped.executableURL
-            spawnArguments = wrapped.arguments
         }
 
         let execution = DevAgentProcessExecution(

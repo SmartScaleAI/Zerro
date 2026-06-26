@@ -37,6 +37,9 @@ enum DevAgentBinaryResolver {
     /// isolation (it's invoked from a background task).
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cache: [String: URL?] = [:]
+    /// Cache of `<binary> --version` first-line output, keyed by executable name.
+    /// `String?` (nil cached too) so a failing/timed-out probe isn't retried.
+    nonisolated(unsafe) private static var versionCache: [String: String?] = [:]
     /// The login-shell PATH captured during a lookup, reused for the agent
     /// spawn environment so a version-manager `node` dir (nvm/asdf) is present
     /// (a Node CLI can be detected-installed yet fail to spawn without it).
@@ -69,11 +72,68 @@ enum DevAgentBinaryResolver {
         return loginPATH
     }
 
+    /// First line of `<url> --version` for `name`, cached for the process lifetime
+    /// (nil cached too, so a failing/timing-out probe isn't retried). BLOCKING —
+    /// call off-main during detection (it spawns the binary). Reused by the
+    /// `.claudeNative` minimum-version gate so `--version` is NOT spawned per run.
+    nonisolated static func versionOutput(forName name: String, at url: URL) -> String? {
+        lock.lock()
+        if let cached = versionCache[name] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let resolved = probeVersion(at: url)
+
+        lock.lock()
+        versionCache[name] = resolved
+        lock.unlock()
+        return resolved
+    }
+
     /// Test/diagnostics seam: forget cached results so a re-detect runs.
     nonisolated static func resetCache() {
         lock.lock(); defer { lock.unlock() }
         cache.removeAll()
+        versionCache.removeAll()
         loginPATH = nil
+    }
+
+    // MARK: - Version probe
+
+    /// Spawn `<url> --version` and return its trimmed first line, or nil on a
+    /// spawn error / non-zero exit / 5s timeout. Uses the captured login-shell
+    /// PATH (a Node CLI needs its toolchain dir) and a watchdog so a hung CLI
+    /// can't stall detection — mirrors `DevAgentDetection.probeCursorModels`.
+    nonisolated private static func probeVersion(at url: URL) -> String? {
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["--version"]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        if let path = cachedLoginShellPATH(), !path.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = path
+            process.environment = env
+        }
+        do {
+            try process.run()
+        } catch {
+            Log.dev.error("DevAgent version probe failed to spawn at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            return nil
+        }
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5, execute: watchdog)
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        watchdog.cancel()
+        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text.split(whereSeparator: \.isNewline).first
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     // MARK: - Layer 1: shell probe

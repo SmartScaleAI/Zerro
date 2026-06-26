@@ -39,6 +39,21 @@ final class DevAgentRegistryTests: XCTestCase {
         XCTAssertEqual(cursor.credentialStore, .file)
     }
 
+    func testConfinementPerAgentDrivesTheSpawnFence() throws {
+        // The §5c confinement strategy, modeled EXPLICITLY (the spawn site branches on
+        // this, not credentialStore). Claude Code → `.claudeNative` (its own built-in
+        // sandbox + permission rules via a transient --settings file, so the main
+        // process stays unsandboxed and Keychain auth survives). Codex / Cursor →
+        // `.zerroSeatbelt` (Zerro's sandbox-exec wrapper + the §8 egress proxy).
+        let claude = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.claudeCodeID))
+        let codex = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
+        let cursor = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.cursorID))
+        XCTAssertEqual(claude.confinement, .claudeNative,
+                       "Claude Code uses its own native sandbox, NOT sandbox-exec")
+        XCTAssertEqual(codex.confinement, .zerroSeatbelt)
+        XCTAssertEqual(cursor.confinement, .zerroSeatbelt)
+    }
+
     func testCodexFencedKeepsIgnoreUserConfig() throws {
         // §5a no-MCP for Codex stays `--ignore-user-config` on the fenced tiers,
         // dropped for Unrestricted. This pins ONLY the argv flag.
