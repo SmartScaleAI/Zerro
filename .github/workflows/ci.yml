@@ -23,8 +23,11 @@ concurrency:
   cancel-in-progress: true
 
 # Read-only: these jobs only check out code and run tests. No write scopes.
+# pull-requests:read lets dorny/paths-filter read the PR's changed-file list
+# from the GitHub API on pull_request events.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   # ---------------------------------------------------------------------------
