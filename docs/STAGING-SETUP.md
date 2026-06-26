@@ -101,11 +101,23 @@ local Supabase / Docker stack.**
 - A few minutes later, the staging backend **and** your + your friend's staging
   app (via Sparkle) are current. You just open the app and test.
 
-**Stage 3 — Promote to prod (the one gate).** Open a `staging → main` PR and
-approve it (your single human "go"). On merge to `main`: *Automated:*
+**Stage 3 — Promote to prod (the one gate).** In the `staging → main` PR, **bump
+`apps/desktop/VERSION`** to the new marketing version (e.g. `1.4.18` → `1.4.19`),
+then approve the PR (your single human "go"). On merge to `main`: *Automated:*
 - Supabase deploys migrations + functions to **production**.
-- A release action bumps the version, pushes the `app-v*` tag → your existing
-  release workflow → prod appcast → users auto-update.
+- `auto-release.yml` (triggered only by a change to `apps/desktop/VERSION` on
+  `main`) reads the file and, if no `app-v<version>` tag exists yet, creates and
+  pushes it with `RELEASE_PAT` → that tag push fires your existing
+  `release-app.yml` → prod appcast → users auto-update. Merge a PR that doesn't
+  touch `VERSION` and no release is cut; if `VERSION` is unchanged from the last
+  shipped version, the tag already exists and the workflow skips cleanly.
+
+> **The version bump _is_ the release decision.** Editing the `VERSION` line in
+> the promotion PR is what cuts the build — there's no separate manual
+> `git tag && git push`. `RELEASE_PAT` (not the default `GITHUB_TOKEN`) is
+> required so the tag push is allowed to trigger `release-app.yml`. Introducing
+> the file at the already-shipped version is a no-op, so adding it doesn't
+> release anything — it just arms the next bump.
 
 Net: branch → PR (preview + CI) → merge to staging (auto deploy + staging app) →
 test → approve `staging→main` (auto prod deploy + app release). **Zero manual
@@ -122,8 +134,9 @@ test → approve `staging→main` (auto prod deploy + app release). **Zero manua
 | Per-env config | `config.toml [remotes]` | push | no |
 | Secrets | dotenvx-encrypted `.env.preview` / per-branch | push (set once) | set once, then no |
 | Staging app build | GitHub Actions (`release-staging.yml`) | push to `staging` | no |
-| Prod app build | GitHub Actions (`release-app.yml`, existing) | `app-v*` tag | auto-tagged on `main` merge |
-| Prod **release approval** | you | `staging → main` PR | **yes (intentional gate)** |
+| Prod app build | GitHub Actions (`release-app.yml`, existing) | `app-v*` tag | auto-tagged by `auto-release.yml` |
+| Prod app tag | GitHub Actions (`auto-release.yml`) | `apps/desktop/VERSION` change on `main` | no (bump the file in the PR) |
+| Prod **release approval** | you | `staging → main` PR (bump `apps/desktop/VERSION`) | **yes (intentional gate)** |
 | Secret rotation / LemonSqueezy live dashboard | you | — | **yes (security)** |
 
 This **adopts the Supabase GitHub integration** (reversing the earlier
@@ -186,7 +199,7 @@ App / CI:
       scheme and upserts `ZerroStaging.dmg` + `appcast-staging.xml` to the staging
       `downloads` bucket. Does **not** touch the website or prod appcast.
 - [ ] CI workflow: `ZerroTests` + `supabase db lint` + curl tests + type-gen check on PRs.
-- [ ] Release automation: auto-tag `app-v*` on `staging → main` merge (keep the PR approval as the gate).
+- [x] Release automation: `auto-release.yml` tags `app-v*` from `apps/desktop/VERSION` on `main` (PR approval + the version bump are the gate). Needs a `RELEASE_PAT` repo secret so the tag push triggers `release-app.yml`.
 - [ ] Add `staging` long-lived git branch + branch-protection (PRs required).
 
 Local DX (no Docker):

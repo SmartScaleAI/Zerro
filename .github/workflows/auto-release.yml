@@ -1,0 +1,80 @@
+name: Auto release (tag on VERSION bump)
+
+# The production release gate. When a `staging → main` PR bumps
+# apps/desktop/VERSION and merges, this turns that bump into the `app-v<version>`
+# tag that release-app.yml builds from. That keeps the human decision in one
+# place — the VERSION line in the promotion PR — instead of a manual
+# `git tag && git push`.
+#
+# Flow: bump apps/desktop/VERSION in the staging→main PR → merge → this workflow
+# tags app-v<version> → release-app.yml (on: push tags app-v*) cuts the build.
+#
+# Why the path filter: only a change to apps/desktop/VERSION can start a release,
+# so any other push to main is ignored.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/desktop/VERSION'
+
+# Read-only for the workflow's own GITHUB_TOKEN: it only needs to check out code.
+# The tag is created and pushed with RELEASE_PAT (below), which carries its own
+# write scope.
+permissions:
+  contents: read
+
+# Serialize with itself so two quick merges can't race to push the same tag.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA (supply-chain hardening, matching ci.yml /
+      # release-app.yml). Trailing comment is the human-readable tag the SHA maps
+      # to; bump both together when upgrading.
+      #
+      # token: RELEASE_PAT is deliberate. A tag pushed with the default
+      # GITHUB_TOKEN would NOT trigger release-app.yml (GitHub suppresses workflow
+      # runs from token-pushed refs to avoid recursion). The PAT's push is treated
+      # as a normal push, so the app-v* tag fires release-app.yml.
+      #
+      # fetch-depth: 0 fetches full history AND all tags, so the existence guard
+      # below can see whether app-v<version> already exists.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          token: ${{ secrets.RELEASE_PAT }}
+          fetch-depth: 0
+
+      # Read the marketing version from the file and create the tag if — and only
+      # if — it doesn't already exist yet. The guard makes this idempotent: the
+      # first commit that introduces VERSION at the current shipped version (and
+      # any later re-run on an unchanged version) finds the tag present and exits
+      # cleanly without cutting a duplicate release. A real bump points at a new
+      # version with no tag, so it tags + pushes.
+      - name: Tag release if VERSION is new
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < apps/desktop/VERSION)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::apps/desktop/VERSION is empty."
+            exit 1
+          fi
+          TAG="app-v${VERSION}"
+          echo "VERSION file -> $VERSION (tag $TAG)"
+
+          # Authoritative existence check against the remote, independent of what
+          # the local clone happened to fetch. ls-remote --exit-code returns 0
+          # when the ref exists, non-zero when it doesn't.
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists — nothing to release. Skipping."
+            exit 0
+          fi
+
+          echo "Creating and pushing ${TAG} (this triggers release-app.yml)."
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
