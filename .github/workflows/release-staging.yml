@@ -293,7 +293,7 @@ jobs:
           STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          curl --fail-with-body -X PUT \
+          curl --fail-with-body -X POST \
             "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/${DMG_NAME}" \
             -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/x-apple-diskimage" \
@@ -338,7 +338,7 @@ jobs:
           STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          curl --fail-with-body -X PUT \
+          curl --fail-with-body -X POST \
             "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/appcast-staging.xml" \
             -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/xml" \
