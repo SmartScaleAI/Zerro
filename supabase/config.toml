@@ -1,3 +1,4 @@
+# staging pipeline validation
 # Supabase local config. `project_id` is the LOCAL project name; the deployed
 # project is selected by `supabase link --project-ref <ref>`.
 project_id = "zerro"
