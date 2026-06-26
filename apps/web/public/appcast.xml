@@ -7,9 +7,9 @@
             <pubDate>Fri, 26 Jun 2026 14:34:33 +0000</pubDate>
             <link>https://getzerro.app/</link>
             <sparkle:version>242</sparkle:version>
-            <sparkle:shortVersionString>1.4.17</sparkle:shortVersionString>
+            <sparkle:shortVersionString>1.4.18</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro-242.dmg" length="5902271" type="application/octet-stream" sparkle:edSignature="eN04U/ecPom28SOtv8sC7b9dZ8R2ExxWIB0Oy5DoldlRTQ+blNdWI+rhx/zXa1wVZbxvsE0mZt8jY4fhOWIMAQ=="/>
+            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro-242.dmg" length="5902279" type="application/octet-stream" sparkle:edSignature="rgxls+81rbIIW63//z5b1XquVjQoWJuo43yjOfm0AjqFY3f9wi2bBTCq23AZKiCo6TzqGpDD7HqUd2IaZDsKBA=="/>
         </item>
         <item>
             <title>1.4.16</title>
