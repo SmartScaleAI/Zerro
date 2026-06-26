@@ -9,7 +9,7 @@
             <sparkle:version>238</sparkle:version>
             <sparkle:shortVersionString>1.4.16</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro.dmg" length="5903197" type="application/octet-stream" sparkle:edSignature="vKy2yNO6gRG9OoHNmelaL8dIoJjrrT1slmw2/YHaIa9aWTdMqxMo289AXaG7zDUfi18DrbXRijRh+YMSJaEcCQ=="/>
+            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro-238.dmg" length="5903197" type="application/octet-stream" sparkle:edSignature="vKy2yNO6gRG9OoHNmelaL8dIoJjrrT1slmw2/YHaIa9aWTdMqxMo289AXaG7zDUfi18DrbXRijRh+YMSJaEcCQ=="/>
         </item>
     </channel>
 </rss>

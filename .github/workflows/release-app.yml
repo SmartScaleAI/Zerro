@@ -65,6 +65,11 @@ jobs:
           BUILD="$(git rev-list --count HEAD)"
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          # Permanent, versioned dmg filename. generate_appcast derives each
+          # item's enclosure URL from the archive filename + --download-url-prefix,
+          # so naming the dmg Zerro-<build>.dmg yields a per-release immutable URL
+          # (…/downloads/Zerro-<build>.dmg) instead of the mutable Zerro.dmg (L-07).
+          echo "DMG_NAME=$APP_NAME-$BUILD.dmg" >> "$GITHUB_ENV"
           echo "Releasing $MARKETING (build $BUILD)"
 
       # ----------------------------------------------------------------------
@@ -225,10 +230,12 @@ jobs:
           cp -R "$RUNNER_TEMP/export/$APP_NAME.app" "$STAGE/"
           ln -s /Applications "$STAGE/Applications" || true
           mkdir -p dist
+          # The volume name stays "Zerro" (what users see mounted); only the file
+          # is versioned so the appcast enclosure resolves to a permanent URL.
           hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" \
-            -ov -format UDZO "dist/$APP_NAME.dmg"
+            -ov -format UDZO "dist/$DMG_NAME"
           rm -rf "$STAGE"
-          codesign --force --sign "Developer ID Application" --timestamp "dist/$APP_NAME.dmg"
+          codesign --force --sign "Developer ID Application" --timestamp "dist/$DMG_NAME"
 
       # ----------------------------------------------------------------------
       - name: Notarize + staple
@@ -241,7 +248,7 @@ jobs:
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           printf '%s' "$AC_API_KEY_P8" > "$KEY_PATH"
 
-          if ! xcrun notarytool submit "dist/$APP_NAME.dmg" \
+          if ! xcrun notarytool submit "dist/$DMG_NAME" \
                 --key "$KEY_PATH" \
                 --key-id "$AC_API_KEY_ID" \
                 --issuer "$AC_API_ISSUER_ID" \
@@ -254,7 +261,7 @@ jobs:
           fi
           rm -f "$KEY_PATH"
 
-          xcrun stapler staple "dist/$APP_NAME.dmg"
+          xcrun stapler staple "dist/$DMG_NAME"
 
           # `stapler validate` on a DMG does an ONLINE ticket lookup (a stapled
           # dmg ticket isn't validated purely offline the way a .app's is).
@@ -267,7 +274,7 @@ jobs:
           # The staple above already succeeded; retry validation to ride out
           # ticket propagation rather than failing an otherwise-good release.
           for attempt in 1 2 3 4 5 6; do
-            if xcrun stapler validate "dist/$APP_NAME.dmg"; then
+            if xcrun stapler validate "dist/$DMG_NAME"; then
               echo "stapler validate succeeded on attempt $attempt."
               break
             fi
@@ -283,18 +290,28 @@ jobs:
       # Upload the notarized + stapled dmg to the public Supabase Storage
       # bucket. The repo is private, so GitHub Release assets 404 for anyone
       # not signed in; the public download is served from Supabase instead.
-      # x-upsert overwrites Zerro.dmg so the public URL stays stable across
-      # releases. Must run AFTER stapling so the stapled dmg is what ships.
+      # Must run AFTER stapling so the stapled dmg is what ships.
+      #
+      # Two destinations, same bytes (L-07 fix):
+      #   • downloads/Zerro-<build>.dmg — PERMANENT, immutable. This is the only
+      #     object the appcast references, so every past release's advertised
+      #     edSignature stays valid forever (and old builds remain downloadable,
+      #     which the BYOK update window depends on). Build numbers are monotonic,
+      #     so a future release never targets this name.
+      #   • downloads/Zerro.dmg — the stable "download latest" marketing object,
+      #     overwritten every release. The appcast NEVER references it, so it
+      #     carries no signature constraint and is safe to overwrite.
       #
       # SECURITY — L-01 (over-privileged upload credential; remediation pending):
       #   This step authenticates with SUPABASE_SERVICE_ROLE_KEY, which is
       #   full backend access (bypasses all RLS). It is over-privileged for what
-      #   it does: upsert one object (downloads/Zerro.dmg). The bucket today has
+      #   it does: upsert two objects in the downloads bucket (Zerro-<build>.dmg
+      #   and Zerro.dmg). The bucket today has
       #   ZERO RLS write policies, so service_role is currently the only path that
       #   can write — a least-privilege swap REQUIRES a Supabase-side change.
       #   Cleanest fix (see docs/README-backend.md → "Release DMG upload (L-01)"): a tiny edge
       #   function mints a one-time, path-scoped, 2-hour `createSignedUploadUrl`
-      #   for downloads/Zerro.dmg; CI then PUTs to that URL holding NO Supabase key
+      #   for the two downloads/* objects; CI then PUTs to those URLs holding NO Supabase key
       #   (only a narrow RELEASE_UPLOAD_SECRET). Owner action: deploy the function +
       #   set secrets, then switch this step (snippet in the runbook). Until then:
       #   the key is a registered GitHub secret (auto-masked in logs) and is never
@@ -305,30 +322,80 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
+          BASE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads"
+
+          # 1) Permanent, versioned object — the only one the appcast references.
+          #    Immutable across forward releases; x-upsert keeps a same-tag re-run
+          #    from 409ing (the appcast regen step below then re-signs to match).
           curl --fail-with-body -X POST \
-            "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads/${APP_NAME}.dmg" \
+            "$BASE/${DMG_NAME}" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/x-apple-diskimage" \
             -H "x-upsert: true" \
-            --data-binary @"dist/${APP_NAME}.dmg"
+            --data-binary @"dist/${DMG_NAME}"
+
+          # 2) Stable marketing "download latest" object (getzerro.app/Zerro.dmg
+          #    redirects here). Overwritten every release; never in the appcast.
+          curl --fail-with-body -X POST \
+            "$BASE/${APP_NAME}.dmg" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/${DMG_NAME}"
 
       # ----------------------------------------------------------------------
-      # Generate the signed appcast. The download URL points at the public
-      # Supabase Storage asset uploaded above. generate_appcast computes the
-      # length + edSignature from the actual build, so the appcast can never
-      # drift from the shipped dmg.
+      # Generate the signed appcast as a CUMULATIVE, multi-item feed. The new
+      # item's download URL points at this release's permanent versioned object;
+      # generate_appcast computes its length + edSignature from the actual build,
+      # so the appcast can never drift from the shipped dmg. Every prior item is
+      # preserved verbatim (its recorded pubDate/length/edSignature/versioned
+      # URL), which is what lets a lapsed BYOK user still be offered the newest
+      # build inside their 1-year window (UpdateWindowPolicy.bestInWindow). L-07.
       - name: Generate signed appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           DL_PREFIX="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
+
+          # Seed the generator with the CURRENTLY PUBLISHED appcast so it MERGES
+          # (appends the new item, keeps every existing one) instead of emitting a
+          # single-item feed. generate_appcast preserves items whose archives are
+          # absent — it does NOT need the old dmgs present (verified against the
+          # pinned Sparkle ${SPARKLE_VERSION} generate_appcast/FeedXML.swift).
+          # The runner is on the release tag (detached HEAD), so the up-to-date
+          # appcast must come from main, not the tag tree.
+          git fetch origin main
+          if git cat-file -e "origin/main:$SITE_APPCAST_PATH" 2>/dev/null; then
+            git show "origin/main:$SITE_APPCAST_PATH" > "dist/appcast.xml"
+            echo "Seeded dist/appcast.xml from origin/main for a cumulative merge."
+          else
+            echo "No published appcast on origin/main yet — generating a fresh feed."
+          fi
+
+          # --maximum-versions 0 = preserve ALL items (Sparkle's documented
+          # "keep everything"). The default of 3 would prune older in-window
+          # builds and strand lapsed BYOK users. The BYOK update window is one
+          # year measured per-user from purchase, so the feed must retain the
+          # full release history to always offer the newest entitled build.
           echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
             --ed-key-file - \
             --download-url-prefix "$DL_PREFIX" \
+            --maximum-versions 0 \
             --link "https://getzerro.app/" \
             -o "dist/appcast.xml" \
             "dist"
+
+          # Invariants (fail the release rather than ship a bad feed):
+          #   • the new build resolves to its versioned, immutable URL, and
+          #   • NO item references the mutable marketing Zerro.dmg (which is
+          #     overwritten every release and would race its signature — L-07).
+          if ! grep -qF "downloads/${DMG_NAME}\"" "dist/appcast.xml"; then
+            echo "::error::appcast is missing the versioned enclosure for ${DMG_NAME}"; exit 1
+          fi
+          if grep -qF "downloads/${APP_NAME}.dmg\"" "dist/appcast.xml"; then
+            echo "::error::appcast references the mutable ${APP_NAME}.dmg — only versioned URLs are allowed (run the L-07 build-238 migration first)"; exit 1
+          fi
           echo "----- appcast.xml -----"
           cat dist/appcast.xml
 
@@ -342,7 +409,7 @@ jobs:
           name: ${{ steps.ver.outputs.marketing }}
           fail_on_unmatched_files: true
           files: |
-            apps/desktop/dist/${{ env.APP_NAME }}.dmg
+            apps/desktop/dist/${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg
 
       # ----------------------------------------------------------------------
       # Publish the appcast to the website (same repo). The push to main

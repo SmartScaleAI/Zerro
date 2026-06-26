@@ -9,6 +9,23 @@ download, and update the appcast on your website. Existing users auto-update.
 git tag v1.0.2 && git push --tags     # ← that's the whole release
 ```
 
+> **Update (2026-06-26) — appcast retention & versioned downloads (L-07).** The
+> appcast at `apps/web/public/appcast.xml` is now a **cumulative, multi-item
+> feed**: every release appends its `<item>` and preserves all prior ones (each
+> with its recorded `pubDate`/`length`/`edSignature`). Each release uploads its
+> dmg to a **permanent, immutable** object `downloads/Zerro-<build>.dmg` — the
+> only URL the appcast references — so old versions stay downloadable and their
+> signatures never go stale. The stable `downloads/Zerro.dmg` is still
+> overwritten every release but is **marketing-only** ("download latest", behind
+> `getzerro.app/Zerro.dmg`); the appcast never points at it. CI seeds
+> `generate_appcast` from `origin/main`'s appcast and runs it with
+> `--maximum-versions 0` (preserve all). This retention is what lets the BYOK
+> 1-year update window offer a lapsed user the newest build they're entitled to
+> rather than nothing. **Note:** the surrounding sections below still describe an
+> older two-repo / GitHub-Releases-download flow and are stale (tracked as L-08);
+> the live pipeline is `.github/workflows/release-app.yml` in this monorepo,
+> triggered by `app-v*` tags.
+
 ---
 
 ## Your two repos and what lives where
@@ -39,8 +56,10 @@ the two.
 
 ### Why the dmg lives on Zerro's GitHub Releases (not in smartscale-website)
 
-- **Old versions stay downloadable** — each release keeps its own asset URL. (Today you
-  overwrite a single `Zerro.dmg`, which breaks anything still referencing the old one.)
+- **Old versions stay downloadable** — each release keeps its own permanent
+  `downloads/Zerro-<build>.dmg` object (the appcast references these versioned
+  URLs). The stable `Zerro.dmg` is overwritten each release but is marketing-only
+  and never referenced by the appcast, so overwriting it can't strand anyone.
 - **smartscale-website stays tiny** — binaries don't belong in git; only the small
   `appcast.xml` text file crosses into it.
 - **Enables Sparkle delta updates later**, which need old versions kept around.
