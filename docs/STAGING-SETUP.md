@@ -181,7 +181,10 @@ Backend / Supabase:
 App / CI:
 - [ ] Make the functions URL build-time configurable (`Info.plist` + `.xcconfig` + `ManagedBackend` patch).
 - [ ] Add the `Staging` build config + `com.cbreeding.Zerro.staging` + staging feed.
-- [ ] `release-staging.yml` (staging app build → `appcast-staging.xml`).
+- [x] `release-staging.yml` (staging app build → `appcast-staging.xml`) — triggers
+      on `staging-v*` tags + manual dispatch; signs/notarizes the **Zerro Staging**
+      scheme and upserts `ZerroStaging.dmg` + `appcast-staging.xml` to the staging
+      `downloads` bucket. Does **not** touch the website or prod appcast.
 - [ ] CI workflow: `ZerroTests` + `supabase db lint` + curl tests + type-gen check on PRs.
 - [ ] Release automation: auto-tag `app-v*` on `staging → main` merge (keep the PR approval as the gate).
 - [ ] Add `staging` long-lived git branch + branch-protection (PRs required).
@@ -203,8 +206,9 @@ Local DX (no Docker):
 | App bundle id | `com.cbreeding.Zerro` | `com.cbreeding.Zerro.staging` |
 | Sparkle feed | `getzerro.app/appcast.xml` | `appcast-staging.xml` on branch Storage |
 | DB/function deploys | auto on merge to `main` | auto on merge to `staging` |
-| App build | `release-app.yml` on `app-v*` | `release-staging.yml` on push to `staging` |
-| Provider API keys / LemonSqueezy | live | dev keys / test mode |
+| App build | `release-app.yml` on `app-v*` | `release-staging.yml` on `staging-v*` tag |
+| Deeplink scheme | `zerro://` (`DEEPLINK_SCHEME=zerro`) | `zerro-staging://` (`DEEPLINK_SCHEME=zerro-staging`) |
+| Provider API keys / LemonSqueezy | live | dev keys / test mode (redirect → `zerro-staging://checkout-complete`) |
 
 ---
 

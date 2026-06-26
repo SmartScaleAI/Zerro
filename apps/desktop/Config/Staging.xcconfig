@@ -15,3 +15,11 @@ ZERRO_FUNCTIONS_BASE_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/functions
 SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml
 PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
 PRODUCT_NAME = Zerro Staging
+
+// Distinct deep-link scheme for the side-by-side Staging build. The production
+// build registers `zerro://`; Staging registers `zerro-staging://` so a
+// LemonSqueezy checkout callback routes to the build that started it and never
+// bounces to the other install. Set the LS test-mode "Redirect URL after
+// purchase" to zerro-staging://checkout-complete to match. See
+// Config/Production.xcconfig for how this flows into Info.plist + AppDelegate.
+DEEPLINK_SCHEME = zerro-staging
