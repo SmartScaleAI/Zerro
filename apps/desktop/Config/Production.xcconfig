@@ -13,3 +13,10 @@ ZERRO_FUNCTIONS_BASE_URL = https:/$()/wjxqmurgwyxwkezncxke.supabase.co/functions
 SU_FEED_URL = https:/$()/getzerro.app/appcast.xml
 PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro
 PRODUCT_NAME = Zerro
+
+// Custom URL scheme LemonSqueezy bounces the checkout back to
+// (zerro://checkout-complete). Flows into Info.plist's CFBundleURLSchemes via
+// $(DEEPLINK_SCHEME) and is read back by AppDelegate to gate the inbound deep
+// link. Staging overrides this so a checkout callback can never cross between
+// the side-by-side prod and staging installs.
+DEEPLINK_SCHEME = zerro

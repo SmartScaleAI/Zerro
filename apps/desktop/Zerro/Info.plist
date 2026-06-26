@@ -25,10 +25,15 @@
 	<string>$(SU_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>IV0J9TIWJpe/dL5A/8NvDhfmsjZatlrJA1NPnmX2xiE=</string>
-	<!-- Billing: the `zerro://` scheme LemonSqueezy bounces back to after a
+	<!-- Billing: the custom scheme LemonSqueezy bounces back to after a
 	     checkout (each product's "Redirect URL after purchase" =
-	     zerro://checkout-complete?product=<product>). Handled in
-	     AppDelegate.application(_:open:). -->
+	     <scheme>://checkout-complete?product=<product>). The scheme is
+	     wired to the per-configuration DEEPLINK_SCHEME build setting
+	     (apps/desktop/Config/*.xcconfig): `zerro` for production,
+	     `zerro-staging` for the side-by-side Staging build, so the two
+	     installs never poach each other's checkout callback. Handled in
+	     AppDelegate.application(_:open:), which reads the registered
+	     scheme back from this same array. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -36,7 +41,7 @@
 			<string>com.cbreeding.Zerro.deeplink</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>zerro</string>
+				<string>$(DEEPLINK_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
