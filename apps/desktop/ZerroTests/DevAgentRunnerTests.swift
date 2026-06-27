@@ -440,6 +440,16 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             parse(#"{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"echo hi"}},"toolCallId":"t"}}"#),
             DevAgentEvent(kind: .running, detail: "echo hi"))
+        // grep → args.pattern; ls → args.path (basename); glob → args.globPattern.
+        XCTAssertEqual(
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"grepToolCall":{"args":{"pattern":"useAuth"}},"toolCallId":"t"}}"#),
+            DevAgentEvent(kind: .searching, detail: "useAuth"))
+        XCTAssertEqual(
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"lsToolCall":{"args":{"path":"/proj/src/components"}},"toolCallId":"t"}}"#),
+            DevAgentEvent(kind: .listing, detail: "components"))
+        XCTAssertEqual(
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"globToolCall":{"args":{"globPattern":"**/*.ts"}},"toolCallId":"t"}}"#),
+            DevAgentEvent(kind: .searching, detail: "**/*.ts"))
         // The `completed` twin must NOT re-emit (the `started` one already did).
         XCTAssertNil(
             parse(#"{"type":"tool_call","subtype":"completed","tool_call":{"editToolCall":{"args":{"path":"/p/README.md"}}}}"#))
@@ -457,6 +467,64 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             parse(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll edit it."}]}}"#),
             DevAgentEvent(kind: .message, detail: "I'll edit it."))
+    }
+
+    // MARK: - Substatus (single-line pill label)
+
+    func testEventSubstatusCarriesDetailThrough() {
+        // The pill substatus now preserves each kind's specifics instead of
+        // collapsing reading/searching/listing/running to a generic line.
+        XCTAssertEqual(
+            DevAgentEvent(kind: .reading, detail: "authMiddleware.ts").substatus,
+            .reading(file: "authMiddleware.ts"))
+        XCTAssertEqual(
+            DevAgentEvent(kind: .searching, detail: "useAuth").substatus,
+            .searching(pattern: "useAuth"))
+        XCTAssertEqual(
+            DevAgentEvent(kind: .listing, detail: "src").substatus,
+            .listing(dir: "src"))
+        XCTAssertEqual(
+            DevAgentEvent(kind: .running, detail: "npm test").substatus,
+            .running(command: "npm test"))
+        XCTAssertEqual(
+            DevAgentEvent(kind: .editing, detail: "Button.tsx").substatus,
+            .editing(file: "Button.tsx"))
+        // A detail-less event of a specific kind maps to the empty-detail case.
+        XCTAssertEqual(DevAgentEvent(kind: .running).substatus, .running(command: ""))
+        // Narration / thinking / structural kinds have no specific → generic motion.
+        XCTAssertEqual(DevAgentEvent(kind: .thinking).substatus, .working)
+        XCTAssertEqual(DevAgentEvent(kind: .message, detail: "hi").substatus, .working)
+        XCTAssertEqual(DevAgentEvent(kind: .working).substatus, .working)
+        XCTAssertEqual(DevAgentEvent(kind: .done).substatus, .done)
+    }
+
+    func testSubstatusLabelRendersSpecificsAndFallsBack() {
+        // Specifics surface in the label …
+        XCTAssertEqual(DevRunSubstatus.reading(file: "authMiddleware.ts").label, "Reading authMiddleware.ts…")
+        XCTAssertEqual(DevRunSubstatus.searching(pattern: "useAuth").label, "Searching for \u{201C}useAuth\u{201D}…")
+        XCTAssertEqual(DevRunSubstatus.listing(dir: "src").label, "Listing src…")
+        XCTAssertEqual(DevRunSubstatus.running(command: "npm test").label, "Running npm test…")
+        XCTAssertEqual(DevRunSubstatus.editing(file: "Button.tsx").label, "Editing Button.tsx…")
+        // … and an empty detail falls back to the generic phrasing (no dangling
+        // "Reading …" / empty quotes).
+        XCTAssertEqual(DevRunSubstatus.reading(file: "").label, "Reading files…")
+        XCTAssertEqual(DevRunSubstatus.searching(pattern: "").label, "Searching your codebase…")
+        XCTAssertEqual(DevRunSubstatus.listing(dir: "").label, "Listing files…")
+        XCTAssertEqual(DevRunSubstatus.running(command: "").label, "Running commands…")
+        XCTAssertEqual(DevRunSubstatus.editing(file: "").label, "Editing files…")
+        XCTAssertEqual(DevRunSubstatus.working.label, "Working on your changes…")
+    }
+
+    func testSubstatusLabelTruncatesLongDetail() {
+        // A long command is capped (40 chars) + ellipsis so the capsule can't blow
+        // out and the " · Xs" elapsed suffix stays visible.
+        let long = String(repeating: "x", count: 80)
+        let label = DevRunSubstatus.running(command: long).label
+        XCTAssertEqual(label, "Running \(String(repeating: "x", count: 40))…")
+        XCTAssertTrue(label.hasSuffix("…"))
+        // A detail at the cap boundary is untouched (no spurious ellipsis).
+        let exact = String(repeating: "y", count: 40)
+        XCTAssertEqual(DevRunSubstatus.reading(file: exact).label, "Reading \(exact)…")
     }
 
     func testEventValueEqualityIgnoresIdentityAndTimestamp() {

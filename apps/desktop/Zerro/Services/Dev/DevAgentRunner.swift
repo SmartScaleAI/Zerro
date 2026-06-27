@@ -44,25 +44,43 @@ import os
 
 // MARK: - Public result/status types
 
-/// Coarse legacy progress for the pill's single-line `agentRunning` substatus.
-/// Retained as a bridge while the rich live feed (`DevAgentEvent`) lands in the
-/// UI (Part 5); the runner now emits `DevAgentEvent` and derives this from it.
+/// Live single-line progress for the pill's `agentRunning` substatus. Carries the
+/// activity's specifics (the file / command / pattern) so the pill shows *what*
+/// the agent is doing right now — "Reading authMiddleware.ts…", "Running npm
+/// test…" — instead of one frozen generic line. The runner emits `DevAgentEvent`
+/// and derives this from it (see `DevAgentEvent.substatus`). The detail is
+/// ON-SCREEN ONLY — like `DevAgentEvent.detail`, it must NEVER reach analytics.
 enum DevRunSubstatus: Equatable, Sendable {
-    case readingFiles
+    case reading(file: String)
+    case searching(pattern: String)
+    case listing(dir: String)
     case editing(file: String)
-    case running
+    case running(command: String)
     case working
     case done
 
-    /// Short pill label.
+    /// Short pill label. The detail (file / command / pattern) is capped so the
+    /// capsule can't blow out and the elapsed-clock suffix stays visible; an empty
+    /// detail falls back to the generic phrasing.
     var label: String {
         switch self {
-        case .readingFiles:     return "Exploring your codebase…"
-        case .editing(let f):   return f.isEmpty ? "Editing files…" : "Editing \(f)…"
-        case .running:          return "Running commands…"
-        case .working:          return "Working on your changes…"
-        case .done:             return "Done"
+        case .reading(let f):    return f.isEmpty ? "Reading files…"            : "Reading \(Self.capped(f))…"
+        case .searching(let p):  return p.isEmpty ? "Searching your codebase…"  : "Searching for \u{201C}\(Self.capped(p))\u{201D}…"
+        case .listing(let d):    return d.isEmpty ? "Listing files…"            : "Listing \(Self.capped(d))…"
+        case .editing(let f):    return f.isEmpty ? "Editing files…"            : "Editing \(Self.capped(f))…"
+        case .running(let c):    return c.isEmpty ? "Running commands…"         : "Running \(Self.capped(c))…"
+        case .working:           return "Working on your changes…"
+        case .done:              return "Done"
         }
+    }
+
+    /// Bound a rendered detail's length so the single-line pill stays tidy (the
+    /// pill already truncates, but short labels keep the " · Xs" elapsed suffix
+    /// on-screen). No ellipsis is appended here — every label already ends in the
+    /// trailing progress "…", which doubles as the truncation marker (so a clipped
+    /// command reads "Running …cmd…", never an ugly "……").
+    private static func capped(_ s: String, max: Int = 40) -> String {
+        s.count > max ? String(s.prefix(max)) : s
     }
 }
 
@@ -101,13 +119,18 @@ struct DevAgentEvent: Sendable, Identifiable {
         self.timestamp = timestamp
     }
 
-    /// Coarse legacy substatus for the single-line pill (Part 5 replaces this with
-    /// the feed). Collapses the rich kinds back to the original five.
+    /// The single-line pill substatus for this event — `kind` + `detail` carried
+    /// straight through so reading/searching/listing/running/editing each surface
+    /// their specifics (no longer collapsed to a generic "Exploring…"/"Running…").
+    /// The narration/thinking/structural kinds have no specific to show, so they
+    /// stay on the generic "Working…" motion.
     var substatus: DevRunSubstatus {
         switch kind {
         case .editing:                                   return .editing(file: detail ?? "")
-        case .reading, .searching, .listing:             return .readingFiles
-        case .running:                                   return .running
+        case .reading:                                   return .reading(file: detail ?? "")
+        case .searching:                                 return .searching(pattern: detail ?? "")
+        case .listing:                                   return .listing(dir: detail ?? "")
+        case .running:                                   return .running(command: detail ?? "")
         case .done:                                      return .done
         case .thinking, .message, .toolResult, .working: return .working
         }
@@ -950,8 +973,11 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             return DevAgentEvent(kind: .editing, detail: fileArg())
         }
         if lower.contains("search") || lower.contains("grep") || lower.contains("glob") {
-            return DevAgentEvent(kind: .searching,
-                                 detail: nonEmpty(args?["pattern"] as? String ?? args?["query"] as? String))
+            // `grep` → args.pattern, `search` → args.query, `glob` → args.globPattern.
+            let pattern = args?["pattern"] as? String
+                ?? args?["query"] as? String
+                ?? args?["globPattern"] as? String
+            return DevAgentEvent(kind: .searching, detail: nonEmpty(pattern))
         }
         if lower.contains("list") || lower.contains("ls") {
             return DevAgentEvent(kind: .listing, detail: fileArg())
