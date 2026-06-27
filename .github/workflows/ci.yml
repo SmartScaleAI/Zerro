@@ -284,6 +284,44 @@ jobs:
         run: deno test --allow-env --allow-read
 
   # ---------------------------------------------------------------------------
+  # Invariant guard for the Sparkle auto-update feed. The website serves
+  # getzerro.app/appcast.xml from EITHER a committed file
+  # (apps/web/public/appcast.xml) OR — once that file is removed — a Vercel
+  # rewrite to the public Supabase Storage object (downloads/appcast.xml). This
+  # job FAILS the PR if neither source would serve a valid feed, which is exactly
+  # what would silently break the updater if the static file were removed before
+  # Storage was seeded (or if Storage later went empty). Cheap (one curl), runs
+  # on every PR, and is required via ci-passed below. Retries ride out a
+  # transient Storage blip; only a sustained outage/empty object fails the gate.
+  appcast-feed-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: A working appcast feed must always be served
+        run: |
+          set -euo pipefail
+          FILE="apps/web/public/appcast.xml"
+          if [ -f "$FILE" ]; then
+            grep -q "<item>" "$FILE" || { echo "::error::$FILE exists but has no <item>."; exit 1; }
+            echo "Appcast served from the committed file ($FILE) — OK."
+            exit 0
+          fi
+          # Static file removed → the website rewrites /appcast.xml to Storage.
+          # That object MUST be live with items, or the updater has no feed.
+          URL="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml"
+          for a in 1 2 3 4 5; do
+            if curl -fsS --max-time 20 "$URL" -o /tmp/feed.xml && grep -q "<item>" /tmp/feed.xml; then
+              echo "No committed file; the Storage appcast is live with items — OK."
+              exit 0
+            fi
+            echo "attempt $a: Storage appcast not ready; retrying in 10s…"
+            sleep 10
+          done
+          echo "::error::No committed $FILE AND the Storage object is missing/empty ($URL). The updater would have no feed — seed Storage (run the 'Republish appcast to Storage' workflow) before removing the static file."
+          exit 1
+
+  # ---------------------------------------------------------------------------
   # Aggregate gate. THIS is the single job to mark as the required status check
   # in branch protection — never swift-tests / edge-tests directly. Because
   # those two are path-gated, a PR that doesn't touch apps/desktop (or
@@ -296,7 +334,7 @@ jobs:
   # quarantined subprocess suites must never block the gate, so their flakes (or
   # real failures) stay advisory-only and are surfaced as that job's own check.
   ci-passed:
-    needs: [swift-tests, edge-tests]
+    needs: [swift-tests, edge-tests, appcast-feed-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -305,12 +343,15 @@ jobs:
           set -euo pipefail
           swift='${{ needs.swift-tests.result }}'
           edge='${{ needs.edge-tests.result }}'
-          echo "swift-tests: $swift"
-          echo "edge-tests:  $edge"
-          # A path-gated job that didn't run is `skipped` — that's fine. Anything
-          # else that isn't a clean `success` (i.e. failure or cancelled) fails
-          # the gate.
-          for r in "$swift" "$edge"; do
+          feed='${{ needs.appcast-feed-guard.result }}'
+          echo "swift-tests:        $swift"
+          echo "edge-tests:         $edge"
+          echo "appcast-feed-guard: $feed"
+          # A path-gated job that didn't run is `skipped` — that's fine.
+          # appcast-feed-guard is not path-gated, so it is `success`/`failure`.
+          # Anything that isn't `success`/`skipped` (i.e. failure or cancelled)
+          # fails the gate.
+          for r in "$swift" "$edge" "$feed"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;
