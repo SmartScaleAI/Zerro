@@ -42,7 +42,7 @@ and fine.
 
 | Tile | Insight type | How to build |
 |---|---|---|
-| **Onboarding step funnel** | Funnel | Steps, each = event `onboarding_step_viewed` filtered by `step` =, in order: `welcome` → `consent` → `email` → `screen_recording` → `microphone` → `all_set`, then a final step `onboarding_completed`. Conversion window: 1 day. Shows exactly where new users drop — watch the **consent** and **screen_recording** steps especially. |
+| **Onboarding step funnel** | Funnel | Steps, each = event `onboarding_step_viewed` filtered by `step` =, in order: `welcome` → `consent` → `email` → `permissions` → `all_set`, then a final step `onboarding_completed`. Conversion window: 1 day. Shows exactly where new users drop — watch the **consent** and **permissions** steps especially. (Screen Recording + Microphone were merged into one `permissions` step.) |
 | **Activation funnel (first record → first copy)** | Funnel | Steps: `onboarding_completed` → `recording_started` → `generation_succeeded` → `artifact_copied`. Conversion window: 7 days. This is your **north-star** funnel — first run to first usable output. |
 | **Activation trend** | Trend | Series A = unique users of `onboarding_completed`; Series B = unique users of `artifact_copied`. Weekly. The gap = installs that finished setup but never got value. |
 

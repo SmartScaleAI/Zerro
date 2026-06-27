@@ -4,15 +4,21 @@
 //
 //  Created by Colin Breeding on 5/27/26.
 //
-//  The five step views. Permission steps (Screen / Mic) branch on a
-//  tri-state sub-state derived from PermissionsManager, with a
-//  DEBUG-only override pin on OnboardingState so the dev panel can
-//  preview any sub-state without toggling system permissions.
+//  The step views. The merged Permissions step shows Screen Recording
+//  and Microphone as two rows on one screen, each branching on a
+//  tri-state sub-state derived from PermissionsManager (plus a fourth
+//  "needs relaunch" sub-state for Screen Recording), with DEBUG-only
+//  override pins on OnboardingState so the dev panel can preview any
+//  sub-state per row without toggling system permissions.
 //
-//  Sub-state semantics:
-//    • Screen / Mic — blocking. Continue in BEFORE triggers the OS
-//      request; GRANTED shows a manual Continue (auto-advance lands
-//      in Checkpoint 4); DENIED offers System Settings + Check again.
+//  Sub-state semantics (per row):
+//    • notDetermined — an Allow control triggers the OS request.
+//    • granted — a checkmark indicator.
+//    • denied — Open System Settings deep-link + Check again.
+//    • needs-relaunch (Screen only) — Relaunch + Check again.
+//  Advancing is an explicit user action: the single Continue Setup
+//  button stays disabled until BOTH permissions are granted (no
+//  auto-advance).
 //
 
 import AppKit
@@ -395,147 +401,295 @@ struct EmailStepView: View {
     }
 }
 
-// MARK: - Screen Recording
+// MARK: - Permissions (merged Screen Recording + Microphone)
 
-struct ScreenRecordingStepView: View {
+/// One screen for both macOS permissions Zerro needs, modeled on the
+/// Superwhisper "Let's set up permissions" page: Screen Recording and
+/// Microphone each render as their own row with their own Allow control,
+/// and a single Continue Setup button at the bottom stays disabled until
+/// BOTH are granted.
+///
+/// Advancing is an explicit user action — there is NO auto-advance. The
+/// per-row controls reflect each permission's effective sub-state (with a
+/// DEBUG dev-panel pin override per row), but the Continue gate reads the
+/// LIVE `permissions.*` values so a pin can't let a tester past the real
+/// gate.
+struct PermissionsStepView: View {
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
 
-    private var effectiveStatus: PermissionStatus {
+    /// Per-row display state honors the DEBUG dev-panel pin so each
+    /// sub-state can be previewed without toggling system permissions.
+    private var effectiveScreen: PermissionStatus {
         onboarding.pinnedScreenSubState ?? permissions.screenRecordingStatus
     }
 
-    /// Auto-advance only when the granted state is the live OS value;
-    /// a dev pin suppresses the timer so the state can be inspected.
-    private var autoAdvanceFromGranted: Bool {
-        onboarding.pinnedScreenSubState == nil
+    private var effectiveMic: PermissionStatus {
+        onboarding.pinnedMicSubState ?? permissions.microphoneStatus
     }
 
-    /// M1: show the dedicated "needs relaunch" sub-view when the grant is
-    /// present in System Settings but a live capture probe failed in this
-    /// process. Takes priority over the tri-state so the user is never
-    /// stranded on a "denied" screen that contradicts their toggle (in a
-    /// stuck Release build CGPreflight may even read `.granted` and the
-    /// step would otherwise auto-advance into a recording that can't
-    /// capture). Suppressed while a dev pin is active so the panel can
-    /// still inspect the three base sub-states.
-    private var showsNeedsRelaunch: Bool {
+    /// M1: the "granted in Settings but not live in this process" recovery
+    /// path. Takes priority over the tri-state for the Screen Recording row
+    /// so the user is offered a Relaunch affordance instead of a "denied"
+    /// row that contradicts their System Settings toggle. Suppressed while a
+    /// dev pin is active so the panel can still inspect the base tri-state.
+    private var screenNeedsRelaunch: Bool {
         onboarding.pinnedScreenSubState == nil && permissions.screenRecordingNeedsRelaunch
     }
 
-    var body: some View {
-        content
-            .task(id: effectiveStatus) { permissions.managePolling(for: effectiveStatus) }
-            .onDisappear { permissions.stopPolling() }
+    /// Continue is gated on the LIVE OS values (never the dev pins) so a
+    /// pinned sub-state can't let a tester advance past the real gate —
+    /// matches the prior per-step production behavior.
+    ///
+    /// Also blocks while `screenRecordingNeedsRelaunch`: in that state
+    /// `CGPreflightScreenCaptureAccess()` reads `.granted` even though live
+    /// capture fails until the app is relaunched, so without this check
+    /// Continue would enable while the Screen Recording row still shows the
+    /// "Relaunch Zerro" affordance — letting a user finish onboarding into a
+    /// state where their first recording fails.
+    private var bothGranted: Bool {
+        permissions.screenRecordingStatus == .granted &&
+        permissions.microphoneStatus == .granted &&
+        !permissions.screenRecordingNeedsRelaunch
     }
 
+    /// Re-keys the polling `.task` whenever either effective status changes,
+    /// so an out-of-band System Settings toggle flips the row within ~1s.
+    private var pollKey: PollKey {
+        PollKey(screen: effectiveScreen, mic: effectiveMic)
+    }
+
+    var body: some View {
+        OnboardingStepLayout {
+            OnboardingIconTile(systemName: "checkmark.shield")
+        } content: {
+            VStack(spacing: VFSpacing.lg) {
+                OnboardingHeadline(
+                    title: "Let\u{2019}s set up permissions",
+                    bodyText: "Zerro needs two macOS permissions to capture what you\u{2019}re showing and hear your narration. Allow both to continue."
+                )
+
+                VStack(spacing: VFSpacing.sm) {
+                    screenRow
+                    micRow
+                }
+            }
+        } actions: {
+            OnboardingPrimaryButton("Continue Setup", isEnabled: bothGranted) {
+                onboarding.advance()
+            }
+        }
+        // Single combined poller: poll iff either row is denied, so two
+        // callers can't fight over the one shared timer. Re-runs on every
+        // status transition via `pollKey`; stops when neither row is denied
+        // and on disappear.
+        .task(id: pollKey) {
+            let needsPolling = effectiveScreen == .denied || effectiveMic == .denied
+            if needsPolling { permissions.startPolling() } else { permissions.stopPolling() }
+        }
+        .onDisappear { permissions.stopPolling() }
+    }
+
+    // MARK: Rows
+
+    private var screenRow: some View {
+        PermissionRow(
+            systemName: "rectangle.dashed.badge.record",
+            title: "Screen Recording",
+            description: "Lets Zerro capture what\u{2019}s on your screen."
+        ) {
+            screenControl
+        }
+    }
+
+    private var micRow: some View {
+        PermissionRow(
+            systemName: "mic.fill",
+            title: "Microphone",
+            description: "Lets Zerro hear your narration."
+        ) {
+            micControl
+        }
+    }
+
+    // MARK: Trailing controls
+
     @ViewBuilder
-    private var content: some View {
-        if showsNeedsRelaunch {
-            OnboardingRelaunchView(
-                title: "Almost there",
-                description: "Screen Recording is enabled but needs a relaunch to take effect.",
-                onRelaunch: { permissions.relaunchToApplyScreenRecording() },
-                onCheckAgain: { Task { await permissions.probeScreenRecordingEffectiveness() } }
-            )
+    private var screenControl: some View {
+        if screenNeedsRelaunch {
+            // M1 recovery: grant present in Settings but not live in-process.
+            PermissionActionStack {
+                PermissionMiniButton("Relaunch Zerro", prominent: true) {
+                    permissions.relaunchToApplyScreenRecording()
+                }
+                PermissionMiniButton("Check again") {
+                    Task { await permissions.probeScreenRecordingEffectiveness() }
+                }
+            }
         } else {
-            screenStatusContent
+            switch effectiveScreen {
+            case .notDetermined:
+                PermissionAllowButton { permissions.requestScreenRecording() }
+            case .granted:
+                PermissionGrantedIndicator()
+            case .denied:
+                PermissionActionStack {
+                    PermissionMiniButton("Open Settings", prominent: true) {
+                        NSWorkspace.shared.open(SystemSettingsURLs.screenRecording)
+                    }
+                    // "Check again" runs the SCShareableContent effectiveness
+                    // probe (a decision point): a live grant flips to granted, a
+                    // grant present in Settings but not yet live flips to the
+                    // needs-relaunch affordance, still-missing stays denied.
+                    PermissionMiniButton("Check again") {
+                        Task { await permissions.probeScreenRecordingEffectiveness() }
+                    }
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private var screenStatusContent: some View {
-        switch effectiveStatus {
+    private var micControl: some View {
+        switch effectiveMic {
         case .notDetermined:
-            OnboardingStepLayout {
-                EmptyView()
-            } content: {
-                OnboardingHeadline(
-                    title: "Screen Recording",
-                    bodyText: "Zerro needs to see your screen to capture what you\u{2019}re showing. On the Managed and Trial plans, those frames \u{2014} and your spoken narration \u{2014} are sent to a third-party AI provider to generate your result; on-device redaction blacks out common secrets first, but it\u{2019}s best-effort and never covers your audio."
-                )
-            } accessory: {
-                RecordingPillDemo()
-            } actions: {
-                OnboardingPrimaryButton("Continue") {
-                    permissions.requestScreenRecording()
-                }
-            }
+            PermissionAllowButton { Task { await permissions.requestMicrophone() } }
         case .granted:
-            OnboardingGrantedView(
-                title: "Screen Recording allowed",
-                autoAdvance: autoAdvanceFromGranted,
-                onContinue: { onboarding.advance() }
-            )
+            PermissionGrantedIndicator()
         case .denied:
-            OnboardingDeniedView(
-                title: "Screen Recording was denied",
-                description: "macOS won\u{2019}t re-prompt \u{2014} you need to enable it manually.",
-                breadcrumbLabel: "Screen Recording",
-                settingsURL: SystemSettingsURLs.screenRecording,
-                // M1: "Check Again" is a decision point, so it runs the
-                // SCShareableContent effectiveness probe. Three outcomes:
-                // a live grant advances to .granted; a grant that's present
-                // in Settings but not yet live in this process flips to the
-                // "needs relaunch" sub-view (instead of stranding the user
-                // here); still-missing stays denied. Stays silent when the
-                // grant is live; may spawn one popup if permission is still
-                // actually missing — acceptable for a user-initiated action.
-                secondary: .checkAgain {
-                    Task { await permissions.probeScreenRecordingEffectiveness() }
+            PermissionActionStack {
+                PermissionMiniButton("Open Settings", prominent: true) {
+                    NSWorkspace.shared.open(SystemSettingsURLs.microphone)
                 }
-            )
+                PermissionMiniButton("Check again") { permissions.refreshStatuses() }
+            }
+        }
+    }
+
+    /// Equatable key for `.task(id:)` — `PermissionStatus` is Equatable, so a
+    /// struct of the two effective statuses re-runs the poller on any
+    /// transition. (`.task(id:)` only requires Equatable, not Hashable.)
+    private struct PollKey: Equatable {
+        let screen: PermissionStatus
+        let mic: PermissionStatus
+    }
+}
+
+// MARK: - Permission row + controls
+
+/// A single permission row: icon tile, title, one-line description, and a
+/// trailing control reflecting that permission's effective sub-state.
+private struct PermissionRow<Trailing: View>: View {
+    let systemName: String
+    let title: String
+    let description: String
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: VFSpacing.md) {
+            RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .frame(width: 36, height: 36)
+                .overlay(
+                    Image(systemName: systemName)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.vfTextPrimary)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: VFSpacing.sm)
+
+            trailing()
+        }
+        .padding(VFSpacing.md)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .strokeBorder(Color.vfHairline, lineWidth: 1)
+        )
+    }
+}
+
+/// The primary per-row "Allow" pill that triggers the OS permission request.
+private struct PermissionAllowButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Allow")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.vfOnBrand)
+                .padding(.horizontal, VFSpacing.md)
+                .padding(.vertical, 7)
+                .background(Color.vfBrandAccent, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The granted indicator shown once a permission has been allowed.
+private struct PermissionGrantedIndicator: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(Color.vfSuccessGreen)
+            Text("Allowed")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.vfTextSecondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Right-aligned vertical stack for the two-button denied / needs-relaunch
+/// trailing controls.
+private struct PermissionActionStack<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            content()
         }
     }
 }
 
-// MARK: - Microphone
+/// Compact trailing button used by the denied / needs-relaunch sub-states.
+/// `prominent` styles the primary action (Open Settings / Relaunch) with the
+/// brand fill; the secondary "Check again" uses the muted fill.
+private struct PermissionMiniButton: View {
+    let title: String
+    let prominent: Bool
+    let action: () -> Void
 
-struct MicrophoneStepView: View {
-    @Environment(OnboardingState.self) private var onboarding
-    @Environment(PermissionsManager.self) private var permissions
-
-    private var effectiveStatus: PermissionStatus {
-        onboarding.pinnedMicSubState ?? permissions.microphoneStatus
-    }
-
-    private var autoAdvanceFromGranted: Bool {
-        onboarding.pinnedMicSubState == nil
+    init(_ title: String, prominent: Bool = false, action: @escaping () -> Void) {
+        self.title = title
+        self.prominent = prominent
+        self.action = action
     }
 
     var body: some View {
-        content
-            .task(id: effectiveStatus) { permissions.managePolling(for: effectiveStatus) }
-            .onDisappear { permissions.stopPolling() }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch effectiveStatus {
-        case .notDetermined:
-            OnboardingStepShell(
-                title: "Microphone",
-                bodyText: "We capture your narration so the AI knows what you\u{2019}re saying about what\u{2019}s on screen."
-            ) {
-                OnboardingPrimaryButton("Continue") {
-                    Task { await permissions.requestMicrophone() }
-                }
-            }
-        case .granted:
-            OnboardingGrantedView(
-                title: "Microphone allowed",
-                autoAdvance: autoAdvanceFromGranted,
-                onContinue: { onboarding.advance() }
-            )
-        case .denied:
-            OnboardingDeniedView(
-                title: "Microphone was denied",
-                description: "macOS won\u{2019}t re-prompt \u{2014} you need to enable it manually.",
-                breadcrumbLabel: "Microphone",
-                settingsURL: SystemSettingsURLs.microphone,
-                secondary: .checkAgain { permissions.refreshStatuses() }
-            )
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(prominent ? Color.vfOnBrand : Color.vfTextPrimary)
+                .padding(.horizontal, VFSpacing.sm)
+                .padding(.vertical, 6)
+                .background(
+                    prominent ? Color.vfBrandAccent : Color.white.opacity(0.08),
+                    in: Capsule()
+                )
         }
+        .buttonStyle(.plain)
     }
 }
 

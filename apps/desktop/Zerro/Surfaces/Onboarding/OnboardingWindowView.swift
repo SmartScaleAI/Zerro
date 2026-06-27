@@ -61,13 +61,12 @@ struct OnboardingWindowView: View {
     @ViewBuilder
     private var stepBody: some View {
         switch onboarding.currentStep {
-        case .welcome:         WelcomeStepView()
-        case .consent:         ConsentStepView()
-        case .email:           EmailStepView()
-        case .screenRecording: ScreenRecordingStepView()
-        case .microphone:      MicrophoneStepView()
-        case .devMode:         DevModeStepView()
-        case .allSet:          AllSetStepView()
+        case .welcome:     WelcomeStepView()
+        case .consent:     ConsentStepView()
+        case .email:       EmailStepView()
+        case .permissions: PermissionsStepView()
+        case .devMode:     DevModeStepView()
+        case .allSet:      AllSetStepView()
         }
     }
 }
