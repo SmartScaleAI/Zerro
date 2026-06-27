@@ -1335,7 +1335,12 @@ final class AreaSelectorWindowController {
         state.setCheckingGitRepo(true)
         Task.detached(priority: .utility) { [weak state] in
             let isRepo = (try? GitCheckpointService(projectURL: url))?.isRepository() ?? false
-            await MainActor.run {
+            // Re-capture `state` weakly in the main-actor hop: the inner closure
+            // runs on a different executor than this detached task, so referencing
+            // the task's `[weak state]` var directly is a cross-domain captured-var
+            // race (an error in the Swift 6 language mode). Its own capture-list
+            // entry is an immutable per-closure binding, so there's no shared var.
+            await MainActor.run { [weak state] in
                 guard let state, state.projectURL == url else { return }
                 state.setProjectGitRepo(isRepo)
             }

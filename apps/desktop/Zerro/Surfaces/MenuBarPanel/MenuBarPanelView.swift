@@ -486,10 +486,18 @@ struct MenuBarPanelView: View {
             .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Zerro")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .fixedSize()
+                HStack(spacing: 6) {
+                    Text("Zerro")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .fixedSize()
+                    // Staging-only: amber "STAGING" pill in the dropdown header
+                    // so it's obvious which build's menu is open. Absent from the
+                    // production binary.
+                    #if STAGING
+                    StagingBadge(fontSize: 9)
+                    #endif
+                }
                 HStack(spacing: 4) {
                     Circle()
                         .fill(headerStatusColor)
