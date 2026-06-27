@@ -29,6 +29,30 @@ permissions:
   contents: read
   pull-requests: read
 
+# Single source of truth for the test scheme and the QUARANTINED suites — the
+# subprocess/IPC suites that flake on CI even serially (they spawn real child
+# processes / sandbox-exec, or bind a loopback socket server, and gate
+# assertions on wall-clock waits, so a loaded runner intermittently fails them
+# with the failure moving between tests). The required `swift-tests` job runs
+# everything EXCEPT these (-skip-testing); the advisory `swift-subprocess-tests`
+# job runs ONLY these (-only-testing) and is deliberately excluded from the
+# `ci-passed` gate. Keep both jobs in sync through this one list.
+#
+# Why these three (classified from the test sources, not guessed):
+#   DevAgentRunnerTests   — spawns throwaway /bin/sh agent scripts + sandbox-exec
+#                           with sleep/elapsed + stall-ordering timing asserts.
+#   DevRecoveryTests      — real git via Task.detached behind a settle() poll
+#                           that does NOT fail on timeout, so a slow runner reads
+#                           stale state and the next assertion fails.
+#   DevNetworkProxyTests  — binds a real loopback NWListener every run and polls
+#                           async listener teardown behind 5s semaphores.
+# The other subprocess suites (GitCheckpointTests, DevDispatchCoordinatorTests,
+# DevModeTeardownSafetyTests) stay in the gate: their git spawns are synchronous
+# with no wall-clock deadline, so slowness can't convert into a failed assertion.
+env:
+  SCHEME: Zerro
+  QUARANTINE_SUITES: "DevAgentRunnerTests DevRecoveryTests DevNetworkProxyTests"
+
 jobs:
   # ---------------------------------------------------------------------------
   # Cheap ubuntu job that decides which heavy jobs need to run. We do PER-JOB
@@ -66,8 +90,6 @@ jobs:
     defaults:
       run:
         working-directory: apps/desktop
-    env:
-      SCHEME: Zerro
     steps:
       # Pinned to the same SHA release-app.yml uses (v4.3.1).
       - name: Checkout
@@ -90,30 +112,34 @@ jobs:
           xcodebuild -version
           swift --version
 
-      # Build + run the ZerroTests bundle. Debug config, macOS destination, code
-      # signing disabled (CI has no Developer ID identity and the test bundle
-      # doesn't need one). Output is tee'd so the next step can confirm the
-      # tests actually executed. set -o pipefail keeps xcodebuild's exit status
-      # through the tee.
+      # Build + run the REQUIRED slice of the ZerroTests bundle: everything
+      # except the quarantined subprocess/IPC suites (QUARANTINE_SUITES, defined
+      # at the workflow level). Debug config, macOS destination, code signing
+      # disabled (CI has no Developer ID identity and the test bundle doesn't
+      # need one). Output is tee'd so the next step can confirm tests executed.
+      # set -o pipefail keeps xcodebuild's exit status through the tee.
       #
-      # -parallel-testing-enabled NO: the process-spawning suites (notably
-      # DevAgentRunnerTests, which shells out to spawn agent CLIs) flake under
-      # Xcode's parallel test runner — a worker that forks a child races the
-      # other workers and intermittently fails fast (e.g.
-      # DevAgentRunnerTests.testSuccessCapturesResultSummary failing in ~0.02s).
-      # All 764 tests pass deterministically when run serially, so we force a
-      # single worker here. If full-serial wall-time becomes a concern, swap this
-      # for a test plan that marks only the process-spawning suites
-      # non-parallelizable instead of serializing the whole bundle.
-      - name: Run ZerroTests
+      # Two determinism levers, both required:
+      #   -parallel-testing-enabled NO  — single test worker. The parallel runner
+      #       let the process-spawning suites race each other.
+      #   -skip-testing:<suite>         — drops the suites that flake even
+      #       serially (real child processes / sandbox-exec / loopback sockets
+      #       behind wall-clock waits) from THIS required gate. They still run,
+      #       advisory, in swift-subprocess-tests. This is what keeps ci-passed
+      #       deterministic on real code.
+      - name: Run ZerroTests (required slice; subprocess suites quarantined out)
         run: |
           set -euo pipefail
+          SKIP=()
+          for s in $QUARANTINE_SUITES; do SKIP+=( -skip-testing:ZerroTests/"$s" ); done
+          echo "Quarantined (skipped here, run advisory in swift-subprocess-tests): $QUARANTINE_SUITES"
           xcodebuild test \
             -project Zerro.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Debug \
             -destination 'platform=macOS' \
             -parallel-testing-enabled NO \
+            "${SKIP[@]}" \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$RUNNER_TEMP/swift-test.log"
 
@@ -135,6 +161,95 @@ jobs:
             echo "::error::ZerroTests target did not execute any tests."
             exit 1
           fi
+
+      # Defense-in-depth for the quarantine invariant: assert that NONE of the
+      # quarantined suites executed in this required slice. If a future edit (or
+      # a shell word-splitting regression that collapses the -skip-testing flags)
+      # silently lets them back into the gate, fail loudly here rather than
+      # silently re-importing the flake.
+      - name: Confirm quarantined suites were skipped
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/swift-test.log"
+          for s in $QUARANTINE_SUITES; do
+            if grep -qE "Test Suite '$s'|Test case '$s\." "$LOG"; then
+              echo "::error::Quarantined suite $s ran in the required gate — -skip-testing did not apply."
+              exit 1
+            fi
+          done
+          echo "Quarantine verified: none of [$QUARANTINE_SUITES] ran in the required slice."
+
+  # ---------------------------------------------------------------------------
+  # ADVISORY (non-required) job for the quarantined subprocess/IPC suites
+  # (QUARANTINE_SUITES). They spawn real child processes / bind loopback sockets
+  # and gate assertions on wall-clock waits, so they flake intermittently on
+  # loaded CI runners even serially. This job is DELIBERATELY EXCLUDED from
+  # `ci-passed`'s `needs`, so a flake here never blocks a merge — but the suites
+  # still RUN, so a genuine regression stays visible as a red (advisory) check.
+  #
+  # Mirrors swift-tests' build, but runs ONLY the quarantined suites
+  # (-only-testing) and retries each failure up to 3x in a FRESH process
+  # (-retry-tests-on-failure / -test-iterations / -test-repetition-relaunch):
+  # a transient subprocess/socket race passes on retry; a real break fails all 3.
+  swift-subprocess-tests:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Select Xcode 26.4
+        run: |
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_26.4*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::Xcode 26.4 not found on runner. Available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+
+      - name: Run quarantined subprocess suites (advisory, retried)
+        run: |
+          set -euo pipefail
+          ONLY=()
+          for s in $QUARANTINE_SUITES; do ONLY+=( -only-testing:ZerroTests/"$s" ); done
+          echo "Advisory subprocess suites (retried up to 3x, fresh process): $QUARANTINE_SUITES"
+          xcodebuild test \
+            -project Zerro.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -retry-tests-on-failure \
+            -test-iterations 3 \
+            -test-repetition-relaunch-enabled YES \
+            "${ONLY[@]}" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/swift-subprocess-test.log"
+
+      # Catch a silent zero-run: a renamed/misspelled entry in QUARANTINE_SUITES
+      # would make -only-testing match nothing, which xcodebuild still reports as
+      # ** TEST SUCCEEDED **. Require every quarantined suite to have actually
+      # started, so the advisory signal can't go silently blind. (Only reached
+      # when the test step passed; a real failure already fails the job above.)
+      - name: Confirm quarantined suites executed
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/swift-subprocess-test.log"
+          for s in $QUARANTINE_SUITES; do
+            if ! grep -qE "Test Suite '$s'|Test case '$s\." "$LOG"; then
+              echo "::error::Quarantined suite $s did not execute (QUARANTINE_SUITES out of sync with the test class names?)."
+              exit 1
+            fi
+          done
+          echo "All quarantined suites executed: $QUARANTINE_SUITES"
 
   # ---------------------------------------------------------------------------
   # Deno unit tests for the Supabase edge functions. Only runs when a function
@@ -176,6 +291,10 @@ jobs:
   # required check never resolves and would block the PR forever. This job
   # always runs (`if: always()`) and treats `skipped` as OK, so it goes green on
   # such PRs — while still failing if a job that DID run failed or was cancelled.
+  #
+  # The advisory swift-subprocess-tests job is intentionally NOT in `needs`: the
+  # quarantined subprocess suites must never block the gate, so their flakes (or
+  # real failures) stay advisory-only and are surfaced as that job's own check.
   ci-passed:
     needs: [swift-tests, edge-tests]
     if: always()
