@@ -3,6 +3,15 @@
     <channel>
         <title>Zerro</title>
         <item>
+            <title>1.4.19</title>
+            <pubDate>Sat, 27 Jun 2026 15:10:24 +0000</pubDate>
+            <link>https://getzerro.app/</link>
+            <sparkle:version>274</sparkle:version>
+            <sparkle:shortVersionString>1.4.19</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro-274.dmg" length="5938551" type="application/octet-stream" sparkle:edSignature="DSLVDYWWbddekduxPA29nAD9JI7Ngnyg3+J/Dnoe9oSPrdcHB+kjhDx39B7cRrWx1Dv+V3YS1v9XKY8r3psuAA=="/>
+        </item>
+        <item>
             <title>1.4.17</title>
             <pubDate>Fri, 26 Jun 2026 14:34:33 +0000</pubDate>
             <link>https://getzerro.app/</link>
