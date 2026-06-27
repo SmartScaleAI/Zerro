@@ -390,7 +390,11 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
         onEvent: @escaping @Sendable (DevAgentEvent) -> Void,
         onStall: @escaping @Sendable (Bool) -> Void
     ) async -> DevRunResult {
-        lock.lock(); _runCount += 1; _lastModel = model; _lastPrompt = prompt; lock.unlock()
+        // `withLock` rather than bare `lock()/unlock()`: this is an async function,
+        // and NSLock's manual lock/unlock are unavailable from async contexts (an
+        // error in the Swift 6 language mode). The scoped form is async-safe and
+        // matches the rest of the codebase (CrashReporting, DevNetworkProxy).
+        lock.withLock { _runCount += 1; _lastModel = model; _lastPrompt = prompt }
         sideEffect?(projectURL)
         return result
     }
@@ -398,16 +402,22 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
     func cancel() {}
 }
 
-private final class PhaseRecorder: @unchecked Sendable {
+// `nonisolated`: these are lock-guarded, manually-`Sendable` helpers read and
+// written from whatever executor the runner's side effect happens to be on
+// (including XCTAssert's nonisolated autoclosure). Opting them out of the
+// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` default keeps their accessors
+// callable from a nonisolated context — without it, reading `.value` from a
+// nonisolated autoclosure warns (an error in the Swift 6 language mode).
+private nonisolated final class PhaseRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [DevDispatchPhase] = []
-    func append(_ p: DevDispatchPhase) { lock.lock(); items.append(p); lock.unlock() }
-    func values() -> [DevDispatchPhase] { lock.lock(); defer { lock.unlock() }; return items }
+    func append(_ p: DevDispatchPhase) { lock.withLock { items.append(p) } }
+    func values() -> [DevDispatchPhase] { lock.withLock { items } }
 }
 
-private final class LockedFlag: @unchecked Sendable {
+private nonisolated final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var _value = false
-    var value: Bool { lock.lock(); defer { lock.unlock() }; return _value }
-    func set(_ v: Bool) { lock.lock(); _value = v; lock.unlock() }
+    var value: Bool { lock.withLock { _value } }
+    func set(_ v: Bool) { lock.withLock { _value = v } }
 }

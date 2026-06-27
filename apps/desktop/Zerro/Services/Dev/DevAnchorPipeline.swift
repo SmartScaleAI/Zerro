@@ -36,7 +36,10 @@ enum DevAnchorPipeline {
 
     /// Native-pixel size of the square crop around each anchor. ~768 captures the
     /// element + enough context for OCR + the model, while bounding vision tokens.
-    static let defaultCropSize = 768
+    /// `nonisolated` so it can back `build`'s default argument: default-argument
+    /// expressions are evaluated in a nonisolated context, so a main-actor-isolated
+    /// static here would warn (an error in the Swift 6 language mode).
+    nonisolated static let defaultCropSize = 768
 
     /// Build the resolved anchors. Async — extracts a native frame per reference.
     /// Best-effort per anchor: a failed extraction yields an anchor with no marked

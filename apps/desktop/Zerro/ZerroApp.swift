@@ -1003,8 +1003,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func resolveCheckoutReturn(
         _ parsed: CheckoutReturn,
         entitlements: EntitlementStore,
-        effects: CheckoutReturnEffects = .live
+        effects: CheckoutReturnEffects? = nil
     ) async -> CheckoutOutcome {
+        // `.live` is a main-actor-isolated static, but default-argument expressions
+        // are evaluated in a nonisolated context, so `= .live` warns (an error in
+        // the Swift 6 language mode). Default to `nil` and resolve here, inside this
+        // @MainActor body where `.live` is legitimately reachable.
+        let effects = effects ?? .live
         guard let key = parsed.licenseKey else {
             return await resolveCheckoutReturnWithoutKey(entitlements: entitlements, effects: effects)
         }

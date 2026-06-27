@@ -84,7 +84,12 @@ final class DevAgentDetection {
                 let resolved = DevAgentRegistry.all()
                 let cursor = DevAgentDetection.probeCursorModels()
                 let codex = DevAgentDetection.probeCodexModels()
-                await MainActor.run {
+                // Re-capture `self` weakly for the main-actor hop. The inner closure
+                // runs on the main actor — a different executor than this detached
+                // task — so reaching for the task's `[weak self]` var would be a
+                // cross-domain captured-var race (an error in the Swift 6 language
+                // mode). A fresh capture-list binding keeps the hop race-free.
+                await MainActor.run { [weak self] in
                     self?.finish(with: resolved, cursorModels: cursor, codexModels: codex)
                 }
             }
