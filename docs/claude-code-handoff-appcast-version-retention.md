@@ -1,5 +1,16 @@
 # Claude Code handoff — Retain appcast history + versioned dmgs (unblock the BYOK 1-year update window)
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-06-27).** The cumulative/versioned-dmg goal of
+> this doc shipped, but the **appcast publish mechanism described below is no
+> longer used.** The release no longer seeds from `origin/main:apps/web/public/appcast.xml`
+> or commits/pushes the appcast to `main` (that push silently broke once `main`
+> required PRs — see 1.4.19). The appcast is now **uploaded to Supabase Storage**
+> (`downloads/appcast.xml`) and served at `getzerro.app/appcast.xml` via a Vercel
+> rewrite; the cumulative feed is seeded over HTTP from the published feed. See
+> `.github/workflows/release-app.yml` (steps "Generate signed appcast" /
+> "Publish appcast to Supabase Storage") and `apps/web/next.config.ts`. Treat the
+> "git fetch origin main / push to main" instructions here as historical only.
+
 ## TL;DR for the agent
 
 Change the release pipeline so the published Sparkle appcast **keeps every past

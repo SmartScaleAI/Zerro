@@ -76,6 +76,25 @@ const nextConfig: NextConfig = {
         source: "/ingest/:path*",
         destination: "https://us.i.posthog.com/:path*",
       },
+      {
+        // Sparkle auto-update feed. Installed apps have getzerro.app/appcast.xml
+        // baked in as their SUFeedURL, so that path must keep resolving. Serve it
+        // by REWRITE (transparent proxy, same-origin) from the public Supabase
+        // Storage object the release workflow uploads — NOT a redirect, so the
+        // Sparkle client never has to follow a cross-host hop. This replaces
+        // committing the feed to git and pushing it to the now-PR-protected
+        // `main` (which silently broke 1.4.19's publish).
+        //
+        // CUTOVER: this is an afterFiles rewrite (the array form), which Next.js
+        // evaluates AFTER the filesystem — so while a real file exists at
+        // public/appcast.xml it serves the feed and this rewrite is INERT.
+        // Removing public/appcast.xml (after Storage is seeded) atomically flips
+        // serving to the Storage object with no gap. (Same precedence rule as the
+        // /Zerro.dmg redirect note below.)
+        source: "/appcast.xml",
+        destination:
+          "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml",
+      },
     ]
   },
   // PostHog needs trailing-slash-sensitive routes to pass through untouched.
