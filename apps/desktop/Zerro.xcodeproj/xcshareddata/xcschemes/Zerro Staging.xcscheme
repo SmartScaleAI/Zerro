@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "FF8546CE2FC74ACC000EB1A6"
-               BuildableName = "Zerro Staging.app"
+               BuildableName = "Zerro.app"
                BlueprintName = "Zerro"
                ReferencedContainer = "container:Zerro.xcodeproj">
             </BuildableReference>
@@ -59,7 +59,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FF8546CE2FC74ACC000EB1A6"
-            BuildableName = "Zerro Staging.app"
+            BuildableName = "Zerro.app"
             BlueprintName = "Zerro"
             ReferencedContainer = "container:Zerro.xcodeproj">
          </BuildableReference>
@@ -76,7 +76,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FF8546CE2FC74ACC000EB1A6"
-            BuildableName = "Zerro Staging.app"
+            BuildableName = "Zerro.app"
             BlueprintName = "Zerro"
             ReferencedContainer = "container:Zerro.xcodeproj">
          </BuildableReference>
