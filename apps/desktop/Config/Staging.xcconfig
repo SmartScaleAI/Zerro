@@ -16,6 +16,15 @@ SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/publ
 PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
 PRODUCT_NAME = Zerro Staging
 
+// Staging-only compile flag. Defines a `STAGING` active-compilation condition so
+// `#if STAGING` is true ONLY in this configuration — independent of `#if DEBUG`,
+// since the Staging build is release-type (optimized, no DEBUG). Gates the amber
+// "this is staging" markers (recording overlay border + badge, amber menu-bar
+// icon, staging app icon) so the Production build is never affected. `$(inherited)`
+// preserves any condition set by a lower-priority layer. Read in code via
+// `Build.isStaging` (see Zerro/BuildEnvironment.swift).
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) STAGING
+
 // Distinct deep-link scheme for the side-by-side Staging build. The production
 // build registers `zerro://`; Staging registers `zerro-staging://` so a
 // LemonSqueezy checkout callback routes to the build that started it and never

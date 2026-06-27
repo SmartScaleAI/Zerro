@@ -43,16 +43,39 @@ struct MenuBarIconView: View {
         ZStack(alignment: .bottomTrailing) {
             // Idle: template so macOS adapts it to the bar color
             // (light/dark/wallpaper). Recording: original, since the red
-            // is already baked into the pixels.
+            // is already baked into the pixels. Staging: always original,
+            // since the amber tint is baked in (see `glyph`).
             Image(nsImage: Self.glyph(recording: isRecording))
-                .renderingMode(isRecording ? .original : .template)
+                .renderingMode(Self.renderingMode(recording: isRecording))
 
             if isRecording {
                 PulsingDot(color: .vfRecordingRed, size: 5)
                     .overlay(Circle().strokeBorder(Color.black, lineWidth: 1))
                     .offset(x: 3, y: 2)
             }
+
+            // Staging idle: a small static amber dot reinforces the amber glyph
+            // so the build is identifiable at a glance even when not recording.
+            // (While recording, the red dot above takes the corner.) Absent from
+            // the production binary.
+            #if STAGING
+            if !isRecording {
+                Circle()
+                    .fill(Color.vfStagingAccent)
+                    .frame(width: 5, height: 5)
+                    .overlay(Circle().strokeBorder(Color.black, lineWidth: 1))
+                    .offset(x: 3, y: 2)
+            }
+            #endif
         }
+    }
+
+    private static func renderingMode(recording: Bool) -> Image.TemplateRenderingMode {
+        #if STAGING
+        return .original
+        #else
+        return recording ? .original : .template
+        #endif
     }
 
     private static func glyph(recording: Bool) -> NSImage {
@@ -61,14 +84,26 @@ struct MenuBarIconView: View {
         image.lockFocus()
         let rect = NSRect(origin: .zero, size: iconSize)
         base.draw(in: rect)
+        #if STAGING
+        // Staging: always tint the glyph amber and bake it in (non-template) so
+        // the menu-bar icon is unmistakably the staging build at a glance —
+        // whether or not a recording is in progress.
+        NSColor(Color.vfStagingAccent).set()
+        rect.fill(using: .sourceAtop)
+        #else
         if recording {
             // Tint the drawn glyph red and bake it into the pixels so it
             // survives the menu bar (template rendering would strip color).
             NSColor(Color.vfRecordingRed).set()
             rect.fill(using: .sourceAtop)
         }
+        #endif
         image.unlockFocus()
+        #if STAGING
+        image.isTemplate = false
+        #else
         image.isTemplate = !recording
+        #endif
         return image
     }
 }
