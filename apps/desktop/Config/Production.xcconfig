@@ -1,0 +1,22 @@
+// Production.xcconfig
+// Build settings for the shipping Zerro app. Wired to the Debug and Release
+// configurations of the app target (see Zerro.xcodeproj). These values flow
+// into Info.plist via $(...) references (ZerroFunctionsBaseURL, SUFeedURL) and
+// set the product's identity (bundle id, product name).
+//
+// NOTE on URLs: xcconfig treats `//` as a comment, which would swallow the
+// `https://` scheme. The `$()` between the scheme's slashes is an empty
+// variable reference — it parses without starting a comment and expands to
+// nothing, so the resolved value is a normal `https://…` URL.
+
+ZERRO_FUNCTIONS_BASE_URL = https:/$()/wjxqmurgwyxwkezncxke.supabase.co/functions/v1
+SU_FEED_URL = https:/$()/getzerro.app/appcast.xml
+PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro
+PRODUCT_NAME = Zerro
+
+// Custom URL scheme LemonSqueezy bounces the checkout back to
+// (zerro://checkout-complete). Flows into Info.plist's CFBundleURLSchemes via
+// $(DEEPLINK_SCHEME) and is read back by AppDelegate to gate the inbound deep
+// link. Staging overrides this so a checkout callback can never cross between
+// the side-by-side prod and staging installs.
+DEEPLINK_SCHEME = zerro

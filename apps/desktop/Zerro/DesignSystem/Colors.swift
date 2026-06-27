@@ -28,6 +28,14 @@ extension Color {
     static let vfWarningAmber = Color(red: 1.00, green: 0.624, blue: 0.039) // #FF9F0A
     static let vfSuccessGreen = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
 
+    /// Staging build-distinction accent — the single amber/orange used by every
+    /// "this is the Staging build" marker (recording-overlay border + badge,
+    /// menu-bar icon tint, app-icon ribbon) so they read as one family and can
+    /// never be confused with production. Fixed #FF9500 (vivid orange-amber),
+    /// deliberately distinct from `vfRecordingRed` and `vfWarningAmber`. Only
+    /// referenced from `#if STAGING` paths, so it never paints in production.
+    static let vfStagingAccent = Color(red: 1.00, green: 0.584, blue: 0.0) // #FF9500
+
     /// Semantic alias for destructive UI (Clear History, Reset to
     /// Defaults, the Delete button in Recent Prompts). Same hex as
     /// `vfRecordingRed`; the named alias keeps the button styles from

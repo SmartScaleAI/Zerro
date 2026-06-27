@@ -156,6 +156,16 @@ final class RecordingSession: NSObject {
     // MARK: - Init parameters
 
     private let selection: SelectionRect?
+    /// `CGWindowID`s (as `Int`, matching `NSWindow.windowNumber`) of this app's
+    /// own overlay windows to keep OUT of the recording via the capture content
+    /// filter's `excludingWindows`. On macOS 15+ ScreenCaptureKit composites all
+    /// windows into one framebuffer and ignores `NSWindow.sharingType` / window
+    /// level, so filter exclusion is the only reliable mechanism. Empty in
+    /// Production; the Staging recording-marker frame populates it (see
+    /// `AppState.startRecording`). The windows must already be on screen when
+    /// `start()` enumerates `SCShareableContent`, or they won't be found to
+    /// exclude.
+    private let excludedWindowNumbers: [Int]
     private let microphoneDeviceID: String
     private let onElapsed: (TimeInterval) -> Void
     private let onFinish: (Outcome) -> Void
@@ -341,9 +351,11 @@ final class RecordingSession: NSObject {
         onFinish: @escaping (Outcome) -> Void,
         onAudioLevel: (@MainActor @Sendable (Float) -> Void)? = nil,
         clockMultiplier: Double = 1.0,
-        capturesCursorTrack: Bool = false
+        capturesCursorTrack: Bool = false,
+        excludedWindowNumbers: [Int] = []
     ) {
         self.selection = selection
+        self.excludedWindowNumbers = excludedWindowNumbers
         self.microphoneDeviceID = microphoneDeviceID
         self.onElapsed = onElapsed
         self.onFinish = onFinish
@@ -410,6 +422,17 @@ final class RecordingSession: NSObject {
         // once capture is live, below) can be scoped to this exact device.
         self.capturedMicDevice = micDevice
 
+        // App-owned overlay windows to keep out of the recording (e.g. the
+        // Staging recording-marker frame). Mapped from the requested window
+        // numbers to the `SCWindow`s enumerated above; only windows that are
+        // actually on screen resolve, so a stale number is silently a no-op. On
+        // macOS 15+ this content-filter exclusion is the ONLY mechanism that
+        // works — `NSWindow.sharingType`/level are ignored by ScreenCaptureKit.
+        // Empty (the common case) ⇒ `excludingWindows: []`, unchanged behavior.
+        let excludedWindows = excludedWindowNumbers.isEmpty
+            ? []
+            : content.windows.filter { excludedWindowNumbers.contains(Int($0.windowID)) }
+
         // Three capture shapes, in priority order:
         //   1. Full-screen target — capture the whole display, no crop,
         //      at its full pixel dimensions (menu bar included).
@@ -419,18 +442,18 @@ final class RecordingSession: NSObject {
         if case .fullScreen? = selection?.target {
             config.width = display.width
             config.height = display.height
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         } else if let selection {
             let source = Self.displayLocalSourceRect(global: selection.rect, on: screen)
             config.sourceRect = source
             config.destinationRect = CGRect(origin: .zero, size: source.size)
             config.width = Int(source.width.rounded())
             config.height = Int(source.height.rounded())
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         } else {
             config.width = display.width
             config.height = display.height
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
         }
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
 

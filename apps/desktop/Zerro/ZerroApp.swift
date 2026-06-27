@@ -880,14 +880,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Step 4 (billing): the `zerro://` checkout-return deep link. LemonSqueezy's
-    /// per-product "Redirect URL after purchase" bounces the browser back to
-    /// `zerro://checkout-complete?product=<product>`; macOS routes it here
-    /// (CFBundleURLTypes registers the scheme). Custom-scheme opens arrive via
-    /// this AppKit hook rather than SwiftUI `.onOpenURL` because the app may have
-    /// no window mounted on return (it's a menu-bar/accessory app).
+    /// The custom URL scheme THIS build registers for the checkout-return deep
+    /// link, read back from the app's own `CFBundleURLTypes`. That array is
+    /// populated by the per-configuration `DEEPLINK_SCHEME` build setting
+    /// (`zerro` for production, `zerro-staging` for the side-by-side Staging
+    /// build — see `apps/desktop/Config/*.xcconfig`), so the handler accepts
+    /// exactly what macOS routes to this build and prod/staging never poach each
+    /// other's callback. Reading the registered scheme keeps a single source of
+    /// truth rather than hardcoding it twice. Falls back to `zerro` if the plist
+    /// is somehow absent. Lowercased for a case-insensitive scheme compare.
+    static let deeplinkScheme: String = {
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]]
+        let scheme = types?
+            .compactMap { ($0["CFBundleURLSchemes"] as? [String])?.first }
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let scheme, !scheme.isEmpty { return scheme.lowercased() }
+        return "zerro"
+    }()
+
+    /// Step 4 (billing): the checkout-return deep link. LemonSqueezy's per-product
+    /// "Redirect URL after purchase" bounces the browser back to
+    /// `<scheme>://checkout-complete?product=<product>` (`scheme` = `deeplinkScheme`
+    /// above); macOS routes it here because CFBundleURLTypes registers the scheme.
+    /// Custom-scheme opens arrive via this AppKit hook rather than SwiftUI
+    /// `.onOpenURL` because the app may have no window mounted on return (it's a
+    /// menu-bar/accessory app).
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme?.lowercased() == "zerro" {
+        for url in urls where url.scheme?.lowercased() == Self.deeplinkScheme {
             Self.handleCheckoutReturn(url)
         }
     }
@@ -983,8 +1003,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func resolveCheckoutReturn(
         _ parsed: CheckoutReturn,
         entitlements: EntitlementStore,
-        effects: CheckoutReturnEffects = .live
+        effects: CheckoutReturnEffects? = nil
     ) async -> CheckoutOutcome {
+        // `.live` is a main-actor-isolated static, but default-argument expressions
+        // are evaluated in a nonisolated context, so `= .live` warns (an error in
+        // the Swift 6 language mode). Default to `nil` and resolve here, inside this
+        // @MainActor body where `.live` is legitimately reachable.
+        let effects = effects ?? .live
         guard let key = parsed.licenseKey else {
             return await resolveCheckoutReturnWithoutKey(entitlements: entitlements, effects: effects)
         }

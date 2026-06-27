@@ -13,14 +13,27 @@
 	<string>phc_tW2QmWsUwgn2pAAq7ynDWTxcHiP97vG5LdQfRtXD9dAy</string>
 	<key>POSTHOG_HOST</key>
 	<string>https://us.i.posthog.com</string>
+	<!-- Managed backend base URL. Wired to the per-configuration
+	     ZERRO_FUNCTIONS_BASE_URL build setting (see apps/desktop/Config/*.xcconfig)
+	     so the Staging build talks to the staging Supabase project while the
+	     production build stays pinned to prod. Read by ManagedBackend. -->
+	<key>ZerroFunctionsBaseURL</key>
+	<string>$(ZERRO_FUNCTIONS_BASE_URL)</string>
+	<!-- Sparkle appcast. Wired to the per-configuration SU_FEED_URL build
+	     setting so each build checks its own update feed. -->
 	<key>SUFeedURL</key>
-	<string>https://getzerro.app/appcast.xml</string>
+	<string>$(SU_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>IV0J9TIWJpe/dL5A/8NvDhfmsjZatlrJA1NPnmX2xiE=</string>
-	<!-- Billing: the `zerro://` scheme LemonSqueezy bounces back to after a
+	<!-- Billing: the custom scheme LemonSqueezy bounces back to after a
 	     checkout (each product's "Redirect URL after purchase" =
-	     zerro://checkout-complete?product=<product>). Handled in
-	     AppDelegate.application(_:open:). -->
+	     <scheme>://checkout-complete?product=<product>). The scheme is
+	     wired to the per-configuration DEEPLINK_SCHEME build setting
+	     (apps/desktop/Config/*.xcconfig): `zerro` for production,
+	     `zerro-staging` for the side-by-side Staging build, so the two
+	     installs never poach each other's checkout callback. Handled in
+	     AppDelegate.application(_:open:), which reads the registered
+	     scheme back from this same array. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -28,7 +41,7 @@
 			<string>com.cbreeding.Zerro.deeplink</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>zerro</string>
+				<string>$(DEEPLINK_SCHEME)</string>
 			</array>
 		</dict>
 	</array>

@@ -70,11 +70,21 @@ Two git branches drive everything: `staging` (→ Supabase staging branch + stag
 app) and `main` (→ production + prod app). You work in feature branches off
 `staging`.
 
-**Stage 0 — Local (fast inner loop).** `git checkout staging && git checkout -b
-feature/x`. Write Swift + migrations + functions. One command (`make dev` /
-`justfile`) boots `supabase start` + `functions serve`; a DEBUG build points at
-`127.0.0.1`. Generate migrations with `supabase db diff`, not by hand. *Nothing to
-deploy — all local.*
+**Stage 0 — Local dev against staging (no Docker).** `git checkout staging &&
+git checkout -b feature/x`. Your DEBUG build runs in Xcode pointed at the
+**staging branch** (`ZERRO_FUNCTIONS_BASE_URL =
+https://waripvlpcpwdmacpjiqc.supabase.co/functions/v1` in the scheme) — **no
+local Supabase / Docker stack.**
+- **App / Swift changes:** just Run (Cmd-R) — nothing to deploy.
+- **Backend changes** (a function or a migration): push only that change to
+  staging with one command — `supabase functions deploy <name> --project-ref
+  waripvlpcpwdmacpjiqc` or `supabase db push --project-ref waripvlpcpwdmacpjiqc`
+  — and your local app sees it immediately. Generate migrations with
+  `supabase db diff`.
+- *Trade-offs you've accepted:* a backend change needs that one deploy command
+  (vs instant locally), staging is **shared with your friend**, and dev needs a
+  network connection. You can still spin up Docker ad hoc if you ever want full
+  isolation, but the default loop is staging.
 
 **Stage 1 — Open a PR into `staging`.** *Automated:*
 - Supabase spins up an **ephemeral preview branch** for the PR — applies
@@ -91,11 +101,23 @@ deploy — all local.*
 - A few minutes later, the staging backend **and** your + your friend's staging
   app (via Sparkle) are current. You just open the app and test.
 
-**Stage 3 — Promote to prod (the one gate).** Open a `staging → main` PR and
-approve it (your single human "go"). On merge to `main`: *Automated:*
+**Stage 3 — Promote to prod (the one gate).** In the `staging → main` PR, **bump
+`apps/desktop/VERSION`** to the new marketing version (e.g. `1.4.18` → `1.4.19`),
+then approve the PR (your single human "go"). On merge to `main`: *Automated:*
 - Supabase deploys migrations + functions to **production**.
-- A release action bumps the version, pushes the `app-v*` tag → your existing
-  release workflow → prod appcast → users auto-update.
+- `auto-release.yml` (triggered only by a change to `apps/desktop/VERSION` on
+  `main`) reads the file and, if no `app-v<version>` tag exists yet, creates and
+  pushes it with `RELEASE_PAT` → that tag push fires your existing
+  `release-app.yml` → prod appcast → users auto-update. Merge a PR that doesn't
+  touch `VERSION` and no release is cut; if `VERSION` is unchanged from the last
+  shipped version, the tag already exists and the workflow skips cleanly.
+
+> **The version bump _is_ the release decision.** Editing the `VERSION` line in
+> the promotion PR is what cuts the build — there's no separate manual
+> `git tag && git push`. `RELEASE_PAT` (not the default `GITHUB_TOKEN`) is
+> required so the tag push is allowed to trigger `release-app.yml`. Introducing
+> the file at the already-shipped version is a no-op, so adding it doesn't
+> release anything — it just arms the next bump.
 
 Net: branch → PR (preview + CI) → merge to staging (auto deploy + staging app) →
 test → approve `staging→main` (auto prod deploy + app release). **Zero manual
@@ -112,8 +134,9 @@ test → approve `staging→main` (auto prod deploy + app release). **Zero manua
 | Per-env config | `config.toml [remotes]` | push | no |
 | Secrets | dotenvx-encrypted `.env.preview` / per-branch | push (set once) | set once, then no |
 | Staging app build | GitHub Actions (`release-staging.yml`) | push to `staging` | no |
-| Prod app build | GitHub Actions (`release-app.yml`, existing) | `app-v*` tag | auto-tagged on `main` merge |
-| Prod **release approval** | you | `staging → main` PR | **yes (intentional gate)** |
+| Prod app build | GitHub Actions (`release-app.yml`, existing) | `app-v*` tag | auto-tagged by `auto-release.yml` |
+| Prod app tag | GitHub Actions (`auto-release.yml`) | `apps/desktop/VERSION` change on `main` | no (bump the file in the PR) |
+| Prod **release approval** | you | `staging → main` PR (bump `apps/desktop/VERSION`) | **yes (intentional gate)** |
 | Secret rotation / LemonSqueezy live dashboard | you | — | **yes (security)** |
 
 This **adopts the Supabase GitHub integration** (reversing the earlier
@@ -171,13 +194,19 @@ Backend / Supabase:
 App / CI:
 - [ ] Make the functions URL build-time configurable (`Info.plist` + `.xcconfig` + `ManagedBackend` patch).
 - [ ] Add the `Staging` build config + `com.cbreeding.Zerro.staging` + staging feed.
-- [ ] `release-staging.yml` (staging app build → `appcast-staging.xml`).
+- [x] `release-staging.yml` (staging app build → `appcast-staging.xml`) — triggers
+      on `staging-v*` tags + manual dispatch; signs/notarizes the **Zerro Staging**
+      scheme and upserts `ZerroStaging.dmg` + `appcast-staging.xml` to the staging
+      `downloads` bucket. Does **not** touch the website or prod appcast.
 - [ ] CI workflow: `ZerroTests` + `supabase db lint` + curl tests + type-gen check on PRs.
-- [ ] Release automation: auto-tag `app-v*` on `staging → main` merge (keep the PR approval as the gate).
+- [x] Release automation: `auto-release.yml` tags `app-v*` from `apps/desktop/VERSION` on `main` (PR approval + the version bump are the gate). Needs a `RELEASE_PAT` repo secret so the tag push triggers `release-app.yml`.
 - [ ] Add `staging` long-lived git branch + branch-protection (PRs required).
 
-Local DX:
-- [ ] `make dev` / `justfile` to boot the local stack + serve in one command.
+Local DX (no Docker):
+- [ ] Local DEBUG build points at staging by default (`ZERRO_FUNCTIONS_BASE_URL`
+      in the Xcode scheme) — local Supabase/Docker stack retired.
+- [ ] Seed a test license / trial into the staging DB so signed-in flows
+      (generation, billing) work, since the branch starts empty.
 
 ---
 
@@ -190,8 +219,9 @@ Local DX:
 | App bundle id | `com.cbreeding.Zerro` | `com.cbreeding.Zerro.staging` |
 | Sparkle feed | `getzerro.app/appcast.xml` | `appcast-staging.xml` on branch Storage |
 | DB/function deploys | auto on merge to `main` | auto on merge to `staging` |
-| App build | `release-app.yml` on `app-v*` | `release-staging.yml` on push to `staging` |
-| Provider API keys / LemonSqueezy | live | dev keys / test mode |
+| App build | `release-app.yml` on `app-v*` | `release-staging.yml` on `staging-v*` tag |
+| Deeplink scheme | `zerro://` (`DEEPLINK_SCHEME=zerro`) | `zerro-staging://` (`DEEPLINK_SCHEME=zerro-staging`) |
+| Provider API keys / LemonSqueezy | live | dev keys / test mode (redirect → `zerro-staging://checkout-complete`) |
 
 ---
 
@@ -211,6 +241,9 @@ Local DX:
 - **AI-Agency:** ✅ pause before upgrading.
 - **Deploy workflow:** ✅ **GitHub-integrated** (Supabase integration + GitHub
   Actions) — full automation; supersedes the earlier CLI-managed choice.
+- **Local dev:** ✅ runs against the **staging branch, no local Docker** — backend
+  changes pushed with one `--project-ref` deploy command; staging doubles as the
+  shared dev + test environment.
 
 Still open:
 - **Phase 1 first, then Phase 2?** (start testing on a DEBUG build while we build

@@ -38,9 +38,27 @@ import os
 /// kept in one place so a future project move is a single-line change.
 enum ManagedBackend {
 
+    /// The production Supabase Edge Functions base — the fallback used when the
+    /// `ZerroFunctionsBaseURL` Info.plist key is missing or empty. NOT a secret.
+    private static let productionFunctionsBaseURLString = "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1"
+
     /// Supabase Edge Functions base. NOT a secret — anyone can call these;
     /// the server enforces auth + credits regardless of who calls.
-    static let functionsBaseURLString = "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1"
+    ///
+    /// Resolved from the `ZerroFunctionsBaseURL` Info.plist key, which the
+    /// xcconfig files wire to the per-configuration `ZERRO_FUNCTIONS_BASE_URL`
+    /// build setting (prod URL for Debug/Release, the staging project for the
+    /// side-by-side "Zerro Staging" build). Falls back to the production URL
+    /// when the key is missing or empty, so a stripped/old Info.plist still
+    /// points at prod rather than crashing. The DEBUG env override below still
+    /// wins on top of this for local model testing.
+    static let functionsBaseURLString: String = {
+        if let raw = Bundle.main.object(forInfoDictionaryKey: "ZerroFunctionsBaseURL") as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return productionFunctionsBaseURLString
+    }()
 
     /// DEBUG-only base-URL override for local model testing. Set the
     /// ZERRO_FUNCTIONS_BASE_URL environment variable in the Xcode scheme

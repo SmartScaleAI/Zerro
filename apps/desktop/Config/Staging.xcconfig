@@ -1,0 +1,34 @@
+// Staging.xcconfig
+// Build settings for the side-by-side "Zerro Staging" app. Wired to the Staging
+// configuration of the app target (see Zerro.xcodeproj). A distinct bundle id
+// and product name let Staging install and run alongside the production Zerro;
+// the backend URL points at the staging Supabase project.
+//
+// NOTE on URLs: xcconfig treats `//` as a comment, which would swallow the
+// `https://` scheme. The `$()` between the scheme's slashes is an empty
+// variable reference — it parses without starting a comment and expands to
+// nothing, so the resolved value is a normal `https://…` URL.
+//
+// SU_FEED_URL is provisional here — finalized in the staging release step.
+
+ZERRO_FUNCTIONS_BASE_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/functions/v1
+SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml
+PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
+PRODUCT_NAME = Zerro Staging
+
+// Staging-only compile flag. Defines a `STAGING` active-compilation condition so
+// `#if STAGING` is true ONLY in this configuration — independent of `#if DEBUG`,
+// since the Staging build is release-type (optimized, no DEBUG). Gates the amber
+// "this is staging" markers (recording overlay border + badge, amber menu-bar
+// icon, staging app icon) so the Production build is never affected. `$(inherited)`
+// preserves any condition set by a lower-priority layer. Read in code via
+// `Build.isStaging` (see Zerro/BuildEnvironment.swift).
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) STAGING
+
+// Distinct deep-link scheme for the side-by-side Staging build. The production
+// build registers `zerro://`; Staging registers `zerro-staging://` so a
+// LemonSqueezy checkout callback routes to the build that started it and never
+// bounces to the other install. Set the LS test-mode "Redirect URL after
+// purchase" to zerro-staging://checkout-complete to match. See
+// Config/Production.xcconfig for how this flows into Info.plist + AppDelegate.
+DEEPLINK_SCHEME = zerro-staging

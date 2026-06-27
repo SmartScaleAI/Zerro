@@ -1,0 +1,352 @@
+name: Release (macOS app — Staging)
+
+# Side-by-side "Zerro Staging" release. Adapted from release-app.yml (the prod
+# release) but pointed entirely at the STAGING channel: it builds the Staging
+# configuration, ships the dmg + appcast to the staging Supabase project, and
+# NEVER touches the website or the production appcast.
+#
+# Trigger: push a staging version tag like staging-v1.0.7
+#   git tag staging-v1.0.7 && git push origin staging-v1.0.7
+on:
+  push:
+    tags:
+      - "staging-v*"
+  # Allow manually re-running for a given version from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version (e.g. 1.0.7). Used only for manual runs."
+        required: true
+
+# Read-only: unlike the prod release this never creates a GitHub Release and
+# never pushes an appcast commit — the staging appcast lives in Supabase Storage.
+permissions:
+  contents: read
+
+# Never run two staging releases at once: both would upsert the same dmg +
+# appcast object in the staging bucket.
+concurrency:
+  group: release-staging
+  cancel-in-progress: false
+
+# All build/sign steps run from the app directory inside the monorepo.
+defaults:
+  run:
+    working-directory: apps/desktop
+
+env:
+  SCHEME: Zerro Staging               # shared scheme that builds the app as Staging
+  CONFIGURATION: Staging
+  APP_NAME: Zerro Staging             # the built product is "Zerro Staging.app"
+  DMG_NAME: ZerroStaging.dmg          # dmg filename — NO spaces (task requirement)
+  BUNDLE_ID: com.cbreeding.Zerro.staging
+  TEAM_ID: H6NWCRRAHV
+  # Staging Supabase project. The downloads bucket is public; reads resolve at
+  # …/storage/v1/object/public/downloads/<name>.
+  STAGING_PROJECT_REF: waripvlpcpwdmacpjiqc
+  SPARKLE_VERSION: "2.9.2"            # must match the app's pinned Sparkle
+
+jobs:
+  release:
+    runs-on: macos-26      # default Xcode 26.4.x — required for the macOS 26.4 deployment target
+    steps:
+      # ----------------------------------------------------------------------
+      - name: Checkout app repo
+        # Pinned to a full commit SHA (supply-chain hardening L-03). The trailing
+        # comment is the human-readable tag the SHA corresponds to; bump both
+        # together when upgrading.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0          # tags + full history for build-number derivation
+
+      # ----------------------------------------------------------------------
+      # Derive versions. Marketing version comes from the tag
+      # (staging-v1.0.2 -> 1.0.2). Build number = total commit count, which is
+      # monotonically increasing and therefore always greater than the last
+      # staging release (Sparkle requires this).
+      - name: Derive version + build number
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MARKETING="${{ github.event.inputs.version }}"
+          else
+            MARKETING="${GITHUB_REF_NAME#staging-v}"
+          fi
+          BUILD="$(git rev-list --count HEAD)"
+          echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "Releasing Staging $MARKETING (build $BUILD)"
+
+      # ----------------------------------------------------------------------
+      # Select the Xcode toolchain. Pinned to 26.4.x to keep the build toolchain
+      # aligned with the macOS 26.4 deployment target (same pin as the prod
+      # release).
+      - name: Select Xcode 26.4
+        run: |
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_26.4*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::Xcode 26.4 not found on runner. Available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+          swift --version
+
+      # ----------------------------------------------------------------------
+      # Import the Developer ID certificate into a temporary keychain. Same
+      # certificate + secrets as the prod release (staging is signed with the
+      # SAME Developer ID identity — only the bundle id differs). The keychain
+      # (and thus the key) is destroyed when the job finishes.
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo "$CERT_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" -P "$CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Allow codesign to use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Put our keychain first in the search list so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed s/\"//g)
+
+          rm -f "$CERT_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      # ----------------------------------------------------------------------
+      # Fetch the Sparkle CLI tools (generate_appcast) that match the app's
+      # pinned Sparkle version.
+      - name: Fetch Sparkle tools
+        env:
+          # SHA-256 of the official Sparkle-2.9.2.tar.xz release asset (supply-chain
+          # hardening L-02). generate_appcast below is fed the EdDSA *private*
+          # signing key on stdin, so a tampered tarball could exfiltrate it — this
+          # digest must be bumped in lockstep with SPARKLE_VERSION (env, top of file).
+          SPARKLE_SHA256: "1cb340cbbef04c6c0d162078610c25e2221031d794a3449d89f2f56f4df77c95"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          curl -fsSL "$URL" -o sparkle.tar.xz
+          # Integrity gate: verify the download against the pinned digest and FAIL
+          # the job on mismatch, BEFORE extracting or handing the key to it.
+          echo "${SPARKLE_SHA256}  sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p sparkle && tar -xf sparkle.tar.xz -C sparkle
+          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/sparkle/bin/generate_appcast" --version || true
+
+      # ----------------------------------------------------------------------
+      # Archive the Staging configuration. Versions are passed directly to
+      # xcodebuild (command-line build settings always override the pbxproj).
+      #
+      # NOTE: the app target's "Upload dSYMs to PostHog" Run Script phase self-
+      # skips when POSTHOG_CLI_API_KEY is unset, so staging archives do NOT upload
+      # dSYMs to the (production) PostHog project — we deliberately leave that env
+      # unset here.
+      - name: Archive (Staging)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "Zerro.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -archivePath "$RUNNER_TEMP/ZerroStaging.xcarchive" \
+            archive \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}"
+
+      - name: Export Developer ID app
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/ZerroStaging.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "Scripts/ExportOptions.plist"
+          test -d "$RUNNER_TEMP/export/$APP_NAME.app"
+
+      # Fail fast if the built app's versions don't match the tag — this is what
+      # generate_appcast reads, so a mismatch here ships a bad appcast.
+      - name: Verify app version matches tag
+        run: |
+          set -euo pipefail
+          PLIST="$RUNNER_TEMP/export/$APP_NAME.app/Contents/Info.plist"
+          GOT_MARKETING="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$PLIST")"
+          GOT_BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$PLIST")"
+          echo "App reports: $GOT_MARKETING (build $GOT_BUILD); expected ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
+          [ "$GOT_MARKETING" = "${{ steps.ver.outputs.marketing }}" ] || { echo "::error::Marketing version mismatch"; exit 1; }
+          [ "$GOT_BUILD" = "${{ steps.ver.outputs.build }}" ] || { echo "::error::Build number mismatch"; exit 1; }
+
+      # Staging must register zerro-staging:// (NOT prod's zerro://) so a
+      # LemonSqueezy test-mode checkout callback routes to this build and never
+      # bounces to a prod install. Fail the release if the wrong scheme is baked in.
+      - name: Verify staging deeplink scheme + bundle id
+        run: |
+          set -euo pipefail
+          PLIST="$RUNNER_TEMP/export/$APP_NAME.app/Contents/Info.plist"
+          GOT_SCHEME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$PLIST")"
+          GOT_BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$PLIST")"
+          echo "Staging build registers scheme '$GOT_SCHEME' (bundle $GOT_BUNDLE)"
+          [ "$GOT_SCHEME" = "zerro-staging" ] || { echo "::error::expected deeplink scheme zerro-staging, got '$GOT_SCHEME'"; exit 1; }
+          [ "$GOT_BUNDLE" = "$BUNDLE_ID" ] || { echo "::error::expected bundle id $BUNDLE_ID, got '$GOT_BUNDLE'"; exit 1; }
+
+      - name: Verify signature + hardened runtime
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/export/$APP_NAME.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvvv "$APP" 2>&1 | grep -q "flags=.*runtime" \
+            || { echo "Hardened runtime not enabled — notarization would fail."; exit 1; }
+
+      # ----------------------------------------------------------------------
+      - name: Build dmg
+        run: |
+          set -euo pipefail
+          STAGE="$(mktemp -d)"
+          cp -R "$RUNNER_TEMP/export/$APP_NAME.app" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications" || true
+          mkdir -p dist
+          # Volume name keeps the human-readable "Zerro Staging" (what users see
+          # mounted); the file is the no-spaces ZerroStaging.dmg.
+          hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" \
+            -ov -format UDZO "dist/$DMG_NAME"
+          rm -rf "$STAGE"
+          codesign --force --sign "Developer ID Application" --timestamp "dist/$DMG_NAME"
+
+      # ----------------------------------------------------------------------
+      - name: Notarize + staple
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$AC_API_KEY_P8" > "$KEY_PATH"
+
+          if ! xcrun notarytool submit "dist/$DMG_NAME" \
+                --key "$KEY_PATH" \
+                --key-id "$AC_API_KEY_ID" \
+                --issuer "$AC_API_ISSUER_ID" \
+                --wait; then
+            echo "Notarization failed — fetching log…"
+            SUB_ID="$(xcrun notarytool history --key "$KEY_PATH" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" 2>/dev/null | awk '/id:/ {print $2; exit}')"
+            [ -n "${SUB_ID:-}" ] && xcrun notarytool log "$SUB_ID" --key "$KEY_PATH" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" || true
+            rm -f "$KEY_PATH"
+            exit 1
+          fi
+          rm -f "$KEY_PATH"
+
+          xcrun stapler staple "dist/$DMG_NAME"
+
+          # `stapler validate` on a DMG does an ONLINE ticket lookup; immediately
+          # after "Accepted" the ticket can take a moment to become queryable, so
+          # a single validate flakes. The staple above already succeeded; retry to
+          # ride out ticket propagation rather than failing a good release.
+          for attempt in 1 2 3 4 5 6; do
+            if xcrun stapler validate "dist/$DMG_NAME"; then
+              echo "stapler validate succeeded on attempt $attempt."
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::stapler validate still failing after $attempt attempts."
+              exit 1
+            fi
+            echo "stapler validate attempt $attempt failed (ticket may still be propagating); retrying in 20s…"
+            sleep 20
+          done
+
+      # ----------------------------------------------------------------------
+      # Upload the notarized + stapled dmg to the staging downloads bucket. The
+      # staging app's SUFeedURL points at this same project's public downloads
+      # path, so this is the only place the staging build is served from.
+      #
+      # The dmg name is constant (ZerroStaging.dmg) and the appcast is regenerated
+      # to match on every run, so a single mutable object is correct here — there
+      # is no cross-release signature-immutability constraint (unlike prod's
+      # versioned objects). x-upsert lets a re-run replace the object in place.
+      #
+      # SECURITY (mirrors prod's L-01): STAGING_SERVICE_ROLE_KEY is full backend
+      # access (bypasses RLS) and is over-privileged for a bucket upsert, but the
+      # bucket has no RLS write policy so service_role is currently the only write
+      # path. The key is a registered GitHub secret (auto-masked) and is never
+      # echoed — no `set -x`, no `curl -v`.
+      - name: Upload notarized dmg to staging Storage
+        env:
+          STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
+          curl --fail-with-body -X POST \
+            "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/${DMG_NAME}" \
+            -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/${DMG_NAME}"
+
+      # ----------------------------------------------------------------------
+      # Generate the signed STAGING appcast. dist holds only ZerroStaging.dmg, so
+      # this is a single-item feed whose enclosure resolves to the public,
+      # constant dmg URL; generate_appcast computes its length + edSignature from
+      # the actual build, so the feed can never drift from the shipped dmg. We do
+      # NOT seed from a previous appcast: the dmg object is mutable, so a
+      # cumulative feed would carry stale signatures for the same URL. A fresh
+      # single-item feed always matches the dmg just uploaded.
+      - name: Generate signed staging appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          DL_PREFIX="https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/"
+
+          echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "$DL_PREFIX" \
+            --link "https://getzerro.app/" \
+            -o "dist/appcast-staging.xml" \
+            "dist"
+
+          # Invariant: the feed must reference the staging dmg's public URL. Fail
+          # the release rather than publish a feed that points nowhere.
+          if ! grep -qF "downloads/${DMG_NAME}\"" "dist/appcast-staging.xml"; then
+            echo "::error::staging appcast is missing the enclosure for ${DMG_NAME}"; exit 1
+          fi
+          echo "----- appcast-staging.xml -----"
+          cat "dist/appcast-staging.xml"
+
+      # ----------------------------------------------------------------------
+      # Publish the staging appcast to the SAME staging bucket (NOT the website,
+      # NOT the prod appcast). The staging app reads it from the public path.
+      - name: Upload staging appcast to staging Storage
+        env:
+          STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
+          curl --fail-with-body -X POST \
+            "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/appcast-staging.xml" \
+            -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/xml" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/appcast-staging.xml"
+
+      - name: Done
+        run: |
+          echo "Released Staging ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})."
+          echo "dmg:     https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/${DMG_NAME}"
+          echo "appcast: https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml"

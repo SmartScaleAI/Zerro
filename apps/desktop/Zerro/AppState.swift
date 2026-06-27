@@ -876,6 +876,17 @@ final class AppState {
     /// completion / cancel so memory is reclaimed.
     private var recordingSession: RecordingSession?
 
+    #if STAGING
+    /// Staging-only amber "you're recording against Staging" frame around the
+    /// display being recorded. Owned here (rather than in `ZerroApp` like the
+    /// other overlay controllers) and driven explicitly from the start/teardown
+    /// paths below, because it must be raised BEFORE `RecordingSession.start()`
+    /// enumerates windows — so its window number can be excluded from the
+    /// capture filter — a moment that precedes the `.recording` state the
+    /// self-observing overlays key off. Absent from the Production binary.
+    private let stagingRecordingMarker = StagingRecordingMarkerWindowController()
+    #endif
+
     /// The in-flight processing/prompt-generation work, held so a cancel
     /// during the .processing phase can actually abort it. runProcessing
     /// and runPromptGeneration run sequentially (the latter is called
@@ -1129,6 +1140,19 @@ final class AppState {
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
 
+        // Staging: raise the amber recording frame on the display being recorded
+        // BEFORE the session enumerates windows, and hand its window number to
+        // the capture filter so the frame is excluded from the output (on macOS
+        // 15+ only content-filter exclusion works — see RecordingSession). The
+        // frame shows for BOTH full-display and region records; for a region
+        // record it also falls outside the cropped rect. Production: empty.
+        #if STAGING
+        stagingRecordingMarker.show(for: selection)
+        let captureExcludedWindowNumbers = stagingRecordingMarker.excludedWindowNumber.map { [$0] } ?? []
+        #else
+        let captureExcludedWindowNumbers: [Int] = []
+        #endif
+
         let session = RecordingSession(
             selection: selection,
             microphoneDeviceID: microphoneDeviceID,
@@ -1150,7 +1174,10 @@ final class AppState {
             // for a Dev Mode recording. `recordingIsDevMode` is already set above
             // from the `devMode` selection; a normal recording captures none and
             // stays byte-identical.
-            capturesCursorTrack: recordingIsDevMode
+            capturesCursorTrack: recordingIsDevMode,
+            // Staging recording-marker window (empty in Production) — kept out of
+            // the capture via the content filter's excludingWindows.
+            excludedWindowNumbers: captureExcludedWindowNumbers
         )
         recordingSession = session
 
@@ -1196,6 +1223,12 @@ final class AppState {
                 let orphanedURL = session.outputURL
                 Task.detached(priority: .utility) { WorkingDirectory.remove(at: orphanedURL) }
                 guard let self, self.recordingSession === session else { return }
+                // Start failed: drop the Staging recording frame raised before
+                // start() (guarded above so a superseding recording's frame is
+                // left alone). No-op in Production.
+                #if STAGING
+                self.stagingRecordingMarker.hide()
+                #endif
                 self.recordingSession = nil
                 self.activeSelection = nil
                 let reason = Self.failureReason(from: error)
@@ -1333,6 +1366,13 @@ final class AppState {
     /// they legitimately differ between paths.
     private func resetTransientRecordingState() {
         recordingSession = nil
+        // Belt-and-suspenders for the Staging recording frame: covers the
+        // teardown paths that bypass `handleSessionFinish` (user cancel,
+        // mid-session TCC revocation, too-short discard). Idempotent with the
+        // hide there. No-op in Production.
+        #if STAGING
+        stagingRecordingMarker.hide()
+        #endif
         elapsedSeconds = 0
         frameCount = 0
         audioLevels = Array(repeating: 0, count: AppState.waveformBarCount)
@@ -1608,6 +1648,13 @@ final class AppState {
     /// of recordingSession and the transition into the next state.
     private func handleSessionFinish(_ outcome: RecordingSession.Outcome) {
         recordingSession = nil
+        // Capture has ended (every outcome — finished/auto-stop/cancelled/failed/
+        // interrupted): drop the Staging recording frame. Covers the normal-stop
+        // success path too, which transitions to `.processing` WITHOUT going
+        // through `resetTransientRecordingState`. No-op in Production.
+        #if STAGING
+        stagingRecordingMarker.hide()
+        #endif
         // Mid-session revocation already set state = .failed and tore
         // down everything we'd reset here. The writer's tail callback
         // (.cancelled because we called session.cancel(); or .failed

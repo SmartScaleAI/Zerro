@@ -214,5 +214,14 @@ private struct RecordingFocusView: View {
             .fill(Color.black.opacity(0.5), style: FillStyle(eoFill: true))
         }
         .ignoresSafeArea()
+        // Staging-only: amber edge border + "STAGING" badge on the focus dim
+        // shown during an active recording — the moment of capture. The border
+        // traces the screen edge and the badge sits in a corner, both outside
+        // the cleared cutout (the captured region), so the capture is unobscured.
+        // Absent from the production binary (the modifier only exists under
+        // #if STAGING).
+        #if STAGING
+        .stagingOverlayMarker()
+        #endif
     }
 }

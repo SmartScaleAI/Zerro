@@ -12,7 +12,14 @@
 import CoreGraphics
 import Foundation
 
-enum ProcessingConfig {
+// `nonisolated` so this bag of pure tunables opts OUT of the project's
+// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` default. These are plain Sendable
+// constants + pure math — nothing main-actor about them — and several are read
+// from nonisolated contexts (e.g. `DevAnchorPipeline.build`'s default arguments,
+// the off-main eval extraction runner). Without this, every constant becomes a
+// main-actor-isolated static and those reads warn ("can not be referenced from a
+// nonisolated context" — an error in the Swift 6 language mode).
+nonisolated enum ProcessingConfig {
 
     /// Fallback/top-up cadence, in seconds. No longer the primary sampler:
     /// Phase 2 keyframes on real visual change (see the analysis tunables

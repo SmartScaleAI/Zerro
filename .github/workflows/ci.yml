@@ -1,0 +1,200 @@
+name: CI
+
+# Pull-request checks for the two long-lived branches we merge into.
+# Unit-level only: Swift (desktop app) + Deno (Supabase edge functions).
+#
+# Why no DB-lint / migration job here:
+#   Database migrations are already validated on every PR by the Supabase
+#   preview branch's `migrate` step (it applies supabase/migrations against a
+#   throwaway branch database and fails the PR on a bad migration). Duplicating
+#   that here would only add a slower, less authoritative second signal, so this
+#   workflow deliberately omits it.
+on:
+  pull_request:
+    branches:
+      - staging
+      - main
+
+# One run per PR: cancel an in-flight run when new commits are pushed. The macOS
+# test job is the expensive one, so dropping superseded runs is the main lever
+# for keeping macOS minutes down.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Read-only: these jobs only check out code and run tests. No write scopes.
+# pull-requests:read lets dorny/paths-filter read the PR's changed-file list
+# from the GitHub API on pull_request events.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cheap ubuntu job that decides which heavy jobs need to run. We do PER-JOB
+  # path filtering here (computed once, fanned out via `needs`) rather than a
+  # workflow-level `on: pull_request: paths:` filter. Per-job filtering means a
+  # docs-only or web-only PR still gets a green CI status, while the costly
+  # macOS test job never spins up unless apps/desktop actually changed — that's
+  # the macOS-minutes saving. (For pull_request events dorny/paths-filter reads
+  # the changed-file list from the GitHub API, so this job needs no checkout.)
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+      edge: ${{ steps.filter.outputs.edge }}
+    steps:
+      # Pinned to a full commit SHA (supply-chain hardening, matching
+      # release-app.yml). Trailing comment is the human-readable tag the SHA
+      # maps to; bump both together when upgrading.
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
+        with:
+          filters: |
+            desktop:
+              - 'apps/desktop/**'
+            edge:
+              - 'supabase/functions/**'
+
+  # ---------------------------------------------------------------------------
+  # Swift unit tests for the macOS app. Only runs when the desktop app changed.
+  swift-tests:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-26      # default Xcode 26.4.x — matches release-app.yml's runner
+    defaults:
+      run:
+        working-directory: apps/desktop
+    env:
+      SCHEME: Zerro
+    steps:
+      # Pinned to the same SHA release-app.yml uses (v4.3.1).
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      # Select the Xcode toolchain the SAME way release-app.yml does: glob for
+      # the 26.4.x app and fail loudly if it isn't on the runner. Pinned to
+      # 26.4.x to stay aligned with the macOS 26.4 deployment target's toolchain.
+      - name: Select Xcode 26.4
+        run: |
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_26.4*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::Xcode 26.4 not found on runner. Available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+          swift --version
+
+      # Build + run the ZerroTests bundle. Debug config, macOS destination, code
+      # signing disabled (CI has no Developer ID identity and the test bundle
+      # doesn't need one). Output is tee'd so the next step can confirm the
+      # tests actually executed. set -o pipefail keeps xcodebuild's exit status
+      # through the tee.
+      #
+      # -parallel-testing-enabled NO: the process-spawning suites (notably
+      # DevAgentRunnerTests, which shells out to spawn agent CLIs) flake under
+      # Xcode's parallel test runner — a worker that forks a child races the
+      # other workers and intermittently fails fast (e.g.
+      # DevAgentRunnerTests.testSuccessCapturesResultSummary failing in ~0.02s).
+      # All 764 tests pass deterministically when run serially, so we force a
+      # single worker here. If full-serial wall-time becomes a concern, swap this
+      # for a test plan that marks only the process-spawning suites
+      # non-parallelizable instead of serializing the whole bundle.
+      - name: Run ZerroTests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Zerro.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+
+      # Guard against the silent "linked & launched but ran zero tests" mode,
+      # which xcodebuild still reports as ** TEST SUCCEEDED **. With parallel
+      # testing disabled (see above) the serial runner prints `Test Suite
+      # 'ZerroTests.xctest' started`; the parallel runner instead prints one
+      # `Test case '...' passed/failed on 'My Mac…'` line per case. The pattern
+      # matches either so the guard survives a future re-enable of parallelism —
+      # require at least one such line so a misconfigured scheme that executes
+      # nothing fails the job.
+      - name: Confirm ZerroTests executed
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/swift-test.log"
+          COUNT="$(grep -acE "Test case '.*' (passed|failed)|Test Suite 'ZerroTests" "$LOG" || true)"
+          echo "ZerroTests reported $COUNT executed test case line(s)."
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::ZerroTests target did not execute any tests."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Deno unit tests for the Supabase edge functions. Only runs when a function
+  # changed.
+  edge-tests:
+    needs: changes
+    if: needs.changes.outputs.edge == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase/functions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      # Pinned to a full commit SHA (supply-chain hardening). deno-version is
+      # pinned to the runtime the suite was verified against locally; bump both
+      # the SHA and the version deliberately.
+      - name: Setup Deno
+        uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282  # v2.0.4
+        with:
+          deno-version: "2.8.3"
+
+      # Discover and run every *_test.ts suite under supabase/functions.
+      #   --allow-env  : config.ts reads function settings from env (and the
+      #                  generate/test_setup.ts harness sets test env).
+      #   --allow-read : the prompt-mirror tests read the locked prompt files
+      #                  under apps/desktop/Scripts/artifact-eval, so the read
+      #                  grant is intentionally NOT path-scoped.
+      # (deno test auto-discovers *_test.ts, so no explicit file list is needed.)
+      - name: Run edge-function tests
+        run: deno test --allow-env --allow-read
+
+  # ---------------------------------------------------------------------------
+  # Aggregate gate. THIS is the single job to mark as the required status check
+  # in branch protection — never swift-tests / edge-tests directly. Because
+  # those two are path-gated, a PR that doesn't touch apps/desktop (or
+  # supabase/functions) leaves the corresponding job `skipped`; a `skipped`
+  # required check never resolves and would block the PR forever. This job
+  # always runs (`if: always()`) and treats `skipped` as OK, so it goes green on
+  # such PRs — while still failing if a job that DID run failed or was cancelled.
+  ci-passed:
+    needs: [swift-tests, edge-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs passed (skipped is OK)
+        run: |
+          set -euo pipefail
+          swift='${{ needs.swift-tests.result }}'
+          edge='${{ needs.edge-tests.result }}'
+          echo "swift-tests: $swift"
+          echo "edge-tests:  $edge"
+          # A path-gated job that didn't run is `skipped` — that's fine. Anything
+          # else that isn't a clean `success` (i.e. failure or cancelled) fails
+          # the gate.
+          for r in "$swift" "$edge"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;
+            esac
+          done
+          echo "All required CI jobs passed (or were correctly skipped)."

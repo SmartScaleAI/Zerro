@@ -66,6 +66,13 @@ struct AreaSelectorView: View {
                 toolbarTooltip(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
+            // Staging-only: amber edge border + "STAGING" badge so the capture
+            // overlay can never be confused with production. Periphery-only and
+            // click-through, so it never obstructs the selection. Absent from
+            // the production binary (the modifier only exists under #if STAGING).
+            #if STAGING
+            .stagingOverlayMarker(topInset: topInset)
+            #endif
         }
     }
 
