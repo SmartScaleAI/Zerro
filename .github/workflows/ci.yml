@@ -95,6 +95,16 @@ jobs:
       # doesn't need one). Output is tee'd so the next step can confirm the
       # tests actually executed. set -o pipefail keeps xcodebuild's exit status
       # through the tee.
+      #
+      # -parallel-testing-enabled NO: the process-spawning suites (notably
+      # DevAgentRunnerTests, which shells out to spawn agent CLIs) flake under
+      # Xcode's parallel test runner — a worker that forks a child races the
+      # other workers and intermittently fails fast (e.g.
+      # DevAgentRunnerTests.testSuccessCapturesResultSummary failing in ~0.02s).
+      # All 764 tests pass deterministically when run serially, so we force a
+      # single worker here. If full-serial wall-time becomes a concern, swap this
+      # for a test plan that marks only the process-spawning suites
+      # non-parallelizable instead of serializing the whole bundle.
       - name: Run ZerroTests
         run: |
           set -euo pipefail
@@ -103,15 +113,18 @@ jobs:
             -scheme "$SCHEME" \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$RUNNER_TEMP/swift-test.log"
 
       # Guard against the silent "linked & launched but ran zero tests" mode,
-      # which xcodebuild still reports as ** TEST SUCCEEDED **. The Xcode 26.x
-      # parallel runner prints one `Test case '...' passed/failed on 'My Mac…'`
-      # line per case (older Xcode prints `Test Suite 'ZerroTests.xctest'
-      # started`); require at least one such line so a misconfigured scheme that
-      # executes nothing fails the job.
+      # which xcodebuild still reports as ** TEST SUCCEEDED **. With parallel
+      # testing disabled (see above) the serial runner prints `Test Suite
+      # 'ZerroTests.xctest' started`; the parallel runner instead prints one
+      # `Test case '...' passed/failed on 'My Mac…'` line per case. The pattern
+      # matches either so the guard survives a future re-enable of parallelism —
+      # require at least one such line so a misconfigured scheme that executes
+      # nothing fails the job.
       - name: Confirm ZerroTests executed
         run: |
           set -euo pipefail
