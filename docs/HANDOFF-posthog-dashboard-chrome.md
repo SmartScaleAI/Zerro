@@ -66,16 +66,15 @@ tile as a section header.
 
 ### 2.1 — `[App] Onboarding step funnel`  (Funnel)
 - Insight type: **Funnels**.
-- Add these steps IN ORDER. Steps 1–6 are all the SAME event
-  `onboarding_step_viewed` with a property filter on `step`; step 7 is a
+- Add these steps IN ORDER. Steps 1–5 are all the SAME event
+  `onboarding_step_viewed` with a property filter on `step`; step 6 is a
   different event:
   1. `onboarding_step_viewed` where `step` = `welcome`
   2. `onboarding_step_viewed` where `step` = `consent`
   3. `onboarding_step_viewed` where `step` = `email`
-  4. `onboarding_step_viewed` where `step` = `screen_recording`
-  5. `onboarding_step_viewed` where `step` = `microphone`
-  6. `onboarding_step_viewed` where `step` = `all_set`
-  7. `onboarding_completed`
+  4. `onboarding_step_viewed` where `step` = `permissions`
+  5. `onboarding_step_viewed` where `step` = `all_set`
+  6. `onboarding_completed`
 - Set **conversion window** to **1 day**.
 - Title `[App] Onboarding step funnel`. Save & add to dashboard.
 

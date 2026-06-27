@@ -13,7 +13,7 @@
 //      `allCases.count`-driven, so the count is a shipped contract.
 //
 //  Specifically pins the Dev Mode step (educational, shown to all users)
-//  between Microphone and All Set.
+//  between the merged Permissions step and All Set.
 //
 
 import XCTest
@@ -21,12 +21,12 @@ import XCTest
 
 final class OnboardingStepTests: XCTestCase {
 
-    /// Dev Mode sits immediately between Microphone and All Set.
+    /// Dev Mode sits immediately between Permissions and All Set.
     func testDevModeOrdering() {
         XCTAssertEqual(
             OnboardingStep.devMode.rawValue,
-            OnboardingStep.microphone.rawValue + 1,
-            "Dev Mode must come immediately after Microphone"
+            OnboardingStep.permissions.rawValue + 1,
+            "Dev Mode must come immediately after Permissions"
         )
         XCTAssertEqual(
             OnboardingStep.allSet.rawValue,
@@ -40,9 +40,14 @@ final class OnboardingStepTests: XCTestCase {
         XCTAssertEqual(OnboardingStep.devMode.analyticsName, "dev_mode")
     }
 
+    /// Stable analytics id for the merged Screen Recording + Microphone step.
+    func testPermissionsAnalyticsName() {
+        XCTAssertEqual(OnboardingStep.permissions.analyticsName, "permissions")
+    }
+
     /// Total step count is a shipped contract (drives the dots + funnel
-    /// `total_steps`). Welcome → Consent → Email → Screen → Mic → Dev → Ready.
+    /// `total_steps`). Welcome → Consent → Email → Permissions → Dev → Ready.
     func testStepCount() {
-        XCTAssertEqual(OnboardingStep.allCases.count, 7)
+        XCTAssertEqual(OnboardingStep.allCases.count, 6)
     }
 }

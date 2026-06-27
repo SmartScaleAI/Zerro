@@ -24,8 +24,7 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     case welcome = 0
     case consent
     case email
-    case screenRecording
-    case microphone
+    case permissions   // merged Screen Recording + Microphone
     case devMode      // NEW — educational, shown to all users
     case allSet
 
@@ -38,13 +37,12 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     /// constant across releases.
     var analyticsName: String {
         switch self {
-        case .welcome:         return "welcome"
-        case .consent:         return "consent"
-        case .email:           return "email"
-        case .screenRecording: return "screen_recording"
-        case .microphone:      return "microphone"
-        case .devMode:         return "dev_mode"
-        case .allSet:          return "all_set"
+        case .welcome:     return "welcome"
+        case .consent:     return "consent"
+        case .email:       return "email"
+        case .permissions: return "permissions"
+        case .devMode:     return "dev_mode"
+        case .allSet:      return "all_set"
         }
     }
 
@@ -52,13 +50,12 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
     /// titles live in the step views themselves.
     var devLabel: String {
         switch self {
-        case .welcome:         return "1 \u{00B7} Welcome"
-        case .consent:         return "2 \u{00B7} Consent"
-        case .email:           return "3 \u{00B7} Email"
-        case .screenRecording: return "4 \u{00B7} Screen"
-        case .microphone:      return "5 \u{00B7} Mic"
-        case .devMode:         return "6 \u{00B7} Dev"
-        case .allSet:          return "7 \u{00B7} Ready"
+        case .welcome:     return "1 \u{00B7} Welcome"
+        case .consent:     return "2 \u{00B7} Consent"
+        case .email:       return "3 \u{00B7} Email"
+        case .permissions: return "4 \u{00B7} Permissions"
+        case .devMode:     return "5 \u{00B7} Dev"
+        case .allSet:      return "6 \u{00B7} Ready"
         }
     }
 }

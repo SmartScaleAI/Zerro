@@ -663,14 +663,14 @@ struct ZerroApp: App {
         )
 
         if permissions.screenRecordingStatus != .granted {
-            Log.hotkey.notice("gating: screen recording not granted — opening onboarding @ screenRecording")
-            onboarding.jump(to: .screenRecording)
+            Log.hotkey.notice("gating: screen recording not granted — opening onboarding @ permissions")
+            onboarding.jump(to: .permissions)
             AppDelegate.openOnboarding()
             return
         }
         if permissions.microphoneStatus != .granted {
-            Log.hotkey.notice("gating: microphone not granted — opening onboarding @ microphone")
-            onboarding.jump(to: .microphone)
+            Log.hotkey.notice("gating: microphone not granted — opening onboarding @ permissions")
+            onboarding.jump(to: .permissions)
             AppDelegate.openOnboarding()
             return
         }
