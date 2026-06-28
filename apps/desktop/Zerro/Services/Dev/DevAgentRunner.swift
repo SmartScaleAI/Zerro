@@ -44,6 +44,17 @@ import os
 
 // MARK: - Public result/status types
 
+/// A normalized snapshot of the agent's own to-do/plan list — the pill's roadmap
+/// line ("[2/5] Adding auth middleware…"). All three agents emit the FULL list on
+/// every update; `planFrom` collapses one to this 1-based current-step view. The
+/// `title` is ON-SCREEN ONLY — never analytics (same invariant as the file/command
+/// detail in Phases 1–2).
+struct DevRunPlan: Equatable, Sendable {
+    let step: Int
+    let total: Int
+    let title: String
+}
+
 /// Live single-line progress for the pill's `agentRunning` substatus. Carries the
 /// activity's specifics (the file / command / pattern) so the pill shows *what*
 /// the agent is doing right now — "Reading authMiddleware.ts…", "Running npm
@@ -56,12 +67,14 @@ enum DevRunSubstatus: Equatable, Sendable {
     case listing(dir: String)
     case editing(file: String)
     case running(command: String)
+    /// The agent's own plan/roadmap step (Phase 3) — "[2/5] Adding auth middleware…".
+    case planStep(step: Int, total: Int, title: String)
     case working
     case done
 
-    /// Short pill label. The detail (file / command / pattern) is capped so the
-    /// capsule can't blow out and the elapsed-clock suffix stays visible; an empty
-    /// detail falls back to the generic phrasing.
+    /// Short pill label. The detail (file / command / pattern / plan title) is
+    /// capped so the capsule can't blow out and the elapsed-clock suffix stays
+    /// visible; an empty detail falls back to the generic phrasing.
     var label: String {
         switch self {
         case .reading(let f):    return f.isEmpty ? "Reading files…"            : "Reading \(Self.capped(f))…"
@@ -69,6 +82,11 @@ enum DevRunSubstatus: Equatable, Sendable {
         case .listing(let d):    return d.isEmpty ? "Listing files…"            : "Listing \(Self.capped(d))…"
         case .editing(let f):    return f.isEmpty ? "Editing files…"            : "Editing \(Self.capped(f))…"
         case .running(let c):    return c.isEmpty ? "Running commands…"         : "Running \(Self.capped(c))…"
+        // Bracket/colon form, deliberately WITHOUT " · " — `ProcessingPillContent`
+        // splits the dev label on " \u{00B7} " to pin the elapsed timer, so the plan
+        // line must not contain that separator.
+        case .planStep(let step, let total, let title):
+            return title.isEmpty ? "Step \(step) of \(total)…" : "[\(step)/\(total)] \(Self.capped(title))…"
         case .working:           return "Working on your changes…"
         case .done:              return "Done"
         }
@@ -103,6 +121,7 @@ struct DevAgentEvent: Sendable, Identifiable {
         case running       // detail: command
         case message       // detail: the agent's narration text
         case toolResult    // detail: a short result summary (reserved)
+        case plan(DevRunPlan) // the agent's to-do/plan step (Phase 3); rides in the value
         case working       // generic motion (unknown/initial)
         case done          // the terminal `result` event
     }
@@ -131,6 +150,7 @@ struct DevAgentEvent: Sendable, Identifiable {
         case .searching:                                 return .searching(pattern: detail ?? "")
         case .listing:                                   return .listing(dir: detail ?? "")
         case .running:                                   return .running(command: detail ?? "")
+        case .plan(let p):                               return .planStep(step: p.step, total: p.total, title: p.title)
         case .done:                                      return .done
         case .thinking, .message, .toolResult, .working: return .working
         }
@@ -517,6 +537,11 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
 
     nonisolated static func parseCodexErrorEventForTesting(_ line: String) -> String? {
         DevAgentProcessExecution.parseCodexErrorEvent(line)
+    }
+
+    /// Testing seam for the shared plan derivation (Phase 3).
+    nonisolated static func planFromForTesting(_ items: [(title: String, done: Bool, current: Bool)]) -> DevRunPlan? {
+        DevAgentProcessExecution.planFrom(items)
     }
 
     /// Testing seam for the question-stripping pass applied to dev summaries.
@@ -1000,6 +1025,21 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         let args = (call[kind] as? [String: Any])?["args"] as? [String: Any]
         let lower = kind.lowercased()
         func fileArg() -> String? { lastComponent(args?["path"] as? String) }
+        // Plan/roadmap (Phase 3): `todoToolCall` / `updateTodosToolCall`. Checked
+        // first so the substring routing below can't claim it. Each todo carries
+        // `content` + `status` (`TODO_STATUS_PENDING`/`_IN_PROGRESS`/`_COMPLETED`/
+        // `_CANCELLED`); a cancelled item is dropped from the total.
+        if lower.contains("todo") {
+            let todos = (args?["todos"] as? [[String: Any]]) ?? []
+            let items = todos.compactMap { todo -> (title: String, done: Bool, current: Bool)? in
+                let status = todo["status"] as? String
+                if status == "TODO_STATUS_CANCELLED" { return nil }
+                return (title: (todo["content"] as? String) ?? "",
+                        done: status == "TODO_STATUS_COMPLETED",
+                        current: status == "TODO_STATUS_IN_PROGRESS")
+            }
+            return planFrom(items).map { DevAgentEvent(kind: .plan($0)) } ?? DevAgentEvent(kind: .working)
+        }
         if lower.contains("edit") || lower.contains("write") || lower.contains("create") {
             return DevAgentEvent(kind: .editing, detail: fileArg())
         }
@@ -1149,8 +1189,8 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// the start+complete item types (`command_execution`, `mcp_tool_call`), EXCEPT
     /// the completed-only types (`file_change`, `web_search`, `agent_message`,
     /// `reasoning`) which MUST emit on completion — that's their only line.
-    /// `turn.completed` → `.done`. `todo_list` parses to nil here (Phase 3 surfaces
-    /// the plan line). Unknown shapes degrade to nil, never crash.
+    /// `turn.completed` → `.done`. `todo_list` → a `.plan` step (Phase 3) on any
+    /// started/updated/completed. Unknown shapes degrade to nil, never crash.
     nonisolated static func parseCodexJSONLine(_ line: String) -> DevAgentEvent? {
         guard let obj = jsonObject(line) else { return nil }
         switch obj["type"] as? String {
@@ -1195,9 +1235,20 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             // The agent's narration (also captured as the summary; see below).
             guard phase == "item.completed" else { return nil }
             return DevAgentEvent(kind: .message, detail: nonEmpty(item["text"] as? String))
+        case "todo_list":
+            // Plan/roadmap (Phase 3). Emitted on started/updated/completed (last
+            // wins; idempotent). Codex has NO explicit in_progress flag — each item
+            // is just `{text, completed}` — so `planFrom` falls back to the first
+            // not-done item. nil (all done / empty) → no feed signal.
+            let todos = (item["items"] as? [[String: Any]]) ?? []
+            return planFrom(todos.map {
+                (title: ($0["text"] as? String) ?? "",
+                 done: ($0["completed"] as? Bool) == true,
+                 current: false)
+            }).map { DevAgentEvent(kind: .plan($0)) }
         default:
-            // `todo_list` (Phase 3), the `error` item (captured as resultError, not
-            // a feed event), and any future item type → no feed signal.
+            // The `error` item (captured as resultError, not a feed event) and any
+            // future item type → no feed signal.
             return nil
         }
     }
@@ -1380,6 +1431,17 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
             return DevAgentEvent(kind: .listing, detail: lastComponent(input?["path"] as? String))
         case "Bash":
             return DevAgentEvent(kind: .running, detail: commandLine(input?["command"] as? String))
+        case "TodoWrite":
+            // The plan/roadmap (Phase 3). Each todo carries `content` + `status`
+            // (`pending`/`in_progress`/`completed`) and an `activeForm` ("Adding
+            // auth middleware") that's the ideal present-tense title.
+            let todos = (input?["todos"] as? [[String: Any]]) ?? []
+            let plan = planFrom(todos.map {
+                (title: ($0["activeForm"] as? String) ?? ($0["content"] as? String) ?? "",
+                 done: ($0["status"] as? String) == "completed",
+                 current: ($0["status"] as? String) == "in_progress")
+            })
+            return plan.map { DevAgentEvent(kind: .plan($0)) } ?? DevAgentEvent(kind: .working)
         case "Agent", "Task":
             // `Agent` is the current subagent tool; `Task` was its old name. No
             // single file/command to name — show generic "running" motion.
@@ -1387,6 +1449,24 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         default:
             return DevAgentEvent(kind: .working)
         }
+    }
+
+    /// Collapse a normalized to-do list (agents emit the FULL list every update) to
+    /// the pill's 1-based current-step view, or nil when there's nothing to show
+    /// (empty, or every item done — let the next tool event / `.done` take the line;
+    /// we never render "[6/5]"). `current` marks the agent's explicitly-current item
+    /// (Claude/Cursor `in_progress`); when none is flagged (Codex always; the others
+    /// before anything starts) the first not-`done` item is current. The title is
+    /// on-screen only — never telemetry.
+    nonisolated static func planFrom(_ items: [(title: String, done: Bool, current: Bool)]) -> DevRunPlan? {
+        let total = items.count
+        guard total > 0 else { return nil }
+        guard let index = items.firstIndex(where: { $0.current })
+                ?? items.firstIndex(where: { !$0.done }) else {
+            return nil   // all items done → no plan line
+        }
+        let title = items[index].title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return DevRunPlan(step: min(index + 1, total), total: total, title: title)
     }
 
     // MARK: Detail helpers (on-screen specifics — never telemetry)

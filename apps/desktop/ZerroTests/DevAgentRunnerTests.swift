@@ -516,9 +516,10 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             parseCodex(#"{"type":"turn.completed","usage":{"input_tokens":24763,"output_tokens":122}}"#),
             DevAgentEvent(kind: .done))
-        // todo_list parses to nil for now (Phase 3 surfaces the plan line).
-        XCTAssertNil(
-            parseCodex(#"{"type":"item.completed","item":{"id":"i10","type":"todo_list","items":[{"text":"step","completed":false}]}}"#))
+        // todo_list → a `.plan` step (Phase 3; see testCodexTodoListPlan for depth).
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i10","type":"todo_list","items":[{"text":"step","completed":false}]}}"#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 1, total: 1, title: "step"))))
         // Lifecycle frames carry no feed signal.
         XCTAssertNil(parseCodex(#"{"type":"thread.started","thread_id":"t"}"#))
         XCTAssertNil(parseCodex(#"{"type":"turn.started"}"#))
@@ -630,6 +631,102 @@ final class DevAgentRunnerTests: XCTestCase {
         // A detail at the cap boundary is untouched (no spurious ellipsis).
         let exact = String(repeating: "y", count: 40)
         XCTAssertEqual(DevRunSubstatus.reading(file: exact).label, "Reading \(exact)…")
+    }
+
+    // MARK: - Plan / to-do step (Phase 3)
+
+    func testClaudeTodoWritePlan() {
+        // TodoWrite → the `in_progress` item is the current step; its `activeForm`
+        // ("Adding auth middleware") is the title.
+        XCTAssertEqual(
+            parse(#"""
+            {"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Add auth middleware","status":"completed","activeForm":"Added auth middleware"},{"content":"Wire routes","status":"in_progress","activeForm":"Adding auth middleware"},{"content":"c","status":"pending","activeForm":"C"},{"content":"d","status":"pending","activeForm":"D"},{"content":"e","status":"pending","activeForm":"E"}]}}]}}
+            """#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 2, total: 5, title: "Adding auth middleware"))))
+        // No `activeForm` → fall back to `content`.
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"Only step","status":"in_progress"}]}}]}}"#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 1, total: 1, title: "Only step"))))
+        // All complete → no plan line (generic motion).
+        XCTAssertEqual(
+            parse(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"a","status":"completed"},{"content":"b","status":"completed"}]}}]}}"#),
+            DevAgentEvent(kind: .working))
+    }
+
+    func testCursorTodoPlan() {
+        // todoToolCall: the `_IN_PROGRESS` item is current; a `_CANCELLED` item is
+        // excluded from the total (so 4 todos, 1 cancelled → total 3, step 2).
+        XCTAssertEqual(
+            parse(#"""
+            {"type":"tool_call","subtype":"started","tool_call":{"todoToolCall":{"args":{"todos":[{"content":"first","status":"TODO_STATUS_COMPLETED"},{"content":"second","status":"TODO_STATUS_IN_PROGRESS"},{"content":"third","status":"TODO_STATUS_PENDING"},{"content":"scrapped","status":"TODO_STATUS_CANCELLED"}]}}}}
+            """#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 2, total: 3, title: "second"))))
+        // `updateTodosToolCall` routes too (name contains "todo").
+        XCTAssertEqual(
+            parse(#"{"type":"tool_call","subtype":"started","tool_call":{"updateTodosToolCall":{"args":{"todos":[{"content":"x","status":"TODO_STATUS_IN_PROGRESS"},{"content":"y","status":"TODO_STATUS_PENDING"}]}}}}"#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 1, total: 2, title: "x"))))
+    }
+
+    func testCodexTodoListPlan() {
+        // Codex has no in_progress flag — the FIRST incomplete item is current
+        // (step = first-incomplete index + 1). Parses on item.updated …
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.updated","item":{"id":"i8","type":"todo_list","items":[{"text":"Scan docs","completed":true},{"text":"Plan","completed":true},{"text":"Write code","completed":false},{"text":"Test","completed":false}]}}"#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 3, total: 4, title: "Write code"))))
+        // … and on item.completed (idempotent; last wins).
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i8","type":"todo_list","items":[{"text":"a","completed":false}]}}"#),
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 1, total: 1, title: "a"))))
+        // All complete → no feed signal (nil for the optional Codex parser).
+        XCTAssertNil(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i8","type":"todo_list","items":[{"text":"a","completed":true}]}}"#))
+    }
+
+    func testPlanFromDerivation() {
+        // Explicit `current` wins over the first-not-done fallback.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.planFromForTesting([
+                (title: "a", done: true, current: false),
+                (title: "b", done: false, current: false),
+                (title: "c", done: false, current: true),
+            ]),
+            DevRunPlan(step: 3, total: 3, title: "c"))
+        // No explicit current → first not-done.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.planFromForTesting([
+                (title: "a", done: true, current: false),
+                (title: "b", done: false, current: false),
+            ]),
+            DevRunPlan(step: 2, total: 2, title: "b"))
+        // step never exceeds total (last item current → step == total).
+        let p = ClaudeCodeAgentRunner.planFromForTesting([
+            (title: "a", done: true, current: false),
+            (title: "b", done: true, current: true),
+        ])
+        XCTAssertEqual(p?.step, 2)
+        XCTAssertEqual(p?.total, 2)
+        // All done / empty → nil.
+        XCTAssertNil(ClaudeCodeAgentRunner.planFromForTesting([
+            (title: "a", done: true, current: false),
+            (title: "b", done: true, current: false),
+        ]))
+        XCTAssertNil(ClaudeCodeAgentRunner.planFromForTesting([]))
+    }
+
+    func testPlanStepLabelAndSubstatus() {
+        XCTAssertEqual(DevRunSubstatus.planStep(step: 2, total: 5, title: "Adding auth middleware").label,
+                       "[2/5] Adding auth middleware…")
+        // Empty title → the bare "Step N of M" form.
+        XCTAssertEqual(DevRunSubstatus.planStep(step: 2, total: 5, title: "").label, "Step 2 of 5…")
+        // Long title is capped (40), and the label never contains the timer
+        // separator " · " (which would break ProcessingPillContent's split).
+        let long = DevRunSubstatus.planStep(step: 1, total: 3, title: String(repeating: "x", count: 80)).label
+        XCTAssertEqual(long, "[1/3] \(String(repeating: "x", count: 40))…")
+        XCTAssertFalse(long.contains(" \u{00B7} "))
+        // The event's substatus carries the plan through unchanged.
+        XCTAssertEqual(
+            DevAgentEvent(kind: .plan(DevRunPlan(step: 2, total: 5, title: "x"))).substatus,
+            .planStep(step: 2, total: 5, title: "x"))
     }
 
     func testEventValueEqualityIgnoresIdentityAndTimestamp() {
