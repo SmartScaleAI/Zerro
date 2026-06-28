@@ -469,6 +469,111 @@ final class DevAgentRunnerTests: XCTestCase {
             DevAgentEvent(kind: .message, detail: "I'll edit it."))
     }
 
+    // MARK: - Parser (Codex `--json`)
+
+    func testParseCodexJSONLineItemEvents() {
+        // command_execution: emit on `item.started` with the shell wrapper stripped
+        // (`bash -lc ls` → `ls`); the `item.completed` twin must NOT re-emit.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","exit_code":null,"status":"in_progress"}}"#),
+            DevAgentEvent(kind: .running, detail: "ls"))
+        XCTAssertNil(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","exit_code":0,"status":"completed"}}"#))
+        // A quoted wrapped command unwraps one matching quote pair.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.started","item":{"id":"i2","type":"command_execution","command":"bash -lc \"npm test\"","status":"in_progress"}}"#),
+            DevAgentEvent(kind: .running, detail: "npm test"))
+        // file_change: completed-only → `.editing` with the basename; multiple
+        // changes append " +N" (the count of the OTHER files).
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i3","type":"file_change","changes":[{"path":"src/App.swift","kind":"update"}],"status":"completed"}}"#),
+            DevAgentEvent(kind: .editing, detail: "App.swift"))
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i4","type":"file_change","changes":[{"path":"a/x.md","kind":"add"},{"path":"b/y.md","kind":"update"},{"path":"c/z.md","kind":"delete"}],"status":"completed"}}"#),
+            DevAgentEvent(kind: .editing, detail: "x.md +2"))
+        // file_change with no usable path → `.editing` with no detail.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i5","type":"file_change","changes":[],"status":"completed"}}"#),
+            DevAgentEvent(kind: .editing))
+        // web_search: completed-only → `.searching` with the query.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i6","type":"web_search","query":"codex exec json schema"}}"#),
+            DevAgentEvent(kind: .searching, detail: "codex exec json schema"))
+        // reasoning → `.thinking`; agent_message → `.message` with the text.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i7","type":"reasoning","text":"Thinking about it"}}"#),
+            DevAgentEvent(kind: .thinking))
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i8","type":"agent_message","text":"Done. Updated the docs."}}"#),
+            DevAgentEvent(kind: .message, detail: "Done. Updated the docs."))
+        // mcp_tool_call: emit on start as `.running` with `server/tool`; completed twin nil.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"item.started","item":{"id":"i9","type":"mcp_tool_call","server":"github","tool":"create_issue","status":"in_progress"}}"#),
+            DevAgentEvent(kind: .running, detail: "github/create_issue"))
+        XCTAssertNil(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i9","type":"mcp_tool_call","server":"github","tool":"create_issue","status":"completed"}}"#))
+        // turn.completed → `.done`.
+        XCTAssertEqual(
+            parseCodex(#"{"type":"turn.completed","usage":{"input_tokens":24763,"output_tokens":122}}"#),
+            DevAgentEvent(kind: .done))
+        // todo_list parses to nil for now (Phase 3 surfaces the plan line).
+        XCTAssertNil(
+            parseCodex(#"{"type":"item.completed","item":{"id":"i10","type":"todo_list","items":[{"text":"step","completed":false}]}}"#))
+        // Lifecycle frames carry no feed signal.
+        XCTAssertNil(parseCodex(#"{"type":"thread.started","thread_id":"t"}"#))
+        XCTAssertNil(parseCodex(#"{"type":"turn.started"}"#))
+        XCTAssertNil(parseCodex(#"{"type":"turn.failed","error":{"message":"boom"}}"#))
+        XCTAssertNil(parseCodex(#"{"type":"error","message":"boom"}"#))
+        // An unknown/future item type and garbage degrade to nil, never crash.
+        XCTAssertNil(parseCodex(#"{"type":"item.started","item":{"id":"i11","type":"future_thing"}}"#))
+        XCTAssertNil(parseCodex("not json"))
+        XCTAssertNil(parseCodex(""))
+    }
+
+    func testParseCodexSummary() {
+        // The closing `agent_message` is the summary (question-stripped).
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseCodexSummaryForTesting(
+                #"{"type":"item.completed","item":{"type":"agent_message","text":"Added the route. Want me to add tests?"}}"#),
+            "Added the route.")
+        // Non-agent_message / lifecycle lines yield no summary.
+        XCTAssertNil(ClaudeCodeAgentRunner.parseCodexSummaryForTesting(
+            #"{"type":"item.completed","item":{"type":"command_execution","command":"bash -lc ls","status":"completed"}}"#))
+        XCTAssertNil(ClaudeCodeAgentRunner.parseCodexSummaryForTesting(
+            #"{"type":"turn.completed","usage":{}}"#))
+    }
+
+    func testParseCodexErrorEvent() {
+        // turn.failed → nested error.message (live-confirmed shape, codex 0.140.0).
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+                #"{"type":"turn.failed","error":{"message":"model response stream ended unexpectedly"}}"#),
+            "model response stream ended unexpectedly")
+        // Top-level fatal error → message (live-confirmed shape).
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+                #"{"type":"error","message":"You've hit your usage limit."}"#),
+            "You've hit your usage limit.")
+        // A "Reconnecting…" top-level error is a transient retry → ignored (nil).
+        XCTAssertNil(ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+            #"{"type":"error","message":"Reconnecting... attempt 1/5"}"#))
+        // A dedicated error item carries its own message.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+                #"{"type":"item.completed","item":{"type":"error","message":"patch failed to apply"}}"#),
+            "patch failed to apply")
+        // A failed command_execution item → a best-effort exit summary.
+        XCTAssertEqual(
+            ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+                #"{"type":"item.completed","item":{"type":"command_execution","command":"bash -lc \"npm run build\"","exit_code":2,"status":"failed"}}"#),
+            "Command failed (exit 2): npm run build")
+        // A successful command / normal line → nil (not an error).
+        XCTAssertNil(ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+            #"{"type":"item.completed","item":{"type":"command_execution","command":"bash -lc ls","exit_code":0,"status":"completed"}}"#))
+        XCTAssertNil(ClaudeCodeAgentRunner.parseCodexErrorEventForTesting(
+            #"{"type":"turn.completed","usage":{}}"#))
+    }
+
     // MARK: - Substatus (single-line pill label)
 
     func testEventSubstatusCarriesDetailThrough() {
@@ -1072,6 +1177,10 @@ final class DevAgentRunnerTests: XCTestCase {
 
     private func parse(_ line: String) -> DevAgentEvent? {
         ClaudeCodeAgentRunner.parseStreamJSONLineForTesting(line)
+    }
+
+    private func parseCodex(_ line: String) -> DevAgentEvent? {
+        ClaudeCodeAgentRunner.parseCodexJSONLineForTesting(line)
     }
 
     // MARK: - Claude native sandbox (.claudeNative confinement)

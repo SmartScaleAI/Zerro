@@ -506,6 +506,19 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         DevAgentProcessExecution.parseStreamErrorEvent(line)
     }
 
+    /// Testing seams for the Codex (`codex exec --json`) parsers (Phase 2).
+    nonisolated static func parseCodexJSONLineForTesting(_ line: String) -> DevAgentEvent? {
+        DevAgentProcessExecution.parseCodexJSONLine(line)
+    }
+
+    nonisolated static func parseCodexSummaryForTesting(_ line: String) -> String? {
+        DevAgentProcessExecution.parseCodexSummary(line)
+    }
+
+    nonisolated static func parseCodexErrorEventForTesting(_ line: String) -> String? {
+        DevAgentProcessExecution.parseCodexErrorEvent(line)
+    }
+
     /// Testing seam for the question-stripping pass applied to dev summaries.
     nonisolated static func summaryDroppingQuestionsForTesting(_ text: String) -> String? {
         DevAgentProcessExecution.summaryDroppingQuestions(text)
@@ -756,9 +769,10 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// in `ingestStdout`). When it's the terminal `result` event, also capture the
     /// agent's final message text for the success summary (Part A) AND its error
     /// text for the failure detail (the stream-json agents report fatal errors in
-    /// the `result` event, not on stderr). For `.text`
-    /// (Codex) every non-empty line becomes a coarse `.message` event — still live,
-    /// still resets the clock.
+    /// the `result` event, not on stderr). For `.codexJSON` the same three pieces
+    /// (event / summary / error) come off Codex's own JSONL schema via the
+    /// `parseCodex*` parsers. For `.text` every non-empty line becomes a coarse
+    /// `.message` event — still live, still resets the clock.
     nonisolated private func processStreamLine(_ line: String) {
         switch outputFormat {
         case .streamJSON:
@@ -783,6 +797,23 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
                     resultError = errText
                 }
             }
+            emit(event)
+        case .codexJSON:
+            // Codex (`codex exec --json`) — a DIFFERENT JSONL schema from
+            // Claude/Cursor, so its own parser. With `--json` there is no plain-text
+            // tail, so the failure reason and the success summary both come off the
+            // structured stream: a fatal error (`turn.failed` / top-level `error` /
+            // a failed item) → `resultError`; each `agent_message` → `resultSummary`
+            // (last one wins). Both are checked before the render guard since they
+            // ride lines that have no feed representation. Defensive — unknown
+            // shapes parse to nil and are skipped, never crash.
+            if let errText = DevAgentProcessExecution.parseCodexErrorEvent(line) {
+                resultError = errText
+            }
+            if let summary = DevAgentProcessExecution.parseCodexSummary(line) {
+                resultSummary = summary
+            }
+            guard let event = DevAgentProcessExecution.parseCodexJSONLine(line) else { return }
             emit(event)
         case .text:
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1101,6 +1132,166 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         return nil
     }
 
+    // MARK: - Codex `--json` parsing (Phase 2; best-effort, defensive)
+
+    /// Map one Codex (`codex exec --json`) JSONL line to a feed `DevAgentEvent`, or
+    /// nil when the line carries no renderable signal (lifecycle / error / a
+    /// completion twin we already showed on start). A SEPARATE parser from
+    /// `parseStreamJSONLine` because Codex's schema is its own: top-level
+    /// `thread.started`/`turn.started`/`turn.completed`/`turn.failed`/`error`
+    /// lifecycle events, plus `item.started`/`item.updated`/`item.completed`
+    /// envelopes carrying an `item` whose `item.type` names the activity
+    /// (`command_execution`/`file_change`/`web_search`/`agent_message`/`reasoning`/
+    /// `mcp_tool_call`/`todo_list`/`error`). Verified against codex-cli 0.140.0
+    /// (lifecycle/error live-captured June 2026) + the documented item schema.
+    ///
+    /// Emission mirrors Phase 1's "emit on start, don't re-emit on completion" for
+    /// the start+complete item types (`command_execution`, `mcp_tool_call`), EXCEPT
+    /// the completed-only types (`file_change`, `web_search`, `agent_message`,
+    /// `reasoning`) which MUST emit on completion — that's their only line.
+    /// `turn.completed` → `.done`. `todo_list` parses to nil here (Phase 3 surfaces
+    /// the plan line). Unknown shapes degrade to nil, never crash.
+    nonisolated static func parseCodexJSONLine(_ line: String) -> DevAgentEvent? {
+        guard let obj = jsonObject(line) else { return nil }
+        switch obj["type"] as? String {
+        case "turn.completed":
+            return DevAgentEvent(kind: .done)
+        case "item.started", "item.updated", "item.completed":
+            guard let topType = obj["type"] as? String,
+                  let item = obj["item"] as? [String: Any] else { return nil }
+            return codexItemEvent(phase: topType, item: item)
+        default:
+            // thread.started / turn.started / turn.failed / top-level error are
+            // lifecycle/error frames (handled by the summary/error parsers, not the
+            // feed). Unknown → nil.
+            return nil
+        }
+    }
+
+    /// Map one Codex `item.*` envelope to a feed event. `phase` is the top-level
+    /// event (`item.started`/`item.updated`/`item.completed`); `item` is its
+    /// payload. Defensive: a missing/unknown `item.type` degrades to nil.
+    nonisolated private static func codexItemEvent(phase: String, item: [String: Any]) -> DevAgentEvent? {
+        switch item["type"] as? String {
+        case "command_execution":
+            // Shown once, on start (the completion twin would re-emit the same line).
+            guard phase == "item.started" else { return nil }
+            return DevAgentEvent(kind: .running,
+                                 detail: commandLine(strippedShell(item["command"] as? String)))
+        case "mcp_tool_call":
+            guard phase == "item.started" else { return nil }
+            return DevAgentEvent(kind: .running, detail: codexMCPToolDetail(item))
+        case "file_change":
+            // Completed-only — emit on completion (its sole line).
+            guard phase == "item.completed" else { return nil }
+            return codexFileChangeEvent(item)
+        case "web_search":
+            guard phase == "item.completed" else { return nil }
+            return DevAgentEvent(kind: .searching, detail: nonEmpty(item["query"] as? String))
+        case "reasoning":
+            guard phase == "item.completed" else { return nil }
+            return DevAgentEvent(kind: .thinking)
+        case "agent_message":
+            // The agent's narration (also captured as the summary; see below).
+            guard phase == "item.completed" else { return nil }
+            return DevAgentEvent(kind: .message, detail: nonEmpty(item["text"] as? String))
+        default:
+            // `todo_list` (Phase 3), the `error` item (captured as resultError, not
+            // a feed event), and any future item type → no feed signal.
+            return nil
+        }
+    }
+
+    /// A `file_change` item → an `.editing` event named after the first changed
+    /// file. When several files change in one item, append " +N" (the count of the
+    /// OTHER files) so the pill reads e.g. "Editing App.swift +2…". An empty/absent
+    /// change list → `.editing` with no detail ("Editing files…").
+    nonisolated private static func codexFileChangeEvent(_ item: [String: Any]) -> DevAgentEvent {
+        let changes = item["changes"] as? [[String: Any]] ?? []
+        guard let name = lastComponent(changes.first?["path"] as? String) else {
+            return DevAgentEvent(kind: .editing)
+        }
+        let others = changes.count - 1
+        return DevAgentEvent(kind: .editing, detail: others > 0 ? "\(name) +\(others)" : name)
+    }
+
+    /// A `mcp_tool_call` item → the tool's label: `server/tool` when both are
+    /// present, else whichever is, else nil.
+    nonisolated private static func codexMCPToolDetail(_ item: [String: Any]) -> String? {
+        let server = nonEmpty(item["server"] as? String)
+        let tool = nonEmpty(item["tool"] as? String)
+        switch (server, tool) {
+        case let (s?, t?): return "\(s)/\(t)"
+        case let (s?, nil): return s
+        case let (nil, t?): return t
+        case (nil, nil):    return nil
+        }
+    }
+
+    /// Extract Codex's final assistant message as the success summary — the analog
+    /// of `parseResultSummary` for the Codex stream. Codex puts its closing text in
+    /// an `agent_message` item (NOT the terminal `turn.completed`), so this returns
+    /// non-nil for each `item.completed` `agent_message`; the caller keeps the last
+    /// one. Question sentences are stripped (the dev result card can't reply), same
+    /// as the other agents. nil for any other line. Defensive — unknown → nil.
+    nonisolated static func parseCodexSummary(_ line: String) -> String? {
+        guard let obj = jsonObject(line),
+              obj["type"] as? String == "item.completed",
+              let item = obj["item"] as? [String: Any],
+              item["type"] as? String == "agent_message",
+              let text = (item["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        return summaryDroppingQuestions(text)
+    }
+
+    /// Extract Codex's failure reason so a non-zero exit surfaces the real cause
+    /// instead of the generic fallback (with `--json` there is no plain-text tail).
+    /// Authoritative sources, in order of arrival: a terminal `turn.failed`
+    /// (`error.message`), a fatal top-level `error` (`message`), or — as a
+    /// best-effort fallback — a completed `error` item / a `command_execution`
+    /// whose `status == "failed"`. The caller keeps the last non-nil, and the
+    /// terminal `turn.failed`/`error` arrive last, so they win when present.
+    ///
+    /// EXCEPTION: a top-level `error` whose message begins "Reconnecting" is a
+    /// transient, non-fatal retry — ignored (nil) so it never masquerades as the
+    /// failure reason. nil for a non-error line. Defensive — unknown → nil.
+    nonisolated static func parseCodexErrorEvent(_ line: String) -> String? {
+        guard let obj = jsonObject(line) else { return nil }
+        switch obj["type"] as? String {
+        case "turn.failed":
+            return nonEmpty((obj["error"] as? [String: Any])?["message"] as? String)
+        case "error":
+            guard let msg = nonEmpty(obj["message"] as? String),
+                  !msg.hasPrefix("Reconnecting") else { return nil }
+            return msg
+        case "item.completed":
+            guard let item = obj["item"] as? [String: Any] else { return nil }
+            // A dedicated error item carries its own message.
+            if item["type"] as? String == "error" { return nonEmpty(item["message"] as? String) }
+            // A failed command/file-change is a fallback (turn.failed / top-level
+            // error are the real reasons and arrive last, so they overwrite this).
+            guard (item["status"] as? String) == "failed" else { return nil }
+            if let m = nonEmpty(item["message"] as? String) { return m }
+            if item["type"] as? String == "command_execution",
+               let cmd = strippedShell(item["command"] as? String) {
+                if let code = item["exit_code"] as? Int { return "Command failed (exit \(code)): \(cmd)" }
+                return "Command failed: \(cmd)"
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// Parse one JSONL line to a dictionary, or nil for an empty/garbage line.
+    /// Shared by the Codex parsers above.
+    nonisolated private static func jsonObject(_ line: String) -> [String: Any]? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
     /// Remove question sentences from an agent's free-text summary so the
     /// (read-only) dev result card never asks the user something it can't accept
     /// an answer to. Operates per markdown line to preserve list/paragraph
@@ -1219,6 +1410,26 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         let trimmed = first.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         return trimmed.count > 120 ? String(trimmed.prefix(120)) + "…" : trimmed
+    }
+
+    /// Strip Codex's shell wrapper from a `command_execution` command so the label
+    /// reads "Running ls…" not "Running bash -lc ls…". Codex runs shell commands as
+    /// `bash -lc "<cmd>"` (and `-c`/`sh`/`zsh` variants); drop that prefix and, if
+    /// the remainder is a single fully-quoted string, unwrap one matching quote
+    /// pair. Returns nil for an absent/blank command. On-screen only — never
+    /// telemetry.
+    nonisolated private static func strippedShell(_ command: String?) -> String? {
+        guard var cmd = command?.trimmingCharacters(in: .whitespaces), !cmd.isEmpty else { return nil }
+        for prefix in ["bash -lc ", "bash -c ", "sh -lc ", "sh -c ", "zsh -lc ", "zsh -c "]
+        where cmd.hasPrefix(prefix) {
+            cmd = String(cmd.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            break
+        }
+        if cmd.count >= 2, let f = cmd.first, let l = cmd.last,
+           (f == "\"" && l == "\"") || (f == "'" && l == "'") {
+            cmd = String(cmd.dropFirst().dropLast())
+        }
+        return cmd.isEmpty ? nil : cmd
     }
 
     // MARK: - Spawn environment

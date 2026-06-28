@@ -40,8 +40,12 @@ enum DevAgentPromptDelivery: Equatable, Sendable {
 /// How the agent's stdout is interpreted by the runner.
 enum DevAgentOutputFormat: Equatable, Sendable {
     /// Line-delimited JSON events (`--output-format stream-json`) → parsed to
-    /// pill substatus.
+    /// pill substatus. The Claude Code + Cursor schema (`parseStreamJSONLine`).
     case streamJSON
+    /// Codex's structured JSONL event stream (`codex exec --json`) → parsed to
+    /// pill substatus by `parseCodexJSONLine`. A DIFFERENT schema from
+    /// `streamJSON` (top-level `item.*`/`turn.*` events), so its own parser.
+    case codexJSON
     /// Opaque text → spinner + tail of the last line.
     case text
 }
