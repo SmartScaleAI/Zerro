@@ -40,8 +40,12 @@ enum DevAgentPromptDelivery: Equatable, Sendable {
 /// How the agent's stdout is interpreted by the runner.
 enum DevAgentOutputFormat: Equatable, Sendable {
     /// Line-delimited JSON events (`--output-format stream-json`) → parsed to
-    /// pill substatus.
+    /// pill substatus. The Claude Code + Cursor schema (`parseStreamJSONLine`).
     case streamJSON
+    /// Codex's structured JSONL event stream (`codex exec --json`) → parsed to
+    /// pill substatus by `parseCodexJSONLine`. A DIFFERENT schema from
+    /// `streamJSON` (top-level `item.*`/`turn.*` events), so its own parser.
+    case codexJSON
     /// Opaque text → spinner + tail of the last line.
     case text
 }
@@ -380,10 +384,14 @@ enum DevAgentRegistry {
     ///     (approval never), so no approval flag is needed.
     ///   • `--skip-git-repo-check` is harmless inside a repo (the dispatch always
     ///     runs in one — the checkpoint requires git) and avoids a repo-detection
-    ///     mismatch; `--color never` keeps the `.text` tail clean.
-    ///   • Output is parsed as `.text` (spinner + tail) — Codex's `--json` event
-    ///     schema differs from Claude's stream-json, so we don't pretend to parse
-    ///     it; the result card falls back to the diff-generated change line.
+    ///     mismatch; `--color never` is a no-op under `--json` but harmless.
+    ///   • `--json` makes Codex print its event stream as JSONL, parsed as
+    ///     `.codexJSON` by `parseCodexJSONLine` (Phase 2). Codex's schema is its OWN
+    ///     (top-level `item.*`/`turn.*` events), distinct from Claude/Cursor's
+    ///     stream-json — hence a separate parser. It drives the live pill substatus
+    ///     ("Running ls…" → "Editing NOTES.md…") and the result card's summary +
+    ///     error, replacing the old `.text` spinner+tail (which fell back to the
+    ///     diff-generated change line and had no real error detail).
     ///   • `-m/--model` selects the model; the ids come from Codex's OWN
     ///     per-account list (see `DevAgentDetection.codexModels`), NOT the OpenAI
     ///     API manifest (a ChatGPT-account Codex rejects the API codex ids).
@@ -394,8 +402,8 @@ enum DevAgentRegistry {
             displayName: "Codex",
             executableName: "codex",
             promptDelivery: .argument,
-            outputFormat: .text,
-            baseArgs: ["exec", "--skip-git-repo-check", "--color", "never"],
+            outputFormat: .codexJSON,
+            baseArgs: ["exec", "--json", "--skip-git-repo-check", "--color", "never"],
             editsOnlyArgs: ["--sandbox", "workspace-write"],
             // Every tier runs commands enabled. `danger-full-access` (vs
             // `workspace-write`) keeps network on so `npm install` can fetch under
