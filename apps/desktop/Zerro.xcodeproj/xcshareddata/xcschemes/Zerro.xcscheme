@@ -67,7 +67,7 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "-RetainEvalArtifacts YES"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
       <EnvironmentVariables>
