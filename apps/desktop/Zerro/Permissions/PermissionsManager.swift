@@ -119,6 +119,17 @@ final class PermissionsManager {
     /// returns to us), at which point CGPreflight reflects the user's
     /// real answer and it's safe to commit the "has asked" flag.
     @ObservationIgnored private var screenRecordingResponseObserver: NSObjectProtocol?
+    /// Set true when the app resigns active while a screen-recording request
+    /// is in flight — i.e. the TCC popup actually appeared and stole focus.
+    /// Used to distinguish a real (popup-showing) CGRequest from a silent
+    /// no-op so the 2s safety net doesn't force-finalize while the popup is
+    /// still on screen and unanswered.
+    @ObservationIgnored private var screenRecordingPopupDidAppear = false
+    /// Observer for `NSApplication.didResignActiveNotification` while a
+    /// screen-recording request is in flight. Receiving it means the TCC
+    /// popup appeared (it belongs to another process and steals key focus);
+    /// its absence means CGRequest was a silent no-op.
+    @ObservationIgnored private var screenRecordingResignObserver: NSObjectProtocol?
     /// Most recent result of probing `SCShareableContent.current`. That
     /// API throws unless our process actually has Screen Recording
     /// permission, which makes it the most reliable signal — more
@@ -405,6 +416,8 @@ final class PermissionsManager {
         // `finalizeScreenRecordingResponse` once we see real evidence
         // of a response.
         isAwaitingScreenRecordingResponse = true
+        screenRecordingPopupDidAppear = false
+        installScreenRecordingResignObserver()
         installScreenRecordingResponseObserver()
         _ = CGRequestScreenCaptureAccess()
         refreshStatuses()
@@ -433,10 +446,58 @@ final class PermissionsManager {
         // within ~1s and the status flips to .granted directly.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(2))
-            guard let self, self.isAwaitingScreenRecordingResponse else { return }
+            // A real TCC popup steals focus, so the app would have resigned
+            // active. If that happened, the popup is up and unanswered — do NOT
+            // force a denied state out from under the user; the didBecomeActive
+            // observer finalizes when they answer. Only force-finalize when no
+            // popup appeared (the genuine silent-no-op case the safety net is for).
+            guard let self, self.shouldForceFinalizeScreenRecordingOnTimeout else { return }
             Log.permissions.notice("CGRequest appears to have been a no-op — force-finalizing")
             self.finalizeScreenRecordingResponse()
         }
+    }
+
+    /// Whether the 2s safety net should force a denied resolution when it
+    /// fires. True only when a request is still in flight AND no TCC popup
+    /// appeared (no `didResignActive` was observed) — the genuine silent-no-op
+    /// case the safety net exists for. When a popup DID appear it is presumably
+    /// still on screen and unanswered, so resolution is left to the
+    /// `didBecomeActive` observer rather than yanking the user into a denied
+    /// view. Single source of truth shared with the unit tests.
+    private var shouldForceFinalizeScreenRecordingOnTimeout: Bool {
+        isAwaitingScreenRecordingResponse && !screenRecordingPopupDidAppear
+    }
+
+    /// Watches for the app losing active state while a screen-recording
+    /// request is in flight. Receiving this means the TCC popup actually
+    /// appeared (it belongs to another process and steals key focus), as
+    /// opposed to CGRequest being a silent no-op. Lets the 2s safety net
+    /// avoid force-finalizing while a real, unanswered popup is on screen.
+    private func installScreenRecordingResignObserver() {
+        guard screenRecordingResignObserver == nil else { return }
+        screenRecordingResignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Hop to MainActor because the closure stored in
+            // NotificationCenter isn't isolated. PermissionsManager is
+            // @MainActor.
+            Task { @MainActor [weak self] in
+                self?.noteScreenRecordingPopupAppeared()
+            }
+        }
+    }
+
+    /// Records that the TCC popup appeared — the app resigned active while a
+    /// screen-recording request was in flight. No-op once the request has been
+    /// finalized (the `isAwaitingScreenRecordingResponse` guard), so a stray
+    /// later resign can't retroactively flip the flag. Drives the safety net's
+    /// "real popup vs silent no-op" decision via
+    /// `shouldForceFinalizeScreenRecordingOnTimeout`.
+    private func noteScreenRecordingPopupAppeared() {
+        guard isAwaitingScreenRecordingResponse else { return }
+        screenRecordingPopupDidAppear = true
     }
 
     /// Subscribes to `NSApplication.didBecomeActiveNotification`. The TCC
@@ -473,6 +534,10 @@ final class PermissionsManager {
         if let observer = screenRecordingResponseObserver {
             NotificationCenter.default.removeObserver(observer)
             screenRecordingResponseObserver = nil
+        }
+        if let observer = screenRecordingResignObserver {
+            NotificationCenter.default.removeObserver(observer)
+            screenRecordingResignObserver = nil
         }
         refreshStatuses()
     }
@@ -994,3 +1059,38 @@ final class PermissionsManager {
     }
     #endif
 }
+
+#if DEBUG
+// MARK: - Test seams
+//
+// These let the unit tests exercise the screen-recording safety-net gating
+// WITHOUT calling `requestScreenRecording()` (which fires a real TCC popup,
+// starts timers, and reads live OS grant state). Kept in this file so they
+// can reach `PermissionsManager`'s `private` members; DEBUG-only so they add
+// no surface to release builds.
+extension PermissionsManager {
+    /// Puts the manager into the "request in flight, no popup seen yet" state
+    /// that `requestScreenRecording()` establishes just before it calls
+    /// `CGRequestScreenCaptureAccess()` — minus the popup and the timers.
+    func beginScreenRecordingRequestForTesting() {
+        isAwaitingScreenRecordingResponse = true
+        screenRecordingPopupDidAppear = false
+    }
+
+    /// Drives the real `didResignActive` handler, i.e. simulates the TCC popup
+    /// appearing and stealing focus while a request is in flight.
+    func simulateScreenRecordingPopupAppearedForTesting() {
+        noteScreenRecordingPopupAppeared()
+    }
+
+    /// Mirrors the production decision the 2s safety net makes when it fires.
+    var shouldForceFinalizeScreenRecordingOnTimeoutForTesting: Bool {
+        shouldForceFinalizeScreenRecordingOnTimeout
+    }
+
+    /// Whether a screen-recording request is still considered in flight.
+    var isAwaitingScreenRecordingResponseForTesting: Bool {
+        isAwaitingScreenRecordingResponse
+    }
+}
+#endif
