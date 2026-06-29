@@ -24,9 +24,9 @@
 
 /* Begin PBXFileReference section */
 		18AA00000000000000000002 /* ZerroTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZerroTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF8546CF2FC74ACC000EB1A6 /* Zerro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zerro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FFCF610000000000000000C1 /* Production.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Production.xcconfig; sourceTree = "<group>"; };
 		FFCF610000000000000000C2 /* Staging.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Staging.xcconfig; sourceTree = "<group>"; };
-		FF8546CF2FC74ACC000EB1A6 /* Zerro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zerro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -87,15 +87,6 @@
 			);
 			sourceTree = "<group>";
 		};
-		FFCF610000000000000000C0 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				FFCF610000000000000000C1 /* Production.xcconfig */,
-				FFCF610000000000000000C2 /* Staging.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
 		FF8546D02FC74ACC000EB1A6 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -103,6 +94,15 @@
 				18AA00000000000000000002 /* ZerroTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		FFCF610000000000000000C0 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				FFCF610000000000000000C1 /* Production.xcconfig */,
+				FFCF610000000000000000C2 /* Staging.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		FFD158EF2FCBA3050043FE79 /* Frameworks */ = {

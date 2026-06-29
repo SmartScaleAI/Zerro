@@ -212,6 +212,21 @@ public enum RecordingFailureReason: Equatable {
     /// the capture and processing failure sites.
     case diskFull
 
+    // Layer 0 — local "no input" gate
+    /// The recording carried no on-device signal a request could come from —
+    /// silent audio AND no clicks (`RecordingInputGate.shouldSkipGeneration`).
+    /// Detected on-device AFTER processing but BEFORE any provider dispatch, so
+    /// generation never ran and NOTHING was charged. Routed here rather than
+    /// dispatching a call that the model would answer with `ZERRO_NO_REQUEST`
+    /// anyway — that would cost the user a credit for an unusable result. The
+    /// copy reads as informational ("didn't catch that — nothing was charged"),
+    /// NOT a billing failure. Non-retryable: re-running the same silent clip
+    /// fails identically; the fix is to record again with the mic working. The
+    /// gate is shared, so a Dev Mode recording that hits it shows THIS pill, not
+    /// the Dev "Nothing to change" card (the residual "spoke but no change" case
+    /// stays the server sentinel's job).
+    case noInputCaptured
+
     // Phase 9 — API failures
     /// User hasn't entered an OpenAI key in Settings, or the stored key
     /// is blank. Distinguished from `.apiAuth` so the message can guide
@@ -320,6 +335,7 @@ public enum RecordingFailureReason: Equatable {
              .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
+             .noInputCaptured,
              .artifactUnreadable,
              .apiKeyMissing, .apiAuth,
              .responseTooLong,
@@ -359,6 +375,8 @@ public enum RecordingFailureReason: Equatable {
             return "Recording needs to be at least \(Int(ProcessingConfig.minRecordingSeconds)) seconds long."
         case .diskFull:
             return "Your Mac is out of storage \u{2014} free up space and try again."
+        case .noInputCaptured:
+            return "Didn\u{2019}t catch anything to act on \u{2014} nothing was charged. Check your mic and record again."
         case .apiKeyMissing:
             return "Add your API keys in Settings to generate prompts \u{2014} an OpenAI key is required for transcription."
         case .apiAuth:
@@ -405,6 +423,7 @@ public enum RecordingFailureReason: Equatable {
         case .processingFailed:          return "Processing failed"
         case .recordingTooShort:         return "Recording too short"
         case .diskFull:                  return "Storage full"
+        case .noInputCaptured:           return "Didn\u{2019}t catch that"
         case .apiKeyMissing:             return "API key needed"
         case .apiAuth:                   return "API key rejected"
         case .networkOffline:            return "Connection problem"
@@ -456,6 +475,8 @@ public enum RecordingFailureReason: Equatable {
             return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds \u{2014} too short to capture enough context. Record again, narrating the change you want as you go."
         case .diskFull:
             return "Your Mac ran out of storage while saving the recording, so it couldn\u{2019}t finish. Free up a few gigabytes, then start a new recording."
+        case .noInputCaptured:
+            return "This recording didn\u{2019}t include anything to act on \u{2014} no narration and no clicks \u{2014} so nothing was sent and nothing was charged. Check that your microphone is on, then record again, narrating the change you want."
         case .apiKeyMissing:
             return "Generating a prompt needs an API key, and none is set. Add one under Settings \u{2014} an OpenAI key is required for transcription \u{2014} then start a new recording."
         case .apiAuth:
@@ -2165,7 +2186,26 @@ final class AppState {
     ///
     /// Fail-safe: if entitlements/proxy aren't wired (unit tests, or a managed
     /// state without a proxy), fall back to the local path rather than failing.
-    private func runPromptGeneration(processed: ProcessedRecording) {
+    ///
+    /// Internal (not private) so the Layer 0 no-input gate test can drive this
+    /// routing entry point directly — asserting a no-input recording is skipped
+    /// before dispatch — without a live proxy/entitlement stack (like the G-01
+    /// teardown tests reach `devAgentStarted`).
+    func runPromptGeneration(processed: ProcessedRecording) {
+        // Layer 0 — the local no-input gate. A recording with no on-device signal
+        // a request could come from (silent audio AND no clicks) would be a
+        // guaranteed `ZERRO_NO_REQUEST`, so short-circuit it HERE — before the
+        // `generation_started` event, route resolution, or any provider/local
+        // dispatch — so an empty recording costs the user nothing (no credit) and
+        // us nothing (no round-trip). One insertion point covers every route. See
+        // `RecordingInputGate` for why this never drops a real request.
+        if RecordingInputGate.shouldSkipGeneration(
+            hasSpeech: processed.hasSpeech,
+            clickCount: processed.clicks.count
+        ) {
+            handleNoInputCaptured(processed: processed)
+            return
+        }
         // Phase F made this a four-way decision (was Managed-vs-local in Phase E).
         // The policy lives in `EntitlementStore.generationRoute`; this is just the
         // mechanism. A nil entitlements falls back to local (fail-safe).
@@ -2212,6 +2252,35 @@ final class AppState {
         case .local:
             runLocalPromptGeneration(processed: processed)
         }
+    }
+
+    /// Layer 0 skip handler — a recording the local no-input gate flagged as
+    /// having nothing to act on (silent audio AND no clicks). Lands on the
+    /// friendly `.noInputCaptured` pill (informational, nothing charged) and
+    /// discards the working directory: there's nothing to retry or resume (no
+    /// Continue/Revert), so it must NOT be held as a pending paid generation.
+    /// Reuses the same processed-recording discard teardown the cancel/reset
+    /// paths use — a best-effort detached delete keyed on the working dir, then
+    /// `resetTransientRecordingState()` to clear the in-memory ref. Runs entirely
+    /// BEFORE any dispatch (the gate short-circuits first), so it fires a distinct
+    /// `generation_skipped` event rather than `generation_started`/`_succeeded`/
+    /// `_failed` — the funnel separates skips from real generations.
+    private func handleNoInputCaptured(processed: ProcessedRecording) {
+        // Distinct from the generation funnel: this path never dispatched, so it
+        // must read as a skip, not a failed run. Captured before the reset clears
+        // `recordingIsDevMode`.
+        Analytics.capture("generation_skipped", [
+            "reason": "no_input",
+            "is_dev_mode": recordingIsDevMode,
+        ])
+        // Discard the working dir — nothing to retry/resume. Same best-effort
+        // detached delete the cancel/reset discard paths use; the in-memory ref is
+        // cleared synchronously by `resetTransientRecordingState()` below so it's
+        // never resumed as a pending paid generation.
+        let workingDirectory = processed.workingDirectory
+        Task.detached(priority: .utility) { WorkingDirectory.remove(at: workingDirectory) }
+        resetTransientRecordingState()
+        state = .failed(reason: .noInputCaptured)
     }
 
     /// Phase E/F — the proxy generation path (Managed subscription OR trial).
@@ -3958,8 +4027,8 @@ final class AppState {
     /// NOT captured: reasons that are user- or environment-driven and
     /// already surfaced to the user with actionable copy (permission
     /// revoked, no microphone connected, disk full, recording too short,
-    /// missing/invalid API key, network offline). Reporting those would be
-    /// noise — they're not bugs in Zerro.
+    /// no input captured, missing/invalid API key, network offline).
+    /// Reporting those would be noise — they're not bugs in Zerro.
     ///
     /// Provider-RETURNED failures (5xx / 429 / 422-truncation) ARE captured
     /// (the `true` arm): they're an HTTP response from the proxy/provider worth
@@ -3979,7 +4048,7 @@ final class AppState {
         case .screenRecordingRevoked, .microphoneRevoked, .microphoneDisconnected,
              .microphoneUnavailable,
              .displayUnavailable, .displayChanged,
-             .recordingTooShort, .diskFull,
+             .recordingTooShort, .diskFull, .noInputCaptured,
              .apiKeyMissing, .apiAuth, .networkOffline,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:

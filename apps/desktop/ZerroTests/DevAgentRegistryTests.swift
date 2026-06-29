@@ -74,9 +74,10 @@ final class DevAgentRegistryTests: XCTestCase {
         let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
         XCTAssertEqual(entry.displayName, "Codex")
         XCTAssertEqual(entry.executableName, "codex")
-        // Prompt rides in argv (positional), output parsed as plain text.
+        // Prompt rides in argv (positional); output is Codex's `--json` JSONL
+        // event stream, parsed by `parseCodexJSONLine` (Phase 2).
         XCTAssertEqual(entry.promptDelivery, .argument)
-        XCTAssertEqual(entry.outputFormat, .text)
+        XCTAssertEqual(entry.outputFormat, .codexJSON)
         XCTAssertEqual(entry.modelFlagName, "--model")
         XCTAssertEqual(entry.installed, entry.absolutePath != nil)
     }
@@ -84,7 +85,7 @@ final class DevAgentRegistryTests: XCTestCase {
     func testCodexEditsOnlyUsesWorkspaceWriteSandbox() throws {
         let entry = try XCTUnwrap(DevAgentRegistry.entry(id: DevAgentRegistry.codexID))
         let args = entry.arguments(permission: .editsOnly, model: "gpt-5.5")
-        XCTAssertEqual(Array(args.prefix(2)), ["exec", "--skip-git-repo-check"])
+        XCTAssertEqual(Array(args.prefix(3)), ["exec", "--json", "--skip-git-repo-check"])
         assertFlag(args, "--sandbox", value: "workspace-write")
         assertFlag(args, "--model", value: "gpt-5.5")
         XCTAssertFalse(args.contains("--full-auto"), "must not use the deprecated --full-auto")

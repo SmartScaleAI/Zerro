@@ -6,11 +6,12 @@
 //
 //  DEBUG-only dev panel that sits below the main onboarding card.
 //  Provides:
-//    • Step jump pills — leap to any of the 5 steps without walking
-//      through the flow.
-//    • Sub-state pin pills — for the two permission steps, override
-//      the live PermissionsManager value with a forced .notDetermined
-//      / .granted / .denied so each sub-state can be rendered without
+//    • Step jump pills — leap to any step without walking through the
+//      flow.
+//    • Sub-state pin pills — on the merged Permissions step, override
+//      each permission's live PermissionsManager value with a forced
+//      .notDetermined / .granted / .denied (SCREEN + MIC pinned
+//      independently) so each sub-state can be rendered without
 //      toggling system permissions.
 //
 //  This is the canonical Phase 5 debug surface — the temporary
@@ -72,10 +73,11 @@ struct OnboardingDevPanel: View {
     @ViewBuilder
     private var subStatePinRow: some View {
         switch onboarding.currentStep {
-        case .screenRecording:
-            permissionPinRow(label: "SCREEN", binding: bindScreen)
-        case .microphone:
-            permissionPinRow(label: "MIC", binding: bindMic)
+        case .permissions:
+            VStack(spacing: VFSpacing.sm) {
+                permissionPinRow(label: "SCREEN", binding: bindScreen)
+                permissionPinRow(label: "MIC", binding: bindMic)
+            }
         case .welcome, .consent, .email, .devMode, .allSet:
             HStack {
                 Text("\u{2014}").font(.system(size: 11)).foregroundStyle(Color.vfTextTertiary)
