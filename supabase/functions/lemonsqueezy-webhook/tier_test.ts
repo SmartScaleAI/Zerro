@@ -88,22 +88,37 @@ Deno.test("config validation: a yearly id NOT in LS_VARIANT_MANAGED is flagged",
   );
 });
 
-// ---- top-up packs (Phase 5, one-time orders) ----------------------------------
+// ---- top-up packs (ordered registry, one-time orders) -------------------------
+// A small fixture mirroring the shape of config.TOPUP_PACKS: ordered packs, each
+// with a comma-separated variant-id list (live + test-mode ids), some unset ("").
+const TOPUP_PACKS = [
+  { key: "mini",   credits: 50,    variantIds: "1735339" },
+  { key: "boost",  credits: 200,   variantIds: "1735340" },
+  { key: "power",  credits: 500,   variantIds: "1735341,1735342" }, // e.g. live + test-mode
+  { key: "pro",    credits: 1000,  variantIds: "1735343" },
+  { key: "studio", credits: 2500,  variantIds: "" },                // un-provisioned
+  { key: "max",    credits: 5000,  variantIds: "" },
+  { key: "mega",   credits: 10000, variantIds: "1735346" },
+];
 
-const TOPUP_CONFIG = {
-  boostVariantIds: "1735340",
-  powerVariantIds: "1735341,1735342", // e.g. live + test-mode ids
-  boostCredits: 200,
-  powerCredits: 500,
-};
-
-Deno.test("top-up: Boost and Power variants resolve to their packs", () => {
-  assertEquals(resolveTopupPack("1735340", TOPUP_CONFIG), { pack: "boost", credits: 200 });
-  assertEquals(resolveTopupPack("1735341", TOPUP_CONFIG), { pack: "power", credits: 500 });
-  assertEquals(resolveTopupPack("1735342", TOPUP_CONFIG), { pack: "power", credits: 500 });
+Deno.test("top-up: a mid, the smallest, and the largest pack resolve to their key+credits", () => {
+  // Mid pack.
+  assertEquals(resolveTopupPack("1735343", TOPUP_PACKS), { pack: "pro", credits: 1000 });
+  // Smallest pack.
+  assertEquals(resolveTopupPack("1735339", TOPUP_PACKS), { pack: "mini", credits: 50 });
+  // Largest pack.
+  assertEquals(resolveTopupPack("1735346", TOPUP_PACKS), { pack: "mega", credits: 10000 });
+  // A pack whose id list has multiple entries still matches either id.
+  assertEquals(resolveTopupPack("1735342", TOPUP_PACKS), { pack: "power", credits: 500 });
 });
 
-Deno.test("top-up: unknown or empty variant → null (order falls through unhandled)", () => {
-  assertEquals(resolveTopupPack("9999999", TOPUP_CONFIG), null);
-  assertEquals(resolveTopupPack("", TOPUP_CONFIG), null);
+Deno.test("top-up: empty/whitespace variant → null (no match)", () => {
+  assertEquals(resolveTopupPack("", TOPUP_PACKS), null);
+  assertEquals(resolveTopupPack("   ", TOPUP_PACKS), null);
+});
+
+Deno.test("top-up: a non-top-up variant → null (order falls through unhandled)", () => {
+  // Not in any pack's list, and an un-provisioned pack ("" variantIds) never
+  // accidentally matches.
+  assertEquals(resolveTopupPack("9999999", TOPUP_PACKS), null);
 });

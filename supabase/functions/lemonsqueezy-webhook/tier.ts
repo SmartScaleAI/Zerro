@@ -10,7 +10,7 @@
 // managed product has a monthly AND a yearly variant. We test MEMBERSHIP of the
 // incoming variant in the list, not equality against the whole string.
 
-import type { Tier } from "../_shared/config.ts";
+import type { Tier, TopupPackDef } from "../_shared/config.ts";
 import type { LsSubscriptionAttributes } from "../_shared/types.ts";
 
 /** Parse a comma-separated variant-id secret into trimmed, non-empty ids. */
@@ -115,30 +115,23 @@ export function resolveBillingInterval(
 
 // ---- Top-up packs (one-time orders, plan §1.4) -------------------------------
 
-export interface TopupVariantConfig {
-  /** Raw comma-separated Boost variant ids (LS_VARIANT_TOPUP_BOOST). */
-  boostVariantIds: string;
-  /** Raw comma-separated Power variant ids (LS_VARIANT_TOPUP_POWER). */
-  powerVariantIds: string;
-  boostCredits: number;
-  powerCredits: number;
-}
-
 /**
- * Match an order's variant id to a top-up pack, or null when the order is not
- * a recognized top-up product (e.g. the BYOK license order — the caller falls
- * through to the existing ignored-unhandled path; never a default grant).
+ * Match an order's variant id to a top-up pack in the ordered registry, or null
+ * when the order is not a recognized top-up product (e.g. the BYOK license order
+ * — the caller falls through to the existing ignored-unhandled path; never a
+ * default grant). Iterates `packs` (config.TOPUP_PACKS) in declared order and
+ * returns the first whose variant-id list contains `variantId`. The returned
+ * `pack` is the pack's key (a string), used only for logging.
  */
 export function resolveTopupPack(
   variantId: string,
-  config: TopupVariantConfig,
-): { pack: "boost" | "power"; credits: number } | null {
+  packs: TopupPackDef[],
+): { pack: string; credits: number } | null {
   if (!variantId) return null;
-  if (parseVariantList(config.boostVariantIds).includes(variantId)) {
-    return { pack: "boost", credits: config.boostCredits };
-  }
-  if (parseVariantList(config.powerVariantIds).includes(variantId)) {
-    return { pack: "power", credits: config.powerCredits };
+  for (const p of packs) {
+    if (parseVariantList(p.variantIds).includes(variantId)) {
+      return { pack: p.key, credits: p.credits };
+    }
   }
   return null;
 }
