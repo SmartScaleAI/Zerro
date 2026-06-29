@@ -24,12 +24,9 @@ import { normalizeTrialEmail } from "../_shared/email-normalize.ts";
 import {
   CREDITS_MANAGED,
   LS_VARIANT_MANAGED,
-  LS_VARIANT_TOPUP_BOOST,
-  LS_VARIANT_TOPUP_POWER,
   LS_VARIANT_YEARLY,
-  TOPUP_BOOST_CREDITS,
   TOPUP_EXPIRY_MONTHS,
-  TOPUP_POWER_CREDITS,
+  TOPUP_PACKS,
 } from "../_shared/config.ts";
 import type {
   LsLicenseKeyAttributes,
@@ -46,7 +43,6 @@ import {
   resolveTier,
   resolveTopupPack,
   type TierVariantConfig,
-  type TopupVariantConfig,
   validateYearlyVariantConfig,
 } from "./tier.ts";
 import type { Status, WebhookStore } from "./store.ts";
@@ -94,13 +90,6 @@ let configAlarmEmitted = false;
 // rejected (not silently mislabeled). Every other event (cancel/expire,
 // invoices, orders, license keys) is config-independent and processes normally.
 const BILLING_INTERVAL_EVENTS = new Set(["subscription_created", "subscription_updated"]);
-
-const TOPUP_CONFIG: TopupVariantConfig = {
-  boostVariantIds: LS_VARIANT_TOPUP_BOOST,
-  powerVariantIds: LS_VARIANT_TOPUP_POWER,
-  boostCredits: TOPUP_BOOST_CREDITS,
-  powerCredits: TOPUP_POWER_CREDITS,
-};
 
 function logAction(event: string, subscriptionId: string | null, action: string) {
   console.log(JSON.stringify({ fn: "lemonsqueezy-webhook", event, subscriptionId, action }));
@@ -529,7 +518,7 @@ async function handleOrderCreated(deps: WebhookDeps, payload: LsWebhook<LsOrderA
     ? String(attrs.first_order_item.variant_id)
     : "";
 
-  const pack = resolveTopupPack(variantId, TOPUP_CONFIG);
+  const pack = resolveTopupPack(variantId, TOPUP_PACKS);
   if (!pack) {
     logAction("order_created", null, "ignored_unhandled");
     return;

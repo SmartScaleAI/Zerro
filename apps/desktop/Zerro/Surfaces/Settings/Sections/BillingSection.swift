@@ -704,25 +704,23 @@ private struct UsageMeterRow: View {
         CreditDisplay.isLowBalance(balance: balance)
     }
 
-    /// 6F.4 — comfortable balance: a quiet packs line; low balance: escalate
-    /// in amber. Pack chips whose checkout link isn't configured resolve nil
-    /// and drop out (BillingLinks placeholder pattern); with neither link
-    /// filled, only the low-state notice renders.
+    /// 6F.4 — comfortable balance: a quiet "need more?" line; low balance:
+    /// escalate in amber. A single "Add credits" button opens the one
+    /// multi-variant Credit Packs checkout (the customer picks the pack on the
+    /// LemonSqueezy page). The button only renders when the checkout is
+    /// configured (`topupCheckoutURL != nil`); until then a low balance still
+    /// shows the amber notice, but with no dead-link button.
     @ViewBuilder
     private func topupPrompt(balance: Int) -> some View {
         let low = isLow(balance: balance)
-        let anyLink = BillingLinks.boostTopupCheckoutURL != nil || BillingLinks.powerTopupCheckoutURL != nil
-        if low || anyLink {
+        let url = BillingLinks.topupCheckoutURL
+        if low || url != nil {
             HStack(spacing: VFSpacing.sm) {
-                Text(low ? "Running low \u{2014} top up to keep going" : "Need more? Top-up packs:")
+                Text(low ? "Running low \u{2014} top up to keep going" : "Need more credits?")
                     .font(.system(size: 12))
                     .foregroundStyle(low ? Color.vfWarningAmber : Color.vfTextSecondary)
-                if let boost = BillingLinks.boostTopupCheckoutURL {
-                    Button("Boost \u{00B7} 200 \u{00B7} $10") { openCheckout(boost, product: .topupBoost) }
-                        .buttonStyle(SettingsSecondaryButtonStyle())
-                }
-                if let power = BillingLinks.powerTopupCheckoutURL {
-                    Button("Power \u{00B7} 500 \u{00B7} $22") { openCheckout(power, product: .topupPower) }
+                if let url {
+                    Button("Add credits") { openCheckout(url, product: .topup) }
                         .buttonStyle(SettingsSecondaryButtonStyle())
                 }
             }

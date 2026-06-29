@@ -233,7 +233,7 @@ struct PaywallView: View {
     // MARK: - Options
 
     /// The option stack adapts to the entitlement (the consolidation target):
-    ///   • Managed   → the two top-up pack cards (the one purchasable thing
+    ///   • Managed   → the single "Add Credits" card (the one purchasable thing
     ///                 left). No re-sell, no manage link, no activate field — a
     ///                 Managed user already holds the plan and a key — EXCEPT when
     ///                 a checkout-return deep link delivered a different key to
@@ -244,12 +244,12 @@ struct PaywallView: View {
     ///   • Trial/Expired → the plan sell: Managed + BYOK side by side + activate.
     @ViewBuilder
     private var optionStack: some View {
-        // Managed is its own self-contained surface: the two top-up packs (plus,
+        // Managed is its own self-contained surface: the "Add Credits" card (plus,
         // only when a deep-link key is pending, the activate field). Return early
         // so none of the manage/sell affordances below render for this state.
         if case .managed = entitlements.state {
             VStack(spacing: VFSpacing.md) {
-                TopupPacksRow()
+                AddCreditsCard()
                 if managedActivatePending {
                     ActivateLicenseCard(onActivated: showActivationSuccess)
                 }
@@ -613,106 +613,50 @@ private struct ManagedPrivacyNote: View {
     }
 }
 
-// MARK: - Top-up packs (Managed only)
+// MARK: - Add credits (Managed only)
 
-/// The Managed "Add Credits" surface: the two one-time top-up packs (Boost,
-/// Power) rendered as full side-by-side cards, mirroring the trial/expired
-/// plan-cards row (Managed + BYOK). Managed-only by construction — `optionStack`
-/// gates on `.managed`, and BYOK/trial never reach it.
-private struct TopupPacksRow: View {
+/// The Managed "Add Credits" surface: a single card that opens the one
+/// multi-variant "Credit Packs" checkout. The customer picks WHICH pack
+/// (50–10,000 credits, $5–$300) on the LemonSqueezy page, so the app links out
+/// once rather than rendering a card per pack. Managed-only by construction —
+/// `optionStack` gates on `.managed`, and BYOK/trial never reach it. Fires
+/// `checkout_opened` (Tier 3 §0, `paywall` placement) and opens the custom-data-
+/// decorated URL; the button softens to disabled when the checkout URL is still
+/// a placeholder (`topupCheckoutURL == nil`) rather than opening a dead link.
+private struct AddCreditsCard: View {
     var body: some View {
-        // Same side-by-side, equal-height pattern as the plan cards: both packs
-        // fill the taller card's natural height (`fillsHeight`) with their CTAs
-        // bottom-aligned, and the row sizes to content (no dead space).
-        HStack(alignment: .top, spacing: VFSpacing.md) {
-            // Boost — the smaller pack. Standard white CTA.
-            TopupPackCard(
-                name: "Boost",
-                price: "$10",
-                description: "200 credits added to your balance. Carries over for 12 months.",
-                ctaLabel: "Buy Boost",
-                url: BillingLinks.boostTopupCheckoutURL,
-                product: .topupBoost
-            )
-
-            // Power — the recommended pack: a "Best value" badge + the green CTA
-            // mark it as the lift, mirroring the Managed plan card's highlight.
-            TopupPackCard(
-                name: "Power",
-                price: "$22",
-                description: "500 credits added to your balance. Carries over for 12 months.",
-                ctaLabel: "Buy Power",
-                ctaTint: .vfDevAccent,
-                showsBestValue: true,
-                url: BillingLinks.powerTopupCheckoutURL,
-                product: .topupPower
-            )
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-/// One Managed top-up pack as a full plan-style card — same `OptionCardChrome`
-/// footprint and bottom-pinned CTA as `BuyOnceCard`, so the two packs sit side
-/// by side at equal height. Fires `checkout_opened` (Tier 3 §0, `paywall`
-/// placement) and opens the custom-data-decorated URL. A pack whose checkout
-/// link is still a placeholder keeps its card but renders a disabled CTA (the
-/// `isEnabled` softening) rather than vanishing, so the two-card row keeps its
-/// shape.
-private struct TopupPackCard: View {
-    let name: String
-    let price: String
-    let description: String
-    let ctaLabel: String
-    /// Defaults to the standard white fill; the recommended (Power) pack passes
-    /// the Dev-Mode green.
-    var ctaTint: Color = .vfBrandAccent
-    var showsBestValue: Bool = false
-    let url: URL?
-    let product: BillingLinks.CheckoutProduct
-
-    var body: some View {
-        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true) {
-            HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-                Text(name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.vfTextPrimary)
-                if showsBestValue {
-                    BestValueBadge()
-                }
-                Spacer(minLength: VFSpacing.sm)
-                Text(price)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.vfTextPrimary)
-            }
-
-            Text(description)
-                .font(.system(size: 12))
+        OptionCardChrome(padding: VFSpacing.lg) {
+            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits ($5\u{2013}$300). Credits are added to your balance and carry over for 12 months.")
+                .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: VFSpacing.xs)
-
-            OnboardingPrimaryButton(ctaLabel, isEnabled: url != nil, tint: ctaTint, action: openCheckout)
+            OnboardingPrimaryButton(
+                "Add Credits",
+                isEnabled: BillingLinks.topupCheckoutURL != nil,
+                tint: .vfDevAccent,
+                action: openCheckout
+            )
         }
     }
 
     private func openCheckout() {
-        guard let url else {
-            Log.billing.notice("paywall: \(product.rawValue) top-up checkout URL not configured yet (placeholder)")
+        guard let url = BillingLinks.topupCheckoutURL else {
+            Log.billing.notice("paywall: top-up checkout URL not configured yet (placeholder)")
             return
         }
-        Log.billing.notice("paywall: opening \(product.rawValue) top-up checkout")
+        Log.billing.notice("paywall: opening top-up checkout")
         Analytics.capture("checkout_opened", [
-            "product": product.rawValue,
+            "product": BillingLinks.CheckoutProduct.topup.rawValue,
             "placement": "paywall"
         ])
         // Affiliate referral (server-side IP match) resolved first so the sale is
         // attributed; nil-safe + time-boxed so it never blocks checkout.
         Task {
             let affRef = await AffiliateAttribution.referralCode()
-            let checkout = BillingLinks.checkoutURL(url, product: product, affRef: affRef)
+            let checkout = BillingLinks.checkoutURL(url, product: .topup, affRef: affRef)
             await MainActor.run { NSWorkspace.shared.open(checkout) }
         }
     }
@@ -911,28 +855,13 @@ private struct OptionCardChrome<Content: View>: View {
 
 // MARK: - Most-popular badge
 
-/// The Managed card's "Most popular" chip — the same hierarchy cue the
-/// website pricing section puts on its highlighted card. Rendered in Dev-Mode
-/// green (`vfDevAccent`) to match the "Best value" badge on the Add Credits
-/// surface, so the two paywall highlights read as one cue.
+/// The Managed card's "Most popular" chip — the same hierarchy cue the website
+/// pricing section puts on its highlighted card. Rendered in Dev-Mode green
+/// (`vfDevAccent`) to match the green "Subscribe" CTA, so the highlight reads as
+/// one cue.
 private struct MostPopularBadge: View {
     var body: some View {
         Text("Most popular")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.vfDevAccent)
-            .padding(.horizontal, VFSpacing.sm)
-            .padding(.vertical, 3)
-            .background(Capsule(style: .continuous).fill(Color.vfDevAccent.opacity(0.16)))
-            .fixedSize()
-    }
-}
-
-/// The Power pack's "Best value" chip — mirrors `MostPopularBadge`'s capsule
-/// footprint but in Dev-Mode green (`vfDevAccent`), pairing with the green "Buy
-/// Power" CTA so the highlight reads as one cue.
-private struct BestValueBadge: View {
-    var body: some View {
-        Text("Best value")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(Color.vfDevAccent)
             .padding(.horizontal, VFSpacing.sm)

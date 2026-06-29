@@ -121,7 +121,7 @@ const tiers: Tier[] = [
                 note: "≈ 50 generations on standard models.",
             },
             "5 models to choose from — Claude, GPT & Gemini",
-            "Top up anytime — Boost (200 credits, $10) or Power (500 credits, $22)",
+            "Top up anytime — packs from 50 credits to 10,000 credits",
             "We manage all token usage — no API keys",
             "Cancel anytime",
         ],

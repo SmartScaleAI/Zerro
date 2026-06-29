@@ -676,6 +676,15 @@ Deno.test("order_created (Power) → 500 credits", async () => {
   assertEquals(store.topups[0].credits_total, 500);
 });
 
+Deno.test("order_created (Mega, a new pack) → 10,000 credits", async () => {
+  // The expanded registry: variant 307 = Mega (test_setup). Same crediting path,
+  // larger grant — proves the generalized resolveTopupPack reaches a new pack.
+  const store = await storeWithActiveSub();
+  await deliver(store, "order_created", orderPayload({ variant_id: 307, orderId: "topup_order_mega" }));
+  assertEquals(store.topups.length, 1);
+  assertEquals(store.topups[0].credits_total, 10000);
+});
+
 Deno.test("redelivered top-up order (exact) → deduped by the composite event key, one row", async () => {
   const store = await storeWithActiveSub();
   await deliver(store, "order_created", orderPayload());

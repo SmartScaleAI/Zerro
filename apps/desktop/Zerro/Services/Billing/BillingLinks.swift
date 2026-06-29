@@ -29,8 +29,10 @@ enum BillingLinks {
     enum CheckoutProduct: String {
         case subscriptionPro = "subscription_pro"
         case byok = "byok"
-        case topupBoost = "topup_boost"
-        case topupPower = "topup_power"
+        /// The single multi-variant "Credit Packs" product. The customer picks
+        /// which pack (50–10,000 credits) ON the LemonSqueezy page; the webhook
+        /// resolves the purchased variant id → credits (`config.TOPUP_PACKS`).
+        case topup = "topup"
         /// Same Managed subscription product as `subscriptionPro`, but tagged
         /// distinctly so upgrades that originate from the capture toolbar's
         /// trial model-lock popup are attributable separately in analytics.
@@ -139,24 +141,22 @@ enum BillingLinks {
 
     static var proCheckoutURL: URL? { resolvedURL(proCheckoutURLString) }
 
-    // MARK: - Top-up pack checkouts (multi-model Phase 6 / plan §1.4)
+    // MARK: - Top-up checkout (multi-model Phase 6 / plan §1.4)
     //
-    // The hosted checkout for each ONE-TIME top-up pack: Boost (200 credits,
-    // $10) and Power (500 credits, $22). Purchased credits attach to the
-    // buyer's subscription server-side (the `order_created` webhook) and
-    // expire 12 months from purchase. Same resolve-to-nil pattern: the
-    // low-balance prompt hides a pack whose link isn't filled in yet.
-    static let boostTopupCheckoutURLString = checkout(
-        test: "f3518fc2-6dff-47e1-bffd-3def5a1c05a6",
-        live: "4bd1167b-a0d8-49ab-b572-e3704fce63fc"
-    )
-    static let powerTopupCheckoutURLString = checkout(
-        test: "48b7b929-7d0f-4a12-9098-a2ed75aceba5",
-        live: "a73f69a9-0e23-470a-bc8d-3b272d0c8df5"
+    // ONE multi-variant "Credit Packs" product. The customer chooses which pack
+    // (50–10,000 credits, $5–$300) ON the LemonSqueezy page — the app links out
+    // per product, not per variant. Purchased credits attach to the buyer's
+    // subscription server-side (the `order_created` webhook resolves the variant
+    // id → credits via `config.TOPUP_PACKS`) and expire 12 months from purchase.
+    // Same DEBUG(test)/Release(live) switch + resolve-to-nil pattern as the BYOK
+    // and Managed checkouts: a `TODO-*` live id resolves nil so the "Add Credits"
+    // button softens to disabled until production go-live (a separate step).
+    static let topupCheckoutURLString = checkout(
+        test: "0f5787db-cde1-4c8e-95de-553ac4842205",
+        live: "c8c1d865-dce1-4b2e-8b99-9ec21c046b46"
     )
 
-    static var boostTopupCheckoutURL: URL? { resolvedURL(boostTopupCheckoutURLString) }
-    static var powerTopupCheckoutURL: URL? { resolvedURL(powerTopupCheckoutURLString) }
+    static var topupCheckoutURL: URL? { resolvedURL(topupCheckoutURLString) }
 
     /// The checkout URL, or `nil` if still a placeholder. `nil` until the
     /// `TODO:` above is filled in (the placeholder isn't a valid absolute URL,

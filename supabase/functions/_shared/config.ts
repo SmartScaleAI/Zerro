@@ -40,12 +40,39 @@ export const LS_VARIANT_YEARLY = optionalEnv("LS_VARIANT_YEARLY", "");
 // inserts a topup_credits row for the buyer's active subscription. Credits and
 // expiry are env-tunable without a code change; ls_order_id uniqueness makes a
 // redelivered order a no-op.
-//   LS_VARIANT_TOPUP_BOOST="1735340"   # Boost $10 → 200 credits
-//   LS_VARIANT_TOPUP_POWER="1735341"   # Power $22 → 500 credits
-export const LS_VARIANT_TOPUP_BOOST = optionalEnv("LS_VARIANT_TOPUP_BOOST", "");
-export const LS_VARIANT_TOPUP_POWER = optionalEnv("LS_VARIANT_TOPUP_POWER", "");
-export const TOPUP_BOOST_CREDITS = optionalEnvInt("TOPUP_BOOST_CREDITS", 200);
-export const TOPUP_POWER_CREDITS = optionalEnvInt("TOPUP_POWER_CREDITS", 500);
+//
+// ORDERED REGISTRY (renders top→bottom in this order on the app's "Add Credits"
+// surface — the desktop `BillingLinks.topupPacks` mirrors it). Each pack's
+// variant-id secret is a COMMA-SEPARATED LIST (live + test-mode ids); UNSET
+// defaults to "" → "no match" so an un-provisioned pack simply never credits.
+// To add/rotate a pack, set its secret(s); the credit count is env-tunable too.
+//   LS_VARIANT_TOPUP_MINI="…"          # Mini   $5   → 50 credits
+//   LS_VARIANT_TOPUP_BOOST="1735340"   # Boost  $10  → 200 credits
+//   LS_VARIANT_TOPUP_POWER="1735341"   # Power  $20  → 500 credits
+//   LS_VARIANT_TOPUP_PRO="…"           # Pro    $40  → 1,000 credits
+//   LS_VARIANT_TOPUP_STUDIO="…"        # Studio $90  → 2,500 credits
+//   LS_VARIANT_TOPUP_MAX="…"           # Max    $170 → 5,000 credits
+//   LS_VARIANT_TOPUP_MEGA="…"          # Mega   $300 → 10,000 credits
+// The matching TOPUP_<KEY>_CREDITS vars override each pack's grant.
+export interface TopupPackDef {
+  /** Stable slug; also the desktop `CheckoutProduct` raw-value suffix. */
+  key: string;
+  /** Credits granted on purchase (env-overridable). */
+  credits: number;
+  /** Raw comma-separated LS variant id list for this pack ("" = no match). */
+  variantIds: string;
+}
+
+export const TOPUP_PACKS: TopupPackDef[] = [
+  { key: "mini",   credits: optionalEnvInt("TOPUP_MINI_CREDITS",   50),    variantIds: optionalEnv("LS_VARIANT_TOPUP_MINI",   "") },
+  { key: "boost",  credits: optionalEnvInt("TOPUP_BOOST_CREDITS",  200),   variantIds: optionalEnv("LS_VARIANT_TOPUP_BOOST",  "") },
+  { key: "power",  credits: optionalEnvInt("TOPUP_POWER_CREDITS",  500),   variantIds: optionalEnv("LS_VARIANT_TOPUP_POWER",  "") },
+  { key: "pro",    credits: optionalEnvInt("TOPUP_PRO_CREDITS",    1000),  variantIds: optionalEnv("LS_VARIANT_TOPUP_PRO",    "") },
+  { key: "studio", credits: optionalEnvInt("TOPUP_STUDIO_CREDITS", 2500),  variantIds: optionalEnv("LS_VARIANT_TOPUP_STUDIO", "") },
+  { key: "max",    credits: optionalEnvInt("TOPUP_MAX_CREDITS",    5000),  variantIds: optionalEnv("LS_VARIANT_TOPUP_MAX",    "") },
+  { key: "mega",   credits: optionalEnvInt("TOPUP_MEGA_CREDITS",   10000), variantIds: optionalEnv("LS_VARIANT_TOPUP_MEGA",   "") },
+];
+
 // Top-up packs expire this many months after purchase (§1.4: 12).
 export const TOPUP_EXPIRY_MONTHS = optionalEnvInt("TOPUP_EXPIRY_MONTHS", 12);
 
