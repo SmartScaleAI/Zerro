@@ -18,8 +18,10 @@
 //       sitting visually on top of the prompt box below it.
 //    3. body well — the dark inner prompt container (artifact only):
 //       monospace for `snippet`, markdown otherwise.
-//    4. footer — credits charge line bottom-left; the per-type copy capsule
-//       (artifact) bottom-right. A chat-only result has no footer action.
+//    4. footer — credits charge line bottom-left (when managed); the copy
+//       capsule bottom-right. An artifact shows its per-type label
+//       ("Copy Prompt", "Copy snippet", …); a chat-only result shows the
+//       plain "Copy" action for its explanation text.
 //
 //  Pure renderer: everything it shows arrives via props, every effect
 //  leaves via a closure. Copy payloads live upstream in
@@ -29,7 +31,8 @@
 import SwiftUI
 
 struct ArtifactCardView: View {
-    /// nil → the chat-only layout (no body well, no footer action).
+    /// nil → the chat-only layout: no body well, and the footer's Copy uses
+    /// the plain "Copy" label (it copies the explanation `chatText`).
     let artifact: Artifact?
     /// Conversational summary above the prompt box. May be empty when the
     /// model led straight into the artifact.
@@ -311,10 +314,19 @@ struct ArtifactCardView: View {
                 // chrome: destructive Undo, then the green Accept CTA rightmost.
                 undoButton
                 acceptButton
-            } else if artifact != nil {
+            } else if showsCopyAction {
                 copyButton
             }
         }
+    }
+
+    /// Whether the footer offers the Copy action. Copy is offered for any
+    /// artifact result, and for a chat-only result that has copyable
+    /// `chatText` (the explanation). Failure and dev-result footers own their
+    /// own actions, so Copy yields to them. `internal` so the unit tests can
+    /// assert visibility without rendering.
+    var showsCopyAction: Bool {
+        failure == nil && devResult == nil && (artifact != nil || !chatText.isEmpty)
     }
 
     // MARK: Failure configuration
