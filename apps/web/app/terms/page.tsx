@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/terms" },
 }
 
-const LAST_UPDATED = "June 15, 2026"
+const LAST_UPDATED = "June 29, 2026"
 
 export default function TermsPage() {
   return (
@@ -50,10 +50,13 @@ export default function TermsPage() {
 
       <LegalSection title="Accounts">
         <P>
-          You must provide accurate information when creating an account and
-          keep your credentials secure. You are responsible for activity under
-          your account. You must be at least 13 years old (or the minimum age
-          in your jurisdiction) to use the Service.
+          You must provide accurate information when creating an account. We do
+          not use passwords: access is tied to your verified email address and,
+          for paid plans, your Lemon Squeezy license key. Keep your email
+          account and license key secure — anyone with access to them can use
+          your account — and you are responsible for activity under your
+          account. You must be at least 13 years old (or the minimum age in
+          your jurisdiction) to use the Service.
         </P>
       </LegalSection>
 
@@ -67,7 +70,8 @@ export default function TermsPage() {
           </li>
           <li>
             <Strong>BYOK license.</Strong> A one-time license that lets you
-            use your own API keys (OpenAI, Google, Anthropic). The license
+            use your own API keys (OpenAI, Google (Gemini), Anthropic). The
+            license
             includes one year of app updates; after that, prior versions keep
             working but a new license is required for newer versions. You pay
             your AI providers directly for usage, and your provider
@@ -101,7 +105,7 @@ export default function TermsPage() {
           <li>Reverse engineer, resell, or redistribute the Service except as permitted by law.</li>
           <li>Use the Service to develop a competing product by systematically extracting its outputs or behavior.</li>
           <li>Interfere with or disrupt the integrity or performance of the Service.</li>
-          {/* DRAFT — placeholder language pending attorney review */}
+          <li>Record or capture confidential, proprietary, or trade-secret information — including your employer&rsquo;s or any third party&rsquo;s confidential material — without authorization or in violation of any non-disclosure, employment, or other agreement that applies to you.</li>
           <li>Use the Service to capture, submit, or process data subject to special legal protection — including protected health information under HIPAA, payment card data subject to PCI-DSS, or similar regulated categories. The Service is not designed or offered for such use, and you bear sole responsibility and liability for any such data you choose to submit.</li>
         </UL>
       </LegalSection>
@@ -113,11 +117,16 @@ export default function TermsPage() {
           solely to provide the Service, as described in our Privacy Policy.
           We do not store your recordings and we do not use them to train AI
           models. You are responsible for ensuring you have the right to
-          record the content on your screen and any audio you capture.
+          record the content on your screen and any audio you capture,
+          including any confidential, proprietary, or trade-secret information
+          belonging to your employer or a third party, and for complying with
+          any confidentiality, non-disclosure, or employment obligations that
+          apply to you. To the maximum extent permitted by law, we are not
+          liable for content you choose to record or for any consequences of
+          recording content you were not authorized to capture.
         </P>
       </LegalSection>
 
-      {/* DRAFT — placeholder language pending attorney review */}
       <LegalSection title="Indemnification">
         <P>
           You agree to indemnify, defend, and hold harmless SmartScale
@@ -133,9 +142,10 @@ export default function TermsPage() {
       <LegalSection title="Third-party services">
         <P>
           The Service depends on third parties, including AI model providers
-          (OpenAI, Google, Anthropic), Supabase, Lemon Squeezy, Resend, and
-          Vercel. We are not responsible for third-party services, and your
-          use of your own API keys on the BYOK plan is subject to the relevant
+          (OpenAI, Google (Gemini), Anthropic), the Claude Code coding agent
+          used by Dev Mode, Supabase, Lemon Squeezy, Resend, Slack, and Vercel.
+          We are not responsible for third-party services, and your use of your
+          own API keys on the BYOK plan is subject to the relevant
           provider&rsquo;s terms.
         </P>
       </LegalSection>
@@ -158,7 +168,23 @@ export default function TermsPage() {
           NON-INFRINGEMENT. AI-GENERATED OUTPUT MAY CONTAIN ERRORS; YOU ARE
           RESPONSIBLE FOR REVIEWING IT BEFORE USE.
         </P>
-        {/* DRAFT — placeholder language pending attorney review */}
+        <P>
+          Dev Mode runs a third-party coding agent (Claude Code) locally on
+          your computer and at your direction. The agent can read and modify
+          files in the project folder you select and run commands on your
+          machine. Although it is intended to operate within the folder you
+          select, it executes commands on your computer and may in some cases
+          read, change, or delete files or settings outside that folder, and
+          some changes may be permanent and impossible to undo. You are solely
+          responsible for reviewing any changes it proposes or makes before
+          relying on them, for keeping your own backups, and for using version
+          control so changes can be inspected and, where possible, reverted.
+          Dev Mode and the agent are provided &ldquo;as is,&rdquo; and to the
+          maximum extent permitted by law we are not liable for any changes the
+          agent makes to your files, system, or other data — whether inside or
+          outside the folder you select, and whether or not those changes can
+          be reversed — or for any resulting loss or damage.
+        </P>
         <P>
           Zerro&rsquo;s output, including plain-language explanations and
           answers, is provided for general informational purposes only, is
@@ -201,7 +227,6 @@ export default function TermsPage() {
         </P>
       </LegalSection>
 
-      {/* DRAFT — placeholder language pending attorney review. This arbitration and class-action waiver clause in particular needs attorney review for enforceability in the governing-law jurisdiction (Wyoming); the opt-out mechanism and any consumer carve-outs must be confirmed. */}
       <LegalSection title="Dispute resolution">
         <P>
           Except where prohibited by law, any dispute arising out of or

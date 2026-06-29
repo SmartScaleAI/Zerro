@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 }
 
-const LAST_UPDATED = "June 15, 2026"
+const LAST_UPDATED = "June 29, 2026"
 
 export default function PrivacyPage() {
   return (
@@ -43,10 +43,10 @@ export default function PrivacyPage() {
         <UL>
           <li>
             <Strong>We do not store your recordings.</Strong> Screen frames,
-            audio, and transcripts are processed in memory to generate your
-            prompt and are never written to our database. Our generation log
-            has no content columns by design — it records only token counts,
-            model, estimated cost, and success.
+            audio, and transcripts are held briefly on your device and in
+            memory during generation, and are never written to our database.
+            Our generation log has no content columns by design — it records
+            only token counts, model, estimated cost, and success.
           </li>
           <li>
             <Strong>Processing starts on your Mac.</Strong> Your recording is
@@ -74,11 +74,12 @@ export default function PrivacyPage() {
 
       <LegalSection title="Information we collect">
         <P>
-          <Strong>Account information.</Strong> When you create an account we
-          collect your email address. If you sign in with Apple or Google, we
-          receive the email address (and, for Google, basic profile
-          information) those providers share with us. Authentication is
-          handled by Supabase.
+          <Strong>Account information.</Strong> We collect your email address.
+          For a free trial you verify your email with a one-time 6-digit code;
+          for paid access you activate a license key issued by Lemon Squeezy.
+          We do not offer social sign-in (such as Apple or Google), and there
+          is no password to manage. Authentication and our database are handled
+          by Supabase.
         </P>
         <P>
           <Strong>Billing information.</Strong> Payments are processed by Lemon
@@ -96,15 +97,14 @@ export default function PrivacyPage() {
           audio — your narration is uploaded and transcribed as recorded. The
           frames and audio are then sent to our generation service, where the
           audio is transcribed and the content is sent to the third-party AI
-          model you selected (OpenAI, Google, or Anthropic) to produce your
-          prompt.
+          model you selected (OpenAI, Google (Gemini), or Anthropic) to produce
+          your prompt.
           This data is processed transiently: frames, audio, transcripts, and
           prompts are not stored in our database. The generated output is held
           in a short-lived cache for up to 15 minutes solely so that a dropped
           connection can be retried without charging you twice, then becomes
           unreadable and is purged.
         </P>
-        {/* DRAFT — placeholder language pending attorney review */}
         <P>
           You must not submit data subject to special legal protection, such as
           HIPAA-covered health information or PCI-regulated payment card data;
@@ -120,9 +120,26 @@ export default function PrivacyPage() {
         <P>
           <Strong>Recordings (BYOK plan).</Strong> If you bring your own API
           keys, generations are sent directly from your Mac to the relevant
-          provider (OpenAI, Google, or Anthropic). Your recordings and keys
-          never pass through our servers; keys are stored locally in your
-          macOS Keychain.
+          provider (OpenAI, Google (Gemini), or Anthropic). Audio is always
+          transcribed with your OpenAI key (Whisper) before generation, even
+          when the chat model you selected is Google (Gemini) or Anthropic.
+          Your recordings and keys never pass through our servers; keys are
+          stored locally in your macOS Keychain.
+        </P>
+        <P>
+          <Strong>Dev Mode (optional).</Strong> If you turn on Dev Mode, Zerro
+          launches Claude Code — Anthropic&rsquo;s coding-agent CLI — locally on
+          your Mac, inside the project folder you choose. Acting at your
+          direction, the agent can read and modify files in that folder and run
+          commands there; it runs under sandboxing and permission controls that
+          scope its access to your project. To match your recording to the right
+          project, Zerro can read the address of your active browser tab via
+          Apple Events, but it only ever uses a local (localhost) address to
+          detect the development-server port — any non-local address is
+          discarded the instant it is seen, and is never stored, logged, or
+          transmitted. Your project files stay on your Mac and are not sent to
+          SmartScale; when the agent runs, it communicates with Anthropic under
+          its own terms to carry out the work you request.
         </P>
         <P>
           <Strong>Usage data.</Strong> We record per-generation metadata —
@@ -162,6 +179,19 @@ export default function PrivacyPage() {
           PostHog sets no cross-site tracking cookies and keeps no identifier
           between visits.
         </P>
+        <P>
+          <Strong>Affiliate attribution and checkout.</Strong> If you arrive
+          through an affiliate link (a getzerro.app address carrying an
+          &ldquo;aff&rdquo; code), we send that code to our server keyed to your
+          public IP address so that a later purchase can be credited to the
+          referrer. Because checkout happens inside the Mac app — a separate
+          browser context — the app also passes its analytics identifier into
+          the Lemon Squeezy checkout so that a completed subscription can be
+          matched back to the app&rsquo;s usage events. Where this identifier is
+          linked to a checkout or subscription in this way it is pseudonymous
+          rather than fully anonymous, though it is still not your name or
+          email.
+        </P>
       </LegalSection>
 
       <LegalSection title="How we use your information">
@@ -184,15 +214,20 @@ export default function PrivacyPage() {
           We share data with a small set of providers, each only to the extent
           needed to run Zerro: <Strong>Supabase</Strong> (authentication,
           database, and generation service), <Strong>OpenAI</Strong>,{" "}
-          <Strong>Google</Strong>, and <Strong>Anthropic</Strong> (AI model
-          processing of recordings on Managed/Trial plans, and audio
-          transcription via OpenAI Whisper), <Strong>Lemon Squeezy</Strong>{" "}
+          <Strong>Google (Gemini)</Strong>, and <Strong>Anthropic</Strong> (AI
+          model processing of recordings on Managed/Trial plans, and audio
+          transcription via OpenAI Whisper), <Strong>Anthropic (Claude Code)</Strong>{" "}
+          (the local coding agent that powers Dev Mode, a role separate from
+          Anthropic&rsquo;s model API above), <Strong>Lemon Squeezy</Strong>{" "}
           (payments, as merchant of record), <Strong>Resend</Strong>{" "}
-          (transactional email), <Strong>PostHog</Strong> (anonymous app and
-          website analytics and crash reporting), and <Strong>Vercel</Strong>{" "}
-          (website hosting). AI providers process your content under their API
-          terms; we use API offerings under which inputs are not used to train
-          their models. We do not sell your personal information to anyone.
+          (transactional email), <Strong>Slack</Strong> (internal routing of
+          in-app feedback and issue reports you choose to send — which include
+          your email address when you are signed in), <Strong>PostHog</Strong>{" "}
+          (app and website analytics and crash reporting), and{" "}
+          <Strong>Vercel</Strong> (website hosting). AI providers process your
+          content under their API terms; we use API offerings under which inputs
+          are not used to train their models. We do not sell your personal
+          information to anyone.
         </P>
       </LegalSection>
 
@@ -200,7 +235,8 @@ export default function PrivacyPage() {
         <UL>
           <li>
             <Strong>Screen frames, audio, transcripts, prompts:</Strong> not
-            stored; processed in memory during generation only.
+            stored in our database; held briefly on your device and in memory
+            during generation only.
           </li>
           <li>
             <Strong>Generated output:</Strong> cached up to 15 minutes for
@@ -238,11 +274,14 @@ export default function PrivacyPage() {
         <P>
           We use industry-standard safeguards: data is encrypted in transit
           (TLS), API keys on the BYOK plan live in your macOS Keychain rather
-          than on our servers, verification codes are stored only as hashes,
-          and our backend enforces authentication, rate limits, and
-          least-privilege access. No system is perfectly secure, but we design
-          so that the most sensitive data — your screen and voice — is held by
-          us for the shortest possible time, or not at all.
+          than on our servers, trial verification codes and the trial device
+          identifier are stored only as hashes, and our backend enforces
+          authentication, rate limits, and least-privilege access. Some account
+          data, such as your email address, is necessarily stored in readable
+          form so we can operate billing and trials. No system is perfectly
+          secure, but we design so that the most sensitive data — your screen
+          and voice — is held by us for the shortest possible time, or not at
+          all.
         </P>
       </LegalSection>
 
