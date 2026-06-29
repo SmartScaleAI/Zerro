@@ -10,6 +10,13 @@
 //  behavior: a chat-only response still lays out cleanly with its text, the
 //  charge line (when managed), and the dismiss chrome — no layout break.
 //
+//  The chat-only card now also offers a plain "Copy" action (matching the
+//  artifact behavior). Two seams cover it deterministically without UI
+//  automation: `AppState.resultCopyPayload` supplies the chat text the button
+//  copies (falling back to the raw `generatedPrompt`), and
+//  `ArtifactCardView.showsCopyAction` decides whether the footer renders the
+//  Copy button at all.
+//
 
 import AppKit
 import SwiftUI
@@ -75,5 +82,121 @@ final class ChatOnlyResultCardTests: XCTestCase {
         let image = try render(view)
         XCTAssertGreaterThan(image.size.width, 0)
         XCTAssertGreaterThan(image.size.height, 0)
+    }
+
+    /// The expanded chat-only card with copyable text guards the footer-with-
+    /// Copy layout: a future regression that breaks the chat-only footer (e.g.
+    /// dropping the Copy branch) fails the render here, alongside the
+    /// `showsCopyAction` assertions below.
+    func testChatOnlyExpandedWithCopyRenders() throws {
+        let view = PillView(
+            state: .resultExpanded,
+            result: ResultPresentation(
+                chatText: "That hydration error comes from rendering a non-deterministic "
+                    + "value during SSR \u{2014} the server and client markup disagree.",
+                artifact: nil
+            ),
+            chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
+        )
+
+        let image = try render(view)
+        XCTAssertGreaterThan(image.size.width, 0)
+        XCTAssertGreaterThan(image.size.height, 0)
+    }
+
+    // MARK: Copy payload seam (AppState)
+
+    /// A chat-only response (`parsedResponse.artifact == nil`) copies the chat
+    /// text — the data the Copy button writes to the pasteboard.
+    func testResultCopyPayloadReturnsChatTextForChatOnly() {
+        let appState = AppState()
+        appState.generatedPrompt = "<<<raw model output>>>"
+        appState.parsedResponse = ParsedResponse(
+            chatText: "Nothing on screen needs a code change.",
+            artifact: nil,
+            isValid: true,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(appState.resultCopyPayload, "Nothing on screen needs a code change.")
+    }
+
+    /// When the chat text is empty (the malformed fail-safe path), the payload
+    /// falls back to the raw `generatedPrompt` — never nil/empty, so the button
+    /// always has something to copy. This is exactly what the card's `chatText`
+    /// prop mirrors upstream, so the footer never shows a dead Copy button.
+    func testResultCopyPayloadFallsBackToGeneratedPromptWhenChatEmpty() {
+        let appState = AppState()
+        appState.generatedPrompt = "the raw fallback text"
+        appState.parsedResponse = ParsedResponse(
+            chatText: "",
+            artifact: nil,
+            isValid: false,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(appState.resultCopyPayload, "the raw fallback text")
+    }
+
+    // MARK: Copy visibility seam (ArtifactCardView.showsCopyAction)
+
+    private func makeCard(
+        artifact: Artifact?,
+        chatText: String,
+        failure: ArtifactCardView.FailureConfig? = nil,
+        devResult: ArtifactCardView.DevResultConfig? = nil
+    ) -> ArtifactCardView {
+        ArtifactCardView(
+            artifact: artifact,
+            chatText: chatText,
+            chargeLine: nil,
+            noNarration: false,
+            stoppedBySleep: false,
+            onCopy: {},
+            onCollapse: {},
+            onDismiss: {},
+            failure: failure,
+            devResult: devResult
+        )
+    }
+
+    private var sampleArtifact: Artifact {
+        Artifact(type: .agentPrompt, rawType: "agent_prompt", title: "Fix the bug", body: "Do the thing.")
+    }
+
+    /// An artifact result always offers Copy (its per-type label).
+    func testShowsCopyActionForArtifact() {
+        XCTAssertTrue(makeCard(artifact: sampleArtifact, chatText: "").showsCopyAction)
+    }
+
+    /// A chat-only result with explanation text offers the plain Copy action.
+    func testShowsCopyActionForChatOnlyWithText() {
+        XCTAssertTrue(makeCard(artifact: nil, chatText: "Here is why.").showsCopyAction)
+    }
+
+    /// A chat-only result with NO text has nothing to copy — no dead button.
+    func testHidesCopyActionForChatOnlyWithoutText() {
+        XCTAssertFalse(makeCard(artifact: nil, chatText: "").showsCopyAction)
+    }
+
+    /// The failure footer owns its own actions (Retry / Cancel) — Copy yields.
+    func testHidesCopyActionForFailure() {
+        let failure = ArtifactCardView.FailureConfig(
+            headline: "Generation failed",
+            detail: "The model returned an error."
+        )
+        XCTAssertFalse(makeCard(artifact: nil, chatText: "Here is why.", failure: failure).showsCopyAction)
+    }
+
+    /// The dev-result footer owns Undo/Accept — Copy yields.
+    func testHidesCopyActionForDevResult() {
+        let dev = ArtifactCardView.DevResultConfig(
+            title: "Changes applied",
+            summary: "Recolored the button.",
+            diffText: "diff --git a/App.css b/App.css"
+        )
+        XCTAssertFalse(makeCard(artifact: nil, chatText: "", devResult: dev).showsCopyAction)
     }
 }
