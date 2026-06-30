@@ -4203,6 +4203,15 @@ final class AppState {
             case .decodeFailure:
                 // Response contract broke — captured.
                 return .providerError
+            case .modelUnavailable:
+                // Phase 1 (on-device whisper): only `WhisperCppTranscriptionService`
+                // throws this, and that engine is NOT wired into the pipeline yet, so
+                // this branch is currently unreachable — it exists solely to keep this
+                // exhaustive switch compiling. Deliberately NOT given a dedicated
+                // user-facing reason yet; it reuses the generic local
+                // `.processingFailed` bucket. The real mapping (e.g. "model still
+                // downloading") lands with the phase that routes to the local engine.
+                return .processingFailed
             }
         }
         if let pgError = error as? PromptGenerationError {
