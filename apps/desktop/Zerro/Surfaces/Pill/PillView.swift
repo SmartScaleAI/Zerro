@@ -1045,16 +1045,16 @@ private struct ConfirmRecoveryPillContent: View {
 //
 // Compact keeps the Phase 2.75 capsule shape, titled by the result itself:
 // green check + the artifact's dynamic title ("Response ready" for
-// chat-only) + hero Copy + View chevron + close X.
+// chat-only) + View chevron + close X. Copy lives only in the expanded
+// card, not the compact capsule.
 //
-// Expanded follows the approved design: a MINIMAL top strip (just the
-// charge line, left, and the close X, right — no check, no label; the
-// card's own check + title is the success signal), then the chat text as
-// prose on the chrome, then the layered artifact card (ArtifactCardView),
-// which owns the title row, the Hide chevron,
-// and the single per-type copy button. A chat-only response renders no
-// card at all — the strip keeps a Hide toggle in that case so the pill can
-// still collapse to compact.
+// Expanded (UI revision 2): the card IS the expanded pill — no outer
+// strip, no gutters. `ArtifactCardView` owns the whole layout: the header
+// (check + title, Hide chevron, close X), the chat text as prose, the
+// artifact body well (artifact only), and the footer (charge line left when
+// managed; Copy right). A chat-only response (artifact == nil) renders the
+// SAME card — header + chat text + a plain "Copy" action for the
+// explanation text; only the body well is dropped.
 
 private struct ResultPillContent: View {
     let expanded: Bool
