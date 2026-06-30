@@ -45,3 +45,10 @@ phase noted). None are blockers for proceeding.
   `verifyAndInstall` finishes can still resolve to `.ready`, since the post-install block
   doesn't re-check for cancellation. Very narrow; low severity. Re-check `isCancelling`/state
   before the final `.ready` transition if tightening.
+
+## From Phase 3 review
+
+- [ ] **P3-1 — `sttWasLocal` via concrete-type check (Low, optional).**
+  AppState detects local STT with `service is WhisperCppTranscriptionService` to drive the $0
+  cost. Works, but couples cost detection to the concrete type — a future wrapper/decorator
+  would defeat it. Cleaner: have the resolver report `isLocal` alongside the service. Optional.

@@ -846,23 +846,103 @@ final class AppState {
     // local (fail-safe), exactly like a `nil` entitlements.
     @ObservationIgnored weak var trialCredits: TrialCreditsManager?
 
-    /// Whether the user has their own OpenAI key on file — decides whether a
-    /// trial user funds generation locally (their key) or via server credits.
-    /// DELIBERATELY OpenAI-only even under multi-provider BYOK (6C): the local
-    /// path transcribes via Whisper before any chat call, so without an OpenAI
-    /// key it cannot run at all — a Gemini/Anthropic-only keyholder keeps
-    /// routing through server credits. A closure so tests can drive the
-    /// routing without touching the Keychain.
-    @ObservationIgnored var hasOwnAPIKeyProvider: () -> Bool = {
-        if case .found(let key) = KeychainStore.openAIAPIKey.readResult() {
-            return !key.isEmpty
+    /// Phase 4 (Local Whisper) — whether the user can run a generation ENTIRELY
+    /// on their own dime: they hold at least one CHAT provider key AND have a
+    /// usable transcription path for their `sttEngine` (a local model installed,
+    /// or an OpenAI key for cloud Whisper). Decides whether a TRIAL user funds
+    /// generation themselves (their keys/model) or falls back to server credits.
+    ///
+    /// This GENERALIZES the old OpenAI-only `hasOwnAPIKeyProvider`: pre-Local-
+    /// Whisper, "own key" had to mean an OpenAI key (the only transcription
+    /// path), so a Claude/Gemini-only keyholder routed through server credits.
+    /// Now a Claude-only user WITH the on-device model installed has a fully
+    /// local path and funds it themselves. Until a model exists in production
+    /// (Phase 5+), `canResolve(.auto, false, false)` is false, so this stays
+    /// byte-identical to the old behavior for a non-OpenAI keyholder.
+    ///
+    /// Optional closure (the Phase-3 `resolveTranscriptionService` pattern) so
+    /// tests drive routing without a Keychain/disk; `nil` (the default) uses
+    /// `defaultCanGenerateLocally`. Both entitlement readers consult it through
+    /// `canGenerateLocally()`.
+    @ObservationIgnored var canGenerateLocallyProvider: (() -> Bool)?
+
+    /// Resolves `canGenerateLocallyProvider` (or its built-in default) — the
+    /// capability predicate the entitlement readers pass to
+    /// `EntitlementStore.generationRoute` / `preflightBlock`. Internal (not
+    /// private) so `ZerroApp`'s pre-flight gate can call it too (it can't reach
+    /// the private default).
+    func canGenerateLocally() -> Bool {
+        (canGenerateLocallyProvider ?? defaultCanGenerateLocally)()
+    }
+
+    /// Built-in capability check (used when `canGenerateLocallyProvider` is nil).
+    /// CHEAP reads only: at least one chat key (`ProviderKeys.availableProviders`),
+    /// the persisted `sttEngine`, the hash-free local-model signal
+    /// (`LocalModelManager.installedModelURL` — NEVER `isModelReady`, which
+    /// re-hashes ~547 MB, punchlist P2-1), and OpenAI-key presence. Composed by
+    /// the pure `Self.canGenerateLocally(hasAnyChatKey:engine:modelInstalled:openAIKeyPresent:)`.
+    private func defaultCanGenerateLocally() -> Bool {
+        Self.canGenerateLocally(
+            hasAnyChatKey: !ProviderKeys.availableProviders().isEmpty,
+            engine: self.preferences?.sttEngine ?? .auto,
+            modelInstalled: LocalModelManager.installedModelURL() != nil,
+            openAIKeyPresent: ProviderKeys.resolveKey(for: .openai) != nil
+        )
+    }
+
+    /// The pure capability rule, factored out of `defaultCanGenerateLocally` so
+    /// the full key/model/engine matrix is unit-testable without a Keychain or
+    /// disk: the user can self-fund iff they have at least one chat key AND a
+    /// usable transcription path (delegated to `STTRouting.canResolve`, the
+    /// shared STT source of truth).
+    static func canGenerateLocally(
+        hasAnyChatKey: Bool,
+        engine: STTEngine,
+        modelInstalled: Bool,
+        openAIKeyPresent: Bool
+    ) -> Bool {
+        hasAnyChatKey && STTRouting.canResolve(
+            engine: engine,
+            modelInstalled: modelInstalled,
+            openAIKeyPresent: openAIKeyPresent
+        )
+    }
+
+    /// Phase 3 (Local Whisper) — resolves the `TranscriptionService` for a
+    /// recording. Injected as a closure (mirroring `canGenerateLocallyProvider`) so
+    /// tests can drive STT routing without a Keychain/disk. `nil` (the default)
+    /// uses the built-in resolver below.
+    @ObservationIgnored var resolveTranscriptionService: (() throws -> any TranscriptionService)?
+
+    /// Built-in transcription-service resolver (used when
+    /// `resolveTranscriptionService` is nil). Pure `STTRouting` over cheap reads:
+    /// the persisted `sttEngine`, the hash-free local-model signal
+    /// (`LocalModelManager.installedModelURL` — NEVER `isModelReady`, which
+    /// re-hashes ~547 MB), and OpenAI-key presence. Throws `.modelUnavailable` /
+    /// `.missingAPIKey` when a prerequisite is missing, which the transcription
+    /// `catch` maps onto the existing failure pill.
+    private func defaultResolveTranscriptionService() throws -> any TranscriptionService {
+        let engine = self.preferences?.sttEngine ?? .auto
+        let localModelURL = LocalModelManager.installedModelURL()
+        let openAIKeyPresent = ProviderKeys.resolveKey(for: .openai) != nil
+        switch STTRouting.resolve(
+            engine: engine,
+            modelInstalled: localModelURL != nil,
+            openAIKeyPresent: openAIKeyPresent,
+            localModelURL: localModelURL
+        ) {
+        case .service(let service):
+            return service
+        case .needsLocalModel:
+            throw TranscriptionError.modelUnavailable
+        case .needsOpenAIKey:
+            throw TranscriptionError.missingAPIKey
         }
-        return false
     }
 
     /// Whether onboarding is complete — gates launch/wake recovery (we only
     /// offer to recover an interrupted recording once the user is set up). A
-    /// closure (like `hasOwnAPIKeyProvider`) so AppState can own the wake
+    /// closure (like `canGenerateLocallyProvider`) so AppState can own the wake
     /// observer without holding the OnboardingStore; wired by `ZerroApp.init`
     /// to read the real store. Defaults to `true` so tests/previews that don't
     /// wire it aren't gated.
@@ -2209,7 +2289,7 @@ final class AppState {
         // Phase F made this a four-way decision (was Managed-vs-local in Phase E).
         // The policy lives in `EntitlementStore.generationRoute`; this is just the
         // mechanism. A nil entitlements falls back to local (fail-safe).
-        let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
+        let route = entitlements?.generationRoute(canGenerateLocally: canGenerateLocally()) ?? .local
         // Tier 1 analytics: mark the start (for latency_ms on the outcome) and
         // fire the funnel-entry event — but only for the routes that actually
         // dispatch a request. `.trialNeedsEmail` dispatches nothing (it routes
@@ -2805,13 +2885,26 @@ final class AppState {
                 // only; the prompt's empty-narration rule covers the output
                 // (one brief chat line, no artifact).
                 var transcript: Transcript
+                // Phase 3 (Local Whisper): which engine transcribed — local
+                // on-device whisper.cpp vs cloud Whisper. Drives the $0 STT cost
+                // for the local path. Stays false on the no-speech path below (no
+                // transcription runs, so no resolution happens and no key/model is
+                // required — byte-identical to before for a silent clip).
+                var sttWasLocal = false
                 if processed.hasSpeech {
                     // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
                     // failure can be triaged by the breadcrumb sequence
                     // alone, without having to look at the failure event.
                     Log.breadcrumb(category: .pipelineStage, message: "transcription started")
                     let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
-                    transcript = try await OpenAITranscriptionService().transcribe(
+                    // Phase 3: resolve the STT engine ONCE per recording. With no
+                    // local model installed + an OpenAI key, `.auto` resolves to
+                    // OpenAITranscriptionService — byte-identical to before. A missing
+                    // prerequisite throws (.modelUnavailable / .missingAPIKey), caught
+                    // below and mapped to the failure pill like any transcription error.
+                    let service = try (self.resolveTranscriptionService ?? self.defaultResolveTranscriptionService)()
+                    sttWasLocal = service is WhisperCppTranscriptionService
+                    transcript = try await service.transcribe(
                         audioFileURL: audioURL,
                         // Phase 2 (Dev Mode deixis): request word-level timing only
                         // for a Dev Mode recording (the resolver needs it); a normal
@@ -2883,7 +2976,8 @@ final class AppState {
                 self.runGeneration(
                     timeline: timeline,
                     transcript: transcript,
-                    processed: processed
+                    processed: processed,
+                    sttWasLocal: sttWasLocal
                 )
             } catch {
                 // Transcription failed before we reached generation, so stop
@@ -2922,7 +3016,8 @@ final class AppState {
     private func runGeneration(
         timeline: InterleavedTimeline,
         transcript: Transcript,
-        processed: ProcessedRecording
+        processed: ProcessedRecording,
+        sttWasLocal: Bool
     ) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2973,7 +3068,8 @@ final class AppState {
                 Self.logCost(
                     audioDuration: processed.duration,
                     usage: result.usage,
-                    requestedModelID: entry.id
+                    requestedModelID: entry.id,
+                    sttWasLocal: sttWasLocal
                 )
 
                 guard self.state == .processing else { return }
@@ -4388,23 +4484,33 @@ final class AppState {
     /// `BYOKCostEstimator`, priced on the REQUESTED registry model id (a
     /// provider may report a dated alias the table doesn't carry — same rule
     /// as the server). An unpriced id logs honestly as unpriced.
-    private static func logCost(audioDuration: CMTime, usage: TokenUsage, requestedModelID: String) {
+    private static func logCost(audioDuration: CMTime, usage: TokenUsage, requestedModelID: String, sttWasLocal: Bool) {
         let durationSeconds = CMTimeGetSeconds(audioDuration)
-        let whisperCost = OpenAITranscriptionService.estimatedCost(audioDurationSeconds: durationSeconds)
+        // Phase 3 (Local Whisper): on-device transcription is $0; cloud is the
+        // whisper-1 per-minute estimate (unchanged from before).
+        let sttCost = Self.sttCostUSD(audioDurationSeconds: durationSeconds, isLocal: sttWasLocal)
         let chatCost = BYOKCostEstimator.chatCostUSD(modelID: requestedModelID, usage: usage)
         // All cost lines: durations, model names, token counts, and
         // dollar amounts are .public — operational metrics with no user
         // content. Pre-format Doubles with String(format:) for terse
         // interpolation that's SDK-stable across Xcode versions.
         let durStr = String(format: "%.1fs", durationSeconds)
-        let whisperStr = String(format: "$%.4f", whisperCost)
+        let sttStr = String(format: "$%.4f", sttCost)
         let chatStr = chatCost.map { String(format: "$%.4f", $0) } ?? "unpriced"
-        let totalStr = chatCost.map { String(format: "$%.4f", whisperCost + $0) } ?? "unpriced"
-        Log.cost.info("whisper-1: audio=\(durStr, privacy: .public) → \(whisperStr, privacy: .public)")
+        let totalStr = chatCost.map { String(format: "$%.4f", sttCost + $0) } ?? "unpriced"
+        let sttLabel = sttWasLocal ? "whisper.cpp (local)" : "whisper-1"
+        Log.cost.info("\(sttLabel, privacy: .public): audio=\(durStr, privacy: .public) → \(sttStr, privacy: .public)")
         Log.cost.info(
             "\(usage.model, privacy: .public): in=\(usage.inputTokens, privacy: .public) out=\(usage.outputTokens, privacy: .public) → \(chatStr, privacy: .public)"
         )
         Log.cost.info("total: \(totalStr, privacy: .public)")
+    }
+
+    /// STT cost in USD for a recording. On-device (local) transcription is $0;
+    /// cloud is the whisper-1 per-minute estimate. Pure, so the $0-local rule is
+    /// directly unit-testable.
+    static func sttCostUSD(audioDurationSeconds: Double, isLocal: Bool) -> Double {
+        isLocal ? 0 : OpenAITranscriptionService.estimatedCost(audioDurationSeconds: audioDurationSeconds)
     }
 
     func toggleResultExpanded() {

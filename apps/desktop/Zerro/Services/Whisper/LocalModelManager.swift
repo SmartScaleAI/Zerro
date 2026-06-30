@@ -115,6 +115,29 @@ final class LocalModelManager {
     /// main actor). Tests use a tiny fixture where it's instant.
     var isModelReady: Bool { spec.matches(fileAt: modelFileURL, fileManager: fileManager) }
 
+    /// CHEAP, hash-free readiness (punchlist P2-1) — the installed model's URL, or
+    /// `nil` when not installed. Returns the URL iff a file exists at the expected
+    /// path AND its byte size equals `spec.byteSize`. It deliberately does NOT
+    /// re-hash: the full SHA-256 already ran at install time (`verifyAndInstall`),
+    /// so the hot path (Phase 3 STT routing, Phase 5 UI) must use THIS — never
+    /// `isModelReady` / `spec.matches`, which re-hash ~547 MB on the calling actor.
+    ///
+    /// `nonisolated` + `static` so the router can call it off the main actor
+    /// without holding a manager instance.
+    nonisolated static func installedModelURL(
+        spec: ModelSpec = WhisperCppTranscriptionService.ProductionModel.spec,
+        directory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let dir = directory ?? defaultModelsDirectory(fileManager)
+        let url = dir.appendingPathComponent(spec.fileName)
+        guard let size = (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? Int,
+              size == spec.byteSize else {
+            return nil
+        }
+        return url
+    }
+
     // MARK: - Entry points
 
     /// If a verified model is already installed, transition to `.ready`; otherwise
@@ -337,7 +360,7 @@ final class LocalModelManager {
         session = nil
     }
 
-    private static func defaultModelsDirectory(_ fileManager: FileManager) -> URL {
+    private nonisolated static func defaultModelsDirectory(_ fileManager: FileManager) -> URL {
         let base: URL
         do {
             base = try fileManager.url(

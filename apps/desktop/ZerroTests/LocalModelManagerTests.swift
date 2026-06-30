@@ -138,6 +138,48 @@ final class LocalModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .ready(version: spec.id))
     }
 
+    // MARK: - Cheap, hash-free readiness (installedModelURL, P2-1)
+
+    func testInstalledModelURLNilWhenAbsent() throws {
+        let fixture = try makeFixtureFile(byteCount: 2_048)
+        let spec = makeSpec(source: fixture.url, sha256: fixture.sha256, size: 2_048)
+        let dir = try makeTempDir()
+        XCTAssertNil(LocalModelManager.installedModelURL(spec: spec, directory: dir))
+    }
+
+    /// The hot-path check is SIZE-ONLY: a file of the right size but WRONG content
+    /// (so its SHA-256 does NOT match) still returns the URL — proving it never
+    /// hashes. The full-integrity `isModelReady` rejects the same file.
+    func testInstalledModelURLIsSizeOnlyNeverHashes() throws {
+        let dir = try makeTempDir()
+        // spec demands 4096 bytes with some sha256 that won't match zero-bytes.
+        let spec = makeSpec(
+            source: URL(fileURLWithPath: "/unused"),
+            sha256: String(repeating: "a", count: 64),
+            size: 4_096
+        )
+        let url = dir.appendingPathComponent(spec.fileName)
+        try Data(count: 4_096).write(to: url)   // right SIZE, content (hash) won't match
+
+        // Cheap check: returns the URL (no hashing).
+        XCTAssertEqual(LocalModelManager.installedModelURL(spec: spec, directory: dir), url)
+
+        // Full-integrity check on the SAME file would reject it (hash mismatch),
+        // confirming the cheap path deliberately skipped the hash.
+        let manager = LocalModelManager(
+            spec: spec, preferences: PreferencesStore(defaults: .ephemeralPreview()),
+            directory: dir, diskHeadroom: 0
+        )
+        XCTAssertFalse(manager.isModelReady)
+    }
+
+    func testInstalledModelURLNilWhenSizeMismatch() throws {
+        let dir = try makeTempDir()
+        let spec = makeSpec(source: URL(fileURLWithPath: "/unused"), sha256: "", size: 4_096)
+        try Data(count: 1_024).write(to: dir.appendingPathComponent(spec.fileName))   // wrong size
+        XCTAssertNil(LocalModelManager.installedModelURL(spec: spec, directory: dir))
+    }
+
     // MARK: - Disk space
 
     func testDiskSpaceComparison() {

@@ -189,7 +189,7 @@ final class BillingHardeningTests: XCTestCase {
         // (the proxy enforces credits regardless — proven server-side).
         let transport = StubManagedTransport()
         let store = makeManagedStore(transport: transport)
-        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: false), .managedProxy)
+        XCTAssertEqual(store.generationRoute(canGenerateLocally: false), .managedProxy)
     }
 
     func testExpiredStateBlocksTheRecordGate() {

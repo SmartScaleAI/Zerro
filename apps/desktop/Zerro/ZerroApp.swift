@@ -714,7 +714,7 @@ struct ZerroApp: App {
         // OpenAI transient errors, model-output problems) are unreachable here by
         // construction — they need the recording/API call to exist.
         if let entitlements,
-           let block = entitlements.preflightBlock(hasOwnAPIKey: state.hasOwnAPIKeyProvider()) {
+           let block = entitlements.preflightBlock(canGenerateLocally: state.canGenerateLocally()) {
             let reason = state.presentPreflightBlock(block)
             Log.hotkey.notice("gating: pre-flight block \(String(describing: reason), privacy: .public) — surfacing before capture")
             return

@@ -76,12 +76,13 @@ final class BYOKLicenseGateTests: XCTestCase {
         guard case .trial = activeTrial.state else {
             return XCTFail("expected .trial, got \(activeTrial.state)")
         }
-        // A trial user without their own key NEVER routes to the local BYOK
-        // path (here: a fresh unverified trial → the email-capture flow; with
-        // a live token it would be .trialProxy — server credits either way).
-        // The only license-free way onto .local is trial-on-own-OpenAI-key,
-        // which spends THEIR provider money, not a license entitlement.
-        XCTAssertNotEqual(activeTrial.generationRoute(hasOwnAPIKey: false), .local)
+        // A trial user who can't self-fund NEVER routes to the local BYOK path
+        // (here: a fresh unverified trial → the email-capture flow; with a live
+        // token it would be .trialProxy — server credits either way). The only
+        // license-free way onto .local is trial-on-own-setup (a chat key + a
+        // usable transcription path, Phase 4), which spends THEIR provider money,
+        // not a license entitlement.
+        XCTAssertNotEqual(activeTrial.generationRoute(canGenerateLocally: false), .local)
 
         let neverGranted = makeStore(license: makeLicense(present: false), trialCredits: nil)
         XCTAssertNotEqual(neverGranted.state, .byok)
@@ -147,7 +148,7 @@ final class BYOKLicenseGateTests: XCTestCase {
         // to missingAPIKey → the .apiKeyMissing pill. Both requirements hold.
         let licensed = makeStore(license: makeLicense(present: true), trialCredits: trialCredits(remaining: 0))
         XCTAssertEqual(licensed.state, .byok)
-        XCTAssertEqual(licensed.generationRoute(hasOwnAPIKey: false), .local)
+        XCTAssertEqual(licensed.generationRoute(canGenerateLocally: false), .local)
         XCTAssertNil(
             BYOKRouting.effectiveEntry(selectedModelID: ModelRegistry.defaultModelID, availableProviders: []),
             "a licensed BYOK user with no provider keys must still fail closed at generation"
