@@ -36,11 +36,19 @@ final class CreditDisplayTests: XCTestCase {
 
     // MARK: - Usage meter (6F)
 
-    func testMeterHeadlineShowsCombinedAgainstPlanCap() {
-        XCTAssertEqual(CreditDisplay.meterHeadline(combined: 248, planLimit: 300), "248 of 300 credits")
-        // A top-up holder's combined balance can EXCEED the plan cap — by
-        // design (the bar tracks the plan; the headline matches the picker).
-        XCTAssertEqual(CreditDisplay.meterHeadline(combined: 450, planLimit: 300), "450 of 300 credits")
+    func testCombinedHeadlineGroupsThousandsAndSingularizes() {
+        // The headline now shows the COMBINED balance on its own (no "of {cap}"),
+        // so a top-up holder reads "1,289 credits" instead of "1,289 of 300".
+        XCTAssertEqual(CreditDisplay.combinedHeadline(248), "248 credits")
+        // Grouped thousands — the case that motivated the split (a banked
+        // top-up balance running well over the monthly cap).
+        XCTAssertEqual(CreditDisplay.combinedHeadline(1289), "1,289 credits")
+        // §1.5 singular.
+        XCTAssertEqual(CreditDisplay.combinedHeadline(1), "1 credit")
+        // At or below zero, the shared "Out of Credits" rule (balanceLabel) wins
+        // over a literal "0 credits" — the one source of truth.
+        XCTAssertEqual(CreditDisplay.combinedHeadline(0), "Out of Credits")
+        XCTAssertEqual(CreditDisplay.combinedHeadline(-5), "Out of Credits")
     }
 
     func testPlanFractionTracksPlanOnly() {
