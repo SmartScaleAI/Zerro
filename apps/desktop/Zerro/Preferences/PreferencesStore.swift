@@ -105,6 +105,11 @@ final class PreferencesStore {
         /// When the installed model finished downloading (`Date`), or absent.
         /// Companion to `localModelVersion`; likewise NOT resettable.
         static let localModelDownloadedAt = "vf.stt.localModelDownloadedAt"
+        /// Whether the one-time first-key model-download consent prompt has been
+        /// shown (Phase 5). Set on EITHER choice so the prompt never re-nags. NOT
+        /// resettable — a settings reset shouldn't re-trigger the prompt (the
+        /// Transcription settings section still offers a manual download).
+        static let localModelPromptShown = "vf.stt.localModelPromptShown"
 
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
@@ -351,6 +356,13 @@ final class PreferencesStore {
         }
     }
 
+    /// Whether the one-time first-key model-download consent prompt has been shown.
+    /// Default false; set true on either prompt choice so it fires at most once.
+    /// Intentionally NOT reset by `resetToDefaults()` (kept out of `Keys.resettable`).
+    var localModelPromptShown: Bool {
+        didSet { defaults.set(localModelPromptShown, forKey: Keys.localModelPromptShown) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -427,6 +439,9 @@ final class PreferencesStore {
         // Model-install tracking. Default "" / nil = "no model installed".
         self.localModelVersion = defaults.string(forKey: Keys.localModelVersion) ?? ""
         self.localModelDownloadedAt = defaults.object(forKey: Keys.localModelDownloadedAt) as? Date
+        // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
+        // (the prompt hasn't been shown on a fresh install).
+        self.localModelPromptShown = defaults.bool(forKey: Keys.localModelPromptShown)
     }
 
     // MARK: - Reset

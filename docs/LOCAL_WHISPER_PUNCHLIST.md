@@ -5,11 +5,11 @@ phase noted). None are blockers for proceeding.
 
 ## From Phase 1 review
 
-- [ ] **P1-1 — `fullText` leading space (cosmetic, Low).**
-  `WhisperCppTranscriptionService.runEngine` builds `fullText` from `rawTextParts.joined()`,
-  so it carries a leading space (whisper segments each start with " "). Harmless (the
-  timeline uses the trimmed segments), but trim the final joined string for parity with
-  `OpenAITranscriptionService`.
+- [x] **P1-1 — `fullText` leading space. RESOLVED in Phase 7.**
+  `runEngine` now assembles `fullText` via `assembleFullText(fromSegmentTexts:)`, which joins
+  the segment texts and trims the result — no leading/trailing whitespace, parity with
+  `OpenAITranscriptionService`. Covered by a pure (engine-free) test plus a no-whitespace
+  assertion in the end-to-end transcription test.
 
 - [ ] **P1-2 — DTW `t_dtw > 0` first-token edge (Low; validate Phase 8).**
   In `rawTokens`, a token with `t_dtw == 0` falls back to heuristic `t0/t1`. A legitimate
@@ -21,10 +21,10 @@ phase noted). None are blockers for proceeding.
   ≤3-min recordings, but verify a full-length real recording drains completely (or loop until
   `.endOfStream`).
 
-- [ ] **P1-4 — Replace `.modelUnavailable → .processingFailed` placeholder (Med; Phase 6).**
-  `AppState.failureReason` currently maps `.modelUnavailable` to the generic
-  `.processingFailed` as an unreachable Phase-1 placeholder. Phase 6 must replace it with a
-  real, actionable `RecordingFailureReason` ("model still downloading" / offer cloud STT).
+- [x] **P1-4 — Replace `.modelUnavailable → .processingFailed` placeholder. RESOLVED in Phase 6.**
+  `AppState.failureReason` now maps `.modelUnavailable → .localModelUnavailable` (new reason,
+  "Model needed", actionable copy, excluded from capture). Plus the in-flight-download wait so a
+  recording made mid-download proceeds instead of failing.
 
 - [ ] **Housekeeping — commit the restored plan doc.**
   `docs/LOCAL_WHISPER_BYOK_TRANSCRIPTION_PLAN.md` was wiped from the tree (untracked) and
@@ -46,9 +46,24 @@ phase noted). None are blockers for proceeding.
   doesn't re-check for cancellation. Very narrow; low severity. Re-check `isCancelling`/state
   before the final `.ready` transition if tightening.
 
+## From Phase 7 review
+
+- [ ] **P7-1 — `isLocal` recompute can disagree with the built service in a race (Very Low).**
+  P3-1 replaced `service is WhisperCppTranscriptionService` with a recompute
+  `isLocal = modelInstalled && engine != .cloud` in `defaultResolveTranscriptionService`. But under
+  `.auto`, `STTRouting.resolve`'s `buildLocal` uses `try?`; if it returns nil (model file vanished
+  between the cheap size-check and construction) `.auto` returns a CLOUD service while `isLocal`
+  stays true → a cloud transcription logged at $0. Cost-LOG only (no real charge), microsecond race,
+  negligible in practice. Airtight fix: have `STTRouting.resolve` report the locality it actually
+  built (distinct `.localService`/`.cloudService`, or return isLocal), so the caller doesn't
+  recompute. Candidate to fold into Phase 8.
+
 ## From Phase 3 review
 
-- [ ] **P3-1 — `sttWasLocal` via concrete-type check (Low, optional).**
-  AppState detects local STT with `service is WhisperCppTranscriptionService` to drive the $0
-  cost. Works, but couples cost detection to the concrete type — a future wrapper/decorator
-  would defeat it. Cleaner: have the resolver report `isLocal` alongside the service. Optional.
+- [x] **P3-1 — `sttWasLocal` via concrete-type check. RESOLVED in Phase 7.**
+  The resolver now returns `AppState.ResolvedTranscription { service, isLocal }`.
+  `defaultResolveTranscriptionService` reports `isLocal` (model installed AND engine not
+  cloud-forced — the same inputs `STTRouting` routes on, so it can't disagree with the built
+  service), and the transcription step reads `resolved.isLocal` instead of
+  `service is WhisperCppTranscriptionService`. `STTRouting` itself is unchanged; the test
+  injections were updated to the struct.

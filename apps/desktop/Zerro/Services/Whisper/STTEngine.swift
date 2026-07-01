@@ -18,4 +18,13 @@ nonisolated enum STTEngine: String, CaseIterable, Sendable {
     case auto
     case local
     case cloud
+
+    /// User-facing label for the Settings engine picker.
+    var displayName: String {
+        switch self {
+        case .auto: return "Auto"
+        case .local: return "On-device"
+        case .cloud: return "OpenAI cloud"
+        }
+    }
 }

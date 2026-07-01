@@ -98,8 +98,9 @@ final class LocalModelManager {
         self.fileManager = fileManager
         self.directory = directory ?? Self.defaultModelsDirectory(fileManager)
         self.diskHeadroom = diskHeadroom
-        // Starts `.notDownloaded`; `ensureModel()` reconciles with disk on demand.
-        // A full integrity check (SHA-256 of ~547 MB) is too heavy to run at init.
+        // Cheap, hash-free launch reconcile so a previously-installed model shows
+        // `.ready` immediately (e.g. the Settings status row) without a 547 MB hash.
+        reconcile()
     }
 
     // MARK: - Paths / readiness
@@ -202,6 +203,29 @@ final class LocalModelManager {
         isCancelling = true
         downloadTask?.cancel()
         // `handleComplete(.cancelled)` performs the state transition + cleanup.
+    }
+
+    /// CHEAP, hash-free launch/first-access reconcile (punchlist P2-1). If a
+    /// correctly-SIZED model file is present AND preferences recorded this exact
+    /// version, reflect `.ready` WITHOUT re-hashing (the full SHA-256 already ran
+    /// at install). Only upgrades from the initial `.notDownloaded` — it never
+    /// disturbs an in-flight download or an already-resolved state.
+    func reconcile() {
+        guard case .notDownloaded = state else { return }
+        guard preferences.localModelVersion == spec.id,
+              Self.installedModelURL(spec: spec, directory: directory, fileManager: fileManager) != nil
+        else { return }
+        setState(.ready(version: spec.id))
+    }
+
+    /// Delete the installed model and reset tracking — the Settings "Remove"
+    /// action. Clears the preferences fields and returns to `.notDownloaded`. A
+    /// no-op-safe `removeItem` (a missing file is fine).
+    func removeModel() {
+        try? fileManager.removeItem(at: modelFileURL)
+        preferences.localModelVersion = ""
+        preferences.localModelDownloadedAt = nil
+        setState(.notDownloaded)
     }
 
     // MARK: - Disk space

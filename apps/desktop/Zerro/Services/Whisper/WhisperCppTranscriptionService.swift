@@ -297,8 +297,23 @@ struct WhisperCppTranscriptionService: TranscriptionService {
 
         // The provider's full text is the joined segment text (whisper has no
         // separate top-level text field); the per-segment leading spaces make the
-        // join read naturally.
-        return (segments: segments, fullText: rawTextParts.joined(), words: words, duration: durationSeconds)
+        // join read naturally, then the whole thing is trimmed (P1-1).
+        return (
+            segments: segments,
+            fullText: Self.assembleFullText(fromSegmentTexts: rawTextParts),
+            words: words,
+            duration: durationSeconds
+        )
+    }
+
+    /// Joins whisper's per-segment texts into the transcript `fullText`, trimming
+    /// the leading/trailing whitespace off the result. Whisper emits each segment
+    /// with a leading space, so a bare `joined()` carries a leading space from the
+    /// first segment; trimming gives parity with `OpenAITranscriptionService`,
+    /// whose `fullText` has none (P1-1). Pure, so the trim is unit-testable
+    /// without the engine.
+    nonisolated static func assembleFullText(fromSegmentTexts parts: [String]) -> String {
+        parts.joined().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Token → word mapping

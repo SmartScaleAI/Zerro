@@ -60,6 +60,7 @@ struct AccountBillingPane: View {
                 BillingSection()
             case .byok:
                 APIAuthSection()
+                TranscriptionSection()
                 BYOKLicenseSection()
             }
         }
@@ -135,6 +136,7 @@ struct AccountBillingPane: View {
             .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
         ))
         .environment(PreferencesStore())
+        .environment(LocalModelManager(preferences: PreferencesStore()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)
@@ -144,6 +146,7 @@ struct AccountBillingPane: View {
     AccountBillingPane()
         .environment(EntitlementStore.preview(.byok))
         .environment(PreferencesStore())
+        .environment(LocalModelManager(preferences: PreferencesStore()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)
@@ -153,6 +156,7 @@ struct AccountBillingPane: View {
     AccountBillingPane()
         .environment(EntitlementStore.preview(.trial(creditsRemaining: 34)))
         .environment(PreferencesStore())
+        .environment(LocalModelManager(preferences: PreferencesStore()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

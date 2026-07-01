@@ -9,9 +9,15 @@
 //  transcription step without a Keychain/model/network:
 //   • the recording uses whatever service the resolver returns (proving the
 //     hardcoded `OpenAITranscriptionService()` is gone), and
-//   • a thrown `.modelUnavailable` / `.missingAPIKey` surfaces as the existing
-//     `.processingFailed` (Phase-1 placeholder) / `.apiKeyMissing` failure pill.
+//   • a thrown `.modelUnavailable` / `.missingAPIKey` surfaces as the
+//     `.localModelUnavailable` / `.apiKeyMissing` failure pill.
 //  The injected services throw before generation, so no chat call is dispatched.
+//
+//  Phase 6 (Local Whisper) — adds the recording-time wait: when a model download
+//  is IN FLIGHT and the engine can use it (.auto/.local), the transcription step
+//  WAITS (driven by an injected `localModelStateProvider`) until the manager
+//  reaches a terminal state — `.ready` → transcribe via the now-local service;
+//  `.failed`/`.notDownloaded` → surface `.localModelUnavailable`.
 //
 
 import CoreMedia
@@ -47,7 +53,7 @@ final class AppStateTranscriptionRoutingTests: XCTestCase {
     func testLocalPathUsesResolvedServiceForTranscription() async throws {
         let app = AppState()
         let fake = RecordingTranscriptionService()
-        app.resolveTranscriptionService = { fake }
+        app.resolveTranscriptionService = { AppState.ResolvedTranscription(service: fake, isLocal: false) }
 
         let processed = makeProcessed(hasSpeech: true)
         drive(app, processed)
@@ -58,8 +64,11 @@ final class AppStateTranscriptionRoutingTests: XCTestCase {
         XCTAssertEqual(fake.lastWordTimestamps, false, "a normal (non-Dev) recording requests no word timing")
     }
 
-    func testNeedsLocalModelSurfacesAsProcessingFailed() async throws {
+    func testNeedsLocalModelSurfacesAsLocalModelUnavailable() async throws {
         let app = AppState()
+        // No download in flight (no manager wired → `.notDownloaded`), so the
+        // Phase-6 wait is skipped and the resolver's `.modelUnavailable` surfaces
+        // directly.
         app.resolveTranscriptionService = { throw TranscriptionError.modelUnavailable }
 
         drive(app, makeProcessed(hasSpeech: true))
@@ -68,8 +77,89 @@ final class AppStateTranscriptionRoutingTests: XCTestCase {
         guard case .failed(let reason) = app.state else {
             return XCTFail("expected .failed, got \(app.state)")
         }
-        // Phase-1 placeholder mapping (the dedicated reason lands in Phase 6).
-        XCTAssertEqual(reason, .processingFailed)
+        // Phase 6: the dedicated, actionable reason (replaces the Phase-1
+        // `.processingFailed` placeholder).
+        XCTAssertEqual(reason, .localModelUnavailable)
+    }
+
+    // MARK: - Phase 6 wait-for-download
+
+    /// downloading + `.auto` → the transcription step WAITS, and once the manager
+    /// reports `.ready` it proceeds to transcribe via the resolved (local) service.
+    /// This is the primary persona: `.auto` with no OpenAI key whose model is
+    /// finishing its first download — previously a `.missingAPIKey` failure.
+    func testDownloadingThenReadyProceedsToLocalTranscription() async throws {
+        let app = AppState()
+        let fake = RecordingTranscriptionService()
+        // isLocal: true — after the wait, the resolver yields the on-device engine.
+        app.resolveTranscriptionService = { AppState.ResolvedTranscription(service: fake, isLocal: true) }
+
+        // Evolve the model state across the wait's polls: downloading until the
+        // third read, then ready.
+        var reads = 0
+        app.localModelStateProvider = {
+            reads += 1
+            return reads >= 3
+                ? .ready(version: "test-v1")
+                : .downloading(progress: 0.5, downloadedBytes: 100, totalBytes: 200)
+        }
+
+        drive(app, makeProcessed(hasSpeech: true))
+        try await waitUntilSettled(app)
+
+        XCTAssertGreaterThanOrEqual(reads, 3, "the step polled the model state until it became ready")
+        XCTAssertEqual(fake.callCount, 1, "after the model was ready, transcription ran via the resolved local service")
+    }
+
+    /// downloading + `.local` also waits (engine set explicitly), then transcribes
+    /// on `.ready`.
+    func testDownloadingThenReadyWaitsForExplicitLocalEngine() async throws {
+        let app = AppState()
+        let prefs = PreferencesStore()
+        prefs.sttEngine = .local
+        app.preferences = prefs
+        let fake = RecordingTranscriptionService()
+        app.resolveTranscriptionService = { AppState.ResolvedTranscription(service: fake, isLocal: true) }
+
+        var reads = 0
+        app.localModelStateProvider = {
+            reads += 1
+            return reads >= 2
+                ? .ready(version: "test-v1")
+                : .downloading(progress: 0.9, downloadedBytes: 180, totalBytes: 200)
+        }
+
+        drive(app, makeProcessed(hasSpeech: true))
+        try await waitUntilSettled(app)
+
+        XCTAssertEqual(fake.callCount, 1, "explicit .local engine waited, then transcribed once ready")
+    }
+
+    /// downloading → `.failed`: the wait ends, the resolver runs and (with no
+    /// installed model) throws `.modelUnavailable`, which surfaces as the dedicated
+    /// `.localModelUnavailable` pill — NOT a transcribe attempt.
+    func testDownloadEndingInFailedSurfacesLocalModelUnavailable() async throws {
+        let app = AppState()
+        // A failed download leaves no model, so the resolver throws
+        // `.modelUnavailable` (engine `.local` with no model installed) — it never
+        // returns a service, so transcription is structurally never attempted.
+        app.resolveTranscriptionService = { throw TranscriptionError.modelUnavailable }
+
+        var reads = 0
+        app.localModelStateProvider = {
+            reads += 1
+            return reads >= 2
+                ? .failed(reason: "network dropped")
+                : .downloading(progress: 0.2, downloadedBytes: 40, totalBytes: 200)
+        }
+
+        drive(app, makeProcessed(hasSpeech: true))
+        try await waitUntilSettled(app)
+
+        guard case .failed(let reason) = app.state else {
+            return XCTFail("expected .failed, got \(app.state)")
+        }
+        XCTAssertEqual(reason, .localModelUnavailable)
     }
 
     func testNeedsOpenAIKeySurfacesAsApiKeyMissing() async throws {

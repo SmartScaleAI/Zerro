@@ -5,9 +5,10 @@
 //  Phase 6 (multi-model 6C/6D, F5) — the BYOK multi-provider seam:
 //
 //  • `ProviderKeys` — per-provider Keychain key resolution (the user may
-//    store any subset of the three keys). The OpenAI key is special: it is
-//    ALSO the transcription key (Whisper stays OpenAI regardless of the chat
-//    model), so the local pipeline can't run at all without it.
+//    store any subset of the three keys). The OpenAI key ALSO powers CLOUD
+//    transcription — optional since on-device whisper.cpp landed: a user with
+//    a Claude/Gemini key + the on-device model runs the whole pipeline with no
+//    OpenAI key ($0 local STT).
 //  • `BYOKRouting.effectiveEntry` — which registry model a BYOK generation
 //    actually uses: the user's selection when its provider has a key,
 //    otherwise the cheapest enabled model whose provider does (the persisted

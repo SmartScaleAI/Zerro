@@ -30,6 +30,11 @@ struct ZerroApp: App {
     /// generation), and injected into the trial email-capture window.
     @State private var trialCredits: TrialCreditsManager
     @State private var recentPrompts: RecentPromptStore
+    /// Phase 5 (Local Whisper): the ONE shared on-device-model download/state
+    /// manager. Created from `preferences` and injected into Settings so the
+    /// Transcription section and the first-key consent prompt drive the SAME
+    /// instance (never per-view managers).
+    @State private var modelManager: LocalModelManager
     @State private var launchAtLogin: LaunchAtLoginController
     @State private var pillController: PillWindowController
     @State private var recordingFocusController: RecordingFocusWindowController
@@ -99,6 +104,33 @@ struct ZerroApp: App {
         let trial = TrialCreditsManager()
         let ent = EntitlementStore(sessionTokens: sessionTokens, trialCredits: trial)
         let history = RecentPromptStore()
+        // Phase 5: ONE shared on-device-model manager (created from prefs). Fire
+        // download analytics off its state edges in this single place — edge-detected
+        // so the cheap launch reconcile (→ .ready with no prior .downloading) never
+        // emits a spurious "succeeded".
+        let modelManager = LocalModelManager(preferences: prefs)
+        var downloadInFlight = false
+        modelManager.stateDidChange = { newState in
+            switch newState {
+            case .downloading:
+                if !downloadInFlight {
+                    downloadInFlight = true
+                    Analytics.capture("local_model_download_started")
+                }
+            case .ready:
+                if downloadInFlight {
+                    downloadInFlight = false
+                    Analytics.capture("local_model_download_succeeded")
+                }
+            case .failed:
+                if downloadInFlight {
+                    downloadInFlight = false
+                    Analytics.capture("local_model_download_failed")
+                }
+            case .notDownloaded:
+                downloadInFlight = false
+            }
+        }
         let launch = LaunchAtLoginController()
         let metricObserver = MetricKitObserver()
         let selectorCtrl = AreaSelectorWindowController()
@@ -124,6 +156,12 @@ struct ZerroApp: App {
         // selected model from prefs fresh at request time (same lifetime +
         // weak-ref contract as the refs above; prefs lives in @State below).
         state.preferences = prefs
+        // Phase 6 (Local Whisper): hand the SAME shared model manager to AppState
+        // (weak, same lifetime contract). The transcription step reads its `state`
+        // to WAIT for an in-flight download instead of failing. This only READS
+        // `state`; the `stateDidChange` analytics closure wired above stays the
+        // manager's sole `stateDidChange` owner (never clobbered here).
+        state.modelManager = modelManager
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
@@ -131,6 +169,7 @@ struct ZerroApp: App {
         _entitlements = State(initialValue: ent)
         _trialCredits = State(initialValue: trial)
         _recentPrompts = State(initialValue: history)
+        _modelManager = State(initialValue: modelManager)
         _launchAtLogin = State(initialValue: launch)
         _metricKitObserver = State(initialValue: metricObserver)
         _pillController = State(initialValue: pillCtrl)
@@ -430,6 +469,9 @@ struct ZerroApp: App {
                 // available without re-plumbing the scene later).
                 .environment(entitlements)
                 .environment(recentPrompts)
+                // Phase 5: the shared on-device-model manager — read by the
+                // Transcription section and the first-key consent prompt.
+                .environment(modelManager)
                 .environment(launchAtLogin)
         }
         .windowStyle(.hiddenTitleBar)

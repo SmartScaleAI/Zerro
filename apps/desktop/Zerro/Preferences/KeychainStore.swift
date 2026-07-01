@@ -189,9 +189,9 @@ extension KeychainStore {
     //
     // BYOK is multi-provider: the user may store any subset of the three
     // keys. `ProviderKeys` is the canonical resolver (slot lookup, trimmed
-    // read, availability set for the key-gated picker). The OpenAI key is
-    // ALSO the transcription key — Whisper stays OpenAI regardless of the
-    // chat model, so every BYOK recording needs it.
+    // read, availability set for the key-gated picker). The OpenAI key ALSO
+    // powers CLOUD transcription — optional now that on-device whisper.cpp
+    // transcribes with no key, so no single key is mandatory.
 
     static let openAIAPIKey = KeychainStore(service: defaultService, account: "openai_api_key")
     static let geminiAPIKey = KeychainStore(service: defaultService, account: "gemini_api_key")

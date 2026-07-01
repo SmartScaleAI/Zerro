@@ -9,9 +9,11 @@
 //  is selectable in the picker only when its provider's key is present
 //  (key-gating, 6C.3).
 //
-//  The OpenAI key is special: transcription (Whisper) stays OpenAI no matter
-//  which chat model is selected, so every BYOK recording needs it — the row
-//  copy says so.
+//  Any subset of keys works: each key unlocks its provider's chat models, and
+//  the OpenAI key additionally powers CLOUD transcription. Since on-device
+//  whisper.cpp landed, OpenAI is OPTIONAL — local transcription needs no key
+//  (download the model under Transcription) — so no row is "required"; the
+//  OpenAI row copy says it's optional.
 //
 //  Per-provider Keychain entries are the single source of truth; each field
 //  loads from its slot on appear and writes on `.valid` results only — a
@@ -20,9 +22,17 @@
 //  field deletes the entry (independent remove).
 //
 
+import AppKit
 import SwiftUI
 
 struct APIAuthSection: View {
+    // Phase 5 — needed to decide + present the one-time on-device-model consent
+    // prompt when the user saves their first key. The field models stay focused
+    // on Keychain/validation; this section owns the decision (it has the stores).
+    @Environment(PreferencesStore.self) private var preferences
+    @Environment(LocalModelManager.self) private var modelManager
+    @Environment(EntitlementStore.self) private var entitlements
+
     @State private var openAIModel = APIKeyFieldModel(provider: .openai)
     @State private var geminiModel = APIKeyFieldModel(provider: .gemini)
     @State private var anthropicModel = APIKeyFieldModel(provider: .anthropic)
@@ -31,7 +41,7 @@ struct APIAuthSection: View {
         SettingsSection("API Keys") {
             APIKeyRow(
                 model: openAIModel,
-                description: "Required \u{2014} transcription (Whisper) always runs on OpenAI, whichever chat model you pick. Stored in macOS Keychain."
+                description: "Optional \u{2014} unlocks the OpenAI chat models, and powers cloud transcription. On-device transcription needs no key. Stored in macOS Keychain."
             )
             SettingsRowDivider()
             APIKeyRow(
@@ -46,6 +56,73 @@ struct APIAuthSection: View {
             SettingsRowDivider()
             RevalidateRow(models: [openAIModel, geminiModel, anthropicModel])
         }
+        .onAppear(perform: wireKeyVerifiedHandlers)
+    }
+
+    // MARK: - First-key consent prompt (Phase 5)
+
+    /// Wire the first-key → consent handler onto each provider field. Done in
+    /// `onAppear` (not at field construction) because the handler needs the
+    /// environment stores, which aren't available when the @State models init.
+    /// Captures the (reference-type) stores explicitly rather than the View self.
+    private func wireKeyVerifiedHandlers() {
+        let handler: (Bool) -> Void = { [preferences, modelManager, entitlements] wasFirstKey in
+            Self.handleKeyVerified(
+                wasFirstKey: wasFirstKey,
+                preferences: preferences,
+                manager: modelManager,
+                entitlements: entitlements
+            )
+        }
+        openAIModel.onKeyVerified = handler
+        geminiModel.onKeyVerified = handler
+        anthropicModel.onKeyVerified = handler
+    }
+
+    /// Decide whether to present the one-time consent prompt and, if so, show it.
+    /// `static` so the closure captures the stores explicitly (no View self).
+    @MainActor
+    private static func handleKeyVerified(
+        wasFirstKey: Bool,
+        preferences: PreferencesStore,
+        manager: LocalModelManager,
+        entitlements: EntitlementStore
+    ) {
+        let modelReady: Bool = { if case .ready = manager.state { return true } else { return false } }()
+        // Managed users transcribe server-side — never prompt them.
+        let isManaged: Bool = { if case .managed = entitlements.state { return true } else { return false } }()
+
+        guard LocalModelConsent.shouldPrompt(
+            isFirstKey: wasFirstKey,
+            alreadyShown: preferences.localModelPromptShown,
+            modelReady: modelReady,
+            isManaged: isManaged
+        ) else { return }
+
+        // Set BEFORE presenting so the prompt fires at most once on EITHER choice.
+        preferences.localModelPromptShown = true
+        Analytics.capture("local_model_prompt_shown")
+        presentConsentAlert(manager: manager)
+    }
+
+    /// The thin NSAlert presentation. "Download" kicks off the model download; the
+    /// disk-space line is added only when the volume is short.
+    @MainActor
+    private static func presentConsentAlert(manager: LocalModelManager) {
+        let alert = NSAlert()
+        alert.messageText = "On-device transcription"
+        var info = "Zerro transcribes your recordings locally so your audio never leaves your Mac. This needs a one-time ~1 GB download."
+        if !manager.hasEnoughDiskSpace() {
+            info += "\n\nYou\u{2019}ll need about 1 GB of free disk space."
+        }
+        alert.informativeText = info
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Download")   // default (first) button
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            manager.download()
+        }
+        // "Later" → do nothing; Phase 6 re-surfaces the need at record time.
     }
 }
 
@@ -72,11 +149,25 @@ final class APIKeyFieldModel {
     @ObservationIgnored private let keychain: KeychainSlot
     /// Injectable so tests can drive the pill without network.
     @ObservationIgnored var validator: (String) async -> OpenAIClient.KeyValidationResult
+    /// Phase 5 — fired after a `.valid` save that WROTE the key, with `wasFirstKey`
+    /// = whether this was the first API key across ALL providers (read BEFORE the
+    /// write). `APIAuthSection` uses it to gate the one-time on-device-model consent
+    /// prompt; this model stays focused on Keychain/validation.
+    @ObservationIgnored var onKeyVerified: ((Bool) -> Void)?
+    /// Whether NO provider key exists yet — the "is this the first key" signal,
+    /// read BEFORE the write. Injectable (alongside `keychain`) so the first-key
+    /// behavior is testable without reading the user's real Keychain slots.
+    @ObservationIgnored private let firstKeyProbe: () -> Bool
 
-    init(provider: ModelProvider) {
+    init(
+        provider: ModelProvider,
+        keychain: KeychainSlot? = nil,
+        firstKeyProbe: (() -> Bool)? = nil
+    ) {
         self.provider = provider
-        let slot = ProviderKeys.slot(for: provider)
+        let slot = keychain ?? ProviderKeys.slot(for: provider)
         self.keychain = slot
+        self.firstKeyProbe = firstKeyProbe ?? { ProviderKeys.availableProviders().isEmpty }
         self.validator = { key in
             switch provider {
             case .openai: return await OpenAIClient.validateKey(key)
@@ -161,8 +252,12 @@ final class APIKeyFieldModel {
             guard state == .checking else { return }
             switch result {
             case .valid:
+                // Read first-key-ness BEFORE the write — writing makes this
+                // provider's key present, which would flip `availableProviders`.
+                let wasFirstKey = firstKeyProbe()
                 if writeOnValid { writeKeyTrackingAdd(candidate) }
                 state = .verified
+                if writeOnValid { onKeyVerified?(wasFirstKey) }
             case .invalidKey:
                 state = .invalid
             case .inconclusive:
@@ -278,7 +373,11 @@ private struct RevalidateRow: View {
 }
 
 #Preview {
-    APIAuthSection()
+    let prefs = PreferencesStore()
+    return APIAuthSection()
+        .environment(prefs)
+        .environment(LocalModelManager(preferences: prefs))
+        .environment(EntitlementStore(licenseService: .inMemory()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

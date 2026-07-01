@@ -78,4 +78,21 @@ final class STTPreferencesTests: XCTestCase {
         XCTAssertEqual(prefs.localModelVersion, "ggml-large-v3-turbo-q5_0", "model version survives a settings reset")
         XCTAssertNotNil(prefs.localModelDownloadedAt, "download timestamp survives a settings reset")
     }
+
+    func testLocalModelPromptShownPersistsAndIsNotResettable() {
+        let defaults = UserDefaults.ephemeralPreview()
+        let prefs = PreferencesStore(defaults: defaults)
+        XCTAssertFalse(prefs.localModelPromptShown, "defaults false on a fresh install")
+
+        prefs.localModelPromptShown = true
+        XCTAssertTrue(PreferencesStore(defaults: defaults).localModelPromptShown, "persists")
+
+        // Kept OUT of resettable so a settings reset doesn't re-nag.
+        XCTAssertFalse(
+            PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.localModelPromptShown),
+            "localModelPromptShown is not wiped by Reset to Defaults"
+        )
+        prefs.resetToDefaults()
+        XCTAssertTrue(prefs.localModelPromptShown, "survives a settings reset")
+    }
 }

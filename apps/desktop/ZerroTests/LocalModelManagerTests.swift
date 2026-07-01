@@ -204,6 +204,62 @@ final class LocalModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .notDownloaded)
     }
 
+    // MARK: - removeModel (Phase 5)
+
+    func testRemoveModelDeletesFileClearsPrefsAndResetsState() throws {
+        let fixture = try makeFixtureFile()
+        let spec = makeSpec(source: fixture.url, sha256: fixture.sha256, size: fixture.size)
+        let (manager, modelsDir, prefs) = try makeManager(spec: spec)
+        // Simulate a completed install: verified file in place + prefs recorded.
+        try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixture.url, to: manager.modelFileURL)
+        prefs.localModelVersion = spec.id
+        prefs.localModelDownloadedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+        manager.removeModel()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.modelFileURL.path), "file deleted")
+        XCTAssertEqual(prefs.localModelVersion, "", "version cleared")
+        XCTAssertNil(prefs.localModelDownloadedAt, "timestamp cleared")
+        XCTAssertEqual(manager.state, .notDownloaded)
+    }
+
+    // MARK: - Cheap launch reconcile (Phase 5, P2-1)
+
+    /// With a correctly-SIZED file + a recorded version, the manager reports
+    /// `.ready` from init WITHOUT hashing — proven by a wrong-content (right-size)
+    /// file that the full-integrity check would reject.
+    func testReconcileReportsReadyForSizeMatchWithoutHashing() throws {
+        let dir = try makeTempDir()
+        let spec = makeSpec(
+            source: URL(fileURLWithPath: "/unused"),
+            sha256: String(repeating: "b", count: 64),
+            size: 4_096
+        )
+        try Data(count: 4_096).write(to: dir.appendingPathComponent(spec.fileName))
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        prefs.localModelVersion = spec.id
+
+        // init runs reconcile(): cheap size + version match → .ready.
+        let manager = LocalModelManager(spec: spec, preferences: prefs, directory: dir, diskHeadroom: 0)
+
+        XCTAssertEqual(manager.state, .ready(version: spec.id))
+        XCTAssertFalse(manager.isModelReady, "the cheap path did NOT hash (wrong content)")
+    }
+
+    /// A stray right-size file without a recorded `localModelVersion` is NOT
+    /// trusted — reconcile leaves `.notDownloaded`.
+    func testReconcileStaysNotDownloadedWhenVersionUnrecorded() throws {
+        let dir = try makeTempDir()
+        let spec = makeSpec(source: URL(fileURLWithPath: "/unused"), sha256: "z", size: 4_096)
+        try Data(count: 4_096).write(to: dir.appendingPathComponent(spec.fileName))
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())   // localModelVersion == ""
+
+        let manager = LocalModelManager(spec: spec, preferences: prefs, directory: dir, diskHeadroom: 0)
+
+        XCTAssertEqual(manager.state, .notDownloaded)
+    }
+
     // MARK: - Helpers
 
     private func runToTerminal(_ manager: LocalModelManager, timeout: TimeInterval = 30) async throws {

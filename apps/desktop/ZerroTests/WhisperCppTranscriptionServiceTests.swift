@@ -89,6 +89,30 @@ final class WhisperCppTranscriptionServiceTests: XCTestCase {
         XCTAssertTrue(WhisperCppTranscriptionService.aggregateWords(from: tokens).isEmpty)
     }
 
+    // MARK: - fullText assembly (P1-1)
+
+    /// `fullText` joins whisper's per-segment texts and trims the result. Whisper
+    /// prefixes each segment with a space, so a bare `joined()` leaks a leading
+    /// space; trimming gives parity with `OpenAITranscriptionService`, whose
+    /// `fullText` has no leading/trailing whitespace. Pure — runs without the
+    /// engine or a model.
+    func testAssembleFullTextTrimsLeadingAndTrailingWhitespace() {
+        // Whisper emits each segment with a leading space.
+        let parts = [" The quick brown fox", " jumps over the lazy dog."]
+        let full = WhisperCppTranscriptionService.assembleFullText(fromSegmentTexts: parts)
+
+        XCTAssertEqual(full, "The quick brown fox jumps over the lazy dog.")
+        XCTAssertFalse(full.hasPrefix(" "), "no leading space")
+        XCTAssertFalse(full.hasSuffix(" "), "no trailing space")
+        XCTAssertEqual(full, full.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Empty / whitespace-only input yields an empty string (no phantom space).
+    func testAssembleFullTextEmptyAndBlank() {
+        XCTAssertEqual(WhisperCppTranscriptionService.assembleFullText(fromSegmentTexts: []), "")
+        XCTAssertEqual(WhisperCppTranscriptionService.assembleFullText(fromSegmentTexts: [" ", "\n"]), "")
+    }
+
     // MARK: - init(modelURL:)
 
     /// A missing model file fails fast with `.modelUnavailable` (the case added
@@ -119,6 +143,13 @@ final class WhisperCppTranscriptionServiceTests: XCTestCase {
         XCTAssertTrue(
             normalized.contains("quick brown fox"),
             "expected the spoken phrase; got fullText=\"\(transcript.fullText)\""
+        )
+        // P1-1: fullText carries no leading/trailing whitespace (whisper's first
+        // segment leads with a space) — parity with OpenAITranscriptionService.
+        XCTAssertEqual(
+            transcript.fullText,
+            transcript.fullText.trimmingCharacters(in: .whitespacesAndNewlines),
+            "fullText must be trimmed"
         )
 
         XCTAssertFalse(transcript.segments.isEmpty, "expected at least one segment")
