@@ -1,4 +1,4 @@
-import { Check } from "lucide-react"
+import { Check, X } from "lucide-react"
 import { GradientField } from "@/components/ui/gradient-field"
 
 // Server Component — a factual comparison table. Rendered as real <table> markup
@@ -92,9 +92,11 @@ function CellValue({ value, emphasize }: { value: Cell; emphasize?: boolean }) {
         aria-label="Yes"
       />
     ) : (
-      <span className="text-white/45" aria-label="No">
-        &mdash;
-      </span>
+      <X
+        className="mx-auto h-4 w-4 text-white/45"
+        strokeWidth={2.2}
+        aria-label="No"
+      />
     )
   }
   return (
@@ -120,7 +122,7 @@ const Comparison = () => {
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
           Dictation tools give you text. Screen recorders give you a video.
-          Zerro gives you the finished result — a prompt, message, snippet, or
+          Zerro gives you the finished result: a prompt, message, snippet, or
           document, or a straight answer to your question.
         </p>
       </div>
@@ -229,7 +231,7 @@ const Comparison = () => {
 
       <p className="text-center text-sm text-muted-foreground">
         Comparison reflects Zerro&apos;s positioning. Competitor capabilities
-        change over time — check each product for current details.
+        change over time, so check each product for current details.
       </p>
     </section>
   )

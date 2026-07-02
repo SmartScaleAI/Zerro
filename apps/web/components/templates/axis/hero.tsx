@@ -7,6 +7,7 @@ import { Check, Copy, X, Square, ChevronDown, PlayCircle } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
 import { motion, AnimatePresence } from "motion/react"
 import { useEffect, useState } from "react"
+import { APP_VERSION } from "@/lib/site-config"
 
 type PillState = "recording" | "processing" | "ready"
 
@@ -183,7 +184,7 @@ const Hero = () => {
         </h1>
         <p className="max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
           Record your screen, dictate what you want, and Zerro turns it into
-          exactly what you need — an agent prompt, a message, a snippet, a
+          exactly what you need: an agent prompt, a message, a snippet, a
           written-up document, or even real-time updates to your website or
           application.
         </p>
@@ -209,7 +210,7 @@ const Hero = () => {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          v1.4.16 · Apple Silicon · Signed &amp; notarized
+          {`v${APP_VERSION} · Apple Silicon · Signed & notarized`}
         </p>
       </section>
 

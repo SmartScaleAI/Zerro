@@ -651,7 +651,7 @@ const DevMode = () => {
                     <p className="max-w-md text-base leading-relaxed text-muted-foreground">
                         Record your screen and say what you want changed. Zerro turns it
                         into a clear, step-by-step plan, then hands it to your coding
-                        agent — which makes the edits and updates your site as you watch.
+                        agent, which makes the edits and updates your site as you watch.
                     </p>
                     {/* Premium callout — a restrained green-tinted card that echoes the
                         active step pill, with the same Mic accent the recorder uses. */}
@@ -660,7 +660,7 @@ const DevMode = () => {
                             <Mic className="h-4 w-4" strokeWidth={1.8} />
                         </span>
                         <p className="text-[15px] font-medium leading-relaxed text-foreground sm:text-base">
-                            No more screenshots to explain what you mean — just describe
+                            No more screenshots to explain what you mean. Just describe
                             the change out loud and your coding agent takes it from there.
                         </p>
                     </div>
@@ -696,7 +696,7 @@ const DevMode = () => {
                     })}
                 </div>
                 <p className="mt-6 text-center text-sm text-muted-foreground">
-                    Bring your own agent — Zerro auto-detects the CLIs installed on
+                    Bring your own agent. Zerro auto-detects the CLIs installed on
                     your Mac and runs the one you pick, locally.
                 </p>
             </div>

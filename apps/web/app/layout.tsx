@@ -18,11 +18,11 @@ const sansFont = "var(--font-inter), ui-sans-serif, system-ui, sans-serif";
 
 export const metadata: Metadata = {
   title: {
-    default: "Zerro — Give your agent eyes and ears",
-    template: "%s — Zerro",
+    default: "Zerro: Give your agent eyes and ears",
+    template: "%s | Zerro",
   },
   description:
-    "Record your screen, dictate what you want, and Zerro hands you exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer, ready to paste. Record it. Paste it. Zerro in between.",
+    "Record your screen, dictate what you want, and Zerro hands you exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer, ready to paste. Record it. Paste it. Zerro in between.",
   applicationName: "Zerro",
   metadataBase: new URL("https://getzerro.app"),
   alternates: {
@@ -60,18 +60,18 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Zerro — Give your agent eyes and ears",
+    title: "Zerro: Give your agent eyes and ears",
     description:
-      "Record your screen, dictate what you want, and Zerro hands you exactly what you need — a prompt, a message, a snippet, a document, or a clear answer. Record it. Paste it. Zerro in between.",
+      "Record your screen, dictate what you want, and Zerro hands you exactly what you need: a prompt, a message, a snippet, a document, or a clear answer. Record it. Paste it. Zerro in between.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro — Give your agent eyes and ears",
+    title: "Zerro: Give your agent eyes and ears",
     description:
-      "Record your screen, dictate what you want, and get exactly what you need — a prompt, a message, a snippet, a document, or a clear answer.",
+      "Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
   },
 };
 

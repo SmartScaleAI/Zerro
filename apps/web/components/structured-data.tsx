@@ -30,7 +30,7 @@ export function OrganizationJsonLd() {
         logo: `${SITE_URL}/logo/zerro-mark.svg`,
         email: "support@getzerro.app",
         description:
-          "Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer to your question.",
+          "Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer to your question.",
       }}
     />
   );
@@ -46,7 +46,7 @@ export function WebSiteJsonLd() {
         name: "Zerro",
         url: SITE_URL,
         description:
-          "Give your agent eyes and ears. Record your screen, dictate what you want, and get exactly what you need — a prompt, a message, a snippet, a document, or a clear answer.",
+          "Give your agent eyes and ears. Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
         publisher: { "@type": "Organization", name: "Zerro", url: SITE_URL },
       }}
     />
@@ -65,13 +65,13 @@ export function SoftwareApplicationJsonLd() {
         operatingSystem: "macOS",
         url: SITE_URL,
         description:
-          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns exactly what you need — an agent prompt, a ready-to-send message, an exact code snippet, a written-up document, or a clear answer to your question. Processing runs locally on your Mac to prepare your recording; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
+          "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and Zerro returns exactly what you need: an agent prompt, a ready-to-send message, an exact code snippet, a written-up document, or a clear answer to your question. Processing runs locally on your Mac to prepare your recording; let Zerro handle the AI, or bring your own OpenAI, Gemini & Anthropic keys.",
         featureList: [
-          "Returns the right output for the task — agent prompt, message, snippet, document, or a plain-language answer",
+          "Returns the right output for the task: agent prompt, message, snippet, document, or a plain-language answer",
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
-          "Local-first processing — your recording is prepared locally on your machine",
+          "Local-first processing: your recording is prepared locally on your machine",
           "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
-          "30 free credits to start — no card, no key, no time limit",
+          "30 free credits to start: no card, no key, no time limit",
           "3-minute recording cap keeps each request fast and predictable",
           "Signed & notarized .dmg distribution",
           "Sparkle auto-updates",
@@ -83,7 +83,7 @@ export function SoftwareApplicationJsonLd() {
             price: "15",
             priceCurrency: "USD",
             description:
-              "Managed plan — we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 6 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
+              "Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 6 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
             availability: "https://schema.org/InStock",
           },
           {

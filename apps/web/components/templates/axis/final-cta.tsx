@@ -6,6 +6,7 @@ import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
 import { motion } from "motion/react";
+import { APP_VERSION } from "@/lib/site-config";
 
 const FinalCTA = () => {
     return (
@@ -68,7 +69,7 @@ const FinalCTA = () => {
                         </motion.span>
                     </h2>
                     <p className="max-w-xl text-base text-muted-foreground">
-                        Stop describing what you want. Show it. Zerro turns the recording into exactly what you need — a prompt, a message, a snippet, a document, or a straight answer.
+                        Stop describing what you want. Show it. Zerro turns the recording into exactly what you need: a prompt, a message, a snippet, a document, or a straight answer.
                     </p>
                     <div className="flex flex-col items-center gap-3">
                         <DownloadButton
@@ -81,7 +82,7 @@ const FinalCTA = () => {
                             Download for Mac
                         </DownloadButton>
                         <p className="text-sm text-muted-foreground">
-                            v1.4.16 · Apple Silicon · Signed &amp; notarized
+                            {`v${APP_VERSION} · Apple Silicon · Signed & notarized`}
                         </p>
                     </div>
                 </div>

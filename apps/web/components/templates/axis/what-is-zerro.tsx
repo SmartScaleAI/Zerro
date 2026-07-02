@@ -32,8 +32,8 @@ const WhatIsZerro = () => {
           <div className="space-y-5 text-base leading-relaxed text-muted-foreground lg:text-lg">
             <p>
               Zerro turns a screen recording and a few spoken words into a
-              ready-to-paste prompt, message, snippet, document, or answer — or
-              makes changes to your website or application in real time.
+              ready-to-paste prompt, message, snippet, document, or answer. Or
+              it makes changes to your website or application in real time.
             </p>
           </div>
         </div>

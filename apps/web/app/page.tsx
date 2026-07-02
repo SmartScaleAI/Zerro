@@ -24,24 +24,24 @@ export const metadata: Metadata = {
   // Absolute so the homepage title is fully controlled and lead-with-product,
   // rather than relying on the root template suffix.
   title: {
-    absolute: "Zerro — Turn your screen and voice into exactly what you need",
+    absolute: "Zerro: Turn your screen and voice into exactly what you need",
   },
   description:
-    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer to your question. Local-first, bring your own keys.",
+    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Local-first, bring your own keys.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Zerro — Turn your screen and voice into exactly what you need",
+    title: "Zerro: Turn your screen and voice into exactly what you need",
     description:
-      "Record a region of your screen, dictate what you want, and get exactly what you need — an agent prompt, a message, a snippet, a document, or a clear answer to your question. Native macOS, local-first, bring your own keys.",
+      "Record a region of your screen, dictate what you want, and get exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Native macOS, local-first, bring your own keys.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro — Turn your screen and voice into exactly what you need",
+    title: "Zerro: Turn your screen and voice into exactly what you need",
     description:
-      "Record your screen, dictate what you want, and get exactly what you need — a prompt, a message, a snippet, a document, or a clear answer. Native macOS, local-first, BYOK.",
+      "Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer. Native macOS, local-first, BYOK.",
   },
 };
 

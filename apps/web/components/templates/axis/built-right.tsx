@@ -20,13 +20,13 @@ const items: Item[] = [
         icon: Lock,
         title: "Local-first processing",
         description:
-            "Your Mac prepares the recording and redacts sensitive info before anything leaves. Managed sends it to an AI provider; BYOK sends it straight with your key — no Zerro servers.",
+            "Your Mac prepares the recording and redacts sensitive info before anything leaves. Managed sends it to an AI provider; BYOK sends it straight with your key. No Zerro servers.",
     },
     {
         icon: KeyRound,
         title: "Bring your own key",
         description:
-            "On BYOK, your OpenAI, Gemini & Anthropic keys are stored in macOS Keychain and recordings go straight to your provider on your own key — never through Zerro's servers.",
+            "On BYOK, your OpenAI, Gemini & Anthropic keys are stored in macOS Keychain and recordings go straight to your provider on your own key, never through Zerro's servers.",
     },
     {
         icon: Timer,

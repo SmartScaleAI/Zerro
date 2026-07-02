@@ -143,14 +143,14 @@ const NowTalking = () => {
 
           <div className="space-y-5 text-base leading-relaxed text-muted-foreground lg:text-lg">
             <p>
-              The keyboard was never the point — it was just the only interface
+              The keyboard was never the point; it was just the only interface
               we had. As agents get better at acting on what you actually mean,
               typing out every instruction by hand starts to feel like the
               bottleneck it always was.
             </p>
             <p>
               You think faster than you type. You talk faster than you think.
-              Voice closes that gap — and dictation is becoming the default.
+              Voice closes that gap, and dictation is becoming the default.
               Zerro is built for that future: less typing, more talking.
             </p>
           </div>

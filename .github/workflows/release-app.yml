@@ -34,6 +34,7 @@ env:
   TEAM_ID: H6NWCRRAHV
   # The website lives in this same repo; Vercel deploys apps/web on push to main.
   SITE_APPCAST_PATH: apps/web/public/appcast.xml     # where the Sparkle appcast is served from
+  SITE_VERSION_PATH: apps/web/lib/site-config.ts      # single source of truth for the displayed app version
   # Where the dmg download lives (a GitHub Release asset URL is filled in at runtime).
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
 
@@ -425,13 +426,26 @@ jobs:
           git fetch origin main
           git switch main
           cp "apps/desktop/dist/appcast.xml" "$SITE_APPCAST_PATH"
+
+          # Keep the site's displayed version in lockstep with this release.
+          # Fail loudly if the constant ever goes missing, so the site can't
+          # silently drift from the shipped build.
+          if ! grep -qE '^export const APP_VERSION = "' "$SITE_VERSION_PATH"; then
+            echo "::error::APP_VERSION constant not found in $SITE_VERSION_PATH"; exit 1
+          fi
+          # BSD sed (macos runner) needs the -i backup suffix.
+          sed -i.bak -E \
+            "s/^export const APP_VERSION = \"[^\"]*\";/export const APP_VERSION = \"${{ steps.ver.outputs.marketing }}\";/" \
+            "$SITE_VERSION_PATH"
+          rm -f "${SITE_VERSION_PATH}.bak"
+
           git config user.name "Zerro Release Bot"
           git config user.email "release-bot@users.noreply.github.com"
-          git add "$SITE_APPCAST_PATH"
+          git add "$SITE_APPCAST_PATH" "$SITE_VERSION_PATH"
           if git diff --cached --quiet; then
-            echo "Appcast unchanged — nothing to commit."
+            echo "Appcast and version unchanged — nothing to commit."
           else
-            git commit -m "chore(web): update appcast for ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
+            git commit -m "chore(web): publish appcast + bump site version to ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
             # Rebase-retry in case main moved during the ~15 min build.
             for i in 1 2 3; do
               git push origin main && break

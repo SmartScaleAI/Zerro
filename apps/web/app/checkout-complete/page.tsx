@@ -98,7 +98,7 @@ const Page = () => {
 
                     <p className="text-sm text-muted-foreground font-light">
                         If Zerro doesn&apos;t open automatically, click the button
-                        above &mdash; or just switch back to the app and it&apos;ll
+                        above, or just switch back to the app and it&apos;ll
                         update on its own. You can close this tab.
                     </p>
                 </CardContent>

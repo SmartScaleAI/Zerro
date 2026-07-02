@@ -101,7 +101,7 @@ type Tier = {
 const tiers: Tier[] = [
     {
         name: "Managed",
-        blurb: "We handle the AI — no keys, no setup.",
+        blurb: "We handle the AI. No keys, no setup.",
         monthly: {
             price: "$15",
             yearlyMonthly: "$12",
@@ -120,9 +120,9 @@ const tiers: Tier[] = [
                 label: "300 credits per month",
                 note: "≈ 50 generations on standard models.",
             },
-            "5 models to choose from — Claude, GPT & Gemini",
-            "Top up anytime — packs from 50 credits to 10,000 credits",
-            "We manage all token usage — no API keys",
+            "5 models to choose from: Claude, GPT & Gemini",
+            "Top up anytime: packs from 50 credits to 10,000 credits",
+            "We manage all token usage: no API keys",
             "Cancel anytime",
         ],
         cta: { label: "Download for Mac", variant: "primary" },
@@ -138,9 +138,9 @@ const tiers: Tier[] = [
         limitedOffer: true,
         features: [
             "30 free credits to start",
-            "Includes 1 year of updates — your installed version keeps working after",
+            "Includes 1 year of updates; your installed version keeps working after",
             "Bring your own OpenAI, Gemini & Anthropic API keys",
-            "All 5 models — Claude, GPT & Gemini",
+            "All 5 models: Claude, GPT & Gemini",
             "Keys stored in your macOS Keychain",
             "Recordings never pass through Zerro's servers",
             "No subscription, no account",
@@ -174,10 +174,10 @@ const Pricing = () => {
                     Pricing
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">
-                    Let us handle the AI — or bring your own keys.
+                    Let us handle the AI, or bring your own keys.
                 </h2>
                 <p className="max-w-xl text-base text-muted-foreground">
-                    Try it free, then choose the path that fits — we handle the AI, or you bring your own key.
+                    Try it free, then choose the path that fits: we handle the AI, or you bring your own key.
                 </p>
             </div>
 
@@ -196,7 +196,7 @@ const Pricing = () => {
                     Get your free credits
                 </DownloadButton>
                 <p className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                    Start free — 30 credits. No card, no key, no time limit.
+                    Start free with 30 credits. No card, no key, no time limit.
                 </p>
             </div>
 
@@ -440,7 +440,7 @@ const Pricing = () => {
             <p className="relative z-10 mt-8 mx-auto max-w-2xl text-center text-sm text-foreground/75">
                 Managed sends your recording to Zerro&apos;s server, which forwards it to a
                 third-party AI provider to generate the result. Bring-your-own-key skips our
-                servers — recordings go straight to that provider on your own key.
+                servers; recordings go straight to that provider on your own key.
             </p>
 
             <p className="relative z-10 mt-4 text-center text-sm text-foreground/60">
