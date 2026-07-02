@@ -1004,6 +1004,21 @@ final class EntitlementStore {
         return store
     }
 
+    /// Preview convenience: a Managed store pinned to an explicit snapshot,
+    /// including a top-up balance that the `.managed` state's synthesized
+    /// snapshot can't express (`devSetState` forces `topupCreditsRemaining: 0`).
+    /// DEBUG/preview scaffolding only — no backend/DTO/data-model change. Setting
+    /// the `private(set) managedSnapshot` is legal here because this factory
+    /// lives in the same file as its declaration.
+    static func preview(managedSnapshot snapshot: ManagedEntitlementSnapshot) -> EntitlementStore {
+        let store = preview(.managed(
+            creditsRemaining: snapshot.creditsRemaining,
+            resetDate: snapshot.resetDate ?? .distantFuture
+        ))
+        store.managedSnapshot = snapshot
+        return store
+    }
+
     /// DEBUG: force a license re-validation NOW, ignoring the throttle, so the
     /// refund/revoke and fail-open paths can be exercised from the Billing
     /// section without waiting out `revalidationInterval`. Requires a real
