@@ -93,6 +93,24 @@ final class PreferencesStore {
         /// canonical key lives there). Resettable.
         static let devNetworkFilterDisabled = DevNetworkProxy.filterDisabledDefaultsKey
 
+        // On-device transcription (Local Whisper, Phase 2).
+        /// Which STT engine the BYOK/local path uses (`STTEngine.rawValue`:
+        /// auto/local/cloud). A pure preference → resettable.
+        static let sttEngine = "vf.stt.engine"
+        /// The model id currently installed on disk (e.g.
+        /// "ggml-large-v3-turbo-q5_0"), or "" when none. Written by
+        /// `LocalModelManager` after a verified install. NOT resettable — it
+        /// mirrors a file that survives a settings reset (see `resettable`).
+        static let localModelVersion = "vf.stt.localModelVersion"
+        /// When the installed model finished downloading (`Date`), or absent.
+        /// Companion to `localModelVersion`; likewise NOT resettable.
+        static let localModelDownloadedAt = "vf.stt.localModelDownloadedAt"
+        /// Whether the one-time first-key model-download consent prompt has been
+        /// shown (Phase 5). Set on EITHER choice so the prompt never re-nags. NOT
+        /// resettable — a settings reset shouldn't re-trigger the prompt (the
+        /// Transcription settings section still offers a manual download).
+        static let localModelPromptShown = "vf.stt.localModelPromptShown"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -117,6 +135,12 @@ final class PreferencesStore {
             devUnrestrictedWarningSuppressed,
             devSeatbeltWrapperDisabled,
             devNetworkFilterDisabled,
+            sttEngine,
+            // NOTE: `localModelVersion` / `localModelDownloadedAt` are deliberately
+            // NOT here. They track an on-disk file (~547 MB) that a settings reset
+            // does not delete; wiping them would tell the app "no model" while the
+            // file is still present. `LocalModelManager` reconciles them against
+            // the actual file integrity, so they stay out of the reset set.
         ]
     }
 
@@ -303,6 +327,42 @@ final class PreferencesStore {
         didSet { defaults.set(devNetworkFilterDisabled, forKey: Keys.devNetworkFilterDisabled) }
     }
 
+    // MARK: - On-device transcription (Local Whisper, Phase 2)
+
+    /// Which STT engine the BYOK/local path should use. Default `.auto` (local
+    /// when the model is ready, else cloud when an OpenAI key exists) — keeps the
+    /// rollout non-breaking. Persisted as the raw string; resettable.
+    var sttEngine: STTEngine {
+        didSet { defaults.set(sttEngine.rawValue, forKey: Keys.sttEngine) }
+    }
+
+    /// The model id installed on disk (e.g. "ggml-large-v3-turbo-q5_0"), or "" when
+    /// none. Written by `LocalModelManager` after a verified install and read to
+    /// decide whether the local engine is available. NOT wiped by a settings reset
+    /// (the file outlives it); `LocalModelManager` reconciles it against the file.
+    var localModelVersion: String {
+        didSet { defaults.set(localModelVersion, forKey: Keys.localModelVersion) }
+    }
+
+    /// When the installed model finished downloading, or nil. Companion to
+    /// `localModelVersion`; also survives a settings reset.
+    var localModelDownloadedAt: Date? {
+        didSet {
+            if let localModelDownloadedAt {
+                defaults.set(localModelDownloadedAt, forKey: Keys.localModelDownloadedAt)
+            } else {
+                defaults.removeObject(forKey: Keys.localModelDownloadedAt)
+            }
+        }
+    }
+
+    /// Whether the one-time first-key model-download consent prompt has been shown.
+    /// Default false; set true on either prompt choice so it fires at most once.
+    /// Intentionally NOT reset by `resetToDefaults()` (kept out of `Keys.resettable`).
+    var localModelPromptShown: Bool {
+        didSet { defaults.set(localModelPromptShown, forKey: Keys.localModelPromptShown) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -370,6 +430,18 @@ final class PreferencesStore {
         // §8 default OFF (filter ON): same false-for-missing default — the network
         // egress filter is enabled until a user explicitly flips this valve.
         self.devNetworkFilterDisabled = defaults.bool(forKey: Keys.devNetworkFilterDisabled)
+        // STT engine: default `.auto` when unset or an unknown raw value is stored.
+        if let raw = defaults.string(forKey: Keys.sttEngine), let engine = STTEngine(rawValue: raw) {
+            self.sttEngine = engine
+        } else {
+            self.sttEngine = .auto
+        }
+        // Model-install tracking. Default "" / nil = "no model installed".
+        self.localModelVersion = defaults.string(forKey: Keys.localModelVersion) ?? ""
+        self.localModelDownloadedAt = defaults.object(forKey: Keys.localModelDownloadedAt) as? Date
+        // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
+        // (the prompt hasn't been shown on a fresh install).
+        self.localModelPromptShown = defaults.bool(forKey: Keys.localModelPromptShown)
     }
 
     // MARK: - Reset
@@ -401,5 +473,9 @@ final class PreferencesStore {
         devUnrestrictedWarningSuppressed = false
         devSeatbeltWrapperDisabled = false
         devNetworkFilterDisabled = false
+        sttEngine = .auto
+        // `localModelVersion` / `localModelDownloadedAt` are intentionally left
+        // untouched here — they mirror the on-disk model file, which a settings
+        // reset does not delete.
     }
 }

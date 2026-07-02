@@ -315,6 +315,9 @@ private struct PillHostView: View {
             onResumePaidGeneration: { appState.resumePaidGeneration() },
             // Record-start out-of-credits "Add Credits" → open the top-up paywall.
             onAddCredits: { appState.openOutOfCreditsTopUp() },
+            // Config-failure "Open Settings" → activate + open Settings at the
+            // deep-linked pane (Account & Billing), then dismiss the pill.
+            onOpenSettings: { pane in appState.openSettings(to: pane) },
             onDismissResult: { appState.resetToIdle() },
             // M2 — recovery offer resolutions, exactly two outcomes. Generate
             // runs the recovered recording (spends the credit, with consent);

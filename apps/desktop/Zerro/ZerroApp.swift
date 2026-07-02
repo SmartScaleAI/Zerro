@@ -30,6 +30,15 @@ struct ZerroApp: App {
     /// generation), and injected into the trial email-capture window.
     @State private var trialCredits: TrialCreditsManager
     @State private var recentPrompts: RecentPromptStore
+    /// Phase 5 (Local Whisper): the ONE shared on-device-model download/state
+    /// manager. Created from `preferences` and injected into Settings so the
+    /// Transcription section and the first-key consent prompt drive the SAME
+    /// instance (never per-view managers).
+    @State private var modelManager: LocalModelManager
+    /// UX-C: observable per-provider API-key presence, so the Settings
+    /// Transcription engine picker re-renders when a key is added/removed in the
+    /// API Keys section. Injected into Settings alongside `modelManager`.
+    @State private var keyPresence: ProviderKeyPresence
     @State private var launchAtLogin: LaunchAtLoginController
     @State private var pillController: PillWindowController
     @State private var recordingFocusController: RecordingFocusWindowController
@@ -99,6 +108,37 @@ struct ZerroApp: App {
         let trial = TrialCreditsManager()
         let ent = EntitlementStore(sessionTokens: sessionTokens, trialCredits: trial)
         let history = RecentPromptStore()
+        // Phase 5: ONE shared on-device-model manager (created from prefs). Fire
+        // download analytics off its state edges in this single place — edge-detected
+        // so the cheap launch reconcile (→ .ready with no prior .downloading) never
+        // emits a spurious "succeeded".
+        let modelManager = LocalModelManager(preferences: prefs)
+        // UX-C: observable per-provider key presence (default probe reads the
+        // Keychain via ProviderKeys). Refreshed from the API-key fields on every
+        // write/delete; injected into Settings below.
+        let keyPresence = ProviderKeyPresence()
+        var downloadInFlight = false
+        modelManager.stateDidChange = { newState in
+            switch newState {
+            case .downloading:
+                if !downloadInFlight {
+                    downloadInFlight = true
+                    Analytics.capture("local_model_download_started")
+                }
+            case .ready:
+                if downloadInFlight {
+                    downloadInFlight = false
+                    Analytics.capture("local_model_download_succeeded")
+                }
+            case .failed:
+                if downloadInFlight {
+                    downloadInFlight = false
+                    Analytics.capture("local_model_download_failed")
+                }
+            case .notDownloaded:
+                downloadInFlight = false
+            }
+        }
         let launch = LaunchAtLoginController()
         let metricObserver = MetricKitObserver()
         let selectorCtrl = AreaSelectorWindowController()
@@ -124,6 +164,12 @@ struct ZerroApp: App {
         // selected model from prefs fresh at request time (same lifetime +
         // weak-ref contract as the refs above; prefs lives in @State below).
         state.preferences = prefs
+        // Phase 6 (Local Whisper): hand the SAME shared model manager to AppState
+        // (weak, same lifetime contract). The transcription step reads its `state`
+        // to WAIT for an in-flight download instead of failing. This only READS
+        // `state`; the `stateDidChange` analytics closure wired above stays the
+        // manager's sole `stateDidChange` owner (never clobbered here).
+        state.modelManager = modelManager
         _appState = State(initialValue: state)
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
@@ -131,6 +177,8 @@ struct ZerroApp: App {
         _entitlements = State(initialValue: ent)
         _trialCredits = State(initialValue: trial)
         _recentPrompts = State(initialValue: history)
+        _modelManager = State(initialValue: modelManager)
+        _keyPresence = State(initialValue: keyPresence)
         _launchAtLogin = State(initialValue: launch)
         _metricKitObserver = State(initialValue: metricObserver)
         _pillController = State(initialValue: pillCtrl)
@@ -360,7 +408,7 @@ struct ZerroApp: App {
                 .background(PaywallOpenerRegistrar())
                 .background(TrialEmailOpenerRegistrar())
                 .background(ActivateKeyOpenerRegistrar())
-                .background(SettingsDismissRegistrar())
+                .background(SettingsWindowRegistrar())
         }
         .menuBarExtraStyle(.window)
 
@@ -430,6 +478,12 @@ struct ZerroApp: App {
                 // available without re-plumbing the scene later).
                 .environment(entitlements)
                 .environment(recentPrompts)
+                // Phase 5: the shared on-device-model manager — read by the
+                // Transcription section and the first-key consent prompt.
+                .environment(modelManager)
+                // UX-C: observable per-provider key presence — the API Keys section
+                // refreshes it on write/delete; the Transcription picker reads it.
+                .environment(keyPresence)
                 .environment(launchAtLogin)
         }
         .windowStyle(.hiddenTitleBar)
@@ -714,7 +768,7 @@ struct ZerroApp: App {
         // OpenAI transient errors, model-output problems) are unreachable here by
         // construction — they need the recording/API call to exist.
         if let entitlements,
-           let block = entitlements.preflightBlock(hasOwnAPIKey: state.hasOwnAPIKeyProvider()) {
+           let block = entitlements.preflightBlock(canGenerateLocally: state.canGenerateLocally()) {
             let reason = state.presentPreflightBlock(block)
             Log.hotkey.notice("gating: pre-flight block \(String(describing: reason), privacy: .public) — surfacing before capture")
             return
@@ -802,11 +856,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// buyer (a Managed top-up that updated credits silently).
     nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
 
-    /// Set by `SettingsDismissRegistrar`. Used by the checkout-return deep link's
+    /// Set by `SettingsWindowRegistrar`. Used by the checkout-return deep link's
     /// key-prefill branch to dismiss the Settings window if AppKit happened to
     /// materialize it on the deep-link reactivation, so only the Activate window
     /// remains (belt-and-suspenders alongside the activation-anchor scene).
     nonisolated(unsafe) static var requestDismissSettings: (() -> Void)?
+
+    /// Set by `SettingsWindowRegistrar`. Used by `openSettings()` to bring the
+    /// Settings window forward from outside any view (the config-failure pill's
+    /// "Open Settings" primary, via `AppState.openSettings(to:)`). Mirrors
+    /// `requestOpenPaywall`.
+    nonisolated(unsafe) static var requestOpenSettings: (() -> Void)?
 
     /// One-shot: the Settings category to preselect the next time the Settings
     /// window opens. Set right before `openWindow(id: SettingsScene.windowID)` —
@@ -1167,6 +1227,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Activate the app (so the window surfaces in front in this .accessory-policy
+    /// app) then open the Settings window via the captured opener. Preselect the
+    /// pane by setting `pendingSettingsCategory` BEFORE calling this. Used by the
+    /// config-failure pill's "Open Settings" primary (`AppState.openSettings(to:)`).
+    @MainActor
+    static func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let opener = requestOpenSettings {
+            opener()
+        } else {
+            Log.ui.error("openSettings() called but requestOpenSettings is nil — registrar didn't mount")
+        }
+    }
+
     /// Brings the trial email-capture window forward (Phase F). Mirrors
     /// `openPaywall()`. Called by AppState when a trial user's first server-funded
     /// generation needs an email verified.
@@ -1293,23 +1367,28 @@ private struct ActivateKeyOpenerRegistrar: View {
     }
 }
 
-// MARK: - SettingsDismissRegistrar
+// MARK: - SettingsWindowRegistrar
 //
-// Captures `dismissWindow` for the Settings scene into
-// AppDelegate.requestDismissSettings at launch — mirroring how
-// PaywallOpenerRegistrar captures requestDismissPaywall. The checkout-return
-// deep link's key-prefill branch calls it (a safe no-op when Settings isn't
-// open) so a Settings window AppKit may have materialized on the reactivation is
-// cleared, leaving only the Activate window. Mounted in the MenuBarExtra label,
-// the one always-present View.
+// Captures the Settings scene's `openWindow` + `dismissWindow` into
+// AppDelegate.requestOpenSettings / requestDismissSettings at launch — mirroring
+// how PaywallOpenerRegistrar captures its open/dismiss pair. `requestOpenSettings`
+// backs the config-failure pill's "Open Settings" primary (via
+// `AppState.openSettings(to:)`); `requestDismissSettings` is a safe no-op called
+// by the checkout-return deep link's key-prefill branch to clear a Settings window
+// AppKit may have materialized on the reactivation. Mounted in the MenuBarExtra
+// label, the one always-present View.
 
-private struct SettingsDismissRegistrar: View {
+private struct SettingsWindowRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .onAppear {
+                AppDelegate.requestOpenSettings = {
+                    openWindow(id: SettingsScene.windowID)
+                }
                 AppDelegate.requestDismissSettings = {
                     dismissWindow(id: SettingsScene.windowID)
                 }

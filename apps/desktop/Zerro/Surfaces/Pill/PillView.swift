@@ -48,6 +48,15 @@ enum PillState: Equatable {
     /// recorded, so neither affordance has anything to act on. Mapped from
     /// `.failed(.outOfCreditsAtStart)` by the bridge.
     case outOfCreditsStart(headline: String, detail: String)
+    /// Config-type failure (missing/invalid API key, or the on-device model not
+    /// installed) that the user fixes in SETTINGS, not by retrying or re-recording.
+    /// Rendered as the shared failure card (same 760-wide chrome as `.error` /
+    /// `.outOfCreditsStart`): the `headline` on top, the `detail` below, and a
+    /// plain Dismiss + an "Open Settings" primary that opens Settings preselected
+    /// to `pane` (Account & Billing). No Retry — a re-run fails identically until
+    /// the config is fixed. Mapped from `.failed` by the bridge when
+    /// `reason.settingsDeepLink != nil`.
+    case openSettings(headline: String, detail: String, pane: SettingsCategory)
     /// The expanded failure card — shown for RETRYABLE generation failures
     /// (`AppState.canRetryFailure == true`). Reuses the success card's chrome
     /// in an error configuration: amber caution badge, the `headline`
@@ -128,6 +137,10 @@ struct DevResultCard: Equatable {
 struct PillView: View {
     let state: PillState
 
+    /// Single source for the config-failure primary button's label (task 5:
+    /// "easy to swap"). Rendered by the `.openSettings` case.
+    static let openSettingsButtonTitle = "Open Settings"
+
     /// Action closures default to no-ops so `#Preview` blocks can keep
     /// passing literal `PillState` values without ceremony. Production
     /// call sites bind these to `AppState` transitions.
@@ -160,6 +173,13 @@ struct PillView: View {
     /// — there is no held recording, so this only routes to the paywall. Default
     /// no-op so #Preview blocks can pass the literal state without ceremony.
     var onAddCredits: () -> Void = {}
+    /// The `.openSettings` pill's "Open Settings" primary. Wired in
+    /// `PillWindowController` to `AppState.openSettings(to:)`, which activates the
+    /// app + opens the Settings window preselected to the given pane so the user
+    /// can fix the config (add a key / download the model), then dismisses the
+    /// pill. Takes the `SettingsCategory` so one closure serves any config reason's
+    /// deep-link. Default no-op so #Preview blocks can pass literal states.
+    var onOpenSettings: (SettingsCategory) -> Void = { _ in }
     /// Closes the result pill from either compact or expanded state. The
     /// affordance is a small "x" badge tucked into the chrome's top-right
     /// corner so users can dismiss after copying without having to wait
@@ -277,7 +297,7 @@ struct PillView: View {
         // `.error` and `.paidBlockResume` are now the 760-wide failure card
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .error, .paidBlockResume, .outOfCreditsStart, .devDone, .devFailed,
+             .error, .paidBlockResume, .outOfCreditsStart, .openSettings, .devDone, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         }
@@ -292,7 +312,7 @@ struct PillView: View {
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
         case .resultExpanded, .failureExpanded, .error, .paidBlockResume,
-             .outOfCreditsStart, .devFailed,
+             .outOfCreditsStart, .openSettings, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
@@ -446,6 +466,34 @@ struct PillView: View {
                     primaryRole: .warning
                 ),
                 onRetry: onAddCredits
+            )
+            .frame(width: 760)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        case .openSettings(let headline, let detail, let pane):
+            // Config failure: the same failure card with a plain Dismiss + an
+            // "Open Settings" primary that opens Settings preselected to `pane`.
+            // No Retry — the fix lives in Settings (add a key / download the
+            // model), not a re-run (wired to `onOpenSettings(pane)`).
+            ArtifactCardView(
+                artifact: nil,
+                chatText: "",
+                chargeLine: nil,
+                noNarration: false,
+                stoppedBySleep: false,
+                onCopy: {},
+                onCollapse: {},
+                onDismiss: onDismissError,
+                failure: ArtifactCardView.FailureConfig(
+                    headline: headline,
+                    detail: detail,
+                    secondaryTitle: "Dismiss",
+                    onSecondary: onDismissError,
+                    primaryTitle: Self.openSettingsButtonTitle,
+                    primaryIcon: "gearshape",
+                    primaryRole: .warning
+                ),
+                onRetry: { onOpenSettings(pane) }
             )
             .frame(width: 760)
             .fixedSize(horizontal: false, vertical: true)

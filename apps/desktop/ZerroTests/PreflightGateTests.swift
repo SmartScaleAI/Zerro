@@ -4,7 +4,7 @@
 //
 //  Phase G UX — the record-start PRE-FLIGHT gate: catch every knowable failure
 //  BEFORE the user records, not after a wasted capture. Covers
-//  `EntitlementStore.preflightBlock(hasOwnAPIKey:)`, the single synchronous,
+//  `EntitlementStore.preflightBlock(canGenerateLocally:)`, the single synchronous,
 //  local, fail-open decision the `handleHotkey` gate consults between the
 //  `.expired`/`canGenerate` gate and presenting the area selector.
 //
@@ -106,12 +106,12 @@ final class PreflightGateTests: XCTestCase {
 
     func testManagedZeroCreditsBlocksOutOfCredits() {
         let store = managedStore(snapshot: snapshot(.active, credits: 0))
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .outOfCredits)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
     }
 
     func testManagedWithCreditsDoesNotBlock() {
         let store = managedStore(snapshot: snapshot(.active, credits: 42))
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // records normally
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // records normally
     }
 
     func testManagedTrialFundedCombinedBalanceDoesNotBlock() {
@@ -132,13 +132,13 @@ final class PreflightGateTests: XCTestCase {
             trialCreditsRemaining: 5
         )
         let store = managedStore(snapshot: combined)
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // proceeds, charged across ledgers
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // proceeds, charged across ledgers
     }
 
     func testManagedNoSnapshotFailsOpen() {
         // Snapshot hasn't been fetched yet (launch refresh not landed) → records.
         let store = managedStore(snapshot: nil)
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
     }
 
     // MARK: - Overspend → negative → blocked (the one final uncapped generation)
@@ -150,7 +150,7 @@ final class PreflightGateTests: XCTestCase {
         // positive, so the prior negative is never netted away — and the NEXT
         // pre-flight blocks with .outOfCredits.
         let store = managedStore(snapshot: snapshot(.active, credits: 5))
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false)) // 5 credits → records
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // 5 credits → records
 
         // Apply the just-completed overspend (charged 10, server remaining −6).
         let effective = store.applyGenerationSpend(charged: 10, remaining: -6, isTrial: false)
@@ -159,19 +159,19 @@ final class PreflightGateTests: XCTestCase {
         // The snapshot lands on 0 (not a raw negative, not clamped UP to positive)…
         XCTAssertEqual(store.managedSnapshot?.creditsRemaining, 0)
         // …so the next generation is blocked client-side, routed to the top-up paywall.
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .outOfCredits)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
     }
 
     // MARK: - Managed: inactive subscription
 
     func testManagedCancelledSnapshotBlocksSubscriptionInactive() {
         let store = managedStore(snapshot: snapshot(.cancelled, credits: 50))
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .subscriptionInactive)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .subscriptionInactive)
     }
 
     func testManagedExpiredSnapshotBlocksSubscriptionInactive() {
         let store = managedStore(snapshot: snapshot(.expired, credits: 50))
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .subscriptionInactive)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .subscriptionInactive)
     }
 
     // MARK: - Managed: past_due (§9.1) — still works on remaining credits
@@ -179,25 +179,25 @@ final class PreflightGateTests: XCTestCase {
     func testManagedPastDueWithCreditsDoesNotBlock() {
         // past_due is LIVE — keeps working on remaining credits (§9.1).
         let store = managedStore(snapshot: snapshot(.pastDue, credits: 10))
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
     }
 
     func testManagedPastDueZeroCreditsBlocksOutOfCredits() {
         // past_due but nothing left to spend → still out of credits.
         let store = managedStore(snapshot: snapshot(.pastDue, credits: 0))
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .outOfCredits)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
     }
 
     // MARK: - BYOK: missing key
 
     func testByokWithoutKeyBlocksApiKeyMissing() {
         let store = byokStore()
-        XCTAssertEqual(store.preflightBlock(hasOwnAPIKey: false), .apiKeyMissing)
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .apiKeyMissing)
     }
 
     func testByokWithKeyDoesNotBlock() {
         let store = byokStore()
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: true))
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: true))
     }
 
     // MARK: - Trial / expired
@@ -207,7 +207,7 @@ final class PreflightGateTests: XCTestCase {
         // (email capture), not a pre-flight failure block.
         let store = trialStore()
         guard case .trial = store.state else { return XCTFail("expected .trial") }
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
     }
 
     func testExpiredIsHandledByCanGenerateNotPreflight() {
@@ -216,16 +216,19 @@ final class PreflightGateTests: XCTestCase {
         let store = trialStore(expired: true)
         XCTAssertEqual(store.state, .expired)
         XCTAssertFalse(store.canGenerate)
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: false))
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
     }
 
-    // MARK: - Fail-open under a transient Keychain failure
+    // MARK: - The gate trusts the caller-resolved capability
 
-    func testByokKeychainBlipDoesNotBlock() {
-        // A flaky license-key read surfaces as `.byok` (grantsBYOK fails open).
-        // The gate reads the OpenAI key separately; a blip there reports
-        // hasOwnAPIKey == true (the slot fails toward "present"), so no block.
+    func testByokHonorsReportedCapability() {
+        // `preflightBlock` is a PURE function of the caller-supplied
+        // `canGenerateLocally` — it never re-reads the Keychain/disk itself (that
+        // resolution lives in `AppState.canGenerateLocally`). So a `.byok` user
+        // whom the caller reports as self-funding-capable records, full stop;
+        // the capability read (and its own fail-open/closed policy) is exercised
+        // separately in the AppState-level matrix.
         let store = byokStore()
-        XCTAssertNil(store.preflightBlock(hasOwnAPIKey: true)) // blip ⇒ "has key" ⇒ record
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: true)) // capable ⇒ record
     }
 }

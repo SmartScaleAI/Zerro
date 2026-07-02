@@ -154,7 +154,7 @@ public struct DevModeSelection: Equatable, Sendable {
 /// `userMessage` projection renders the single-line string the pill
 /// shows. Kept narrow — Phase 7 surfaces these as a flat message; a
 /// later phase can branch on the case for richer recovery affordances.
-public enum RecordingFailureReason: Equatable {
+public enum RecordingFailureReason: Equatable, CaseIterable {
     // Phase 7 — capture-side failures
     case screenRecordingRevoked
     case microphoneRevoked
@@ -315,6 +315,20 @@ public enum RecordingFailureReason: Equatable {
     /// record attempt routes to the paywall. Non-punitive, non-retryable.
     case trialCreditsExhausted
 
+    // Phase 6 (Local Whisper) — on-device transcription prerequisite
+    /// On-device transcription is required (engine `.local`, or `.auto` with no
+    /// OpenAI-cloud fallback) but the Whisper model isn't installed and no
+    /// download is in flight to wait on. Distinct from `.apiKeyMissing` so the
+    /// copy points the user at Settings › Transcription (download the model)
+    /// rather than the API-key field. A user/environment condition surfaced with
+    /// actionable copy — NOT a Zerro bug, so it's excluded from error-tracker
+    /// capture (like `.apiKeyMissing`). Mapped from
+    /// `TranscriptionError.modelUnavailable` (replacing the Phase-1 placeholder
+    /// that reused `.processingFailed`). Non-retryable in place — the Retry
+    /// button reopens the area selector so the user re-records once the model is
+    /// downloaded.
+    case localModelUnavailable
+
     /// Whether the failure is worth re-running the API stage against the
     /// already-processed artifacts. True only for transient API-side
     /// failures — the local audio/frames/manifest on disk are still good,
@@ -338,10 +352,25 @@ public enum RecordingFailureReason: Equatable {
              .noInputCaptured,
              .artifactUnreadable,
              .apiKeyMissing, .apiAuth,
+             .localModelUnavailable,
              .responseTooLong,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
+        }
+    }
+
+    /// Config-type failures are fixed in SETTINGS, not by retrying or re-recording:
+    /// the failure pill routes its PRIMARY button to open Settings at this pane
+    /// instead of "Retry" / reopen-area-selector. All three are non-`isRetryable`
+    /// and land on Account & Billing, where the API-key + Transcription controls
+    /// live. `nil` for every other reason (pill behavior unchanged).
+    var settingsDeepLink: SettingsCategory? {
+        switch self {
+        case .apiKeyMissing, .localModelUnavailable, .apiAuth:
+            return .accountBilling
+        default:
+            return nil
         }
     }
 
@@ -378,9 +407,11 @@ public enum RecordingFailureReason: Equatable {
         case .noInputCaptured:
             return "Didn\u{2019}t catch anything to act on \u{2014} nothing was charged. Check your mic and record again."
         case .apiKeyMissing:
-            return "Add your API keys in Settings to generate prompts \u{2014} an OpenAI key is required for transcription."
+            return "Zerro needs a chat model key, plus the on-device model or an OpenAI key to transcribe. Add them in Settings."
         case .apiAuth:
             return "Your API key was rejected \u{2014} check it in Settings."
+        case .localModelUnavailable:
+            return "On-device transcription needs its model \u{2014} download it in Settings, or switch to OpenAI cloud."
         case .networkOffline:
             return "Couldn\u{2019}t connect \u{2014} check your connection."
         case .rateLimited:
@@ -426,6 +457,7 @@ public enum RecordingFailureReason: Equatable {
         case .noInputCaptured:           return "Didn\u{2019}t catch that"
         case .apiKeyMissing:             return "API key needed"
         case .apiAuth:                   return "API key rejected"
+        case .localModelUnavailable:     return "Model needed"
         case .networkOffline:            return "Connection problem"
         case .rateLimited:               return "Rate limited"
         case .providerError:             return "Generation failed"
@@ -478,9 +510,11 @@ public enum RecordingFailureReason: Equatable {
         case .noInputCaptured:
             return "This recording didn\u{2019}t include anything to act on \u{2014} no narration and no clicks \u{2014} so nothing was sent and nothing was charged. Check that your microphone is on, then record again, narrating the change you want."
         case .apiKeyMissing:
-            return "Generating a prompt needs an API key, and none is set. Add one under Settings \u{2014} an OpenAI key is required for transcription \u{2014} then start a new recording."
+            return "To use your own API keys, Zerro needs a chat model key (OpenAI, Anthropic, or Gemini) and a way to transcribe your audio: either the on-device model or an OpenAI key. Add what\u{2019}s missing under Settings (download the on-device model under Transcription, or add an OpenAI key), then start a new recording."
         case .apiAuth:
             return "Your API key was rejected. Check it under Settings \u{2014} it may be expired, revoked, or missing the right access \u{2014} then try again."
+        case .localModelUnavailable:
+            return "On-device transcription needs its model downloaded. Open Settings \u{203A} Transcription to download it, or switch transcription to OpenAI cloud if you have an OpenAI key, then start a new recording."
         case .networkOffline:
             return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
         case .rateLimited:
@@ -846,23 +880,197 @@ final class AppState {
     // local (fail-safe), exactly like a `nil` entitlements.
     @ObservationIgnored weak var trialCredits: TrialCreditsManager?
 
-    /// Whether the user has their own OpenAI key on file — decides whether a
-    /// trial user funds generation locally (their key) or via server credits.
-    /// DELIBERATELY OpenAI-only even under multi-provider BYOK (6C): the local
-    /// path transcribes via Whisper before any chat call, so without an OpenAI
-    /// key it cannot run at all — a Gemini/Anthropic-only keyholder keeps
-    /// routing through server credits. A closure so tests can drive the
-    /// routing without touching the Keychain.
-    @ObservationIgnored var hasOwnAPIKeyProvider: () -> Bool = {
-        if case .found(let key) = KeychainStore.openAIAPIKey.readResult() {
-            return !key.isEmpty
+    /// Phase 4 (Local Whisper) — whether the user can run a generation ENTIRELY
+    /// on their own dime: they hold at least one CHAT provider key AND have a
+    /// usable transcription path for their `sttEngine` (a local model installed,
+    /// or an OpenAI key for cloud Whisper). Decides whether a TRIAL user funds
+    /// generation themselves (their keys/model) or falls back to server credits.
+    ///
+    /// This GENERALIZES the old OpenAI-only `hasOwnAPIKeyProvider`: pre-Local-
+    /// Whisper, "own key" had to mean an OpenAI key (the only transcription
+    /// path), so a Claude/Gemini-only keyholder routed through server credits.
+    /// Now a Claude-only user WITH the on-device model installed has a fully
+    /// local path and funds it themselves. Until a model exists in production
+    /// (Phase 5+), `canResolve(.auto, false, false)` is false, so this stays
+    /// byte-identical to the old behavior for a non-OpenAI keyholder.
+    ///
+    /// Optional closure (the Phase-3 `resolveTranscriptionService` pattern) so
+    /// tests drive routing without a Keychain/disk; `nil` (the default) uses
+    /// `defaultCanGenerateLocally`. Both entitlement readers consult it through
+    /// `canGenerateLocally()`.
+    @ObservationIgnored var canGenerateLocallyProvider: (() -> Bool)?
+
+    /// Resolves `canGenerateLocallyProvider` (or its built-in default) — the
+    /// capability predicate the entitlement readers pass to
+    /// `EntitlementStore.generationRoute` / `preflightBlock`. Internal (not
+    /// private) so `ZerroApp`'s pre-flight gate can call it too (it can't reach
+    /// the private default).
+    func canGenerateLocally() -> Bool {
+        (canGenerateLocallyProvider ?? defaultCanGenerateLocally)()
+    }
+
+    /// Built-in capability check (used when `canGenerateLocallyProvider` is nil).
+    /// CHEAP reads only: at least one chat key (`ProviderKeys.availableProviders`),
+    /// the persisted `sttEngine`, the hash-free local-model signal
+    /// (`LocalModelManager.installedModelURL` — NEVER `isModelReady`, which
+    /// re-hashes ~547 MB, punchlist P2-1), and OpenAI-key presence. Composed by
+    /// the pure `Self.canGenerateLocally(hasAnyChatKey:engine:modelInstalled:openAIKeyPresent:)`.
+    private func defaultCanGenerateLocally() -> Bool {
+        Self.canGenerateLocally(
+            hasAnyChatKey: !ProviderKeys.availableProviders().isEmpty,
+            engine: self.preferences?.sttEngine ?? .auto,
+            modelInstalled: LocalModelManager.installedModelURL() != nil,
+            openAIKeyPresent: ProviderKeys.resolveKey(for: .openai) != nil
+        )
+    }
+
+    /// The pure capability rule, factored out of `defaultCanGenerateLocally` so
+    /// the full key/model/engine matrix is unit-testable without a Keychain or
+    /// disk: the user can self-fund iff they have at least one chat key AND a
+    /// usable transcription path (delegated to `STTRouting.canResolve`, the
+    /// shared STT source of truth).
+    static func canGenerateLocally(
+        hasAnyChatKey: Bool,
+        engine: STTEngine,
+        modelInstalled: Bool,
+        openAIKeyPresent: Bool
+    ) -> Bool {
+        hasAnyChatKey && STTRouting.canResolve(
+            engine: engine,
+            modelInstalled: modelInstalled,
+            openAIKeyPresent: openAIKeyPresent
+        )
+    }
+
+    /// Phase 7 (P3-1) — the resolved transcription service plus whether it runs
+    /// ON-DEVICE (local whisper.cpp, $0 STT) vs in the cloud. The resolver REPORTS
+    /// locality so cost logging (`logCost` / `sttWasLocal`) no longer sniffs the
+    /// concrete service type (`is WhisperCppTranscriptionService`).
+    struct ResolvedTranscription {
+        let service: any TranscriptionService
+        let isLocal: Bool
+    }
+
+    /// Phase 3 (Local Whisper) — resolves the transcription service (+ its
+    /// locality) for a recording. Injected as a closure (mirroring
+    /// `canGenerateLocallyProvider`) so tests can drive STT routing without a
+    /// Keychain/disk. `nil` (the default) uses the built-in resolver below.
+    @ObservationIgnored var resolveTranscriptionService: (() throws -> ResolvedTranscription)?
+
+    /// Built-in transcription-service resolver (used when
+    /// `resolveTranscriptionService` is nil). Pure `STTRouting` over cheap reads:
+    /// the persisted `sttEngine`, the hash-free local-model signal
+    /// (`LocalModelManager.installedModelURL` — NEVER `isModelReady`, which
+    /// re-hashes ~547 MB), and OpenAI-key presence. `isLocal` (for the $0-local
+    /// cost log) is taken STRAIGHT from what `STTRouting.resolve` built — never
+    /// recomputed — so a vanished-model `.auto` fallback to cloud can't be logged
+    /// as local (P7-1). Throws `.modelUnavailable` / `.missingAPIKey` when a
+    /// prerequisite is missing, which the transcription `catch` maps onto the
+    /// existing failure pill.
+    private func defaultResolveTranscriptionService() throws -> ResolvedTranscription {
+        let engine = self.preferences?.sttEngine ?? .auto
+        let localModelURL = LocalModelManager.installedModelURL()
+        let openAIKeyPresent = ProviderKeys.resolveKey(for: .openai) != nil
+        switch STTRouting.resolve(
+            engine: engine,
+            modelInstalled: localModelURL != nil,
+            openAIKeyPresent: openAIKeyPresent,
+            localModelURL: localModelURL
+        ) {
+        case .service(let service, let isLocal):
+            return ResolvedTranscription(service: service, isLocal: isLocal)
+        case .needsLocalModel:
+            throw TranscriptionError.modelUnavailable
+        case .needsOpenAIKey:
+            throw TranscriptionError.missingAPIKey
         }
-        return false
+    }
+
+    // MARK: - Phase 6 (Local Whisper) — wait-for-download
+
+    /// Phase 6 (Local Whisper): the ONE shared on-device-model download/state
+    /// manager (created in `ZerroApp.init`, the same instance the Settings
+    /// Transcription section and the first-key consent prompt drive). Weak, wired
+    /// by `ZerroApp.init` — same lifetime + weak-ref contract as `entitlements` /
+    /// `trialCredits`. The transcription step reads its `state` (via
+    /// `currentLocalModelState()`) to decide whether to WAIT for an in-flight
+    /// download before resolving the STT service. AppState only READS `state`; it
+    /// never touches the manager's `stateDidChange` (ZerroApp owns that for the
+    /// download-started/succeeded/failed analytics).
+    @ObservationIgnored weak var modelManager: LocalModelManager?
+
+    /// Phase 6 test seam for the transcription wait's model-state read — mirrors
+    /// `resolveTranscriptionService`. `nil` (production) reads the wired
+    /// `modelManager`; tests inject a closure returning an evolving state so the
+    /// wait can be driven without a real ~547 MB download.
+    @ObservationIgnored var localModelStateProvider: (() -> LocalModelManager.State)?
+
+    /// The current on-device-model state for the transcription wait: the injected
+    /// `localModelStateProvider`, else the wired `modelManager`'s `state`, else
+    /// `.notDownloaded` (no manager wired — e.g. a bare unit test).
+    private func currentLocalModelState() -> LocalModelManager.State {
+        if let provider = localModelStateProvider { return provider() }
+        return modelManager?.state ?? .notDownloaded
+    }
+
+    /// Phase 6 (Local Whisper) — PURE predicate: should the transcription step
+    /// WAIT for an in-flight model download before resolving the STT service?
+    /// True iff a download is actually running (`.downloading`) AND the user's
+    /// engine can use the on-device model (`.auto` or `.local`). `.cloud` always
+    /// transcribes via OpenAI and never waits; any non-`.downloading` state has
+    /// nothing to wait on. Mirrors `STTRouting`'s engine rules so the wait and the
+    /// resolver agree about who needs the local model — in particular the `.auto`
+    /// + no-OpenAI-key + first-download user WAITS for their model here instead of
+    /// failing the resolve with `.missingAPIKey`.
+    static func shouldWaitForLocalModel(engine: STTEngine, managerState: LocalModelManager.State) -> Bool {
+        guard case .downloading = managerState else { return false }
+        return engine != .cloud
+    }
+
+    /// Phase 6 (Local Whisper) — block the transcription step on an in-flight
+    /// model download until it reaches a TERMINAL state, driving a steady
+    /// "Finishing on-device setup… X MB / Y MB" progress label off the manager's
+    /// advancing byte counts (the rotating "thinking" phrases are paused for the
+    /// duration; the elapsed "· Xs" suffix still auto-appends via
+    /// `setProcessingLabel`). A thin poll over `currentLocalModelState()` — it
+    /// deliberately does NOT subscribe to `LocalModelManager.stateDidChange`
+    /// (`ZerroApp` owns that for analytics). Bounded by the download's own
+    /// lifecycle (it always ends in `.ready` / `.failed` / `.notDownloaded`) and
+    /// abortable by recording cancellation (the loop exits the instant the
+    /// recording is no longer `.processing`). On `.ready` the generation rotation
+    /// is resumed and the caller resolves to the now-installed local engine; on
+    /// `.failed` / `.notDownloaded` it returns so the resolver surfaces the right
+    /// error (→ `.localModelUnavailable` / `.missingAPIKey`).
+    private func awaitLocalModelDownload() async {
+        stopThinkingRotation()
+        while state == .processing {
+            switch currentLocalModelState() {
+            case let .downloading(_, downloaded, total):
+                setProcessingLabel(Self.localModelWaitLabel(downloadedBytes: downloaded, totalBytes: total))
+                try? await Task.sleep(for: .seconds(0.25))
+            case .ready:
+                // Installed — resume the generation rotation; the caller's resolve
+                // now picks up the on-device engine.
+                startThinkingRotation()
+                return
+            case .failed, .notDownloaded:
+                // Terminal non-ready — let the resolver run and surface the error.
+                return
+            }
+        }
+    }
+
+    /// Phase 6 (Local Whisper) — the steady progress label shown while the
+    /// transcription step waits for an in-flight model download. Whole megabytes
+    /// (1 MB = 1,048,576 bytes), matching the Settings download row's formatting.
+    static func localModelWaitLabel(downloadedBytes: Int64, totalBytes: Int64) -> String {
+        func mb(_ bytes: Int64) -> String { String(format: "%.0f MB", Double(max(0, bytes)) / 1_048_576) }
+        return "Finishing on-device setup\u{2026} \(mb(downloadedBytes)) / \(mb(totalBytes))"
     }
 
     /// Whether onboarding is complete — gates launch/wake recovery (we only
     /// offer to recover an interrupted recording once the user is set up). A
-    /// closure (like `hasOwnAPIKeyProvider`) so AppState can own the wake
+    /// closure (like `canGenerateLocallyProvider`) so AppState can own the wake
     /// observer without holding the OnboardingStore; wired by `ZerroApp.init`
     /// to read the real store. Defaults to `true` so tests/previews that don't
     /// wire it aren't gated.
@@ -2209,7 +2417,7 @@ final class AppState {
         // Phase F made this a four-way decision (was Managed-vs-local in Phase E).
         // The policy lives in `EntitlementStore.generationRoute`; this is just the
         // mechanism. A nil entitlements falls back to local (fail-safe).
-        let route = entitlements?.generationRoute(hasOwnAPIKey: hasOwnAPIKeyProvider()) ?? .local
+        let route = entitlements?.generationRoute(canGenerateLocally: canGenerateLocally()) ?? .local
         // Tier 1 analytics: mark the start (for latency_ms on the outcome) and
         // fire the funnel-entry event — but only for the routes that actually
         // dispatch a request. `.trialNeedsEmail` dispatches nothing (it routes
@@ -2805,13 +3013,51 @@ final class AppState {
                 // only; the prompt's empty-narration rule covers the output
                 // (one brief chat line, no artifact).
                 var transcript: Transcript
+                // Phase 3 (Local Whisper): which engine transcribed — local
+                // on-device whisper.cpp vs cloud Whisper. Drives the $0 STT cost
+                // for the local path. Stays false on the no-speech path below (no
+                // transcription runs, so no resolution happens and no key/model is
+                // required — byte-identical to before for a silent clip).
+                var sttWasLocal = false
                 if processed.hasSpeech {
                     // Phase 13A: breadcrumb each API stage so a Whisper-vs-GPT
                     // failure can be triaged by the breadcrumb sequence
                     // alone, without having to look at the failure event.
                     Log.breadcrumb(category: .pipelineStage, message: "transcription started")
                     let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
-                    transcript = try await OpenAITranscriptionService().transcribe(
+                    // Phase 6 (Local Whisper): if the on-device model is still
+                    // downloading and the user's engine can use it (.auto/.local),
+                    // WAIT for the download to finish instead of failing the resolve.
+                    // The primary persona is the .auto + no-OpenAI-key user whose
+                    // model is finishing its FIRST download: without this they'd hit
+                    // `.missingAPIKey`; with it they get their on-device transcript.
+                    // No download in flight falls straight through to the resolver
+                    // (which throws → `.localModelUnavailable`) — we never auto-start
+                    // a ~547 MB download the user didn't ask for.
+                    let sttEngine = self.preferences?.sttEngine ?? .auto
+                    if Self.shouldWaitForLocalModel(
+                        engine: sttEngine,
+                        managerState: self.currentLocalModelState()
+                    ) {
+                        await self.awaitLocalModelDownload()
+                        // The wait ends on a terminal model state OR recording
+                        // cancellation — bail if the user cancelled mid-download.
+                        guard self.state == .processing else {
+                            self.stopThinkingRotation()
+                            return
+                        }
+                    }
+                    // Phase 3: resolve the STT engine ONCE per recording. With no
+                    // local model installed + an OpenAI key, `.auto` resolves to
+                    // OpenAITranscriptionService — byte-identical to before. A missing
+                    // prerequisite throws (.modelUnavailable / .missingAPIKey), caught
+                    // below and mapped to the failure pill like any transcription error.
+                    let resolved = try (self.resolveTranscriptionService ?? self.defaultResolveTranscriptionService)()
+                    let service = resolved.service
+                    // P3-1: the resolver reports locality (drives the $0-local STT
+                    // cost) — no concrete-type sniff of the built service.
+                    sttWasLocal = resolved.isLocal
+                    transcript = try await service.transcribe(
                         audioFileURL: audioURL,
                         // Phase 2 (Dev Mode deixis): request word-level timing only
                         // for a Dev Mode recording (the resolver needs it); a normal
@@ -2883,7 +3129,8 @@ final class AppState {
                 self.runGeneration(
                     timeline: timeline,
                     transcript: transcript,
-                    processed: processed
+                    processed: processed,
+                    sttWasLocal: sttWasLocal
                 )
             } catch {
                 // Transcription failed before we reached generation, so stop
@@ -2922,7 +3169,8 @@ final class AppState {
     private func runGeneration(
         timeline: InterleavedTimeline,
         transcript: Transcript,
-        processed: ProcessedRecording
+        processed: ProcessedRecording,
+        sttWasLocal: Bool
     ) {
         processingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2973,7 +3221,8 @@ final class AppState {
                 Self.logCost(
                     audioDuration: processed.duration,
                     usage: result.usage,
-                    requestedModelID: entry.id
+                    requestedModelID: entry.id,
+                    sttWasLocal: sttWasLocal
                 )
 
                 guard self.state == .processing else { return }
@@ -3799,6 +4048,20 @@ final class AppState {
         dismissFailure()
     }
 
+    /// The config-failure pill's "Open Settings" primary (reasons whose
+    /// `settingsDeepLink` is non-nil: `.apiKeyMissing` / `.localModelUnavailable` /
+    /// `.apiAuth`). Preselects the target pane, activates the app, opens the
+    /// Settings window, then dismisses the failure pill. Mirrors
+    /// `openOutOfCreditsTopUp` (open a window + dismiss); the window open itself
+    /// runs through `AppDelegate.openSettings()` because AppState has no SwiftUI
+    /// `openWindow` environment. `SettingsView.onAppear` consumes
+    /// `pendingSettingsCategory` to land on the pane.
+    func openSettings(to category: SettingsCategory) {
+        AppDelegate.pendingSettingsCategory = category
+        AppDelegate.openSettings()
+        dismissFailure()
+    }
+
     /// True when the current failure is transient AND we have a processed
     /// recording on disk to re-run AND we haven't already exhausted
     /// `maxFailureRetries`. The pill reads this via the bridge to decide
@@ -4027,8 +4290,9 @@ final class AppState {
     /// NOT captured: reasons that are user- or environment-driven and
     /// already surfaced to the user with actionable copy (permission
     /// revoked, no microphone connected, disk full, recording too short,
-    /// no input captured, missing/invalid API key, network offline).
-    /// Reporting those would be noise — they're not bugs in Zerro.
+    /// no input captured, missing/invalid API key, on-device model not
+    /// downloaded, network offline). Reporting those would be noise — they're
+    /// not bugs in Zerro.
     ///
     /// Provider-RETURNED failures (5xx / 429 / 422-truncation) ARE captured
     /// (the `true` arm): they're an HTTP response from the proxy/provider worth
@@ -4037,7 +4301,7 @@ final class AppState {
     /// upstream outage collapses into ONE error-tracking issue rather than
     /// flooding the dashboard. `.networkOffline` stays OUT — it's local
     /// connectivity with no provider response to triage.
-    private static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
+    static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
@@ -4049,7 +4313,7 @@ final class AppState {
              .microphoneUnavailable,
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull, .noInputCaptured,
-             .apiKeyMissing, .apiAuth, .networkOffline,
+             .apiKeyMissing, .apiAuth, .localModelUnavailable, .networkOffline,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -4203,6 +4467,16 @@ final class AppState {
             case .decodeFailure:
                 // Response contract broke — captured.
                 return .providerError
+            case .modelUnavailable:
+                // Phase 6 (on-device whisper): the local engine needs its model and
+                // it isn't installed — either engine `.local` with no model, or
+                // `.auto` reaching the local branch with no model AND no OpenAI
+                // fallback. (A download that was IN FLIGHT is waited out earlier in
+                // `runLocalPromptGeneration`, so reaching here means there's nothing
+                // to wait on.) Surface the dedicated, actionable reason that points
+                // the user at Settings › Transcription — replacing the Phase-1
+                // `.processingFailed` placeholder.
+                return .localModelUnavailable
             }
         }
         if let pgError = error as? PromptGenerationError {
@@ -4379,23 +4653,33 @@ final class AppState {
     /// `BYOKCostEstimator`, priced on the REQUESTED registry model id (a
     /// provider may report a dated alias the table doesn't carry — same rule
     /// as the server). An unpriced id logs honestly as unpriced.
-    private static func logCost(audioDuration: CMTime, usage: TokenUsage, requestedModelID: String) {
+    private static func logCost(audioDuration: CMTime, usage: TokenUsage, requestedModelID: String, sttWasLocal: Bool) {
         let durationSeconds = CMTimeGetSeconds(audioDuration)
-        let whisperCost = OpenAITranscriptionService.estimatedCost(audioDurationSeconds: durationSeconds)
+        // Phase 3 (Local Whisper): on-device transcription is $0; cloud is the
+        // whisper-1 per-minute estimate (unchanged from before).
+        let sttCost = Self.sttCostUSD(audioDurationSeconds: durationSeconds, isLocal: sttWasLocal)
         let chatCost = BYOKCostEstimator.chatCostUSD(modelID: requestedModelID, usage: usage)
         // All cost lines: durations, model names, token counts, and
         // dollar amounts are .public — operational metrics with no user
         // content. Pre-format Doubles with String(format:) for terse
         // interpolation that's SDK-stable across Xcode versions.
         let durStr = String(format: "%.1fs", durationSeconds)
-        let whisperStr = String(format: "$%.4f", whisperCost)
+        let sttStr = String(format: "$%.4f", sttCost)
         let chatStr = chatCost.map { String(format: "$%.4f", $0) } ?? "unpriced"
-        let totalStr = chatCost.map { String(format: "$%.4f", whisperCost + $0) } ?? "unpriced"
-        Log.cost.info("whisper-1: audio=\(durStr, privacy: .public) → \(whisperStr, privacy: .public)")
+        let totalStr = chatCost.map { String(format: "$%.4f", sttCost + $0) } ?? "unpriced"
+        let sttLabel = sttWasLocal ? "whisper.cpp (local)" : "whisper-1"
+        Log.cost.info("\(sttLabel, privacy: .public): audio=\(durStr, privacy: .public) → \(sttStr, privacy: .public)")
         Log.cost.info(
             "\(usage.model, privacy: .public): in=\(usage.inputTokens, privacy: .public) out=\(usage.outputTokens, privacy: .public) → \(chatStr, privacy: .public)"
         )
         Log.cost.info("total: \(totalStr, privacy: .public)")
+    }
+
+    /// STT cost in USD for a recording. On-device (local) transcription is $0;
+    /// cloud is the whisper-1 per-minute estimate. Pure, so the $0-local rule is
+    /// directly unit-testable.
+    static func sttCostUSD(audioDurationSeconds: Double, isLocal: Bool) -> Double {
+        isLocal ? 0 : OpenAITranscriptionService.estimatedCost(audioDurationSeconds: audioDurationSeconds)
     }
 
     func toggleResultExpanded() {

@@ -4,9 +4,9 @@
 //
 //  Phase 6 (multi-model 6C) — PromptGenerationService impl backed by the
 //  Anthropic Messages API, for BYOK users running a Claude chat model on
-//  their own key. Transcription is NOT handled here — Whisper stays OpenAI
-//  regardless of the chat provider, so a BYOK user always needs an OpenAI
-//  key too.
+//  their own key. Transcription is NOT handled here — it runs separately,
+//  either on-device (whisper.cpp, no key) or on OpenAI cloud, so a Claude-only
+//  user can transcribe with the on-device model and never needs an OpenAI key.
 //
 //  Wire format ported from the Managed proxy's adapter
 //  (supabase/functions/generate/providers/anthropic.ts — verified against

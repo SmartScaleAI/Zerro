@@ -488,18 +488,18 @@ final class EntitlementStoreTrialTests: XCTestCase {
         // Fresh trial layer (no token, no key) → the capture sheet, NOT a silent
         // failure or a local path that would fail with apiKeyMissing.
         let store = trialStore(makeTrialManager(StubManagedTransport()))
-        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: false), .trialNeedsEmail)
+        XCTAssertEqual(store.generationRoute(canGenerateLocally: false), .trialNeedsEmail)
     }
 
     func testTrialWithOwnKeyRoutesLocal() {
         let store = trialStore(makeTrialManager(StubManagedTransport()))
-        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: true), .local)
+        XCTAssertEqual(store.generationRoute(canGenerateLocally: true), .local)
     }
 
     func testVerifiedTrialRoutesToProxy() async throws {
         let mgr = try await verifiedManager()
         let store = trialStore(mgr)
-        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: false), .trialProxy)
+        XCTAssertEqual(store.generationRoute(canGenerateLocally: false), .trialProxy)
         XCTAssertTrue(store.routesThroughManagedProxy)
     }
 
@@ -525,7 +525,7 @@ final class EntitlementStoreTrialTests: XCTestCase {
         XCTAssertFalse(mgr.hasActiveTrialToken)
 
         let store = trialStore(mgr)
-        XCTAssertEqual(store.generationRoute(hasOwnAPIKey: false), .trialProxy)
+        XCTAssertEqual(store.generationRoute(canGenerateLocally: false), .trialProxy)
         XCTAssertFalse(store.needsTrialEmailVerification)
     }
 
