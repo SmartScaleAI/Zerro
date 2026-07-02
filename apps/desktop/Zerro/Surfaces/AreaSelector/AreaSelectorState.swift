@@ -1048,9 +1048,9 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
     var body: String {
         switch self {
         case .mode:
-            return "Artifact turns your recording into a prompt. Dev Mode sends it straight to a coding agent to make the change for you."
+            return "Artifact turns your recording into a ready-to-use output, like a prompt or snippet. Dev Mode sends it straight to a coding agent to make the change for you."
         case .model:
-            return "This model reads your screen and voice. Tap to switch — the current model's name shows here."
+            return "This model reads your screen and voice. Tap to switch. The current model's name shows here."
         case .mic:
             return "Zerro records what you say while you point and talk. Pick your input device here."
         case .agent:

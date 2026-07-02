@@ -541,24 +541,17 @@ final class AreaSelectorWindowController {
                 // begins under the tour. Esc (key monitor) dismisses early.
                 if let step = state.toolbarWalkthroughStep {
                     if let rect = selectionRect {
-                        let nextFrame = AreaSelectorView.walkthroughNextButtonFrame(
-                            for: step, forSelection: rect, in: size,
-                            fullScreen: fullScreen, devMode: devMode)
-                        if nextFrame.contains(point) {
-                            self?.walkthroughNextTapped(state: state)
-                            return nil
-                        }
-                        if step != .mode {
-                            let backFrame = AreaSelectorView.walkthroughBackButtonFrame(
-                                for: step, forSelection: rect, in: size,
-                                fullScreen: fullScreen, devMode: devMode)
-                            if backFrame.contains(point) {
-                                self?.walkthroughBackTapped(state: state)
-                                return nil
-                            }
+                        switch AreaSelectorView.walkthroughHit(
+                            at: point, for: step,
+                            forSelection: rect, in: size,
+                            fullScreen: fullScreen, devMode: devMode
+                        ) {
+                        case .next: self?.walkthroughNextTapped(state: state); return nil
+                        case .back: self?.walkthroughBackTapped(state: state); return nil
+                        case .none: break
                         }
                     }
-                    return nil
+                    return nil   // all other presses inert while the tour runs
                 }
 
                 // While a dropdown/popup is open it owns clicks: the menu sits

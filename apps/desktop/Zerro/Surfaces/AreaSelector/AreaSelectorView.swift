@@ -720,6 +720,36 @@ struct AreaSelectorView: View {
         )
     }
 
+    /// Which walkthrough callout button `point` lands on, or nil for any
+    /// other point (all inert while the tour runs).
+    enum WalkthroughHit { case next, back }
+
+    /// THE dispatch decision for a press while the walkthrough is active —
+    /// the controller's mouse monitor routes on exactly this. Pure + static
+    /// so the routing is testable without driving NSEvent. Back is only
+    /// hittable past the first step (it's hidden at `.mode`, where its frame
+    /// is `.zero` anyway — the explicit step guard keeps the intent legible).
+    static func walkthroughHit(
+        at point: CGPoint, for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> WalkthroughHit? {
+        if walkthroughNextButtonFrame(
+            for: step, forSelection: rect, in: bounds,
+            fullScreen: fullScreen, devMode: devMode
+        ).contains(point) {
+            return .next
+        }
+        if step != .mode,
+           walkthroughBackButtonFrame(
+            for: step, forSelection: rect, in: bounds,
+            fullScreen: fullScreen, devMode: devMode
+           ).contains(point) {
+            return .back
+        }
+        return nil
+    }
+
     // MARK: - Dropdown geometry (CleanShot-style menus)
     //
     // The model/mic/dev-settings dropdowns share one shape: a dark rounded

@@ -144,13 +144,13 @@ is only five short steps; early exit is via `Esc` (see Navigation below). Step 5
 Draft copy (tighten later):
 
 1. **Mode switch — "Choose what Zerro makes."**
-   *Artifact turns your recording into a prompt or snippet. Dev Mode sends it
-   straight to a coding agent to make the change for you.* Spotlight both
-   segments; anchor the bubble to the whole switch.
+   *Artifact turns your recording into a ready-to-use output, like a prompt or
+   snippet. Dev Mode sends it straight to a coding agent to make the change
+   for you.* Spotlight both segments; anchor the bubble to the whole switch.
 
 2. **Model selector — "Pick the AI model."**
-   *This is the model that reads your screen and voice. Tap to switch; the
-   current model's name shows right here.* If `isModelPickerLocked` is true
+   *This model reads your screen and voice. Tap to switch. The current
+   model's name shows here.* If `isModelPickerLocked` is true
    (trial), swap copy to: *Upgrade to choose a model.* Anchor: `modelChipFrame`.
 
 3. **Microphone — "Choose your mic."**
