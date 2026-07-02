@@ -141,12 +141,12 @@ struct AreaSelectorView: View {
 
     // Handle metrics — ONE geometry for both modes (they differ only in
     // tint). Purely visual: the grab area is `handleHitSlop`, which must
-    // stay ≥ half the largest dimension here (edgeHandleLength 20 → 10 ≤ 22)
+    // stay ≥ half the largest dimension here (edgeHandleLength 26 → 13 ≤ 22)
     // so the hit target always covers the drawn handle.
-    static let cornerBracketArm: CGFloat = 15
-    static let cornerBracketLineWidth: CGFloat = 3
-    static let edgeHandleLength: CGFloat = 20
-    static let edgeHandleThickness: CGFloat = 5
+    static let cornerBracketArm: CGFloat = 20
+    static let cornerBracketLineWidth: CGFloat = 4
+    static let edgeHandleLength: CGFloat = 26
+    static let edgeHandleThickness: CGFloat = 7
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
