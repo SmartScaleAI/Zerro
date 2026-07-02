@@ -139,6 +139,12 @@ struct AreaSelectorView: View {
     // `state.isDragging` keeps the visual language consistent with
     // macOS Screenshot's behavior.
 
+    /// Rendered size of the square drag handles (the dev edge-midpoint
+    /// squares derive from it too, so the two modes stay in sync). Purely
+    /// visual — the grab area is `handleHitSlop`, which must stay ≥ half
+    /// this size so the hit target always covers the drawn handle.
+    static let handleSize: CGFloat = 14
+
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
         if state.isDevMode {
@@ -152,7 +158,7 @@ struct AreaSelectorView: View {
                 Rectangle()
                     .fill(Color.white)
                     .overlay(Rectangle().strokeBorder(Color.vfOnBrand, lineWidth: 1))
-                    .frame(width: 8, height: 8)
+                    .frame(width: Self.handleSize, height: Self.handleSize)
                     .position(positions[i])
             }
         }
@@ -166,7 +172,7 @@ struct AreaSelectorView: View {
     /// Edge-midpoint handles (settled state only) stay as small green squares so
     /// the 8-handle "selection is live" signal survives.
     private func devViewfinderHandles(at rect: CGRect) -> some View {
-        let arm: CGFloat = 14
+        let arm = Self.devBracketArm
         let midpoints = state.isDragging ? [] : edgeMidpointHandlePositions(at: rect)
         return ZStack {
             Path { p in
@@ -184,16 +190,24 @@ struct AreaSelectorView: View {
                     p.addLine(to: vEnd)
                 }
             }
-            .stroke(Color.vfDevAccent, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            .stroke(Color.vfDevAccent, style: StrokeStyle(lineWidth: Self.devBracketLineWidth, lineCap: .round, lineJoin: .round))
 
             ForEach(midpoints.indices, id: \.self) { i in
                 Rectangle()
                     .fill(Color.vfDevAccent)
-                    .frame(width: 6, height: 6)
+                    .frame(width: Self.devEdgeHandleSize, height: Self.devEdgeHandleSize)
                     .position(midpoints[i])
             }
         }
     }
+
+    /// Dev-Mode handle metrics, sized so the green drag points feel as large
+    /// as the artifact-mode squares: longer/heavier corner brackets, and edge
+    /// squares slightly smaller than `handleSize` so the brackets stay the
+    /// dominant corner affordance.
+    private static let devBracketArm: CGFloat = 18
+    private static let devBracketLineWidth: CGFloat = 2.5
+    private static let devEdgeHandleSize: CGFloat = handleSize - 2
 
     private func cornerHandlePositions(at rect: CGRect) -> [CGPoint] {
         [
