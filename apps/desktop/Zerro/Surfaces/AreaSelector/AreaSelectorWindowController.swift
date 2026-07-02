@@ -1461,7 +1461,15 @@ final class AreaSelectorWindowController {
             "trigger": EntitlementStore.PaywallTrigger.voluntaryUpgrade.rawValue,
             "placement": "capture_toolbar"
         ])
+        // Set the trigger on the shared EntitlementStore BEFORE teardown
+        // (dismiss() nils `state`, but the store is long-lived so the
+        // trigger persists for the paywall to read).
         state?.entitlements?.paywallTrigger = .voluntaryUpgrade
+        // Tear down the .screenSaver-level overlay so it stops intercepting
+        // mouse events / rendering above the paywall window. Without this,
+        // the paywall opens BELOW the overlay and is un-clickable. The
+        // overlay is rebuilt fresh on every present(), so dismissing is safe.
+        dismiss()
         AppDelegate.openPaywall()
     }
 
