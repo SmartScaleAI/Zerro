@@ -144,7 +144,11 @@ struct AreaSelectorView: View {
     // hidden entirely while DRAWING a new rect (`interaction == .creating` —
     // the border + readout are the live drag feedback), corners-only while a
     // resize/move is in flight (the `isDragging` midpoint collapse; the
-    // grabbed bracket must not vanish mid-resize), all 8 once settled.
+    // grabbed bracket must not vanish mid-resize), all 8 once settled AT A
+    // CONFIRMABLE SIZE. An undersized settle shows no handles: the
+    // controller's edit hit-test gates on `confirmableSelectionRect`, so
+    // they wouldn't be grabbable — the red border + message own that state
+    // and the user redraws instead.
 
     // Handle metrics — ONE geometry for both modes (they differ only in
     // tint). Purely visual: the grab area is `handleHitSlop`, which must
@@ -157,20 +161,19 @@ struct AreaSelectorView: View {
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
-        // No handles while drawing a new rect — they appear when the drag
-        // settles. Resize/move edits keep them (the user is holding one).
-        if state.interaction != .creating {
-            // Error wins here exactly like the border + readout: an undersized
-            // selection tints the handles red in BOTH modes.
-            let tooSmall = state.isSelectionTooSmall
+        // No handles while drawing a new rect, and none on a settled-but-
+        // undersized selection (not editable — see the MARK note). Resize/
+        // move edits keep them (the user is holding one, and the resize pin
+        // keeps the rect at or above the minimum).
+        if state.interaction != .creating, !state.isSelectionTooSmall {
             if state.isDevMode {
                 // Dev keeps its bare accent treatment (the breathing border
                 // already supplies the glow).
-                handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .vfDevAccent, contrastChrome: false)
+                handleChrome(at: rect, tint: .vfDevAccent, contrastChrome: false)
             } else {
                 // White needs help over light content: hairline vfOnBrand outline
                 // on the pills + a soft shadow on everything.
-                handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .white, contrastChrome: true)
+                handleChrome(at: rect, tint: .white, contrastChrome: true)
             }
         }
     }
