@@ -139,75 +139,84 @@ struct AreaSelectorView: View {
     // `state.isDragging` keeps the visual language consistent with
     // macOS Screenshot's behavior.
 
-    /// Rendered size of the square drag handles (the dev edge-midpoint
-    /// squares derive from it too, so the two modes stay in sync). Purely
-    /// visual — the grab area is `handleHitSlop`, which must stay ≥ half
-    /// this size so the hit target always covers the drawn handle.
-    static let handleSize: CGFloat = 14
+    // Handle metrics — ONE geometry for both modes (they differ only in
+    // tint). Purely visual: the grab area is `handleHitSlop`, which must
+    // stay ≥ half the largest dimension here (edgeHandleLength 20 → 10 ≤ 22)
+    // so the hit target always covers the drawn handle.
+    static let cornerBracketArm: CGFloat = 15
+    static let cornerBracketLineWidth: CGFloat = 3
+    static let edgeHandleLength: CGFloat = 20
+    static let edgeHandleThickness: CGFloat = 5
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
         if state.isDevMode {
-            devViewfinderHandles(at: rect)
+            // Dev keeps its bare accent-green treatment (the breathing border
+            // already supplies the glow).
+            handleChrome(at: rect, tint: Color.vfDevAccent, contrastChrome: false)
         } else {
-            let positions: [CGPoint] = state.isDragging
-                ? cornerHandlePositions(at: rect)
-                : cornerHandlePositions(at: rect) + edgeMidpointHandlePositions(at: rect)
-
-            ForEach(positions.indices, id: \.self) { i in
-                Rectangle()
-                    .fill(Color.white)
-                    .overlay(Rectangle().strokeBorder(Color.vfOnBrand, lineWidth: 1))
-                    .frame(width: Self.handleSize, height: Self.handleSize)
-                    .position(positions[i])
-            }
+            // White needs help over light content: hairline vfOnBrand outline
+            // on the pills + a soft shadow on everything.
+            handleChrome(at: rect, tint: .white, contrastChrome: true)
         }
     }
 
-    /// Dev-Mode corner handles: L-shaped viewfinder brackets (two strokes per
-    /// corner) in the accent green, replacing the filled white squares for the
-    /// "camera viewfinder / inspector" read. Drawn as one stroked `Path` of
-    /// eight short arms (cheaper than eight positioned shapes, and the absolute
-    /// coordinates align to the full overlay bounds exactly like `dimCutout`).
-    /// Edge-midpoint handles (settled state only) stay as small green squares so
-    /// the 8-handle "selection is live" signal survives.
-    private func devViewfinderHandles(at rect: CGRect) -> some View {
-        let arm = Self.devBracketArm
+    /// CleanShot-style handle chrome, shared by both modes: L-shaped brackets
+    /// at the corners (arms pointing inward, one stroked `Path` of eight arms
+    /// — cheaper than eight positioned shapes, and the absolute coordinates
+    /// align to the full overlay bounds exactly like `dimCutout`) plus, once
+    /// the selection settles, a capsule bar on each edge midpoint with its
+    /// long axis ALONG the edge (horizontal on top/bottom, vertical on
+    /// left/right). `contrastChrome` adds the hairline outline + soft shadow
+    /// that keep the white variant legible over light content.
+    @ViewBuilder
+    private func handleChrome(at rect: CGRect, tint: Color, contrastChrome: Bool) -> some View {
         let midpoints = state.isDragging ? [] : edgeMidpointHandlePositions(at: rect)
-        return ZStack {
-            Path { p in
-                // (corner, end of horizontal arm, end of vertical arm) — arms
-                // always point inward from each corner.
-                let brackets: [(CGPoint, CGPoint, CGPoint)] = [
-                    (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.minX + arm, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY + arm)),
-                    (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX - arm, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY + arm)),
-                    (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.maxX - arm, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY - arm)),
-                    (CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX + arm, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY - arm))
-                ]
-                for (corner, hEnd, vEnd) in brackets {
-                    p.move(to: hEnd)
-                    p.addLine(to: corner)
-                    p.addLine(to: vEnd)
-                }
-            }
-            .stroke(Color.vfDevAccent, style: StrokeStyle(lineWidth: Self.devBracketLineWidth, lineCap: .round, lineJoin: .round))
 
-            ForEach(midpoints.indices, id: \.self) { i in
-                Rectangle()
-                    .fill(Color.vfDevAccent)
-                    .frame(width: Self.devEdgeHandleSize, height: Self.devEdgeHandleSize)
-                    .position(midpoints[i])
-            }
+        cornerBracketPath(at: rect)
+            .stroke(tint, style: StrokeStyle(lineWidth: Self.cornerBracketLineWidth, lineCap: .round, lineJoin: .round))
+            .shadow(color: .black.opacity(contrastChrome ? 0.4 : 0), radius: 1.5, y: 0.5)
+
+        ForEach(midpoints.indices, id: \.self) { i in
+            let point = midpoints[i]
+            // Long axis parallel to the edge: top/bottom midpoints share the
+            // rect's horizontal edge lines (exact same y — both values come
+            // from `edgeMidpointHandlePositions`), left/right the vertical.
+            let horizontal = point.y == rect.minY || point.y == rect.maxY
+            let radius = Self.edgeHandleThickness / 2
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(tint)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(contrastChrome ? Color.vfOnBrand : .clear, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(contrastChrome ? 0.4 : 0), radius: 1.5, y: 0.5)
+                .frame(
+                    width: horizontal ? Self.edgeHandleLength : Self.edgeHandleThickness,
+                    height: horizontal ? Self.edgeHandleThickness : Self.edgeHandleLength
+                )
+                .position(point)
         }
     }
 
-    /// Dev-Mode handle metrics, sized so the green drag points feel as large
-    /// as the artifact-mode squares: longer/heavier corner brackets, and edge
-    /// squares slightly smaller than `handleSize` so the brackets stay the
-    /// dominant corner affordance.
-    private static let devBracketArm: CGFloat = 18
-    private static let devBracketLineWidth: CGFloat = 2.5
-    private static let devEdgeHandleSize: CGFloat = handleSize - 2
+    /// The four corner L-brackets as one path — (corner, end of horizontal
+    /// arm, end of vertical arm), arms always pointing inward from the corner.
+    private func cornerBracketPath(at rect: CGRect) -> Path {
+        let arm = Self.cornerBracketArm
+        return Path { p in
+            let brackets: [(CGPoint, CGPoint, CGPoint)] = [
+                (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.minX + arm, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY + arm)),
+                (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX - arm, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY + arm)),
+                (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.maxX - arm, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY - arm)),
+                (CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX + arm, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY - arm))
+            ]
+            for (corner, hEnd, vEnd) in brackets {
+                p.move(to: hEnd)
+                p.addLine(to: corner)
+                p.addLine(to: vEnd)
+            }
+        }
+    }
 
     private func cornerHandlePositions(at rect: CGRect) -> [CGPoint] {
         [
