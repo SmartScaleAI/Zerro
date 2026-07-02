@@ -151,6 +151,28 @@ final class AreaSelectorState {
         }
     }
 
+    /// True in `.area` mode when there IS a selection but it's below
+    /// `minimumSelectionSize` on either axis — drawn/settled but not yet
+    /// large enough to record. Drives the red border + "too small" message.
+    /// The inverse of what makes `confirmableSelectionRect` non-nil, minus
+    /// the `!isDragging` clause, so the border can flag an undersized rect
+    /// live while the user is still sizing it.
+    var isSelectionTooSmall: Bool {
+        guard mode == .area, let rect = selectionRect else { return false }
+        return rect.width < Self.minimumSelectionSize || rect.height < Self.minimumSelectionSize
+    }
+
+    /// Monotonic counter bumped when Return/Enter is refused on an
+    /// undersized selection. The view keys a brief icon bounce on the
+    /// too-small message off changes, so the refusal reads as feedback
+    /// rather than a silent no-op (the message itself is already standing —
+    /// it follows `isSelectionTooSmall`).
+    private(set) var undersizedConfirmPulse: Int = 0
+
+    func noteUndersizedConfirmAttempt() {
+        undersizedConfirmPulse += 1
+    }
+
     /// Hover feedback for the floating Record button. The overlay's
     /// SwiftUI tree is hit-test-disabled (events flow through the
     /// controller's monitor), so the controller computes this by

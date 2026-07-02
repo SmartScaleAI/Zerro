@@ -63,6 +63,7 @@ struct AreaSelectorView: View {
                 devSettingsMenu(in: bounds)
                 devValidationBanner(in: bounds)
                 devLocalhostNoticeBanner(in: bounds)
+                tooSmallMessage(in: bounds)
                 toolbarTooltip(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
@@ -122,8 +123,13 @@ struct AreaSelectorView: View {
     // MARK: - Selection border
 
     private func selectionBorder(at rect: CGRect) -> some View {
-        Rectangle()
-            .stroke(state.isDevMode ? Color.vfDevAccent : Color.vfBrandAccent, lineWidth: 1.5)
+        // Error wins over BOTH mode accents: an undersized selection strokes
+        // red whether in Artifact or Dev mode, live during the drag.
+        let strokeColor: Color = state.isSelectionTooSmall
+            ? .vfRecordingRed
+            : (state.isDevMode ? .vfDevAccent : .vfBrandAccent)
+        return Rectangle()
+            .stroke(strokeColor, lineWidth: 1.5)
             .frame(width: rect.width, height: rect.height)
             .devBreathingPulse(state.isDevMode)
             .position(x: rect.midX, y: rect.midY)
@@ -296,14 +302,22 @@ struct AreaSelectorView: View {
     // capture layer, not the readout.
 
     private func dimensionsLabel(at rect: CGRect) -> some View {
-        Text("\(Int(rect.width)) \u{00D7} \(Int(rect.height))")
+        // Undersized selection: the readout goes red too, so the numbers
+        // themselves read as the problem (they're what's below the minimum).
+        let fill: Color = state.isSelectionTooSmall
+            ? .vfRecordingRed
+            : (state.isDevMode ? .vfDevAccent : Color.black.opacity(0.6))
+        let textColor: Color = state.isSelectionTooSmall
+            ? .white
+            : (state.isDevMode ? Color.vfOnBrand : Color.white)
+        return Text("\(Int(rect.width)) \u{00D7} \(Int(rect.height))")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(state.isDevMode ? Color.vfOnBrand : Color.white)
+            .foregroundStyle(textColor)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(state.isDevMode ? Color.vfDevAccent : Color.black.opacity(0.6))
+                    .fill(fill)
             )
             .fixedSize()
             .position(x: rect.maxX - 36, y: rect.maxY - 16)
@@ -2102,6 +2116,72 @@ struct AreaSelectorView: View {
             .fixedSize()
             .position(x: toolbar.midX, y: toolbar.minY - 18)
         }
+    }
+
+    /// "Selection too small" pill: red-tinted feedback anchored where the
+    /// floating toolbar would otherwise sit (the toolbar hides below the
+    /// minimum size — this is its stand-in, so the empty toolbar slot
+    /// explains itself). Shown once an undersized rect SETTLES rather than
+    /// live mid-drag: every drag starts undersized, so a mid-drag message
+    /// would flash at the start of every selection — the live "keep going"
+    /// signal is the red border + readout instead. Chrome mirrors
+    /// `devValidationBanner`; the icon bounces when Return is refused
+    /// (`undersizedConfirmPulse`).
+    @ViewBuilder
+    private func tooSmallMessage(in bounds: CGSize) -> some View {
+        if state.isSelectionTooSmall, !state.isDragging, let rect = state.selectionRect {
+            // Measure the pill (same NSString sizing idiom as the tooltip) so
+            // it can clamp inside the overlay the way the toolbar does.
+            let text = Self.tooSmallMessageText
+            let textW = ceil((text as NSString).size(
+                withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]
+            ).width)
+            let iconW: CGFloat = 12
+            let pillW = VFSpacing.sm * 2 + iconW + VFSpacing.xs + textW
+            let pillH: CGFloat = 26
+
+            // Hang below the selection, flip above if it would clip the
+            // bottom, clamp inside the overlay — the same fallback math as
+            // `toolbarFrame`.
+            let originY: CGFloat = {
+                var y = rect.maxY + Self.toolbarGap
+                if y + pillH + Self.toolbarMargin > bounds.height {
+                    y = rect.minY - Self.toolbarGap - pillH
+                }
+                if y < Self.toolbarMargin {
+                    y = max(Self.toolbarMargin, bounds.height - pillH - Self.toolbarMargin)
+                }
+                return y
+            }()
+            let centerX = min(
+                max(rect.midX, Self.toolbarMargin + pillW / 2),
+                bounds.width - pillW / 2 - Self.toolbarMargin
+            )
+
+            HStack(spacing: VFSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.vfRecordingRed)
+                    .symbolEffect(.bounce, value: state.undersizedConfirmPulse)
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .fixedSize()
+            }
+            .padding(.horizontal, VFSpacing.sm)
+            .frame(height: pillH)
+            .background(Color.vfPillBackground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.vfRecordingRed.opacity(0.5), lineWidth: 0.5))
+            .fixedSize()
+            .position(x: centerX, y: originY + pillH / 2)
+        }
+    }
+
+    /// Copy for the too-small pill, built from `minimumSelectionSize` so the
+    /// number can never drift from the actual confirm gate.
+    static var tooSmallMessageText: String {
+        let m = Int(AreaSelectorState.minimumSelectionSize)
+        return "Selection too small \u{2014} drag at least \(m) \u{00D7} \(m) to record"
     }
 
     /// One-time, NON-BLOCKING post-denial explainer (Phase 3): a floating capsule

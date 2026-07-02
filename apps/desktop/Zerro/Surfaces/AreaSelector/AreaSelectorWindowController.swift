@@ -914,7 +914,8 @@ final class AreaSelectorWindowController {
     /// zero-size) are a no-op — the overlay stays open — so an accidental
     /// Return without a real drag doesn't kick off a recording of nothing.
     /// In `.fullScreen`, the whole display is always confirmable.
-    private func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
+    /// Internal (not private) so the confirm gate is unit-testable.
+    func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
         // Dev Mode record-time validation: both an agent and a folder must be
         // chosen before a recording can dispatch to the agent. Replaces the
         // first-run popover as the dead-end guard (design §1). Inert in normal
@@ -949,6 +950,11 @@ final class AreaSelectorWindowController {
         guard let viewLocal = state.selectionRect,
               viewLocal.width >= AreaSelectorState.minimumSelectionSize,
               viewLocal.height >= AreaSelectorState.minimumSelectionSize else {
+            // Not silent: the standing red border + too-small pill (they
+            // follow `isSelectionTooSmall`) already explain why Return did
+            // nothing; bump the pulse so the pill's icon bounces and the
+            // refusal visibly lands on it.
+            if state.isSelectionTooSmall { state.noteUndersizedConfirmAttempt() }
             return
         }
         let global = viewLocalToGlobal(viewLocal, window: window)
