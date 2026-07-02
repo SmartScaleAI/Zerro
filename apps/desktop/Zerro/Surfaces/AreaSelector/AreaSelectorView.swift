@@ -55,7 +55,12 @@ struct AreaSelectorView: View {
                 case .fullScreen:
                     fullScreenModeContent(bounds: bounds)
                 }
-                instructionPill(in: bounds)
+                // Hidden while the walkthrough runs — the tour's scrim +
+                // callout own the overlay's attention; the pill would just be
+                // dimmed clutter behind them.
+                if state.toolbarWalkthroughStep == nil {
+                    instructionPill(in: bounds)
+                }
                 floatingToolbar(in: bounds)
                 modelMenu(in: bounds)
                 upgradeMenu(in: bounds)
@@ -65,6 +70,11 @@ struct AreaSelectorView: View {
                 devLocalhostNoticeBanner(in: bounds)
                 tooSmallMessage(in: bounds)
                 toolbarTooltip(in: bounds)
+                // First-run toolbar walkthrough: the dim + spotlight sit
+                // ABOVE the toolbar (cutting the active control through);
+                // the callout is the topmost layer.
+                walkthroughScrim(in: bounds)
+                walkthroughCallout(in: bounds)
             }
             .frame(width: bounds.width, height: bounds.height)
             // Staging-only: amber edge border + "STAGING" badge so the capture
@@ -653,6 +663,190 @@ struct AreaSelectorView: View {
         let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let L = compactLayout(devMode: devMode)
         return CGRect(x: t.minX + L.recordX, y: t.minY, width: recordButtonWidth, height: t.height)
+    }
+
+    // MARK: - Walkthrough geometry (first-run toolbar tour)
+    //
+    // The walkthrough spotlights one toolbar control at a time and floats a
+    // callout (step indicator + title + copy + Back/Next) next to it. All
+    // frames live in static helpers for the same reason the toolbar controls'
+    // do: the SwiftUI tree is hit-test-disabled, so the controller (Phase 3)
+    // must hit-test the EXACT rects the view renders — one source of truth
+    // here keeps render and hit-test in lockstep. Anchors REUSE the controls'
+    // own frame helpers verbatim; no new control geometry is invented.
+
+    /// Padding between a spotlighted control's frame and the scrim cutout /
+    /// accent ring around it.
+    static let walkthroughSpotlightPad: CGFloat = 6
+    static let walkthroughSpotlightCorner: CGFloat = 10
+    /// Vertical gap between the spotlight ring and the callout panel — room
+    /// for the caret plus breathing space clear of the ring's stroke.
+    static let walkthroughCalloutGap: CGFloat = 14
+    static let walkthroughCalloutWidth: CGFloat = 300
+    /// Inner inset of the callout's content (all four sides).
+    static let walkthroughCalloutPad: CGFloat = 14
+    /// Fixed height of the "1 of 5" step-indicator line.
+    static let walkthroughIndicatorHeight: CGFloat = 15
+    /// Vertical gaps: indicator → title, title → body, body → footer.
+    static let walkthroughTitleGap: CGFloat = 4
+    static let walkthroughBodyGap: CGFloat = 6
+    static let walkthroughFooterGap: CGFloat = 14
+    static let walkthroughButtonHeight: CGFloat = 28
+    /// Horizontal padding inside the Next capsule / hit slop around Back.
+    static let walkthroughNextHPad: CGFloat = 14
+    static let walkthroughBackHPad: CGFloat = 8
+    /// Copy is MEASURED with these NSFonts and rendered with the matching
+    /// `.system` fonts (same pattern as `toolbarTooltip`'s multi-line branch),
+    /// so the measured panel height is the rendered height.
+    static let walkthroughTitleFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
+    static let walkthroughBodyFont = NSFont.systemFont(ofSize: 13)
+    static let walkthroughNextFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+    static let walkthroughBackFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+
+    /// The toolbar-control frame a walkthrough step points at. `.agent` maps
+    /// to `devSettingsIconFrame`, which takes no `devMode` — the icon only
+    /// exists in the Dev layout, which Phase 1's state machine forces on
+    /// (display-only) for the agent/record steps, so callers passing
+    /// `devMode: state.isDevMode` resolve every anchor in the layout actually
+    /// on screen.
+    static func walkthroughAnchorFrame(
+        for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> CGRect {
+        switch step {
+        case .mode:
+            return devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        case .model:
+            return modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        case .mic:
+            return micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        case .agent:
+            return devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
+        case .record:
+            return recordButtonFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        }
+    }
+
+    /// The scrim's spotlight rect: the step's anchor padded out on every side.
+    static func walkthroughSpotlightRect(
+        for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> CGRect {
+        walkthroughAnchorFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            .insetBy(dx: -walkthroughSpotlightPad, dy: -walkthroughSpotlightPad)
+    }
+
+    /// Measured panel height for a step's copy at the fixed callout width.
+    static func walkthroughCalloutHeight(for step: ToolbarWalkthroughStep) -> CGFloat {
+        let textW = walkthroughCalloutWidth - walkthroughCalloutPad * 2
+        func measured(_ text: String, font: NSFont) -> CGFloat {
+            ceil((text as NSString).boundingRect(
+                with: CGSize(width: textW, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).height)
+        }
+        return walkthroughCalloutPad
+            + walkthroughIndicatorHeight + walkthroughTitleGap
+            + measured(step.title, font: walkthroughTitleFont) + walkthroughBodyGap
+            + measured(step.body, font: walkthroughBodyFont) + walkthroughFooterGap
+            + walkthroughButtonHeight + walkthroughCalloutPad
+    }
+
+    /// Callout panel frame: centered on the spotlight, preferring ABOVE it
+    /// (caret pointing down at the control), flipping below when there isn't
+    /// room, clamped inside the overlay by `toolbarMargin` — the same
+    /// hang-and-flip `toolbarFrame`/`anchoredMenuFrame` use.
+    static func walkthroughCalloutFrame(
+        for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> CGRect {
+        let spot = walkthroughSpotlightRect(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        let size = CGSize(width: walkthroughCalloutWidth, height: walkthroughCalloutHeight(for: step))
+        var originY = spot.minY - walkthroughCalloutGap - size.height
+        if originY < toolbarMargin {
+            originY = spot.maxY + walkthroughCalloutGap
+        }
+        if originY + size.height + toolbarMargin > bounds.height {
+            originY = max(toolbarMargin, bounds.height - size.height - toolbarMargin)
+        }
+        var originX = spot.midX - size.width / 2
+        originX = min(max(originX, toolbarMargin), bounds.width - size.width - toolbarMargin)
+        return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
+    }
+
+    /// "Next" on every step but the last, which reads "Got it" and ends the tour.
+    static func walkthroughNextLabel(for step: ToolbarWalkthroughStep) -> String {
+        step == .record ? "Got it" : "Next"
+    }
+
+    /// The Next/Got-it capsule: bottom-right corner of the panel's content
+    /// inset, sized to its label.
+    static func walkthroughNextButtonFrame(
+        for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> CGRect {
+        let panel = walkthroughCalloutFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        let w = ceil((walkthroughNextLabel(for: step) as NSString)
+            .size(withAttributes: [.font: walkthroughNextFont]).width) + walkthroughNextHPad * 2
+        return CGRect(
+            x: panel.maxX - walkthroughCalloutPad - w,
+            y: panel.maxY - walkthroughCalloutPad - walkthroughButtonHeight,
+            width: w, height: walkthroughButtonHeight
+        )
+    }
+
+    /// The quiet Back label's rect: bottom-left corner of the content inset,
+    /// with `walkthroughBackHPad` slop around the text. `.zero` on the first
+    /// step — Back is hidden there (nowhere to go back to).
+    static func walkthroughBackButtonFrame(
+        for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> CGRect {
+        guard step != .mode else { return .zero }
+        let panel = walkthroughCalloutFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+        let w = ceil(("Back" as NSString)
+            .size(withAttributes: [.font: walkthroughBackFont]).width) + walkthroughBackHPad * 2
+        return CGRect(
+            x: panel.minX + walkthroughCalloutPad - walkthroughBackHPad,
+            y: panel.maxY - walkthroughCalloutPad - walkthroughButtonHeight,
+            width: w, height: walkthroughButtonHeight
+        )
+    }
+
+    /// Which walkthrough callout button `point` lands on, or nil for any
+    /// other point (all inert while the tour runs).
+    enum WalkthroughHit { case next, back }
+
+    /// THE dispatch decision for a press while the walkthrough is active —
+    /// the controller's mouse monitor routes on exactly this. Pure + static
+    /// so the routing is testable without driving NSEvent. Back is only
+    /// hittable past the first step (it's hidden at `.mode`, where its frame
+    /// is `.zero` anyway — the explicit step guard keeps the intent legible).
+    static func walkthroughHit(
+        at point: CGPoint, for step: ToolbarWalkthroughStep,
+        forSelection rect: CGRect, in bounds: CGSize,
+        fullScreen: Bool, devMode: Bool
+    ) -> WalkthroughHit? {
+        if walkthroughNextButtonFrame(
+            for: step, forSelection: rect, in: bounds,
+            fullScreen: fullScreen, devMode: devMode
+        ).contains(point) {
+            return .next
+        }
+        if step != .mode,
+           walkthroughBackButtonFrame(
+            for: step, forSelection: rect, in: bounds,
+            fullScreen: fullScreen, devMode: devMode
+           ).contains(point) {
+            return .back
+        }
+        return nil
     }
 
     // MARK: - Dropdown geometry (CleanShot-style menus)
@@ -1855,6 +2049,11 @@ struct AreaSelectorView: View {
     /// own label). A non-nil `maxWidth` selects the multi-line bubble variant.
     /// Internal (not private) so the geometry tests can exercise it.
     func tooltipInfo(forSelection rect: CGRect, in bounds: CGSize) -> (text: String, anchor: CGRect, maxWidth: CGFloat?)? {
+        // While the walkthrough is active its callout owns the bubble layer —
+        // suppress hover tooltips entirely so the two never collide (same
+        // pattern as the open-menu suppression below).
+        guard state.toolbarWalkthroughStep == nil else { return nil }
+
         let fs = state.mode == .fullScreen
         let dev = state.isDevMode
 
@@ -2227,6 +2426,98 @@ struct AreaSelectorView: View {
             .position(x: toolbar.midX, y: toolbar.minY - 36)
         }
     }
+
+    // MARK: - Walkthrough rendering (scrim + spotlight + callout)
+    //
+    // Drawn only while `state.toolbarWalkthroughStep` is active AND the
+    // toolbar is on screen (the same gate as `floatingToolbar` — the tour
+    // anchors to toolbar controls, so no toolbar → no tour layers). The
+    // Back/Next buttons are VISUAL ONLY in this phase: the overlay's SwiftUI
+    // tree is hit-test-disabled, so Phase 3 routes their clicks through the
+    // controller's mouse monitor against the same static frames rendered here.
+
+    /// Full-overlay dim with a rounded-rect spotlight cutout around the
+    /// current step's control (one even-odd path, like `dimCutout`), plus an
+    /// accent ring on the cutout so the active control reads as highlighted.
+    @ViewBuilder
+    private func walkthroughScrim(in bounds: CGSize) -> some View {
+        if let step = state.toolbarWalkthroughStep, let rect = state.confirmableSelectionRect {
+            let spot = Self.walkthroughSpotlightRect(
+                for: step, forSelection: rect, in: bounds,
+                fullScreen: state.mode == .fullScreen, devMode: state.isDevMode
+            )
+            let corner = CGSize(width: Self.walkthroughSpotlightCorner, height: Self.walkthroughSpotlightCorner)
+            Path { path in
+                path.addRect(CGRect(origin: .zero, size: bounds))
+                path.addRoundedRect(in: spot, cornerSize: corner, style: .continuous)
+            }
+            .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
+
+            RoundedRectangle(cornerRadius: Self.walkthroughSpotlightCorner, style: .continuous)
+                .stroke(Color.vfBrandAccent, lineWidth: 2)
+                .frame(width: spot.width, height: spot.height)
+                .position(x: spot.midX, y: spot.midY)
+        }
+    }
+
+    /// The step callout: the shared menu panel chrome with a caret pointing
+    /// at the spotlighted control, carrying the step indicator, title, body
+    /// copy, and the (visual-only) Back / Next buttons rendered at their
+    /// static hit frames.
+    @ViewBuilder
+    private func walkthroughCallout(in bounds: CGSize) -> some View {
+        if let step = state.toolbarWalkthroughStep, let rect = state.confirmableSelectionRect {
+            let fullScreen = state.mode == .fullScreen
+            let devMode = state.isDevMode
+            let anchor = Self.walkthroughAnchorFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let panel = Self.walkthroughCalloutFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let backFrame = Self.walkthroughBackButtonFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let nextFrame = Self.walkthroughNextButtonFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
+            let below = Self.menuOpensDownward(menuFrame: panel, iconFrame: anchor)
+            let textW = Self.walkthroughCalloutWidth - Self.walkthroughCalloutPad * 2
+
+            menuPanel(frame: panel) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("\(step.rawValue + 1) of \(ToolbarWalkthroughStep.allCases.count)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.vfTextTertiary)
+                        .frame(height: Self.walkthroughIndicatorHeight, alignment: .topLeading)
+                    Text(step.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.vfTextPrimary)
+                        .frame(width: textW, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Self.walkthroughTitleGap)
+                    Text(step.body)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.vfTextSecondary)
+                        .frame(width: textW, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Self.walkthroughBodyGap)
+                }
+                .padding(Self.walkthroughCalloutPad)
+            }
+
+            // Back — hidden on the first step; quiet text button.
+            if step != .mode {
+                Text("Back")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .frame(width: backFrame.width, height: backFrame.height)
+                    .position(x: backFrame.midX, y: backFrame.midY)
+            }
+
+            // Next / Got it — the filled primary capsule.
+            Text(Self.walkthroughNextLabel(for: step))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.vfOnBrand)
+                .frame(width: nextFrame.width, height: nextFrame.height)
+                .background(Capsule(style: .continuous).fill(Color.vfBrandAccent))
+                .position(x: nextFrame.midX, y: nextFrame.midY)
+
+            menuCaret(centerX: anchor.midX, edgeY: below ? panel.minY : panel.maxY, pointingUp: below, panel: panel)
+        }
+    }
 }
 
 // MARK: - Dev Mode chrome modifiers
@@ -2515,6 +2806,70 @@ private struct PulseLoginBackdrop: View {
         }())
     }
     .frame(width: 1200, height: 700)
+}
+
+/// Walkthrough step 1 (mode switch): scrim + spotlight on the whole mode
+/// switch, callout above with no Back button.
+#Preview("Walkthrough — 1 mode") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeSettledPreviewState()
+            s.startToolbarWalkthrough()
+            return s
+        }())
+    }
+    .frame(width: 1000, height: 640)
+}
+
+/// Walkthrough step 4 (agent settings): the state machine borrows Dev Mode
+/// for display, so the toolbar grows the dev-settings icon and the spotlight
+/// lands on it. Back + Next both visible.
+#Preview("Walkthrough — 4 agent (Dev revealed)") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeWalkthroughPreviewState()
+            s.advanceToolbarWalkthrough() // model
+            s.advanceToolbarWalkthrough() // mic
+            s.advanceToolbarWalkthrough() // agent — Dev layout revealed
+            return s
+        }())
+    }
+    .frame(width: 1000, height: 640)
+}
+
+/// Walkthrough step 5 (record): still in the Dev layout, spotlight on the
+/// Record pill, and the primary button reads "Got it".
+#Preview("Walkthrough — 5 record (Got it)") {
+    ZStack {
+        PulseLoginBackdrop()
+        AreaSelectorView(state: {
+            let s = makeWalkthroughPreviewState()
+            s.advanceToolbarWalkthrough() // model
+            s.advanceToolbarWalkthrough() // mic
+            s.advanceToolbarWalkthrough() // agent
+            s.advanceToolbarWalkthrough() // record — "Got it"
+            return s
+        }())
+    }
+    .frame(width: 1000, height: 640)
+}
+
+/// Settled state + agent/folder seeded (green readiness dot once the tour
+/// reveals the Dev layout) with the walkthrough started at step 1.
+@MainActor
+private func makeWalkthroughPreviewState() -> AreaSelectorState {
+    let s = makeSettledPreviewState()
+    // Dev OFF pre-tour (the walkthrough borrows it for display); agent +
+    // folder chosen so the dev-settings icon's readiness dot shows green.
+    s.setDevState(
+        isDevMode: false, agentID: "claude-code", agentName: "Claude Code",
+        projectURL: URL(fileURLWithPath: "/Users/you/dev/my-site", isDirectory: true)
+    )
+    seedDevAgents(s)
+    s.startToolbarWalkthrough()
+    return s
 }
 
 @MainActor

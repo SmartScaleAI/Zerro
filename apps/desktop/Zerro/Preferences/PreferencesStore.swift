@@ -111,6 +111,13 @@ final class PreferencesStore {
         /// Transcription settings section still offers a manual download).
         static let localModelPromptShown = "vf.stt.localModelPromptShown"
 
+        // Area Selector — first-run toolbar walkthrough.
+        /// One-time: the capture toolbar's first-run walkthrough has been seen
+        /// (set on complete or Esc dismiss — not on mere appearance, so an
+        /// interrupted first open still teaches next time). Resettable so QA
+        /// can re-trigger the tour.
+        static let toolbarWalkthroughSeen = "vf.areaSelector.toolbarWalkthroughSeen"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -136,6 +143,7 @@ final class PreferencesStore {
             devSeatbeltWrapperDisabled,
             devNetworkFilterDisabled,
             sttEngine,
+            toolbarWalkthroughSeen,
             // NOTE: `localModelVersion` / `localModelDownloadedAt` are deliberately
             // NOT here. They track an on-disk file (~547 MB) that a settings reset
             // does not delete; wiping them would tell the app "no model" while the
@@ -363,6 +371,15 @@ final class PreferencesStore {
         didSet { defaults.set(localModelPromptShown, forKey: Keys.localModelPromptShown) }
     }
 
+    // MARK: - Area Selector — first-run toolbar walkthrough
+
+    /// Whether the capture toolbar's first-run walkthrough has been seen.
+    /// Set on complete or Esc dismiss — not on mere appearance, so an
+    /// interrupted first open still teaches next time. Default false.
+    var toolbarWalkthroughSeen: Bool {
+        didSet { defaults.set(toolbarWalkthroughSeen, forKey: Keys.toolbarWalkthroughSeen) }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -442,6 +459,9 @@ final class PreferencesStore {
         // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
         // (the prompt hasn't been shown on a fresh install).
         self.localModelPromptShown = defaults.bool(forKey: Keys.localModelPromptShown)
+        // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
+        // (the walkthrough hasn't been seen on a fresh install).
+        self.toolbarWalkthroughSeen = defaults.bool(forKey: Keys.toolbarWalkthroughSeen)
     }
 
     // MARK: - Reset
@@ -474,6 +494,7 @@ final class PreferencesStore {
         devSeatbeltWrapperDisabled = false
         devNetworkFilterDisabled = false
         sttEngine = .auto
+        toolbarWalkthroughSeen = false
         // `localModelVersion` / `localModelDownloadedAt` are intentionally left
         // untouched here — they mirror the on-disk model file, which a settings
         // reset does not delete.
