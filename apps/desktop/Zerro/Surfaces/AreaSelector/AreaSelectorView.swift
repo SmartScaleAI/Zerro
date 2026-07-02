@@ -133,11 +133,11 @@ struct AreaSelectorView: View {
     //
     // Native macOS convention: 4 corners while a drag is in flight, 8
     // (corners + edge midpoints) once the selection is settled. The
-    // edge midpoints aren't actionable yet — confirm/cancel is the only
-    // exit in C3 — but rendering them is the visual signal that the
-    // rectangle is "live" and would be the resize affordance when
-    // resize lands. Branching on `state.isDragging` keeps the visual
-    // language consistent with macOS Screenshot's behavior.
+    // settled handles are the resize affordance: the controller's mouse
+    // monitor hit-tests them via `handleHitTest` below and routes the
+    // drag into `AreaSelectorState.updateResize`. Branching on
+    // `state.isDragging` keeps the visual language consistent with
+    // macOS Screenshot's behavior.
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
@@ -211,6 +211,56 @@ struct AreaSelectorView: View {
             CGPoint(x: rect.midX, y: rect.maxY), // bottom
             CGPoint(x: rect.minX, y: rect.midY)  // left
         ]
+    }
+
+    // MARK: - Handle hit-testing (resize / move)
+    //
+    // Static like the toolbar frame helpers, so the controller's mouse
+    // monitor hit-tests the same geometry the view renders. The handles
+    // draw at 8×8pt — far too small to grab — so each is grabbable within
+    // `handleHitSlop` of its center, and the edges are grabbable anywhere
+    // ALONG the edge (the midpoint dot is a hint, not the only target),
+    // matching CleanShot. All coordinates are view-local, top-left.
+
+    /// Hit slop around each handle's center — the grabbable band is larger
+    /// than the 8pt visual. ~22pt matches the comfort of CleanShot's targets,
+    /// and stays clear of overlap at the 100pt minimum selection (opposing
+    /// edge bands are 2×22 < 100 apart; corner zones span 44 < 100).
+    static let handleHitSlop: CGFloat = 22
+
+    /// Which handle (if any) is under `point`, given the settled selection
+    /// rect. Corners win ties over edges (checked first), so a press in the
+    /// overlap zone resizes both axes.
+    static func handleHitTest(at point: CGPoint, selection rect: CGRect) -> AreaSelectorState.Handle? {
+        let slop = handleHitSlop
+        let corners: [(AreaSelectorState.Handle, CGPoint)] = [
+            (.topLeft, CGPoint(x: rect.minX, y: rect.minY)),
+            (.topRight, CGPoint(x: rect.maxX, y: rect.minY)),
+            (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY)),
+            (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY))
+        ]
+        for (handle, center) in corners {
+            if abs(point.x - center.x) <= slop, abs(point.y - center.y) <= slop {
+                return handle
+            }
+        }
+        // Edge bands: within slop of the edge line, along the edge's span.
+        // Corner zones already won above, so the full span is safe here.
+        let alongX = point.x >= rect.minX && point.x <= rect.maxX
+        let alongY = point.y >= rect.minY && point.y <= rect.maxY
+        if alongX, abs(point.y - rect.minY) <= slop { return .top }
+        if alongX, abs(point.y - rect.maxY) <= slop { return .bottom }
+        if alongY, abs(point.x - rect.minX) <= slop { return .left }
+        if alongY, abs(point.x - rect.maxX) <= slop { return .right }
+        return nil
+    }
+
+    /// True when `point` is inside the selection but clear of every handle
+    /// band — the drag-to-move region. The inset by `handleHitSlop` is what
+    /// keeps the edge bands (handle territory) out of the move region, so
+    /// handles win even if callers check this first.
+    static func isInteriorHit(_ point: CGPoint, selection rect: CGRect) -> Bool {
+        rect.insetBy(dx: handleHitSlop, dy: handleHitSlop).contains(point)
     }
 
     // MARK: - Dimensions label
