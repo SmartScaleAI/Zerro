@@ -69,6 +69,12 @@ final class AreaSelectorWindowController {
     /// (Managed/Trial) and BYOK key-gating; nil (tests) renders plain
     /// model names.
     ///
+    /// `offerToolbarWalkthrough` — when true AND the walkthrough hasn't been
+    /// seen, the overlay opens with a seeded full-screen selection and the
+    /// first-run toolbar tour running (see the end of this method). The
+    /// hotkey path passes onboarding-complete here; the default false keeps
+    /// every other caller (and tests) on the pre-walkthrough behavior.
+    ///
     /// DEFERRED for Phase 7 handoff: multi-monitor coverage. Today
     /// we present a single overlay on the screen under the cursor;
     /// selections cannot span displays, and other displays remain
@@ -78,6 +84,7 @@ final class AreaSelectorWindowController {
     func present(
         preferences: PreferencesStore,
         entitlements: EntitlementStore? = nil,
+        offerToolbarWalkthrough: Bool = false,
         onConfirm: @escaping (SelectionRect, String, DevModeSelection?) -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -251,6 +258,21 @@ final class AreaSelectorWindowController {
         installEventMonitors(for: win, state: state)
         installScreenChangeObserver()
         installActivationObserver()
+
+        // First-run toolbar walkthrough (plan §6): offered only when the
+        // caller says so (the hotkey path, post-onboarding) and only until
+        // it's been seen. Seed a full-screen selection first so the toolbar
+        // is on screen for the coach-marks to anchor to — the user can drag
+        // a custom region once the tour ends. The seen flag is written on
+        // complete or Esc dismiss (finishToolbarWalkthrough), NOT here, so an
+        // interrupted first open still teaches next time.
+        if offerToolbarWalkthrough, preferences.toolbarWalkthroughSeen == false {
+            state.enterFullScreenMode(overlaySize: win.contentView?.bounds.size ?? screen.frame.size)
+            state.startToolbarWalkthrough()
+            Analytics.capture("area_toolbar_walkthrough_started")
+            Analytics.capture("area_toolbar_walkthrough_step_viewed",
+                              ["step": ToolbarWalkthroughStep.mode.analyticsName])
+        }
     }
 
     /// Phase 10: catch the case where the overlay is presented on an
@@ -511,6 +533,27 @@ final class AreaSelectorWindowController {
                 // to the panel and never re-orders other Zerro windows.
                 if !window.isKeyWindow { window.makeKey() }
 
+                // First-run walkthrough: while the tour is active it owns
+                // EVERY click. Only the callout's Back/Next act (hit-tested
+                // against the same static frames the view renders them at —
+                // the SwiftUI buttons are visual-only); any other press is
+                // inert, so no toolbar control fires and no selection drag
+                // begins under the tour. Esc (key monitor) dismisses early.
+                if let step = state.toolbarWalkthroughStep {
+                    if let rect = selectionRect {
+                        switch AreaSelectorView.walkthroughHit(
+                            at: point, for: step,
+                            forSelection: rect, in: size,
+                            fullScreen: fullScreen, devMode: devMode
+                        ) {
+                        case .next: self?.walkthroughNextTapped(state: state); return nil
+                        case .back: self?.walkthroughBackTapped(state: state); return nil
+                        case .none: break
+                        }
+                    }
+                    return nil   // all other presses inert while the tour runs
+                }
+
                 // While a dropdown/popup is open it owns clicks: the menu sits
                 // visually above the toolbar, so a press inside a control's frame
                 // must route to the menu (select the row under the cursor, or
@@ -711,7 +754,11 @@ final class AreaSelectorWindowController {
             // supersedes the full-screen selection.
             switch event.type {
             case .leftMouseDown:
-                state.beginDrag(at: point)
+                // Defensive: the walkthrough block above consumes the
+                // initiating press while the tour is active, so this is
+                // unreachable then — the guard keeps a drag from ever
+                // starting under the tour if that routing shifts.
+                if state.toolbarWalkthroughStep == nil { state.beginDrag(at: point) }
             case .leftMouseDragged:
                 // Only extend an in-flight drag. A press that began on a
                 // toolbar control (model/mic chip, dropdown row) was
@@ -734,6 +781,13 @@ final class AreaSelectorWindowController {
             }
             switch event.keyCode {
             case 53: // ESC
+                // While the walkthrough is active, ESC dismisses the TOUR —
+                // not the overlay (which stays open, live for recording) —
+                // and marks it seen so it doesn't re-offer next open.
+                if state.toolbarWalkthroughStep != nil {
+                    self?.dismissWalkthrough(state: state)
+                    return nil
+                }
                 // ESC closes an open toolbar dropdown first (mic, model, or
                 // dev-settings), so the first press dismisses the menu and only a
                 // second press cancels the whole overlay.
@@ -762,9 +816,13 @@ final class AreaSelectorWindowController {
                 state.cancel()
                 return nil
             case 49: // Space — select the whole display (one-way)
+                // Swallowed during the walkthrough — no mode change under the tour.
+                if state.toolbarWalkthroughStep != nil { return nil }
                 self?.enterFullScreen(window: window, state: state)
                 return nil
             case 36, 76: // Return, Enter (keypad)
+                // Swallowed during the walkthrough — no record under the tour.
+                if state.toolbarWalkthroughStep != nil { return nil }
                 self?.confirmCurrentSelection(window: window, state: state)
                 return nil
             default:
@@ -783,6 +841,48 @@ final class AreaSelectorWindowController {
     private func enterFullScreen(window: NSWindow, state: AreaSelectorState) {
         let size = window.contentView?.bounds.size ?? window.frame.size
         state.enterFullScreenMode(overlaySize: size)
+    }
+
+    // MARK: - Toolbar walkthrough (first-run tour)
+    //
+    // The state machine (Phase 1) owns the step cursor and the Dev Mode
+    // display borrow/restore; the controller owns exactly what the model
+    // must not (its unit-testability contract): the seen-flag write and
+    // analytics. Next/Back arrive from the mouse monitor above — the
+    // callout's SwiftUI buttons are visual-only, hit-tested against the same
+    // static frames they render at — and Esc from the key monitor.
+
+    private func walkthroughNextTapped(state: AreaSelectorState) {
+        state.advanceToolbarWalkthrough()
+        if let step = state.toolbarWalkthroughStep {
+            Analytics.capture("area_toolbar_walkthrough_step_viewed", ["step": step.analyticsName])
+        } else {
+            // Advancing past .record ("Got it") ended the tour as completed.
+            finishToolbarWalkthrough(completed: true)
+        }
+    }
+
+    private func walkthroughBackTapped(state: AreaSelectorState) {
+        state.toolbarWalkthroughBack()
+        if let step = state.toolbarWalkthroughStep {
+            Analytics.capture("area_toolbar_walkthrough_step_viewed", ["step": step.analyticsName])
+        }
+    }
+
+    /// Esc while the tour is active: end it early. The overlay stays open.
+    private func dismissWalkthrough(state: AreaSelectorState) {
+        state.endToolbarWalkthrough(completed: false)
+        finishToolbarWalkthrough(completed: false)
+    }
+
+    /// Both endings mark the walkthrough seen — completed AND Esc-dismissed
+    /// (per plan §6, a deliberate dismissal shouldn't re-run forever; only an
+    /// interrupted open, which never reaches this, re-offers next time).
+    private func finishToolbarWalkthrough(completed: Bool) {
+        preferences?.toolbarWalkthroughSeen = true
+        Analytics.capture(completed
+            ? "area_toolbar_walkthrough_completed"
+            : "area_toolbar_walkthrough_dismissed")
     }
 
     /// Builds a `SelectionRect` in global AppKit screen coordinates from

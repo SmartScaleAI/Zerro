@@ -785,6 +785,9 @@ struct ZerroApp: App {
             // Multi-model: feeds the toolbar model dropdown's credit detail
             // (Managed/Trial) and BYOK key-gating.
             entitlements: entitlements,
+            // First-run toolbar walkthrough: only offer once onboarding is
+            // complete (the controller's seen-flag check makes it one-time).
+            offerToolbarWalkthrough: onboarding.hasCompletedOnboarding,
             onConfirm: { [weak state, weak preferences] selection, modelID, devSelection in
                 guard let state else { return }
                 // From a visible result/error (done/failed) reset to idle

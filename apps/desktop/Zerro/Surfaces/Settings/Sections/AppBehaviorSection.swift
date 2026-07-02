@@ -38,6 +38,10 @@ struct AppBehaviorSection: View {
             RerunOnboardingRow()
             SettingsRowDivider()
             ResetDefaultsRow()
+            #if DEBUG
+            SettingsRowDivider()
+            ResetToolbarWalkthroughRow()
+            #endif
         }
     }
 }
@@ -163,6 +167,31 @@ private struct ResetDefaultsRow: View {
         }
     }
 }
+
+// MARK: - Reset Toolbar Walkthrough (DEBUG only)
+
+#if DEBUG
+/// Dev affordance (mirrors the OnboardingDevPanel spirit): re-arm the
+/// one-time capture-toolbar walkthrough without the full
+/// reset-for-testing.sh sweep. Flips ONLY the seen flag — onboarding stays
+/// complete and every other preference is untouched — so the next
+/// hotkey → overlay open replays the tour. Compiled out of Release.
+private struct ResetToolbarWalkthroughRow: View {
+    @Environment(PreferencesStore.self) private var preferences
+
+    var body: some View {
+        SettingsRow(
+            label: "Reset Toolbar Walkthrough",
+            description: "DEBUG only — replay the capture-toolbar tour on the next overlay open."
+        ) {
+            Button("Reset Tour") {
+                preferences.toolbarWalkthroughSeen = false
+            }
+            .buttonStyle(SettingsSecondaryButtonStyle())
+        }
+    }
+}
+#endif
 
 #Preview {
     AppBehaviorSection()
