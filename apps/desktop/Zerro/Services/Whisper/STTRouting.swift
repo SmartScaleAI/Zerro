@@ -17,10 +17,17 @@ import Foundation
 
 // MARK: - STTResolution
 
-/// The outcome of STT routing: a ready service, or the one prerequisite the
-/// caller must surface (mapped to `.modelUnavailable` / `.missingAPIKey`).
+/// The outcome of STT routing: a ready service (tagged with whether it's the
+/// ON-DEVICE local engine vs cloud, reported from what `resolve` ACTUALLY built),
+/// or the one prerequisite the caller must surface (mapped to `.modelUnavailable`
+/// / `.missingAPIKey`).
 enum STTResolution {
-    case service(any TranscriptionService)
+    /// A ready service. `isLocal` is what `resolve` built — local whisper.cpp
+    /// (`true`) vs cloud OpenAI Whisper (`false`) — so the caller reads locality
+    /// straight off the resolution instead of recomputing it. This closes the
+    /// P7-1 race where `.auto` falls back to cloud (because `buildLocal` returned
+    /// nil for a vanished file) while a recomputed `isLocal` still said `true`.
+    case service(any TranscriptionService, isLocal: Bool)
     case needsLocalModel
     case needsOpenAIKey
 }
@@ -82,15 +89,18 @@ enum STTRouting {
             return buildLocal(url)
         }
         func cloudOrNeedsKey() -> STTResolution {
-            openAIKeyPresent ? .service(buildCloud()) : .needsOpenAIKey
+            openAIKeyPresent ? .service(buildCloud(), isLocal: false) : .needsOpenAIKey
         }
 
         switch engine {
         case .auto:
-            if let local = localService() { return .service(local) }
+            // Local when the model built; otherwise cloud. Reporting locality here
+            // (not recomputed by the caller) means a vanished-file fallback to
+            // cloud is tagged `isLocal: false`, never a phantom local (P7-1).
+            if let local = localService() { return .service(local, isLocal: true) }
             return cloudOrNeedsKey()
         case .local:
-            if let local = localService() { return .service(local) }
+            if let local = localService() { return .service(local, isLocal: true) }
             return .needsLocalModel
         case .cloud:
             return cloudOrNeedsKey()

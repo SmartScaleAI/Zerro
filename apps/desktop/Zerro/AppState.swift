@@ -360,6 +360,20 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         }
     }
 
+    /// Config-type failures are fixed in SETTINGS, not by retrying or re-recording:
+    /// the failure pill routes its PRIMARY button to open Settings at this pane
+    /// instead of "Retry" / reopen-area-selector. All three are non-`isRetryable`
+    /// and land on Account & Billing, where the API-key + Transcription controls
+    /// live. `nil` for every other reason (pill behavior unchanged).
+    var settingsDeepLink: SettingsCategory? {
+        switch self {
+        case .apiKeyMissing, .localModelUnavailable, .apiAuth:
+            return .accountBilling
+        default:
+            return nil
+        }
+    }
+
     var userMessage: String {
         switch self {
         case .screenRecordingRevoked:
@@ -393,7 +407,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .noInputCaptured:
             return "Didn\u{2019}t catch anything to act on \u{2014} nothing was charged. Check your mic and record again."
         case .apiKeyMissing:
-            return "Add your API keys in Settings \u{2014} a chat key to generate, plus the on-device model or an OpenAI key to transcribe."
+            return "Zerro needs a chat model key, plus the on-device model or an OpenAI key to transcribe. Add them in Settings."
         case .apiAuth:
             return "Your API key was rejected \u{2014} check it in Settings."
         case .localModelUnavailable:
@@ -496,7 +510,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .noInputCaptured:
             return "This recording didn\u{2019}t include anything to act on \u{2014} no narration and no clicks \u{2014} so nothing was sent and nothing was charged. Check that your microphone is on, then record again, narrating the change you want."
         case .apiKeyMissing:
-            return "Generating a prompt needs a chat API key (OpenAI, Anthropic, or Gemini), and transcription needs either the on-device model or an OpenAI key. Add what\u{2019}s missing under Settings \u{2014} download the on-device model under Transcription, or add an OpenAI key \u{2014} then start a new recording."
+            return "To use your own API keys, Zerro needs a chat model key (OpenAI, Anthropic, or Gemini) and a way to transcribe your audio: either the on-device model or an OpenAI key. Add what\u{2019}s missing under Settings (download the on-device model under Transcription, or add an OpenAI key), then start a new recording."
         case .apiAuth:
             return "Your API key was rejected. Check it under Settings \u{2014} it may be expired, revoked, or missing the right access \u{2014} then try again."
         case .localModelUnavailable:
@@ -947,12 +961,12 @@ final class AppState {
     /// `resolveTranscriptionService` is nil). Pure `STTRouting` over cheap reads:
     /// the persisted `sttEngine`, the hash-free local-model signal
     /// (`LocalModelManager.installedModelURL` — NEVER `isModelReady`, which
-    /// re-hashes ~547 MB), and OpenAI-key presence. Reports `isLocal` for cost
-    /// logging (P3-1): a successful resolution runs on-device iff a model is
-    /// installed AND the engine isn't cloud-forced — the same two inputs
-    /// `STTRouting` routes on, so this can't disagree with the service it built.
-    /// Throws `.modelUnavailable` / `.missingAPIKey` when a prerequisite is
-    /// missing, which the transcription `catch` maps onto the existing failure pill.
+    /// re-hashes ~547 MB), and OpenAI-key presence. `isLocal` (for the $0-local
+    /// cost log) is taken STRAIGHT from what `STTRouting.resolve` built — never
+    /// recomputed — so a vanished-model `.auto` fallback to cloud can't be logged
+    /// as local (P7-1). Throws `.modelUnavailable` / `.missingAPIKey` when a
+    /// prerequisite is missing, which the transcription `catch` maps onto the
+    /// existing failure pill.
     private func defaultResolveTranscriptionService() throws -> ResolvedTranscription {
         let engine = self.preferences?.sttEngine ?? .auto
         let localModelURL = LocalModelManager.installedModelURL()
@@ -963,10 +977,7 @@ final class AppState {
             openAIKeyPresent: openAIKeyPresent,
             localModelURL: localModelURL
         ) {
-        case .service(let service):
-            // On-device iff a model is installed and the engine isn't cloud-forced
-            // (mirrors STTRouting's local-vs-cloud branch for a `.service` result).
-            let isLocal = localModelURL != nil && engine != .cloud
+        case .service(let service, let isLocal):
             return ResolvedTranscription(service: service, isLocal: isLocal)
         case .needsLocalModel:
             throw TranscriptionError.modelUnavailable
@@ -4034,6 +4045,20 @@ final class AppState {
     func openOutOfCreditsTopUp() {
         entitlements?.paywallTrigger = .outOfCredits
         AppDelegate.openPaywall()
+        dismissFailure()
+    }
+
+    /// The config-failure pill's "Open Settings" primary (reasons whose
+    /// `settingsDeepLink` is non-nil: `.apiKeyMissing` / `.localModelUnavailable` /
+    /// `.apiAuth`). Preselects the target pane, activates the app, opens the
+    /// Settings window, then dismisses the failure pill. Mirrors
+    /// `openOutOfCreditsTopUp` (open a window + dismiss); the window open itself
+    /// runs through `AppDelegate.openSettings()` because AppState has no SwiftUI
+    /// `openWindow` environment. `SettingsView.onAppear` consumes
+    /// `pendingSettingsCategory` to land on the pane.
+    func openSettings(to category: SettingsCategory) {
+        AppDelegate.pendingSettingsCategory = category
+        AppDelegate.openSettings()
         dismissFailure()
     }
 

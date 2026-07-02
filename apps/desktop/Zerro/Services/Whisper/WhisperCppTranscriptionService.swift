@@ -176,34 +176,52 @@ struct WhisperCppTranscriptionService: TranscriptionService {
                 throw WhisperEngineError.converterUnavailable
             }
 
-            // Size the output for the full resampled length plus generous slack
-            // so the whole file converts in a single pass.
+            // Drain the converter FULLY: feed the whole input buffer once, then
+            // signal end-of-stream, pulling output in fixed CHUNKS until the
+            // converter reports it's done. A single-pass convert into one big
+            // buffer can leave a long recording partially resampled; looping until
+            // end-of-stream accumulates every frame (P1-3). Reserve the expected
+            // resampled length up front to avoid reallocations.
             let ratio = targetFormat.sampleRate / inputFormat.sampleRate
-            let capacity = AVAudioFrameCount((Double(totalFrames) * ratio).rounded(.up)) + 16_384
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
-                throw WhisperEngineError.audioFormatUnavailable
-            }
+            let expectedFrames = Int((Double(totalFrames) * ratio).rounded(.up))
+            var samples: [Float] = []
+            samples.reserveCapacity(expectedFrames + 16)
 
+            let chunkFrames: AVAudioFrameCount = 16_384
             var providedInput = false
-            var conversionError: NSError?
-            let status = converter.convert(to: outputBuffer, error: &conversionError) { _, inStatus in
-                if providedInput {
-                    inStatus.pointee = .endOfStream
-                    return nil
+            drain: while true {
+                guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: chunkFrames) else {
+                    throw WhisperEngineError.audioFormatUnavailable
                 }
-                providedInput = true
-                inStatus.pointee = .haveData
-                return inputBuffer
-            }
-            if status == .error {
-                throw conversionError ?? WhisperEngineError.conversionFailed
+                var conversionError: NSError?
+                let status = converter.convert(to: outputBuffer, error: &conversionError) { _, inStatus in
+                    if providedInput {
+                        inStatus.pointee = .endOfStream
+                        return nil
+                    }
+                    providedInput = true
+                    inStatus.pointee = .haveData
+                    return inputBuffer
+                }
+                if let channel = outputBuffer.floatChannelData, outputBuffer.frameLength > 0 {
+                    samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: Int(outputBuffer.frameLength)))
+                }
+                switch status {
+                case .haveData:
+                    // More output may remain — pull again. A zero-frame `.haveData`
+                    // means no progress, so stop rather than spin.
+                    if outputBuffer.frameLength == 0 { break drain }
+                case .endOfStream, .inputRanDry:
+                    break drain              // all input consumed + output flushed
+                case .error:
+                    throw conversionError ?? WhisperEngineError.conversionFailed
+                @unknown default:
+                    break drain
+                }
             }
 
-            let count = Int(outputBuffer.frameLength)
-            guard count > 0, let channel = outputBuffer.floatChannelData else {
-                return ([], duration)
-            }
-            return (Array(UnsafeBufferPointer(start: channel[0], count: count)), duration)
+            guard !samples.isEmpty else { return ([], duration) }
+            return (samples, duration)
         } catch let error as TranscriptionError {
             throw error
         } catch {
@@ -335,6 +353,21 @@ struct WhisperCppTranscriptionService: TranscriptionService {
         let isSpecial: Bool
     }
 
+    /// Selects a token's timestamp: the DTW-aligned time when present, else
+    /// whisper's heuristic `t0`/`t1` span. whisper.cpp leaves `t_dtw == -1` for a
+    /// token whose DTW time wasn't computed; `0` is a LEGITIMATE time (a word at
+    /// audio start), so "DTW present" is `>= 0`, not `> 0` — otherwise the very
+    /// first word of a recording would silently drop to heuristic timing (P1-2).
+    /// DTW is only ever populated when `wordTimestamps` is on (the only path that
+    /// calls `rawTokens`). Centiseconds in, seconds out; `end` is clamped ≥ `start`.
+    /// Pure, so the DTW-vs-heuristic choice is engine-free testable.
+    nonisolated static func tokenTimes(tDTW: Int64, t0: Int64, t1: Int64) -> (start: TimeInterval, end: TimeInterval) {
+        let hasDTW = tDTW >= 0
+        let start = centisecondsToSeconds(hasDTW ? tDTW : t0)
+        let end = centisecondsToSeconds(hasDTW ? tDTW : t1)
+        return (start, Swift.max(end, start))
+    }
+
     /// Lifts a segment's tokens out of the C context into `[RawToken]`.
     nonisolated static func rawTokens(ctx: OpaquePointer, segment: Int32) -> [RawToken] {
         let endOfTranscript = whisper_token_eot(ctx)
@@ -345,15 +378,11 @@ struct WhisperCppTranscriptionService: TranscriptionService {
             let id = whisper_full_get_token_id(ctx, segment, t)
             let data = whisper_full_get_token_data(ctx, segment, t)
             let text = whisper_full_get_token_text(ctx, segment, t).map { String(cString: $0) } ?? ""
-            // Prefer the DTW-aligned timestamp when present (> 0); otherwise fall
-            // back to whisper's heuristic token span.
-            let hasDTW = data.t_dtw > 0
-            let start = centisecondsToSeconds(hasDTW ? data.t_dtw : data.t0)
-            let end = centisecondsToSeconds(hasDTW ? data.t_dtw : data.t1)
+            let times = tokenTimes(tDTW: data.t_dtw, t0: data.t0, t1: data.t1)
             tokens.append(RawToken(
                 text: text,
-                start: start,
-                end: Swift.max(end, start),
+                start: times.start,
+                end: times.end,
                 isSpecial: id >= endOfTranscript
             ))
         }

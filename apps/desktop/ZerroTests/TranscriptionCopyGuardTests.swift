@@ -64,4 +64,19 @@ final class TranscriptionCopyGuardTests: XCTestCase {
         XCTAssertTrue(detail.contains("openai"))
         XCTAssertFalse(detail.contains("required"), "the on-device option must not be framed as requiring OpenAI")
     }
+
+    /// UX-B copy revision: the rewritten `.apiKeyMissing` strings drop the em-dash
+    /// style and the "Generating a prompt" lead, while keeping the curly-apostrophe
+    /// unicode-escape style.
+    func testApiKeyMissingCopyRevisionStyle() {
+        let detail = RecordingFailureReason.apiKeyMissing.detail
+        XCTAssertFalse(detail.contains("\u{2014}"), "revised detail uses NO em-dashes")
+        XCTAssertFalse(detail.hasPrefix("Generating a prompt"), "revised detail no longer opens with the old lead")
+        XCTAssertTrue(detail.hasPrefix("To use your own API keys"), "revised detail opens with the new lead")
+        XCTAssertTrue(detail.contains("what\u{2019}s"), "keeps the curly-apostrophe unicode-escape style")
+
+        let message = RecordingFailureReason.apiKeyMissing.userMessage
+        XCTAssertFalse(message.contains("\u{2014}"), "revised userMessage uses NO em-dashes")
+        XCTAssertTrue(message.hasPrefix("Zerro needs a chat model key"), "revised userMessage opens with the new lead")
+    }
 }

@@ -113,6 +113,73 @@ final class WhisperCppTranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(WhisperCppTranscriptionService.assembleFullText(fromSegmentTexts: [" ", "\n"]), "")
     }
 
+    // MARK: - DTW token timing (P1-2)
+
+    /// `t_dtw == 0` is a REAL DTW time (a word at audio start), NOT the
+    /// "-1 = not computed" sentinel — it must be kept, not dropped to the
+    /// heuristic `t0`/`t1`. This is the P1-2 fix (`>= 0`, was `> 0`).
+    func testTokenTimesKeepsDTWTimeAtAudioStart() {
+        let times = WhisperCppTranscriptionService.tokenTimes(tDTW: 0, t0: 5, t1: 12)
+        XCTAssertEqual(times.start, 0.0, accuracy: 1e-9, "a t=0 DTW time is kept, not dropped to heuristic")
+        XCTAssertEqual(times.end, 0.0, accuracy: 1e-9)
+    }
+
+    /// `t_dtw == -1` (DTW not computed for this token) → heuristic `t0`/`t1`.
+    func testTokenTimesUsesHeuristicWhenDTWNotComputed() {
+        let times = WhisperCppTranscriptionService.tokenTimes(tDTW: -1, t0: 5, t1: 12)
+        XCTAssertEqual(times.start, 0.05, accuracy: 1e-9)
+        XCTAssertEqual(times.end, 0.12, accuracy: 1e-9)
+    }
+
+    /// A positive DTW time collapses start/end to the single aligned moment.
+    func testTokenTimesUsesPositiveDTW() {
+        let times = WhisperCppTranscriptionService.tokenTimes(tDTW: 30, t0: 5, t1: 99)
+        XCTAssertEqual(times.start, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(times.end, 0.30, accuracy: 1e-9)
+    }
+
+    /// `end` is never allowed to precede `start` (heuristic with reversed t0/t1).
+    func testTokenTimesClampsEndAtLeastStart() {
+        let times = WhisperCppTranscriptionService.tokenTimes(tDTW: -1, t0: 20, t1: 10)
+        XCTAssertGreaterThanOrEqual(times.end, times.start)
+    }
+
+    /// A first word at audio start (start == 0) survives aggregation with its
+    /// 0.0 start intact — the downstream effect of keeping the t=0 DTW time.
+    func testAggregateWordsPreservesZeroStartFirstWord() {
+        let tokens: [WhisperCppTranscriptionService.RawToken] = [
+            .init(text: " Hello", start: 0.0, end: 0.20, isSpecial: false),
+            .init(text: " world", start: 0.20, end: 0.45, isSpecial: false),
+        ]
+        let words = WhisperCppTranscriptionService.aggregateWords(from: tokens)
+        XCTAssertEqual(words.first?.word, "Hello")
+        XCTAssertEqual(words.first?.start ?? -1, 0.0, accuracy: 1e-9, "the first word keeps its t=0 start")
+    }
+
+    // MARK: - Full-drain audio decode (P1-3)
+
+    /// A multi-second recording resamples to ~(16 kHz × duration) samples. The
+    /// decoder pulls output in 16 384-frame chunks, so a 3 s clip needs several
+    /// drain iterations; a single-pass convert would truncate to ~one chunk. This
+    /// runs WITHOUT the engine or a model — just AVFoundation resampling.
+    func testDecodeFullyDrainsMultiSecondBuffer() throws {
+        let sourceRate = 44_100.0
+        let seconds = 3.0
+        let url = try Self.writeSyntheticSine(seconds: seconds, sampleRate: sourceRate)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let decoded = try WhisperCppTranscriptionService.decodeToPCM16kMono(url)
+
+        let expected = Int(WhisperCppTranscriptionService.whisperSampleRate * seconds)   // 48_000
+        let tolerance = Int(Double(expected) * 0.02)                                     // 2% tail slack
+        XCTAssertLessThanOrEqual(
+            abs(decoded.samples.count - expected), tolerance,
+            "resampled \(decoded.samples.count) samples; expected ~\(expected) (16kHz × \(seconds)s). "
+            + "A non-draining single-pass would truncate to ~16384."
+        )
+        XCTAssertEqual(decoded.duration, seconds, accuracy: 0.05, "measured duration ≈ source duration")
+    }
+
     // MARK: - init(modelURL:)
 
     /// A missing model file fails fast with `.modelUnavailable` (the case added
@@ -213,6 +280,44 @@ final class WhisperCppTranscriptionServiceTests: XCTestCase {
         let lowered = text.lowercased()
         let kept = lowered.map { ($0.isLetter || $0.isNumber || $0 == " ") ? $0 : " " }
         return String(kept).split(separator: " ").joined(separator: " ")
+    }
+
+    /// Writes a synthetic mono 440 Hz sine to a temp `.caf` at `sampleRate` for
+    /// `seconds` — the input for the engine-free decode/resample test (P1-3).
+    private static func writeSyntheticSine(seconds: Double, sampleRate: Double) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisper-decode-\(UUID().uuidString).caf")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: true,
+        ]
+        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let format = file.processingFormat
+        let total = AVAudioFrameCount((seconds * sampleRate).rounded())
+        let chunk: AVAudioFrameCount = 8_192
+        var written: AVAudioFrameCount = 0
+        var phase = 0.0
+        let step = 2.0 * Double.pi * 440.0 / sampleRate
+        while written < total {
+            let n = min(chunk, total - written)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: n) else {
+                throw NSError(domain: "WhisperCppTranscriptionServiceTests", code: 1)
+            }
+            buffer.frameLength = n
+            if let channel = buffer.floatChannelData {
+                for i in 0..<Int(n) {
+                    channel[0][i] = Float(sin(phase))
+                    phase += step
+                }
+            }
+            try file.write(from: buffer)
+            written += n
+        }
+        return url
     }
 
     /// The committed spoken fixture, looked up from the test bundle (synchronized

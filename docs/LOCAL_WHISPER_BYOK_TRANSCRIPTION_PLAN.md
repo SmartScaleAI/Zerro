@@ -147,46 +147,56 @@ Implement them in order — later phases depend on earlier ones.
 Production model constants recorded: `ggml-large-v3-turbo-q5_0`, ~547 MB, DTW preset
 `WHISPER_AHEADS_LARGE_V3_TURBO`.
 
-## Phase 2 — `LocalModelManager` (download, storage, verification, state)
+## Phase 2 — `LocalModelManager` (download, storage, verification, state) ✅ COMPLETE
 On-demand download of the production model to `~/Library/Application Support/Zerro/models/`
 with progress, SHA-256 verification, atomic install, cancel, disk-space pre-check, and
 `@MainActor @Observable` state. Add `PreferencesStore` fields: `sttEngine` (default `auto`),
 `localModelVersion`, `localModelDownloadedAt`. Not yet triggered by UI. Tests use a small
 file:// fixture URL.
 
-## Phase 3 — STT routing seam + rewire the local pipeline
+## Phase 3 — STT routing seam + rewire the local pipeline ✅ COMPLETE
 Add a pure `STTRouting.service(sttEngine:modelReady:openAIKeyPresent:modelURL:)` mirroring
 `BYOKRouting`. Rewire `AppState.swift:2814` to the routed service; `nil` → throw the right
 `TranscriptionError`. Branch `logCost` so local STT logs `$0`. With model absent + OpenAI
 key present, behavior is byte-identical to today. Truth-table tests.
 
-## Phase 4 — Decouple trial/preflight routing from the OpenAI key
+## Phase 4 — Decouple trial/preflight routing from the OpenAI key ✅ COMPLETE
 Replace OpenAI-only `hasOwnAPIKeyProvider` with `canGenerateLocally` =
 `!ProviderKeys.availableProviders().isEmpty && (localModelReady || openAIKeyPresent)`.
 Update both readers + `EntitlementStore.generationRoute`/`preflightBlock`. **Highest-risk
 phase** — full byok/trial/managed × {claude-only, gemini-only, openai-only, none} ×
 {modelReady} matrix tests.
 
-## Phase 5 — First-key consent prompt + Settings model status UI
+## Phase 5 — First-key consent prompt + Settings model status UI ✅ COMPLETE
 In `APIKeyFieldModel.run(...)` `.valid` branch, capture `isFirstKey =
 ProviderKeys.availableProviders().isEmpty` before write; if first key & not previously
 prompted & model not ready, show an `NSAlert` consent (Download / Later) and kick off the
 Phase 2 download. Add `localModelPromptShown` flag, a Settings model-status row (progress /
 ready / re-download), and the `sttEngine` control. Managed users never prompted. Analytics.
 
-## Phase 6 — Recording-time UX: mid-download wait + local-STT failure handling
+## Phase 6 — Recording-time UX: mid-download wait + local-STT failure handling ✅ COMPLETE
 If a recording starts before the model is ready, show "Finishing local transcription
 setup… (X MB / Y MB)" (reuse `.processing` label or a new `PillState`), proceed when ready.
 Add `RecordingFailureReason.localModelUnavailable` with actionable copy (download model, or
 switch to cloud STT if an OpenAI key exists). Replaces the Phase-1 `.processingFailed`
 placeholder mapping.
 
-## Phase 7 — Copy, cost notes, and "OpenAI optional" cleanup
+## Phase 7 — Copy, cost notes, and "OpenAI optional" cleanup ✅ COMPLETE
 Update AppState copy (381/481), APIAuthSection OpenAI row (34) to "optional," KeychainStore
 comment (193), BYOKRouting/BYOKCostEstimator notes. Grep guard: no string says OpenAI is
 required for transcription.
 
-## Phase 8 — Quality + Dev Mode validation, performance, sign-off
+## Phase 8 — Quality + Dev Mode validation, performance, sign-off ⏳ Part A DONE
+**Part A (code + harness) DONE:** the deferred punchlist fixes P1-2, P1-3, P2-2, P7-1 landed
+with tests (all green), and a repeatable local-vs-cloud comparison harness + a Dev-Mode
+DTW-timing check ship as gated XCTest cases
+(`apps/desktop/ZerroTests/TranscriptionEvalHarness.swift`, run per
+`apps/desktop/Scripts/README-transcription-eval.md`), writing JSON + scorecards to
+`eval-results/transcription/`. **Pending (human, the sign-off below):** run the harness on
+representative recordings to lock the model choice, confirm Dev-Mode deixis survives DTW
+drift, and record latency numbers. (The ~547 MB model was not present in the build env, so
+the numbers themselves are the human's to produce.)
+
 Compare local `large-v3-turbo q5_0` vs cloud `whisper-1` (WER/qualitative) on representative
 recordings; lock the model choice. Verify Dev Mode deixis resolves with DTW timestamps
 despite 100–400 ms drift (else gate Dev Mode to cloud). Measure latency on Apple Silicon
@@ -196,7 +206,7 @@ leaves device). Commit eval numbers.
 ---
 
 ## Suggested handoff order
-1 ✅ → 2 → 3 → 4 → 5 → 6 → 7 → 8. Phases 1–2 parallelizable. Phase 4 highest-risk.
+1 ✅ → 2 ✅ → 3 ✅ → 4 ✅ → 5 ✅ → 6 ✅ → 7 ✅ → 8 (Part A ✅; sign-off pending). Phases 1–2 parallelizable. Phase 4 highest-risk.
 1, 3, 4 are load-bearing correctness; 5–6 UX; 7 cleanup; 8 validation.
 
 ---

@@ -43,10 +43,12 @@ final class STTRoutingTests: XCTestCase {
     private func assert(_ resolution: STTResolution, is expected: Expected,
                         _ message: String, file: StaticString = #filePath, line: UInt = #line) {
         switch (resolution, expected) {
-        case (.service(let s), .local):
+        case (.service(let s, let isLocal), .local):
             XCTAssertTrue(s is FakeLocalService, "\(message): expected LOCAL service", file: file, line: line)
-        case (.service(let s), .cloud):
+            XCTAssertTrue(isLocal, "\(message): a LOCAL resolution must report isLocal == true", file: file, line: line)
+        case (.service(let s, let isLocal), .cloud):
             XCTAssertTrue(s is FakeCloudService, "\(message): expected CLOUD service", file: file, line: line)
+            XCTAssertFalse(isLocal, "\(message): a CLOUD resolution must report isLocal == false", file: file, line: line)
         case (.needsLocalModel, .needsLocalModel), (.needsOpenAIKey, .needsOpenAIKey):
             break
         default:
@@ -151,8 +153,46 @@ final class STTRoutingTests: XCTestCase {
         let resolution = STTRouting.resolve(
             engine: .cloud, modelInstalled: false, openAIKeyPresent: true, localModelURL: nil
         )
-        guard case .service(let s) = resolution else { return XCTFail("expected a service") }
+        guard case .service(let s, let isLocal) = resolution else { return XCTFail("expected a service") }
         XCTAssertTrue(s is OpenAITranscriptionService)
+        XCTAssertFalse(isLocal, "the real cloud service is not local")
+    }
+
+    // MARK: - P7-1: locality reported from the built service (no recompute)
+
+    /// The P7-1 race: `.auto` with a model "installed" but whose `buildLocal`
+    /// returns nil (file vanished between the cheap size-check and construction)
+    /// falls back to CLOUD — and MUST report `isLocal == false`, not a phantom
+    /// `true` a `modelInstalled && engine != .cloud` recompute would give.
+    func testAutoFallsBackToCloudAndReportsNotLocalWhenBuildLocalReturnsNil() {
+        let resolution = STTRouting.resolve(
+            engine: .auto,
+            modelInstalled: true,                 // the cheap size-check passed…
+            openAIKeyPresent: true,
+            localModelURL: URL(fileURLWithPath: "/tmp/model.bin"),
+            makeLocalService: { _ in nil },       // …but construction fails (vanished)
+            makeCloudService: { FakeCloudService() }
+        )
+        guard case .service(let s, let isLocal) = resolution else {
+            return XCTFail("expected a cloud service fallback, got \(resolution)")
+        }
+        XCTAssertTrue(s is FakeCloudService, "fell back to the cloud service")
+        XCTAssertFalse(isLocal, "a cloud fallback must report isLocal == false (P7-1)")
+    }
+
+    /// `.local` with the same vanished-file fallback has no cloud path, so it
+    /// degrades to `.needsLocalModel` (no service, so no locality to report).
+    func testLocalWithVanishedFileNeedsModel() {
+        let resolution = STTRouting.resolve(
+            engine: .local,
+            modelInstalled: true,
+            openAIKeyPresent: true,
+            localModelURL: URL(fileURLWithPath: "/tmp/model.bin"),
+            makeLocalService: { _ in nil }
+        )
+        guard case .needsLocalModel = resolution else {
+            return XCTFail("expected .needsLocalModel, got \(resolution)")
+        }
     }
 
     /// With no injected factory, `.local` + a path to a NON-existent file → the

@@ -291,15 +291,26 @@ final class LocalModelManager {
         Task { [weak self] in
             let outcome = await Self.verifyAndInstall(staged: staged, into: dest, directory: dir, spec: spec)
             guard let self else { return }
-            switch outcome {
-            case .success:
-                self.preferences.localModelVersion = spec.id
+            // P2-2: a cancel() that raced the install — arriving after the download
+            // finished but before verify/install completed — must WIN. cancel()
+            // can't interrupt the already-finished download, so re-check it HERE
+            // before the terminal transition rather than resolving to `.ready`.
+            switch Self.stateAfterInstall(outcome: outcome, isCancelling: self.isCancelling, version: spec.id) {
+            case .ready(let version):
+                self.preferences.localModelVersion = version
                 self.preferences.localModelDownloadedAt = Date()
-                self.setState(.ready(version: spec.id))
-            case .integrityFailed:
-                self.setState(.failed(reason: "The downloaded model failed verification."))
-            case .installFailed:
-                self.setState(.failed(reason: "The model couldn't be installed."))
+                self.setState(.ready(version: version))
+            case .notDownloaded:
+                // Cancelled during install: undo the just-installed file so no
+                // model is left behind, and don't persist the version (else the
+                // launch reconcile would resurrect it as `.ready`).
+                try? self.fileManager.removeItem(at: dest)
+                self.isCancelling = false
+                self.setState(.notDownloaded)
+            case .failed(let reason):
+                self.setState(.failed(reason: reason))
+            case .downloading:
+                break   // unreachable: stateAfterInstall never returns .downloading
             }
             self.cleanupSession()
         }
@@ -324,10 +335,28 @@ final class LocalModelManager {
 
     // MARK: - Verify + install (off the main actor)
 
-    private enum InstallOutcome: Sendable {
+    /// The result of `verifyAndInstall`. Internal (not private) so the pure
+    /// `stateAfterInstall` race decision (P2-2) is unit-testable.
+    enum InstallOutcome: Sendable {
         case success
         case integrityFailed
         case installFailed
+    }
+
+    /// The state to resolve to once `verifyAndInstall` completes. P2-2: a
+    /// `cancel()` that raced the install (arrived after `didFinishDownloadingTo`
+    /// but before this) WINS — even a successful install resolves to
+    /// `.notDownloaded` (the caller additionally removes the just-installed file
+    /// and skips the version write) rather than `.ready`, so a user who cancelled
+    /// never ends up with a silently-installed model. Pure, so the race decision
+    /// is unit-testable without any real timing.
+    static func stateAfterInstall(outcome: InstallOutcome, isCancelling: Bool, version: String) -> State {
+        if isCancelling { return .notDownloaded }
+        switch outcome {
+        case .success:         return .ready(version: version)
+        case .integrityFailed: return .failed(reason: "The downloaded model failed verification.")
+        case .installFailed:   return .failed(reason: "The model couldn't be installed.")
+        }
     }
 
     private static func verifyAndInstall(

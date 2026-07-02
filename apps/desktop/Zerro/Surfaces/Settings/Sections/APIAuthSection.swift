@@ -32,6 +32,9 @@ struct APIAuthSection: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(LocalModelManager.self) private var modelManager
     @Environment(EntitlementStore.self) private var entitlements
+    // UX-C: refreshed on every key write/delete so the Transcription engine
+    // picker (which reads it) re-renders when an OpenAI key is added/removed.
+    @Environment(ProviderKeyPresence.self) private var keyPresence
 
     @State private var openAIModel = APIKeyFieldModel(provider: .openai)
     @State private var geminiModel = APIKeyFieldModel(provider: .gemini)
@@ -77,6 +80,12 @@ struct APIAuthSection: View {
         openAIModel.onKeyVerified = handler
         geminiModel.onKeyVerified = handler
         anthropicModel.onKeyVerified = handler
+        // UX-C: any key add/remove refreshes the shared presence signal, so the
+        // Transcription picker's "OpenAI cloud" option enables/disables live.
+        let refresh: () -> Void = { [keyPresence] in keyPresence.refresh() }
+        openAIModel.onKeyStoreChanged = refresh
+        geminiModel.onKeyStoreChanged = refresh
+        anthropicModel.onKeyStoreChanged = refresh
     }
 
     /// Decide whether to present the one-time consent prompt and, if so, show it.
@@ -154,6 +163,12 @@ final class APIKeyFieldModel {
     /// write). `APIAuthSection` uses it to gate the one-time on-device-model consent
     /// prompt; this model stays focused on Keychain/validation.
     @ObservationIgnored var onKeyVerified: ((Bool) -> Void)?
+    /// UX-C — fired after ANY change to this provider's Keychain slot (a validated
+    /// write, an inconclusive write-through, or a blank-field delete). `APIAuthSection`
+    /// wires it to `ProviderKeyPresence.refresh()` so the Settings Transcription
+    /// picker re-renders when a key is added/removed. Distinct from `onKeyVerified`
+    /// (which fires only on a first-key `.valid` write, for the consent prompt).
+    @ObservationIgnored var onKeyStoreChanged: (() -> Void)?
     /// Whether NO provider key exists yet — the "is this the first key" signal,
     /// read BEFORE the write. Injectable (alongside `keychain`) so the first-key
     /// behavior is testable without reading the user's real Keychain slots.
@@ -201,14 +216,7 @@ final class APIKeyFieldModel {
     func saveAndValidate() {
         let trimmed = trimmedKey
         if trimmed.isEmpty {
-            // Tier 3 analytics: a present→empty transition is a key removal.
-            // Presence only — the key value is never included.
-            let hadKey = !(keychain.read()?.isEmpty ?? true)
-            keychain.delete()
-            state = .unverified
-            if hadKey {
-                Analytics.capture("byok_key_removed", ["provider": provider.rawValue])
-            }
+            removeKey()
             return
         }
         // Skip the round-trip if nothing actually changed.
@@ -218,17 +226,35 @@ final class APIKeyFieldModel {
         run(validating: trimmed, writeOnValid: true, writeOnInconclusive: true)
     }
 
-    /// Triggered by the Revalidate button — runs validation against the
-    /// stored key without re-typing. If the user has typed something
-    /// new without blurring yet, we still validate THAT (it matches
-    /// their stated intent), but we don't write through on
-    /// inconclusive: the field hasn't been committed yet.
+    /// Commits a key REMOVAL — the shared "empty field means remove" path, used by
+    /// `saveAndValidate()` on blur/return AND by `revalidate()` on an emptied
+    /// field. Deletes the Keychain entry, drops to `.unverified`, fires
+    /// `byok_key_removed` only on a genuine present→absent transition (presence
+    /// only — the key value is never sent), and refreshes the shared
+    /// `ProviderKeyPresence` via `onKeyStoreChanged`. It NEVER resurrects the
+    /// stored key.
+    private func removeKey() {
+        let hadKey = !(keychain.read()?.isEmpty ?? true)
+        keychain.delete()
+        state = .unverified
+        if hadKey {
+            Analytics.capture("byok_key_removed", ["provider": provider.rawValue])
+        }
+        // UX-C: presence changed (a key was removed) — refresh the observable.
+        onKeyStoreChanged?()
+    }
+
+    /// Triggered by the Revalidate button. An EMPTY field commits a REMOVE
+    /// (consistent with `saveAndValidate` — the user cleared it but hasn't blurred
+    /// yet), never a validation of the still-stored key: falling back to the stored
+    /// key here is what flipped a just-cleared field to "Verified" (the bug). A
+    /// non-empty field validates exactly what's typed (matching the user's stated
+    /// intent), without writing through on inconclusive since the field hasn't been
+    /// committed yet.
     func revalidate() {
-        let candidate = trimmedKey.isEmpty
-            ? (keychain.read() ?? "")
-            : trimmedKey
+        let candidate = trimmedKey
         guard !candidate.isEmpty else {
-            state = .unverified
+            removeKey()
             return
         }
         run(validating: candidate, writeOnValid: true, writeOnInconclusive: false)
@@ -243,6 +269,8 @@ final class APIKeyFieldModel {
         if !hadKey {
             Analytics.capture("byok_key_added", ["provider": provider.rawValue])
         }
+        // UX-C: presence may have changed (a key was added) — refresh the observable.
+        onKeyStoreChanged?()
     }
 
     private func run(validating candidate: String, writeOnValid: Bool, writeOnInconclusive: Bool) {
@@ -378,6 +406,7 @@ private struct RevalidateRow: View {
         .environment(prefs)
         .environment(LocalModelManager(preferences: prefs))
         .environment(EntitlementStore(licenseService: .inMemory()))
+        .environment(ProviderKeyPresence())
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

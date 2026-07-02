@@ -377,6 +377,7 @@ private struct BackChevron: View {
     return SettingsView()
         .environment(PreferencesStore())
         .environment(LocalModelManager(preferences: PreferencesStore()))
+        .environment(ProviderKeyPresence())
         .environment(PermissionsManager())
         .environment(OnboardingState())
         .environment(LaunchAtLoginController())

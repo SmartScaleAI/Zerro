@@ -260,6 +260,49 @@ final class LocalModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .notDownloaded)
     }
 
+    // MARK: - Cancel-during-install race (P2-2)
+
+    /// A `cancel()` that races a verify+install — arriving after the download
+    /// finished but before install completes — must WIN: even a SUCCESSFUL install
+    /// resolves to `.notDownloaded`, never `.ready`, so a user who cancelled isn't
+    /// left with a silently-installed model. (`handleFinished` additionally removes
+    /// the installed file and skips the version write on this path.)
+    func testStateAfterInstallCancelBeatsSuccessfulInstall() {
+        XCTAssertEqual(
+            LocalModelManager.stateAfterInstall(outcome: .success, isCancelling: true, version: "v1"),
+            .notDownloaded,
+            "a cancel racing a successful install resolves to .notDownloaded, not .ready"
+        )
+    }
+
+    /// Without a cancel, a successful install resolves to `.ready` as before.
+    func testStateAfterInstallSuccessWithoutCancelIsReady() {
+        XCTAssertEqual(
+            LocalModelManager.stateAfterInstall(outcome: .success, isCancelling: false, version: "v1"),
+            .ready(version: "v1")
+        )
+    }
+
+    /// A cancel also suppresses a FAILURE resolution — the user asked to stop.
+    func testStateAfterInstallCancelBeatsFailure() {
+        XCTAssertEqual(
+            LocalModelManager.stateAfterInstall(outcome: .integrityFailed, isCancelling: true, version: "v1"),
+            .notDownloaded
+        )
+    }
+
+    /// Without a cancel, install failures surface their reasons unchanged.
+    func testStateAfterInstallFailuresWithoutCancel() {
+        XCTAssertEqual(
+            LocalModelManager.stateAfterInstall(outcome: .integrityFailed, isCancelling: false, version: "v1"),
+            .failed(reason: "The downloaded model failed verification.")
+        )
+        XCTAssertEqual(
+            LocalModelManager.stateAfterInstall(outcome: .installFailed, isCancelling: false, version: "v1"),
+            .failed(reason: "The model couldn't be installed.")
+        )
+    }
+
     // MARK: - Helpers
 
     private func runToTerminal(_ manager: LocalModelManager, timeout: TimeInterval = 30) async throws {
