@@ -61,6 +61,32 @@ final class AreaSelectorState {
 
     // MARK: - Drag state
 
+    /// Which part of an existing selection a press grabbed. Drives both the
+    /// resize math and the hover cursor. Corners move two edges; edge
+    /// midpoints move one.
+    enum Handle: Equatable, Sendable {
+        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+    }
+
+    /// What the in-flight left-drag is doing. `.none` between gestures — the
+    /// controller's dragged/up routing keys off this, so a press that was
+    /// consumed by a toolbar control (neither `beginDrag` nor `beginEdit`
+    /// ran) can never resize or move the settled selection.
+    enum DragInteraction: Equatable {
+        case none
+        case creating                 // drawing a new rect (the original behavior)
+        case resizing(Handle)         // dragging a handle of a settled rect
+        case moving                   // dragging the interior of a settled rect
+    }
+
+    private(set) var interaction: DragInteraction = .none
+
+    /// Anchor captured at grab time so a move is computed as a delta from the
+    /// gesture start rather than the absolute cursor position (prevents the
+    /// rect "jumping" so its origin snaps under the cursor on first move).
+    private var dragAnchorRect: CGRect?      // selection rect at mouseDown
+    private var dragAnchorPoint: CGPoint?    // cursor location at mouseDown
+
     /// View-local point (top-left origin) of the mouseDown that
     /// started the current selection. nil before any drag has
     /// started; persists after mouseUp so the rect remains rendered
@@ -72,9 +98,11 @@ final class AreaSelectorState {
     /// mouseUp.
     private(set) var dragCurrent: CGPoint?
 
-    /// True between mouseDown and mouseUp. Drives the 4-handle
-    /// (during-drag) vs. 8-handle (settled) visual branch — the
-    /// 8-handle settled branch arrives in Checkpoint 3.
+    /// True between mouseDown and mouseUp — for create, resize, and move
+    /// gestures alike. Drives the 4-handle (during-drag) vs. 8-handle
+    /// (settled) visual branch and nils `confirmableSelectionRect`, so the
+    /// toolbar hides while actively adjusting exactly as it does during the
+    /// initial draw.
     private(set) var isDragging: Bool = false
 
     /// The current selection in view-local, top-left coordinates,
@@ -95,14 +123,14 @@ final class AreaSelectorState {
 
     /// Minimum confirmable selection, in view-local points (per axis).
     /// Selections smaller than this are treated like a zero-size
-    /// selection — confirm is a no-op. Rationale: a sub-100pt region
+    /// selection — confirm is a no-op. Rationale: a region this small
     /// carries almost no useful visual context for the model, and after
     /// retina backing-scale and H.264's even-dimension requirement, tiny
-    /// regions risk a degenerate or zero-frame capture. 100pt sits above
-    /// any encoder floor while still allowing a "narrate one panel"
+    /// regions risk a degenerate or zero-frame capture. 150pt sits well
+    /// above any encoder floor while still allowing a "narrate one panel"
     /// selection. Shared by the controller's confirm gate and the view's
     /// Record-button visibility.
-    static let minimumSelectionSize: CGFloat = 100
+    static let minimumSelectionSize: CGFloat = 150
 
     /// The settled, confirmable selection in view-local (top-left)
     /// coordinates, or nil if there's nothing to confirm yet. Drives
@@ -121,6 +149,30 @@ final class AreaSelectorState {
             guard overlaySize.width > 0, overlaySize.height > 0 else { return nil }
             return CGRect(origin: .zero, size: overlaySize)
         }
+    }
+
+    /// True in `.area` mode when a SETTLED selection is below
+    /// `minimumSelectionSize` on either axis — drawn but not large enough to
+    /// record. Drives every red "too small" affordance (border, handles,
+    /// readout, message). Deliberately quiet while `isDragging`: every drag
+    /// STARTS undersized, so live-red would flash at the beginning of each
+    /// selection — the error only appears once the user releases an
+    /// undersized rect. The exact inverse of what makes
+    /// `confirmableSelectionRect` non-nil in `.area` mode.
+    var isSelectionTooSmall: Bool {
+        guard mode == .area, !isDragging, let rect = selectionRect else { return false }
+        return rect.width < Self.minimumSelectionSize || rect.height < Self.minimumSelectionSize
+    }
+
+    /// Monotonic counter bumped when Return/Enter is refused on an
+    /// undersized selection. The view keys a brief icon bounce on the
+    /// too-small message off changes, so the refusal reads as feedback
+    /// rather than a silent no-op (the message itself is already standing —
+    /// it follows `isSelectionTooSmall`).
+    private(set) var undersizedConfirmPulse: Int = 0
+
+    func noteUndersizedConfirmAttempt() {
+        undersizedConfirmPulse += 1
     }
 
     /// Hover feedback for the floating Record button. The overlay's
@@ -966,6 +1018,7 @@ final class AreaSelectorState {
         dragOrigin = point
         dragCurrent = point
         isDragging = true
+        interaction = .creating
     }
 
     func updateDrag(to point: CGPoint) {
@@ -975,6 +1028,88 @@ final class AreaSelectorState {
     func endDrag(at point: CGPoint) {
         dragCurrent = point
         isDragging = false
+        interaction = .none
+    }
+
+    // MARK: - Editing a settled selection (resize / move)
+
+    /// Begin editing an existing, settled selection. Normalizes the stored
+    /// points so dragOrigin == top-left and dragCurrent == bottom-right,
+    /// which lets the resize math touch exactly one coordinate per moved
+    /// edge. No-op without a selection or for a non-edit `kind` — only the
+    /// controller's handle/interior hit-test calls this, always with
+    /// `.resizing` or `.moving`.
+    func beginEdit(_ kind: DragInteraction, at point: CGPoint) {
+        guard let rect = selectionRect else { return }
+        switch kind {
+        case .resizing, .moving: break
+        case .none, .creating: return
+        }
+        dragOrigin = CGPoint(x: rect.minX, y: rect.minY)  // top-left
+        dragCurrent = CGPoint(x: rect.maxX, y: rect.maxY) // bottom-right
+        dragAnchorRect = rect
+        dragAnchorPoint = point
+        interaction = kind
+        isDragging = true   // hide the toolbar while adjusting, like a create drag
+        mode = .area        // editing is only meaningful in area mode
+    }
+
+    /// Drag the grabbed handle to `point`, updating only the coordinate(s)
+    /// that handle owns. Each axis PINS at `minimumSelectionSize` rather
+    /// than flipping through the opposite edge — a deliberate edge drag
+    /// "sticks" at the floor, so the region never drops below the
+    /// confirmable minimum mid-resize.
+    func updateResize(to point: CGPoint) {
+        guard case .resizing(let handle) = interaction,
+              var origin = dragOrigin, var current = dragCurrent else { return }
+        let minSize = Self.minimumSelectionSize
+        // origin = top-left, current = bottom-right (beginEdit normalized).
+        switch handle {
+        case .left, .topLeft, .bottomLeft:
+            origin.x = min(point.x, current.x - minSize)
+        case .right, .topRight, .bottomRight:
+            current.x = max(point.x, origin.x + minSize)
+        default:
+            break
+        }
+        switch handle {
+        case .top, .topLeft, .topRight:
+            origin.y = min(point.y, current.y - minSize)
+        case .bottom, .bottomLeft, .bottomRight:
+            current.y = max(point.y, origin.y + minSize)
+        default:
+            break
+        }
+        dragOrigin = origin
+        dragCurrent = current
+    }
+
+    /// Translate the whole selection by the delta from the grab point,
+    /// clamped inside the overlay bounds so the region can't be shoved
+    /// off-screen. Size never changes.
+    func updateMove(to point: CGPoint) {
+        guard interaction == .moving,
+              let anchorRect = dragAnchorRect, let anchorPoint = dragAnchorPoint else { return }
+        var rect = anchorRect.offsetBy(
+            dx: point.x - anchorPoint.x,
+            dy: point.y - anchorPoint.y
+        )
+        let maxX = max(0, overlaySize.width - rect.width)
+        let maxY = max(0, overlaySize.height - rect.height)
+        rect.origin.x = min(max(0, rect.origin.x), maxX)
+        rect.origin.y = min(max(0, rect.origin.y), maxY)
+        dragOrigin = CGPoint(x: rect.minX, y: rect.minY)
+        dragCurrent = CGPoint(x: rect.maxX, y: rect.maxY)
+    }
+
+    /// End a resize/move gesture: the selection settles and the toolbar
+    /// (via `confirmableSelectionRect`) reappears, exactly as after an
+    /// initial draw.
+    func endEdit() {
+        isDragging = false
+        interaction = .none
+        dragAnchorRect = nil
+        dragAnchorPoint = nil
     }
 
     // MARK: - Full-screen mode
@@ -992,6 +1127,9 @@ final class AreaSelectorState {
         dragOrigin = nil
         dragCurrent = nil
         isDragging = false
+        interaction = .none
+        dragAnchorRect = nil
+        dragAnchorPoint = nil
         isRecordButtonHovered = false
     }
 

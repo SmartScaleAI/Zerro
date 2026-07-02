@@ -243,6 +243,11 @@ final class AreaSelectorWindowController {
         CATransaction.commit()
         win.makeKey()
 
+        // The overlay opens as a draw surface — show the crosshair up front
+        // (there is no NSTrackingArea; the mouseMoved monitor re-asserts the
+        // right cursor per position from here on).
+        NSCursor.crosshair.set()
+
         // Defer one runloop tick so any SwiftUI render that landed after the
         // synchronous layout has also settled at full size before we reveal —
         // guaranteeing the fade carries no residual scale.
@@ -355,6 +360,10 @@ final class AreaSelectorWindowController {
         window = nil
         state = nil
         preferences = nil
+
+        // The overlay owned the cursor (crosshair / resize / hand); hand it
+        // back to the system default now that the overlay is gone.
+        NSCursor.arrow.set()
     }
 
     // MARK: - Event monitors
@@ -518,6 +527,11 @@ final class AreaSelectorWindowController {
                     }
                     state.setHoveredPermissionOptionSafety(optionSafety)
                 }
+
+                // Pointer feedback — the discoverability signal that a settled
+                // selection is editable: resize arrows over a handle, open hand
+                // over the interior, arrow over chrome, crosshair elsewhere.
+                self?.updateCursor(at: point, in: size, state: state)
             }
 
             if event.type == .leftMouseDown {
@@ -747,11 +761,37 @@ final class AreaSelectorWindowController {
                 if let toolbarContainerFrame, toolbarContainerFrame.contains(point) {
                     return nil
                 }
+
+                // Editing a settled selection: a press on a resize handle grabs
+                // that handle; a press on the interior grabs the whole region
+                // to move. Gated on `confirmableSelectionRect` (nil mid-drag,
+                // nil below min size) so editing is only offered on a real,
+                // settled region — and sits after every toolbar/menu block so
+                // controls floating over the selection still win the click.
+                // A press that misses both falls through to `beginDrag` and
+                // draws a fresh rectangle, exactly as today.
+                if !anyMenuOpen, state.mode == .area, let rect = selectionRect {
+                    if let handle = AreaSelectorView.handleHitTest(at: point, selection: rect) {
+                        state.beginEdit(.resizing(handle), at: point)
+                        return nil
+                    }
+                    if AreaSelectorView.isInteriorHit(point, selection: rect) {
+                        state.beginEdit(.moving, at: point)
+                        // Grab feel: closed hand for the duration of the move
+                        // (back to open on release via updateCursor).
+                        NSCursor.closedHand.set()
+                        return nil
+                    }
+                }
             }
 
-            // Drag-to-select. A mouseDown starting a drag flips back to
-            // .area (see beginDrag), so drawing a rectangle after Space
-            // supersedes the full-screen selection.
+            // Drag-to-select / resize / move, routed by what the mouseDown
+            // grabbed. A mouseDown starting a create drag flips back to .area
+            // (see beginDrag), so drawing a rectangle after Space supersedes
+            // the full-screen selection. `interaction == .none` covers a press
+            // that began on a toolbar control (consumed above without
+            // beginDrag/beginEdit) — its trailing dragged/up events must NOT
+            // disturb the settled selection.
             switch event.type {
             case .leftMouseDown:
                 // Defensive: the walkthrough block above consumes the
@@ -760,14 +800,33 @@ final class AreaSelectorWindowController {
                 // starting under the tour if that routing shifts.
                 if state.toolbarWalkthroughStep == nil { state.beginDrag(at: point) }
             case .leftMouseDragged:
-                // Only extend an in-flight drag. A press that began on a
-                // toolbar control (model/mic chip, dropdown row) was
-                // consumed at mouseDown without calling beginDrag, so
-                // isDragging is false here — and its trailing dragged/up
-                // events must NOT resize the already-settled selection.
-                if state.isDragging { state.updateDrag(to: point) }
+                switch state.interaction {
+                case .creating:
+                    if state.isDragging { state.updateDrag(to: point) }
+                case .resizing(let handle):
+                    state.updateResize(to: point)
+                    // mouseMoved doesn't fire during a drag, so keep the
+                    // cursor asserted here (AppKit can reset it mid-drag).
+                    Self.resizeCursor(for: handle).set()
+                case .moving:
+                    state.updateMove(to: point)
+                    NSCursor.closedHand.set()
+                case .none:
+                    break
+                }
             case .leftMouseUp:
-                if state.isDragging { state.endDrag(at: point) }
+                switch state.interaction {
+                case .creating:
+                    if state.isDragging { state.endDrag(at: point) }
+                case .resizing, .moving:
+                    state.endEdit()
+                    // The selection just settled — reflect what's now under
+                    // the pointer (open hand / resize arrows / crosshair)
+                    // without waiting for the next mouse move.
+                    self?.updateCursor(at: point, in: size, state: state)
+                case .none:
+                    break
+                }
             default:
                 break
             }
@@ -843,6 +902,71 @@ final class AreaSelectorWindowController {
         state.enterFullScreenMode(overlaySize: size)
     }
 
+    // MARK: - Pointer cursor
+
+    /// Assert the pointer cursor for `point`. Called on EVERY mouseMoved
+    /// (and again when an edit settles): the overlay is a borderless panel
+    /// with no NSTrackingArea, and the system resets the cursor as the
+    /// pointer moves, so re-asserting per move (rather than push/pop) is
+    /// the robust pattern here.
+    private func updateCursor(at point: CGPoint, in size: CGSize, state: AreaSelectorState) {
+        // Chrome owns the pointer: over an open dropdown/popup or the
+        // toolbar container, controls read as controls (plain arrow). The
+        // first-run walkthrough owns it the same way — every press is inert
+        // under the tour, so no draw/resize/move affordance may show.
+        let anyMenuOpen = state.isModelMenuOpen || state.isMicMenuOpen
+            || state.isUpgradePopupOpen || state.isDevSettingsMenuOpen
+        if anyMenuOpen || state.toolbarWalkthroughStep != nil {
+            NSCursor.arrow.set()
+            return
+        }
+        if let rect = state.confirmableSelectionRect {
+            let toolbar = AreaSelectorView.toolbarFrame(
+                forSelection: rect, in: size,
+                fullScreen: state.mode == .fullScreen, devMode: state.isDevMode
+            )
+            if toolbar.contains(point) {
+                NSCursor.arrow.set()
+                return
+            }
+            // The editable-region affordances exist only for a settled area
+            // selection (full-screen has no handles).
+            if state.mode == .area {
+                if let handle = AreaSelectorView.handleHitTest(at: point, selection: rect) {
+                    Self.resizeCursor(for: handle).set()
+                    return
+                }
+                if AreaSelectorView.isInteriorHit(point, selection: rect) {
+                    NSCursor.openHand.set()
+                    return
+                }
+            }
+        }
+        NSCursor.crosshair.set()
+    }
+
+    /// The resize cursor for a grabbed handle. `frameResize` (public,
+    /// macOS 15+) supplies true diagonal glyphs for the corners — no
+    /// private-API fallback needed at our 15.0 deployment target.
+    static func resizeCursor(for handle: AreaSelectorState.Handle) -> NSCursor {
+        .frameResize(position: Self.frameResizePosition(for: handle), directions: .all)
+    }
+
+    /// Handle → frame-resize position, factored out so the mapping is
+    /// unit-testable (NSCursor instances don't compare usefully).
+    static func frameResizePosition(for handle: AreaSelectorState.Handle) -> NSCursor.FrameResizePosition {
+        switch handle {
+        case .topLeft:     return .topLeft
+        case .top:         return .top
+        case .topRight:    return .topRight
+        case .right:       return .right
+        case .bottomRight: return .bottomRight
+        case .bottom:      return .bottom
+        case .bottomLeft:  return .bottomLeft
+        case .left:        return .left
+        }
+    }
+
     // MARK: - Toolbar walkthrough (first-run tour)
     //
     // The state machine (Phase 1) owns the step cursor and the Dev Mode
@@ -892,7 +1016,8 @@ final class AreaSelectorWindowController {
     /// zero-size) are a no-op — the overlay stays open — so an accidental
     /// Return without a real drag doesn't kick off a recording of nothing.
     /// In `.fullScreen`, the whole display is always confirmable.
-    private func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
+    /// Internal (not private) so the confirm gate is unit-testable.
+    func confirmCurrentSelection(window: NSWindow, state: AreaSelectorState) {
         // Dev Mode record-time validation: both an agent and a folder must be
         // chosen before a recording can dispatch to the agent. Replaces the
         // first-run popover as the dead-end guard (design §1). Inert in normal
@@ -927,6 +1052,11 @@ final class AreaSelectorWindowController {
         guard let viewLocal = state.selectionRect,
               viewLocal.width >= AreaSelectorState.minimumSelectionSize,
               viewLocal.height >= AreaSelectorState.minimumSelectionSize else {
+            // Not silent: the standing red border + too-small pill (they
+            // follow `isSelectionTooSmall`) already explain why Return did
+            // nothing; bump the pulse so the pill's icon bounces and the
+            // refusal visibly lands on it.
+            if state.isSelectionTooSmall { state.noteUndersizedConfirmAttempt() }
             return
         }
         let global = viewLocalToGlobal(viewLocal, window: window)

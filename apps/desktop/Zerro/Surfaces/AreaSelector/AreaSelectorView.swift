@@ -68,6 +68,7 @@ struct AreaSelectorView: View {
                 devSettingsMenu(in: bounds)
                 devValidationBanner(in: bounds)
                 devLocalhostNoticeBanner(in: bounds)
+                tooSmallMessage(in: bounds)
                 toolbarTooltip(in: bounds)
                 // First-run toolbar walkthrough: the dim + spotlight sit
                 // ABOVE the toolbar (cutting the active control through);
@@ -132,8 +133,14 @@ struct AreaSelectorView: View {
     // MARK: - Selection border
 
     private func selectionBorder(at rect: CGRect) -> some View {
-        Rectangle()
-            .stroke(state.isDevMode ? Color.vfDevAccent : Color.vfBrandAccent, lineWidth: 1.5)
+        // Error wins over BOTH mode accents: a settled undersized selection
+        // strokes red whether in Artifact or Dev mode (the flag stays quiet
+        // mid-drag — see `isSelectionTooSmall`).
+        let strokeColor: Color = state.isSelectionTooSmall
+            ? .vfRecordingRed
+            : (state.isDevMode ? .vfDevAccent : .vfBrandAccent)
+        return Rectangle()
+            .stroke(strokeColor, lineWidth: 1.5)
             .frame(width: rect.width, height: rect.height)
             .devBreathingPulse(state.isDevMode)
             .position(x: rect.midX, y: rect.midY)
@@ -141,66 +148,99 @@ struct AreaSelectorView: View {
 
     // MARK: - Handles
     //
-    // Native macOS convention: 4 corners while a drag is in flight, 8
-    // (corners + edge midpoints) once the selection is settled. The
-    // edge midpoints aren't actionable yet — confirm/cancel is the only
-    // exit in C3 — but rendering them is the visual signal that the
-    // rectangle is "live" and would be the resize affordance when
-    // resize lands. Branching on `state.isDragging` keeps the visual
-    // language consistent with macOS Screenshot's behavior.
+    // The handles are the resize affordance: the controller's mouse monitor
+    // hit-tests them via `handleHitTest` below and routes the drag into
+    // `AreaSelectorState.updateResize`. Visibility follows the gesture:
+    // hidden entirely while DRAWING a new rect (`interaction == .creating` —
+    // the border + readout are the live drag feedback), corners-only while a
+    // resize/move is in flight (the `isDragging` midpoint collapse; the
+    // grabbed bracket must not vanish mid-resize), all 8 once settled AT A
+    // CONFIRMABLE SIZE. An undersized settle shows no handles: the
+    // controller's edit hit-test gates on `confirmableSelectionRect`, so
+    // they wouldn't be grabbable — the red border + message own that state
+    // and the user redraws instead.
+
+    // Handle metrics — ONE geometry for both modes (they differ only in
+    // tint). Purely visual: the grab area is `handleHitSlop`, which must
+    // stay ≥ half the largest dimension here (edgeHandleLength 26 → 13 ≤ 22)
+    // so the hit target always covers the drawn handle.
+    static let cornerBracketArm: CGFloat = 20
+    static let cornerBracketLineWidth: CGFloat = 4
+    static let edgeHandleLength: CGFloat = 26
+    static let edgeHandleThickness: CGFloat = 7
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
-        if state.isDevMode {
-            devViewfinderHandles(at: rect)
-        } else {
-            let positions: [CGPoint] = state.isDragging
-                ? cornerHandlePositions(at: rect)
-                : cornerHandlePositions(at: rect) + edgeMidpointHandlePositions(at: rect)
-
-            ForEach(positions.indices, id: \.self) { i in
-                Rectangle()
-                    .fill(Color.white)
-                    .overlay(Rectangle().strokeBorder(Color.vfOnBrand, lineWidth: 1))
-                    .frame(width: 8, height: 8)
-                    .position(positions[i])
+        // No handles while drawing a new rect, and none on a settled-but-
+        // undersized selection (not editable — see the MARK note). Resize/
+        // move edits keep them (the user is holding one, and the resize pin
+        // keeps the rect at or above the minimum).
+        if state.interaction != .creating, !state.isSelectionTooSmall {
+            if state.isDevMode {
+                // Dev keeps its bare accent treatment (the breathing border
+                // already supplies the glow).
+                handleChrome(at: rect, tint: .vfDevAccent, contrastChrome: false)
+            } else {
+                // White needs help over light content: hairline vfOnBrand outline
+                // on the pills + a soft shadow on everything.
+                handleChrome(at: rect, tint: .white, contrastChrome: true)
             }
         }
     }
 
-    /// Dev-Mode corner handles: L-shaped viewfinder brackets (two strokes per
-    /// corner) in the accent green, replacing the filled white squares for the
-    /// "camera viewfinder / inspector" read. Drawn as one stroked `Path` of
-    /// eight short arms (cheaper than eight positioned shapes, and the absolute
-    /// coordinates align to the full overlay bounds exactly like `dimCutout`).
-    /// Edge-midpoint handles (settled state only) stay as small green squares so
-    /// the 8-handle "selection is live" signal survives.
-    private func devViewfinderHandles(at rect: CGRect) -> some View {
-        let arm: CGFloat = 14
+    /// CleanShot-style handle chrome, shared by both modes: L-shaped brackets
+    /// at the corners (arms pointing inward, one stroked `Path` of eight arms
+    /// — cheaper than eight positioned shapes, and the absolute coordinates
+    /// align to the full overlay bounds exactly like `dimCutout`) plus, once
+    /// the selection settles, a capsule bar on each edge midpoint with its
+    /// long axis ALONG the edge (horizontal on top/bottom, vertical on
+    /// left/right). `contrastChrome` adds the hairline outline + soft shadow
+    /// that keep the white variant legible over light content.
+    @ViewBuilder
+    private func handleChrome(at rect: CGRect, tint: Color, contrastChrome: Bool) -> some View {
         let midpoints = state.isDragging ? [] : edgeMidpointHandlePositions(at: rect)
-        return ZStack {
-            Path { p in
-                // (corner, end of horizontal arm, end of vertical arm) — arms
-                // always point inward from each corner.
-                let brackets: [(CGPoint, CGPoint, CGPoint)] = [
-                    (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.minX + arm, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY + arm)),
-                    (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX - arm, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY + arm)),
-                    (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.maxX - arm, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY - arm)),
-                    (CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX + arm, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY - arm))
-                ]
-                for (corner, hEnd, vEnd) in brackets {
-                    p.move(to: hEnd)
-                    p.addLine(to: corner)
-                    p.addLine(to: vEnd)
-                }
-            }
-            .stroke(Color.vfDevAccent, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
-            ForEach(midpoints.indices, id: \.self) { i in
-                Rectangle()
-                    .fill(Color.vfDevAccent)
-                    .frame(width: 6, height: 6)
-                    .position(midpoints[i])
+        cornerBracketPath(at: rect)
+            .stroke(tint, style: StrokeStyle(lineWidth: Self.cornerBracketLineWidth, lineCap: .round, lineJoin: .round))
+            .shadow(color: .black.opacity(contrastChrome ? 0.4 : 0), radius: 1.5, y: 0.5)
+
+        ForEach(midpoints.indices, id: \.self) { i in
+            let point = midpoints[i]
+            // Long axis parallel to the edge: top/bottom midpoints share the
+            // rect's horizontal edge lines (exact same y — both values come
+            // from `edgeMidpointHandlePositions`), left/right the vertical.
+            let horizontal = point.y == rect.minY || point.y == rect.maxY
+            let radius = Self.edgeHandleThickness / 2
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(tint)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(contrastChrome ? Color.vfOnBrand : .clear, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(contrastChrome ? 0.4 : 0), radius: 1.5, y: 0.5)
+                .frame(
+                    width: horizontal ? Self.edgeHandleLength : Self.edgeHandleThickness,
+                    height: horizontal ? Self.edgeHandleThickness : Self.edgeHandleLength
+                )
+                .position(point)
+        }
+    }
+
+    /// The four corner L-brackets as one path — (corner, end of horizontal
+    /// arm, end of vertical arm), arms always pointing inward from the corner.
+    private func cornerBracketPath(at rect: CGRect) -> Path {
+        let arm = Self.cornerBracketArm
+        return Path { p in
+            let brackets: [(CGPoint, CGPoint, CGPoint)] = [
+                (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.minX + arm, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY + arm)),
+                (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX - arm, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY + arm)),
+                (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.maxX - arm, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY - arm)),
+                (CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX + arm, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY - arm))
+            ]
+            for (corner, hEnd, vEnd) in brackets {
+                p.move(to: hEnd)
+                p.addLine(to: corner)
+                p.addLine(to: vEnd)
             }
         }
     }
@@ -223,6 +263,57 @@ struct AreaSelectorView: View {
         ]
     }
 
+    // MARK: - Handle hit-testing (resize / move)
+    //
+    // Static like the toolbar frame helpers, so the controller's mouse
+    // monitor hit-tests the same geometry the view renders. The handles
+    // draw at 8×8pt — far too small to grab — so each is grabbable within
+    // `handleHitSlop` of its center, and the edges are grabbable anywhere
+    // ALONG the edge (the midpoint dot is a hint, not the only target),
+    // matching CleanShot. All coordinates are view-local, top-left.
+
+    /// Hit slop around each handle's center — the grabbable band extends well
+    /// past the drawn handle. ~22pt matches the comfort of CleanShot's
+    /// targets, and stays clear of overlap at the minimum selection size
+    /// (opposing edge bands sit 2×22 = 44pt apart < the 150pt minimum;
+    /// corner zones span 44 < 150).
+    static let handleHitSlop: CGFloat = 22
+
+    /// Which handle (if any) is under `point`, given the settled selection
+    /// rect. Corners win ties over edges (checked first), so a press in the
+    /// overlap zone resizes both axes.
+    static func handleHitTest(at point: CGPoint, selection rect: CGRect) -> AreaSelectorState.Handle? {
+        let slop = handleHitSlop
+        let corners: [(AreaSelectorState.Handle, CGPoint)] = [
+            (.topLeft, CGPoint(x: rect.minX, y: rect.minY)),
+            (.topRight, CGPoint(x: rect.maxX, y: rect.minY)),
+            (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY)),
+            (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY))
+        ]
+        for (handle, center) in corners {
+            if abs(point.x - center.x) <= slop, abs(point.y - center.y) <= slop {
+                return handle
+            }
+        }
+        // Edge bands: within slop of the edge line, along the edge's span.
+        // Corner zones already won above, so the full span is safe here.
+        let alongX = point.x >= rect.minX && point.x <= rect.maxX
+        let alongY = point.y >= rect.minY && point.y <= rect.maxY
+        if alongX, abs(point.y - rect.minY) <= slop { return .top }
+        if alongX, abs(point.y - rect.maxY) <= slop { return .bottom }
+        if alongY, abs(point.x - rect.minX) <= slop { return .left }
+        if alongY, abs(point.x - rect.maxX) <= slop { return .right }
+        return nil
+    }
+
+    /// True when `point` is inside the selection but clear of every handle
+    /// band — the drag-to-move region. The inset by `handleHitSlop` is what
+    /// keeps the edge bands (handle territory) out of the move region, so
+    /// handles win even if callers check this first.
+    static func isInteriorHit(_ point: CGPoint, selection rect: CGRect) -> Bool {
+        rect.insetBy(dx: handleHitSlop, dy: handleHitSlop).contains(point)
+    }
+
     // MARK: - Dimensions label
     //
     // Reported in points (not backing-store pixels) for consistency
@@ -233,14 +324,22 @@ struct AreaSelectorView: View {
     // capture layer, not the readout.
 
     private func dimensionsLabel(at rect: CGRect) -> some View {
-        Text("\(Int(rect.width)) \u{00D7} \(Int(rect.height))")
+        // Undersized selection: the readout goes red too, so the numbers
+        // themselves read as the problem (they're what's below the minimum).
+        let fill: Color = state.isSelectionTooSmall
+            ? .vfRecordingRed
+            : (state.isDevMode ? .vfDevAccent : Color.black.opacity(0.6))
+        let textColor: Color = state.isSelectionTooSmall
+            ? .white
+            : (state.isDevMode ? Color.vfOnBrand : Color.white)
+        return Text("\(Int(rect.width)) \u{00D7} \(Int(rect.height))")
             .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(state.isDevMode ? Color.vfOnBrand : Color.white)
+            .foregroundStyle(textColor)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(state.isDevMode ? Color.vfDevAccent : Color.black.opacity(0.6))
+                    .fill(fill)
             )
             .fixedSize()
             .position(x: rect.maxX - 36, y: rect.maxY - 16)
@@ -2228,6 +2327,70 @@ struct AreaSelectorView: View {
             .fixedSize()
             .position(x: toolbar.midX, y: toolbar.minY - 18)
         }
+    }
+
+    /// "Selection too small" pill: red-tinted feedback anchored where the
+    /// floating toolbar would otherwise sit (the toolbar hides below the
+    /// minimum size — this is its stand-in, so the empty toolbar slot
+    /// explains itself). Appears with the rest of the red feedback once an
+    /// undersized rect settles (`isSelectionTooSmall` is quiet mid-drag).
+    /// Chrome mirrors `devValidationBanner`; the icon bounces when Return
+    /// is refused (`undersizedConfirmPulse`).
+    @ViewBuilder
+    private func tooSmallMessage(in bounds: CGSize) -> some View {
+        if state.isSelectionTooSmall, let rect = state.selectionRect {
+            // Measure the pill (same NSString sizing idiom as the tooltip) so
+            // it can clamp inside the overlay the way the toolbar does.
+            let text = Self.tooSmallMessageText
+            let textW = ceil((text as NSString).size(
+                withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]
+            ).width)
+            let iconW: CGFloat = 12
+            let pillW = VFSpacing.sm * 2 + iconW + VFSpacing.xs + textW
+            let pillH: CGFloat = 26
+
+            // Hang below the selection, flip above if it would clip the
+            // bottom, clamp inside the overlay — the same fallback math as
+            // `toolbarFrame`.
+            let originY: CGFloat = {
+                var y = rect.maxY + Self.toolbarGap
+                if y + pillH + Self.toolbarMargin > bounds.height {
+                    y = rect.minY - Self.toolbarGap - pillH
+                }
+                if y < Self.toolbarMargin {
+                    y = max(Self.toolbarMargin, bounds.height - pillH - Self.toolbarMargin)
+                }
+                return y
+            }()
+            let centerX = min(
+                max(rect.midX, Self.toolbarMargin + pillW / 2),
+                bounds.width - pillW / 2 - Self.toolbarMargin
+            )
+
+            HStack(spacing: VFSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.vfRecordingRed)
+                    .symbolEffect(.bounce, value: state.undersizedConfirmPulse)
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .fixedSize()
+            }
+            .padding(.horizontal, VFSpacing.sm)
+            .frame(height: pillH)
+            .background(Color.vfPillBackground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.vfRecordingRed.opacity(0.5), lineWidth: 0.5))
+            .fixedSize()
+            .position(x: centerX, y: originY + pillH / 2)
+        }
+    }
+
+    /// Copy for the too-small pill, built from `minimumSelectionSize` so the
+    /// number can never drift from the actual confirm gate.
+    static var tooSmallMessageText: String {
+        let m = Int(AreaSelectorState.minimumSelectionSize)
+        return "Selection too small \u{2014} drag at least \(m) \u{00D7} \(m) to record"
     }
 
     /// One-time, NON-BLOCKING post-denial explainer (Phase 3): a floating capsule
