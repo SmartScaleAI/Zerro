@@ -138,13 +138,13 @@ struct AreaSelectorView: View {
 
     // MARK: - Handles
     //
-    // Native macOS convention: 4 corners while a drag is in flight, 8
-    // (corners + edge midpoints) once the selection is settled. The
-    // settled handles are the resize affordance: the controller's mouse
-    // monitor hit-tests them via `handleHitTest` below and routes the
-    // drag into `AreaSelectorState.updateResize`. Branching on
-    // `state.isDragging` keeps the visual language consistent with
-    // macOS Screenshot's behavior.
+    // The handles are the resize affordance: the controller's mouse monitor
+    // hit-tests them via `handleHitTest` below and routes the drag into
+    // `AreaSelectorState.updateResize`. Visibility follows the gesture:
+    // hidden entirely while DRAWING a new rect (`interaction == .creating` —
+    // the border + readout are the live drag feedback), corners-only while a
+    // resize/move is in flight (the `isDragging` midpoint collapse; the
+    // grabbed bracket must not vanish mid-resize), all 8 once settled.
 
     // Handle metrics — ONE geometry for both modes (they differ only in
     // tint). Purely visual: the grab area is `handleHitSlop`, which must
@@ -157,17 +157,21 @@ struct AreaSelectorView: View {
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
-        // Error wins here exactly like the border + readout: an undersized
-        // selection tints the handles red in BOTH modes.
-        let tooSmall = state.isSelectionTooSmall
-        if state.isDevMode {
-            // Dev keeps its bare accent treatment (the breathing border
-            // already supplies the glow).
-            handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .vfDevAccent, contrastChrome: false)
-        } else {
-            // White needs help over light content: hairline vfOnBrand outline
-            // on the pills + a soft shadow on everything.
-            handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .white, contrastChrome: true)
+        // No handles while drawing a new rect — they appear when the drag
+        // settles. Resize/move edits keep them (the user is holding one).
+        if state.interaction != .creating {
+            // Error wins here exactly like the border + readout: an undersized
+            // selection tints the handles red in BOTH modes.
+            let tooSmall = state.isSelectionTooSmall
+            if state.isDevMode {
+                // Dev keeps its bare accent treatment (the breathing border
+                // already supplies the glow).
+                handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .vfDevAccent, contrastChrome: false)
+            } else {
+                // White needs help over light content: hairline vfOnBrand outline
+                // on the pills + a soft shadow on everything.
+                handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .white, contrastChrome: true)
+            }
         }
     }
 
