@@ -123,8 +123,9 @@ struct AreaSelectorView: View {
     // MARK: - Selection border
 
     private func selectionBorder(at rect: CGRect) -> some View {
-        // Error wins over BOTH mode accents: an undersized selection strokes
-        // red whether in Artifact or Dev mode, live during the drag.
+        // Error wins over BOTH mode accents: a settled undersized selection
+        // strokes red whether in Artifact or Dev mode (the flag stays quiet
+        // mid-drag — see `isSelectionTooSmall`).
         let strokeColor: Color = state.isSelectionTooSmall
             ? .vfRecordingRed
             : (state.isDevMode ? .vfDevAccent : .vfBrandAccent)
@@ -2124,15 +2125,13 @@ struct AreaSelectorView: View {
     /// "Selection too small" pill: red-tinted feedback anchored where the
     /// floating toolbar would otherwise sit (the toolbar hides below the
     /// minimum size — this is its stand-in, so the empty toolbar slot
-    /// explains itself). Shown once an undersized rect SETTLES rather than
-    /// live mid-drag: every drag starts undersized, so a mid-drag message
-    /// would flash at the start of every selection — the live "keep going"
-    /// signal is the red border + readout instead. Chrome mirrors
-    /// `devValidationBanner`; the icon bounces when Return is refused
-    /// (`undersizedConfirmPulse`).
+    /// explains itself). Appears with the rest of the red feedback once an
+    /// undersized rect settles (`isSelectionTooSmall` is quiet mid-drag).
+    /// Chrome mirrors `devValidationBanner`; the icon bounces when Return
+    /// is refused (`undersizedConfirmPulse`).
     @ViewBuilder
     private func tooSmallMessage(in bounds: CGSize) -> some View {
-        if state.isSelectionTooSmall, !state.isDragging, let rect = state.selectionRect {
+        if state.isSelectionTooSmall, let rect = state.selectionRect {
             // Measure the pill (same NSString sizing idiom as the tooltip) so
             // it can clamp inside the overlay the way the toolbar does.
             let text = Self.tooSmallMessageText

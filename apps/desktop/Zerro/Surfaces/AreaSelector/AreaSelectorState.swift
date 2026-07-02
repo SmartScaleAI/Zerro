@@ -151,14 +151,16 @@ final class AreaSelectorState {
         }
     }
 
-    /// True in `.area` mode when there IS a selection but it's below
-    /// `minimumSelectionSize` on either axis — drawn/settled but not yet
-    /// large enough to record. Drives the red border + "too small" message.
-    /// The inverse of what makes `confirmableSelectionRect` non-nil, minus
-    /// the `!isDragging` clause, so the border can flag an undersized rect
-    /// live while the user is still sizing it.
+    /// True in `.area` mode when a SETTLED selection is below
+    /// `minimumSelectionSize` on either axis — drawn but not large enough to
+    /// record. Drives every red "too small" affordance (border, handles,
+    /// readout, message). Deliberately quiet while `isDragging`: every drag
+    /// STARTS undersized, so live-red would flash at the beginning of each
+    /// selection — the error only appears once the user releases an
+    /// undersized rect. The exact inverse of what makes
+    /// `confirmableSelectionRect` non-nil in `.area` mode.
     var isSelectionTooSmall: Bool {
-        guard mode == .area, let rect = selectionRect else { return false }
+        guard mode == .area, !isDragging, let rect = selectionRect else { return false }
         return rect.width < Self.minimumSelectionSize || rect.height < Self.minimumSelectionSize
     }
 

@@ -57,16 +57,28 @@ final class AreaSelectorTooSmallTests: XCTestCase {
         XCTAssertFalse(state.isSelectionTooSmall, "full-screen is always confirmable")
     }
 
-    func testFlagIsLiveWhileDragging() {
+    func testFlagWaitsForTheDragToSettle() {
         let state = AreaSelectorState()
         state.setOverlaySize(overlay)
+        // Quiet mid-drag even while undersized — every drag starts small, so
+        // the red feedback would otherwise flash at the start of every
+        // selection.
         state.beginDrag(at: CGPoint(x: 200, y: 200))
         state.updateDrag(to: CGPoint(x: 250, y: 250))
         XCTAssertTrue(state.isDragging)
-        XCTAssertTrue(state.isSelectionTooSmall, "border feedback shows live mid-drag")
+        XCTAssertFalse(state.isSelectionTooSmall, "no red feedback while still dragging")
 
+        // Releasing an undersized rect raises the flag.
+        state.endDrag(at: CGPoint(x: 250, y: 250))
+        XCTAssertTrue(state.isSelectionTooSmall, "red feedback appears on release")
+
+        // A new drag lowers it again immediately, and settling large keeps
+        // it down.
+        state.beginDrag(at: CGPoint(x: 200, y: 200))
+        XCTAssertFalse(state.isSelectionTooSmall, "starting a fresh drag clears the error")
         state.updateDrag(to: CGPoint(x: 350, y: 350))
-        XCTAssertFalse(state.isSelectionTooSmall, "crossing the minimum clears it mid-drag")
+        state.endDrag(at: CGPoint(x: 350, y: 350))
+        XCTAssertFalse(state.isSelectionTooSmall)
     }
 
     // MARK: - Confirm gate (Return/Enter)
