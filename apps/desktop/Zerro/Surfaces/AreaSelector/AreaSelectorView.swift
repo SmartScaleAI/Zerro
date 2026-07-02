@@ -156,14 +156,17 @@ struct AreaSelectorView: View {
 
     @ViewBuilder
     private func selectionHandles(at rect: CGRect) -> some View {
+        // Error wins here exactly like the border + readout: an undersized
+        // selection tints the handles red in BOTH modes.
+        let tooSmall = state.isSelectionTooSmall
         if state.isDevMode {
-            // Dev keeps its bare accent-green treatment (the breathing border
+            // Dev keeps its bare accent treatment (the breathing border
             // already supplies the glow).
-            handleChrome(at: rect, tint: Color.vfDevAccent, contrastChrome: false)
+            handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .vfDevAccent, contrastChrome: false)
         } else {
             // White needs help over light content: hairline vfOnBrand outline
             // on the pills + a soft shadow on everything.
-            handleChrome(at: rect, tint: .white, contrastChrome: true)
+            handleChrome(at: rect, tint: tooSmall ? .vfRecordingRed : .white, contrastChrome: true)
         }
     }
 
