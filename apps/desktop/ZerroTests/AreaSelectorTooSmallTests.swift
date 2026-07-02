@@ -31,12 +31,13 @@ final class AreaSelectorTooSmallTests: XCTestCase {
     // MARK: - Flag boundaries
 
     func testTooSmallBoundaries() {
-        // Per-axis rule with a `>=` gate: 100 exactly is enough.
+        // Per-axis rule with a `>=` gate: 150 exactly is enough.
         let cases: [(CGSize, Bool)] = [
-            (CGSize(width: 99, height: 200), true),
-            (CGSize(width: 200, height: 99), true),
-            (CGSize(width: 100, height: 100), false),
-            (CGSize(width: 150, height: 150), false),
+            (CGSize(width: 149, height: 200), true),   // just under on width
+            (CGSize(width: 200, height: 149), true),   // just under on height
+            (CGSize(width: 100, height: 100), true),   // the old minimum is now too small
+            (CGSize(width: 150, height: 150), false),  // exactly the minimum passes
+            (CGSize(width: 300, height: 200), false),  // comfortably above
         ]
         for (size, expected) in cases {
             let state = AreaSelectorState()

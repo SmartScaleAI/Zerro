@@ -123,14 +123,14 @@ final class AreaSelectorState {
 
     /// Minimum confirmable selection, in view-local points (per axis).
     /// Selections smaller than this are treated like a zero-size
-    /// selection — confirm is a no-op. Rationale: a sub-100pt region
+    /// selection — confirm is a no-op. Rationale: a region this small
     /// carries almost no useful visual context for the model, and after
     /// retina backing-scale and H.264's even-dimension requirement, tiny
-    /// regions risk a degenerate or zero-frame capture. 100pt sits above
-    /// any encoder floor while still allowing a "narrate one panel"
+    /// regions risk a degenerate or zero-frame capture. 150pt sits well
+    /// above any encoder floor while still allowing a "narrate one panel"
     /// selection. Shared by the controller's confirm gate and the view's
     /// Record-button visibility.
-    static let minimumSelectionSize: CGFloat = 100
+    static let minimumSelectionSize: CGFloat = 150
 
     /// The settled, confirmable selection in view-local (top-left)
     /// coordinates, or nil if there's nothing to confirm yet. Drives

@@ -259,10 +259,11 @@ struct AreaSelectorView: View {
     // ALONG the edge (the midpoint dot is a hint, not the only target),
     // matching CleanShot. All coordinates are view-local, top-left.
 
-    /// Hit slop around each handle's center — the grabbable band is larger
-    /// than the 8pt visual. ~22pt matches the comfort of CleanShot's targets,
-    /// and stays clear of overlap at the 100pt minimum selection (opposing
-    /// edge bands are 2×22 < 100 apart; corner zones span 44 < 100).
+    /// Hit slop around each handle's center — the grabbable band extends well
+    /// past the drawn handle. ~22pt matches the comfort of CleanShot's
+    /// targets, and stays clear of overlap at the minimum selection size
+    /// (opposing edge bands sit 2×22 = 44pt apart < the 150pt minimum;
+    /// corner zones span 44 < 150).
     static let handleHitSlop: CGFloat = 22
 
     /// Which handle (if any) is under `point`, given the settled selection
