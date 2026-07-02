@@ -879,6 +879,83 @@ final class AreaSelectorState {
         devValidationMessage = message
     }
 
+    // MARK: - Toolbar walkthrough (first-run coach-marks — state machine)
+    //
+    // First-run tour of the toolbar's five controls. This model owns ONLY the
+    // step cursor + the Dev Mode display snapshot; rendering, Back/Next
+    // hit-testing, the seen-flag write, and analytics are controller/view
+    // work in later phases. Deliberately free of preference writes and
+    // analytics calls so the machine stays unit-testable in isolation.
+
+    /// The active walkthrough step, or nil when the walkthrough is inactive.
+    /// Observable so the scrim/callout layers (later phases) react to step
+    /// changes the same way they react to hover flags.
+    private(set) var toolbarWalkthroughStep: ToolbarWalkthroughStep? = nil
+
+    /// The user's real Dev Mode value, snapshotted at walkthrough start — the
+    /// agent/record steps borrow Dev Mode for display, and end restores this.
+    private var devModeBeforeWalkthrough: Bool? = nil
+
+    /// Begin the walkthrough at the first step, snapshotting the current
+    /// Dev Mode so `endToolbarWalkthrough` can hand it back.
+    func startToolbarWalkthrough() {
+        devModeBeforeWalkthrough = isDevMode
+        toolbarWalkthroughStep = .mode
+        applyWalkthroughStepMode()
+    }
+
+    /// Advance one step ("Next"). From the last step ("Got it") this ends
+    /// the walkthrough as completed.
+    func advanceToolbarWalkthrough() {
+        guard let step = toolbarWalkthroughStep else { return }
+        if let next = ToolbarWalkthroughStep(rawValue: step.rawValue + 1) {
+            toolbarWalkthroughStep = next
+            applyWalkthroughStepMode()
+        } else {
+            endToolbarWalkthrough(completed: true)
+        }
+    }
+
+    /// Step back one ("Back" — hidden on the first step). Clamped at
+    /// `.mode`: backing out of the first step is a no-op.
+    func toolbarWalkthroughBack() {
+        guard let step = toolbarWalkthroughStep,
+              let previous = ToolbarWalkthroughStep(rawValue: step.rawValue - 1)
+        else { return }
+        toolbarWalkthroughStep = previous
+        applyWalkthroughStepMode()
+    }
+
+    /// End the walkthrough, restoring the user's real Dev Mode. `completed`
+    /// distinguishes "Got it" (true) from an Esc dismiss (false) — both end
+    /// identically in state; the controller uses the flag for the seen-flag
+    /// write + analytics in a later phase.
+    func endToolbarWalkthrough(completed: Bool) {
+        if let restored = devModeBeforeWalkthrough {
+            setDevModeForDisplay(restored)
+        }
+        devModeBeforeWalkthrough = nil
+        toolbarWalkthroughStep = nil
+    }
+
+    /// Render the toolbar in the mode the current step teaches (Dev for the
+    /// agent/record steps, Artifact otherwise) — display-only, never persisted.
+    private func applyWalkthroughStepMode() {
+        guard let step = toolbarWalkthroughStep else { return }
+        setDevModeForDisplay(step.showsDevControls)
+    }
+
+    /// Set the in-memory `isDevMode` for DISPLAY only. Unlike `setDevMode`
+    /// (whose controller callers persist `preferences.devModeEnabled`), this
+    /// must never reach a code path that writes the preference — the
+    /// walkthrough borrows Dev Mode to put the agent-settings icon on screen
+    /// and hands the real value back on end. It also skips `setDevMode`'s
+    /// menu-closing side effects: a walkthrough step change isn't a user
+    /// mode click.
+    func setDevModeForDisplay(_ on: Bool) {
+        if isDevMode != on { isDevMode = on }
+    }
+
     // MARK: - Mutations driven by AreaSelectorEventView
 
     func beginDrag(at point: CGPoint) {
@@ -926,5 +1003,70 @@ final class AreaSelectorState {
 
     func confirm(with rect: SelectionRect) {
         onConfirm?(rect)
+    }
+}
+
+// MARK: - Toolbar walkthrough steps
+
+/// The five stops of the first-run toolbar walkthrough, one per toolbar
+/// control, ordered left→right to match the toolbar layout. Ordered via
+/// `Int` raw value so advance/back are trivial arithmetic, and
+/// `CaseIterable` so tests and any step indicator iterate the same
+/// source-of-truth ordering (mirrors `OnboardingStep`).
+enum ToolbarWalkthroughStep: Int, CaseIterable {
+    case mode = 0
+    case model
+    case mic
+    case agent
+    case record
+
+    /// Stable identifier for analytics — decoupled from `rawValue` (an index
+    /// that shifts if steps are reordered/inserted), so it must stay constant
+    /// across releases (mirrors `OnboardingStep.analyticsName`).
+    var analyticsName: String {
+        switch self {
+        case .mode:   return "mode"
+        case .model:  return "model"
+        case .mic:    return "mic"
+        case .agent:  return "agent"
+        case .record: return "record"
+        }
+    }
+
+    /// Callout headline.
+    var title: String {
+        switch self {
+        case .mode:   return "Choose what Zerro makes"
+        case .model:  return "Pick the AI model"
+        case .mic:    return "Choose your mic"
+        case .agent:  return "Set up your coding agent"
+        case .record: return "Start recording"
+        }
+    }
+
+    /// Callout body copy.
+    var body: String {
+        switch self {
+        case .mode:
+            return "Artifact turns your recording into a prompt. Dev Mode sends it straight to a coding agent to make the change for you."
+        case .model:
+            return "This model reads your screen and voice. Tap to switch — the current model's name shows here."
+        case .mic:
+            return "Zerro records what you say while you point and talk. Pick your input device here."
+        case .agent:
+            return "In Dev Mode, choose which agent runs and which project folder it edits."
+        case .record:
+            return "Press this (or Return) to begin. You get up to 3 minutes."
+        }
+    }
+
+    /// Whether this step needs the toolbar rendered in Dev Mode — the
+    /// agent-settings icon only exists there, and Record is taught in the
+    /// same (Dev) layout it was just revealed in.
+    var showsDevControls: Bool {
+        switch self {
+        case .mode, .model, .mic: return false
+        case .agent, .record:     return true
+        }
     }
 }
