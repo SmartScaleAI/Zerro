@@ -466,13 +466,16 @@ jobs:
         run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). Appcast uploaded to Supabase Storage; getzerro.app/appcast.xml serves it via the Vercel redirect."
 
       # ----------------------------------------------------------------------
-      # Post the release notes to Slack — the SAME notes shown in the in-app
-      # What's New window (parsed from Changelog.swift at release time; no
-      # second copy of the notes exists). Best-effort: the release is already
-      # live by this point, so a Slack hiccup only warns, never fails the job.
-      # Skips cleanly when the SLACK_RELEASE_WEBHOOK_URL secret is unset (safe
-      # on forks / before the webhook exists) or when the released commit has
-      # no Changelog.swift entry for this version.
+      # Post the release to Slack: the user-facing What's New highlights (the
+      # SAME notes the in-app window shows, parsed from Changelog.swift at
+      # release time) PLUS every app commit in the release range, so internal
+      # members see everything that shipped. The post ALWAYS fires — a release
+      # with no Changelog.swift entry gets a visible ⚠️ flag line instead of a
+      # silent skip (internal-only releases are expected; forgotten entries
+      # get noticed). Best-effort: the release is already live by this point,
+      # so a Slack hiccup only warns, never fails the job. Skips cleanly only
+      # when the SLACK_RELEASE_WEBHOOK_URL secret is unset (safe on forks /
+      # before the webhook exists).
       #
       # working-directory is overridden to the repo root, and the changelog is
       # read by COMMIT SHA (git show), not from the working tree — that pins
@@ -491,11 +494,28 @@ jobs:
             echo "SLACK_RELEASE_WEBHOOK_URL not set — skipping Slack notification."
             exit 0
           fi
-          git show "$GITHUB_SHA:apps/desktop/Zerro/WhatsNew/Changelog.swift" \
+          git fetch --tags --quiet origin || true
+          # Previous app release = nearest app-v* tag before this commit. `^` skips
+          # the tag on THIS commit so we don't diff against ourselves. Empty on the
+          # first-ever release.
+          PREV_TAG="$(git describe --tags --abbrev=0 --match 'app-v*' "${GITHUB_SHA}^" 2>/dev/null || true)"
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${GITHUB_SHA}"
+            COMPARE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${GITHUB_SHA}"
+          else
+            RANGE="$GITHUB_SHA"
+            COMPARE_URL=""
+          fi
+          # Every app commit in this release (internal + user-facing), one subject per line.
+          git log --no-merges --format='%s' $RANGE -- apps/desktop/ > commits.txt || true
+          # User-facing highlights (from the released commit's Changelog.swift, by SHA —
+          # the runner is on a detached tag) + the full commit list → Block Kit payload.
+          git show "$GITHUB_SHA:apps/desktop/Zerro/WhatsNew/Changelog.swift" 2>/dev/null \
             | python3 apps/desktop/Scripts/changelog_to_slack.py \
-                --version "$VER" --build "$BUILD" > payload.json || true
+                --version "$VER" --build "$BUILD" \
+                --commits-file commits.txt --compare-url "$COMPARE_URL" > payload.json || true
           if [ ! -s payload.json ]; then
-            echo "::warning::No Changelog.swift entry for $VER — skipping Slack post."
+            echo "::warning::Could not build Slack payload for $VER — skipping."
             exit 0
           fi
           code="$(curl -s -o /tmp/slack_resp -w '%{http_code}' -X POST \
