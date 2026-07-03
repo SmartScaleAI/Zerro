@@ -14,12 +14,13 @@ export const DOWNLOAD_URL = "https://getzerro.app/Zerro.dmg";
 /**
  * Marketing version of the Zerro macOS app shown on the site (hero + final CTA).
  *
- * SINGLE SOURCE OF TRUTH for the displayed version. Do NOT hand-edit for a
- * release: release-app.yml rewrites this line from apps/desktop/VERSION in the
- * same commit that publishes the appcast, so the site always matches the shipped
- * build. Stored WITHOUT the leading "v"; components render `v{APP_VERSION}`.
+ * SINGLE SOURCE OF TRUTH for the displayed version. Keep it in lockstep with
+ * apps/desktop/VERSION: bump both in the same release PR. Nothing rewrites this
+ * automatically — release-app.yml publishes the appcast to Supabase Storage and
+ * never commits to git (main's require-PR ruleset rejects bot pushes).
+ * Stored WITHOUT the leading "v"; components render `v{APP_VERSION}`.
  */
-export const APP_VERSION = "1.4.21";
+export const APP_VERSION = "1.4.23";
 
 /**
  * Supabase Edge Functions base. NOT a secret — it's the same public base the
