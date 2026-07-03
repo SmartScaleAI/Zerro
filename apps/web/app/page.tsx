@@ -83,6 +83,9 @@ const Page = () => {
         <SectionView section="how_it_works">
           <Feature />
         </SectionView>
+        <SectionView section="comparison">
+          <Comparison />
+        </SectionView>
         <SectionView section="output">
           <ToolFeature />
         </SectionView>
@@ -91,9 +94,6 @@ const Page = () => {
         </SectionView>
         <SectionView section="built_right">
           <BuiltRight />
-        </SectionView>
-        <SectionView section="comparison">
-          <Comparison />
         </SectionView>
         <SectionView section="the_shift">
           <NowTalking />

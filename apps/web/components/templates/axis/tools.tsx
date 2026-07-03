@@ -268,7 +268,7 @@ export default function ToolFeature() {
                     The output
                 </p>
                 <h2 className="text-3xl font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl max-w-2xl leading-tight">
-                    Never type again.
+                    It Writes Itself.
                 </h2>
                 <p className="max-w-xl text-base text-muted-foreground">
                     Every recording becomes exactly what you need: an agent prompt, a message, a snippet, or a document, written up and ready to use. Or, when you just want to understand something, a clear answer in plain language.

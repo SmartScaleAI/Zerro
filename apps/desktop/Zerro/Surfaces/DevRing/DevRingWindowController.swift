@@ -268,11 +268,14 @@ private struct DevRingView: View {
     // Visual tuning — thin and sleek: a crisp edge line plus a soft inward
     // falloff. Tuned to read as present-but-not-heavy.
     private let cornerRadius: CGFloat = 14
-    private let crispLineWidth: CGFloat = 9
-    private let glowLineWidth: CGFloat = 22
-    private let glowBlur: CGFloat = 34
+    private let crispLineWidth: CGFloat = 5
+    private let glowLineWidth: CGFloat = 14
+    private let glowBlur: CGFloat = 22
 
-    private let minOpacity: CGFloat = 0.45
+    // The perceived "retract" at the trough is the blurred falloff dropping
+    // below visibility — a high floor keeps a steady band that only breathes
+    // gently inward, instead of collapsing back to the screen edge.
+    private let minOpacity: CGFloat = 0.70
     private let maxOpacity: CGFloat = 1.0
     private let pulseDuration: TimeInterval = 1.9
 

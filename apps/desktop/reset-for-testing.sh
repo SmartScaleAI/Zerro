@@ -43,6 +43,9 @@ rm -rf \
   "$HOME/Library/Preferences/$BUNDLE_ID.plist"
 
 echo "==> Clearing UserDefaults + flushing the prefs daemon cache"
+# The blanket delete covers every vf.* key, including one-time flags like
+# vf.areaSelector.toolbarWalkthroughSeen — so the first-run toolbar
+# walkthrough re-arms on the next overlay open after a reset.
 defaults delete "$BUNDLE_ID" 2>/dev/null
 killall cfprefsd 2>/dev/null   # otherwise cfprefsd can rewrite the deleted plist
 

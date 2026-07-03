@@ -31,7 +31,9 @@ const HIGHLIGHT_STYLE = {
         "lg:p-7 ring-1 ring-[#28a082]/40 " +
         // a tinted ring + outer colored glow reads cleanly and is cheap (a true
         // gradient border would need a masked padding-box/border-box layer).
-        "shadow-[0_0_0_1px_rgba(40,160,130,0.34),0_46px_120px_-14px_rgba(40,160,130,0.46)]",
+        // The bloom leans left with a tighter spread so its rightward reach
+        // dies inside the column gap instead of washing over the BYOK card.
+        "shadow-[0_0_0_1px_rgba(40,160,130,0.34),-20px_46px_110px_-20px_rgba(40,160,130,0.46)]",
     title: "text-foreground",
     // "Most popular" badge — solid white (the limited-offer ribbon now carries
     // the blue→teal→purple gradient instead).
@@ -247,7 +249,10 @@ const Pricing = () => {
                             className={cn(
                                 tier.highlight
                                     ? "relative z-10 h-full lg:scale-[1.04]"
-                                    : "relative z-0 h-full"
+                                    : // Above the highlighted card so its teal glow
+                                      // renders behind this card's frosted glass
+                                      // instead of painting over it.
+                                      "relative z-20 h-full"
                             )}
                         >
                             {/* "Limited offer" badge — straddles the card's top edge
