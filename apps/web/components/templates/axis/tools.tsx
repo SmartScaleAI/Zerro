@@ -44,31 +44,31 @@ type ArtifactSpec = {
 // Exact example bodies — kept as raw strings so Copy grabs the body exactly.
 const AGENT_PROMPT_BODY = `Fix the promo-code validation on the checkout Order Summary.
 1. Locate the "Apply" button beside the promo-code field (current value: SAVE20) in the Order Summary panel.
-2. When an applied code is invalid or expired, the field currently does nothing — no error, no spinner, no state change.
+2. When an applied code is invalid or expired, the field currently does nothing: no error, no spinner, no state change.
 3. On an invalid code, render an inline error directly beneath the field in red (e.g. "This code is expired or invalid").
 4. Keep the existing layout and totals; this is a validation fix, not a redesign.`;
 
 const MESSAGE_BODY = `Subject: Launch moving to Friday
 Hi Sarah,
 Quick heads-up on the launch timeline. The API migration ran longer than we scoped, so we're moving the launch from Tuesday to Friday to land the cutover cleanly rather than rush it.
-The Thursday demo is unaffected — everything we're showing there is already in place.
+The Thursday demo is unaffected. Everything we're showing there is already in place.
 Sorry for the shift. I'll send a firm Friday window by end of day tomorrow.
 Thanks,
 [You]`;
 
 const SNIPPET_BODY = `=SUMIF(B:B, "Paid", C:C)`;
 
-const DOCUMENT_BODY = `Roadmap Offsite — Summary
+const DOCUMENT_BODY = `Roadmap Offsite: Summary
 Decided
 - Q3 priorities are locked and dated.
 - Checkout revamp ships first, ahead of the billing work.
 Open
-- Platform rewrite — still under discussion; not committed for Q3.
-- Mobile parity — scope TBD pending the rewrite call.
+- Platform rewrite: still under discussion; not committed for Q3.
+- Mobile parity: scope TBD pending the rewrite call.
 Owners
-- Checkout revamp — Priya
-- Billing — Marcus
-- Platform rewrite decision — Sarah, by end of month`;
+- Checkout revamp: Priya
+- Billing: Marcus
+- Platform rewrite decision: Sarah, by end of month`;
 
 const ARTIFACT_ORDER: ArtifactType[] = [
     "agent_prompt",
@@ -93,7 +93,7 @@ const ARTIFACTS: Record<ArtifactType, ArtifactSpec> = {
         toggleLabel: "Message",
         title: "Email Sarah: launch slipping Tuesday → Friday",
         description:
-            "A ready-to-send note about the timeline change — apologetic, but not groveling.",
+            "A ready-to-send note about the timeline change: apologetic, but not groveling.",
         buttonLabel: "Copy draft",
         icon: Mail,
         render: "message",
@@ -102,9 +102,9 @@ const ARTIFACTS: Record<ArtifactType, ArtifactSpec> = {
     },
     snippet: {
         toggleLabel: "Snippet",
-        title: 'SUMIF — total of column C where column B is "Paid"',
+        title: 'SUMIF: total of column C where column B is "Paid"',
         description:
-            "The exact formula to paste into your cell — totals column C for every row marked Paid in column B.",
+            "The exact formula to paste into your cell. It totals column C for every row marked Paid in column B.",
         buttonLabel: "Copy snippet",
         icon: Code,
         render: "snippet",
@@ -113,7 +113,7 @@ const ARTIFACTS: Record<ArtifactType, ArtifactSpec> = {
     },
     document: {
         toggleLabel: "Document",
-        title: "Roadmap offsite — team summary",
+        title: "Roadmap offsite: team summary",
         description:
             "Your raw offsite notes written up as a shareable summary, organized into what's decided, what's open, and who owns what.",
         buttonLabel: "Copy text",
@@ -271,7 +271,7 @@ export default function ToolFeature() {
                     It Writes Itself.
                 </h2>
                 <p className="max-w-xl text-base text-muted-foreground">
-                    Every recording becomes exactly what you need — an agent prompt, a message, a snippet, or a document, written up and ready to use. Or, when you just want to understand something, a clear answer in plain language.
+                    Every recording becomes exactly what you need: an agent prompt, a message, a snippet, or a document, written up and ready to use. Or, when you just want to understand something, a clear answer in plain language.
                 </p>
             </div>
 
