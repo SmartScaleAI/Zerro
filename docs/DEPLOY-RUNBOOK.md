@@ -141,6 +141,14 @@ Full detail in `LEMONSQUEEZY-SETUP-CHECKLIST.md`; the launch actions:
 Release the multi-model app build via Sparkle (appcast). Keep the
 backend-to-app window short — most users auto-update.
 
+**Every app release:** add the new version's entry to the TOP of
+`apps/desktop/Zerro/WhatsNew/Changelog.swift` in the same PR that bumps
+`VERSION` / `CFBundleShortVersionString`. The in-app "What's New" window
+auto-pops once per version update, but ONLY when the current version has an
+entry — a release without one silently skips the pop (defensive guard in
+`WhatsNewPolicy`), so forgetting this means users never see that version's
+notes.
+
 **Release-note callouts (required):**
 
 - **D1 — Managed users on an old app build:** an un-updated app sends no

@@ -26,6 +26,8 @@ struct AboutSupportSection: View {
             SettingsSection("About & Support") {
                 VersionRow()
                 SettingsRowDivider()
+                WhatsNewRow()
+                SettingsRowDivider()
                 CheckForUpdatesRow()
                 SettingsRowDivider()
                 CopyDiagnosticInfoRow()
@@ -162,6 +164,20 @@ private struct SendFeedbackRow: View {
         ) {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: FeedbackScene.windowID)
+        }
+    }
+}
+
+private struct WhatsNewRow: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        SettingsNavigationRow(
+            label: "What\u{2019}s New",
+            description: "See the latest changes and improvements."
+        ) {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: WhatsNewScene.windowID)
         }
     }
 }

@@ -46,6 +46,7 @@ final class DockIconController {
         ActivateKeyScene.windowID,
         TrialEmailScene.windowID,
         FeedbackScene.windowID,
+        WhatsNewScene.windowID,
     ]
 
     /// IDs of qualifying windows currently on screen. Set semantics give

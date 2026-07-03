@@ -45,7 +45,11 @@ rm -rf \
 echo "==> Clearing UserDefaults + flushing the prefs daemon cache"
 # The blanket delete covers every vf.* key, including one-time flags like
 # vf.areaSelector.toolbarWalkthroughSeen — so the first-run toolbar
-# walkthrough re-arms on the next overlay open after a reset.
+# walkthrough re-arms on the next overlay open after a reset. It also wipes
+# the What's New pair (vf.whatsNew.showOnUpdate + vf.whatsNew.lastSeenVersion),
+# which makes the next launch a "fresh install" (marker seeded silently, no
+# pop). To re-trigger the update auto-pop instead, set the marker to an older
+# version:  defaults write "$BUNDLE_ID" vf.whatsNew.lastSeenVersion 1.0.0
 defaults delete "$BUNDLE_ID" 2>/dev/null
 killall cfprefsd 2>/dev/null   # otherwise cfprefsd can rewrite the deleted plist
 
