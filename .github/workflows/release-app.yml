@@ -14,9 +14,9 @@ on:
         required: true
 
 permissions:
-  contents: write          # create the GitHub Release + push the appcast commit
+  contents: write          # create the GitHub Release (the appcast publishes to Storage, not a git push)
 
-# Never run two releases at once: both would push an appcast commit to main.
+# Never run two releases at once: both would upsert the same Storage appcast object.
 concurrency:
   group: release-app
   cancel-in-progress: false
@@ -32,10 +32,9 @@ env:
   APP_NAME: Zerro
   BUNDLE_ID: com.cbreeding.Zerro
   TEAM_ID: H6NWCRRAHV
-  # The website lives in this same repo; Vercel deploys apps/web on push to main.
-  SITE_APPCAST_PATH: apps/web/public/appcast.xml     # where the Sparkle appcast is served from
-  SITE_VERSION_PATH: apps/web/lib/site-config.ts      # single source of truth for the displayed app version
-  # Where the dmg download lives (a GitHub Release asset URL is filled in at runtime).
+  # The Sparkle appcast is published by uploading it to a public Supabase Storage
+  # object; getzerro.app/appcast.xml serves it via a Vercel redirect (apps/web).
+  # No git push to the (PR-protected) main branch is involved.
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
 
 jobs:
@@ -364,14 +363,20 @@ jobs:
           # single-item feed. generate_appcast preserves items whose archives are
           # absent — it does NOT need the old dmgs present (verified against the
           # pinned Sparkle ${SPARKLE_VERSION} generate_appcast/FeedXML.swift).
-          # The runner is on the release tag (detached HEAD), so the up-to-date
-          # appcast must come from main, not the tag tree.
-          git fetch origin main
-          if git cat-file -e "origin/main:$SITE_APPCAST_PATH" 2>/dev/null; then
-            git show "origin/main:$SITE_APPCAST_PATH" > "dist/appcast.xml"
-            echo "Seeded dist/appcast.xml from origin/main for a cumulative merge."
+          #
+          # The source of truth is the PUBLISHED feed, fetched over HTTP (the
+          # runner is on a detached tag, and the feed no longer lives in git):
+          # the public Storage object first, then the live site URL as a fallback
+          # for the git→Storage migration window, then a fresh feed.
+          PUB_STORAGE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml"
+          PUB_SITE="https://getzerro.app/appcast.xml"
+          if curl -fsS "$PUB_STORAGE" -o "dist/appcast.xml" && grep -q "<item>" "dist/appcast.xml"; then
+            echo "Seeded dist/appcast.xml from the published Storage feed for a cumulative merge."
+          elif curl -fsSL "$PUB_SITE" -o "dist/appcast.xml" && grep -q "<item>" "dist/appcast.xml"; then
+            echo "Seeded dist/appcast.xml from the live website feed (Storage object not present yet)."
           else
-            echo "No published appcast on origin/main yet — generating a fresh feed."
+            rm -f "dist/appcast.xml"
+            echo "No published appcast found — generating a fresh feed."
           fi
 
           # --maximum-versions 0 = preserve ALL items (Sparkle's documented
@@ -397,6 +402,19 @@ jobs:
           if grep -qF "downloads/${APP_NAME}.dmg\"" "dist/appcast.xml"; then
             echo "::error::appcast references the mutable ${APP_NAME}.dmg — only versioned URLs are allowed (run the L-07 build-238 migration first)"; exit 1
           fi
+          # Guard: the just-built version must be the NEWEST the feed advertises —
+          # its build number must be the max <sparkle:version> in the generated
+          # appcast. Catches a tag placed on an old or duplicate commit (e.g.
+          # 1.4.18 was tagged on 1.4.17's commit → reused build 242), which would
+          # otherwise publish a feed that never offers this build.
+          MAX_VER="$(grep -oE '<sparkle:version>[0-9]+</sparkle:version>' dist/appcast.xml | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+          if [ -z "$MAX_VER" ]; then
+            echo "::error::generated appcast has no <sparkle:version> element — generate_appcast produced an unexpected format."; exit 1
+          fi
+          if [ "$MAX_VER" != "${{ steps.ver.outputs.build }}" ]; then
+            echo "::error::built build ${{ steps.ver.outputs.build }} is not the newest in the appcast (max sparkle:version=$MAX_VER) — the tag is likely on an old/duplicate commit; bump VERSION on a fresh commit before tagging."
+            exit 1
+          fi
           echo "----- appcast.xml -----"
           cat dist/appcast.xml
 
@@ -413,45 +431,36 @@ jobs:
             apps/desktop/dist/${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg
 
       # ----------------------------------------------------------------------
-      # Publish the appcast to the website (same repo). The push to main
-      # touches apps/web/, so Vercel auto-deploys it. checkout@v4 leaves the
-      # workflow's GITHUB_TOKEN configured for pushes; permissions.contents:
-      # write covers it.
-      - name: Publish appcast to website (apps/web)
-        working-directory: .
+      # Publish the appcast by upserting it into the public Supabase Storage
+      # `downloads` bucket. getzerro.app/appcast.xml serves THIS object via a
+      # Vercel redirect (apps/web/next.config.ts), so a successful upload IS the
+      # publish — no git commit, no push to the PR-protected `main`.
+      #
+      # This replaced a `git push origin main` of apps/web/public/appcast.xml,
+      # which started silently failing once `main` got a require-PR ruleset: the
+      # push was rejected but the old retry loop swallowed it, so 1.4.19 reported
+      # a green release while never updating the feed. --fail-with-body makes any
+      # HTTP error FAIL the release, so a publish failure can never be hidden again.
+      #
+      # SECURITY (L-01, mirrors the dmg upload above): SUPABASE_SERVICE_ROLE_KEY
+      # is over-privileged for a bucket upsert but is the only write path today;
+      # it's a masked GitHub secret and is never echoed — no `set -x`, no curl -v.
+      - name: Publish appcast to Supabase Storage
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          set -euo pipefail
-          # The runner checked out the release tag (detached HEAD); the appcast
-          # commit must land on main.
-          git fetch origin main
-          git switch main
-          cp "apps/desktop/dist/appcast.xml" "$SITE_APPCAST_PATH"
-
-          # Keep the site's displayed version in lockstep with this release.
-          # Fail loudly if the constant ever goes missing, so the site can't
-          # silently drift from the shipped build.
-          if ! grep -qE '^export const APP_VERSION = "' "$SITE_VERSION_PATH"; then
-            echo "::error::APP_VERSION constant not found in $SITE_VERSION_PATH"; exit 1
-          fi
-          # BSD sed (macos runner) needs the -i backup suffix.
-          sed -i.bak -E \
-            "s/^export const APP_VERSION = \"[^\"]*\";/export const APP_VERSION = \"${{ steps.ver.outputs.marketing }}\";/" \
-            "$SITE_VERSION_PATH"
-          rm -f "${SITE_VERSION_PATH}.bak"
-
-          git config user.name "Zerro Release Bot"
-          git config user.email "release-bot@users.noreply.github.com"
-          git add "$SITE_APPCAST_PATH" "$SITE_VERSION_PATH"
-          if git diff --cached --quiet; then
-            echo "Appcast and version unchanged — nothing to commit."
-          else
-            git commit -m "chore(web): publish appcast + bump site version to ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})"
-            # Rebase-retry in case main moved during the ~15 min build.
-            for i in 1 2 3; do
-              git push origin main && break
-              git pull --rebase origin main
-            done
-          fi
+          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
+          # cache-control: no-cache — the feed is mutable (a new release upserts
+          # it), so it must always be revalidated. Without this the object can
+          # inherit Supabase's default max-age, which Vercel WILL edge-cache,
+          # pinning a stale feed for up to an hour after a release.
+          curl --fail-with-body -X POST \
+            "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads/appcast.xml" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/xml" \
+            -H "Cache-Control: no-cache" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/appcast.xml"
 
       - name: Done
-        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). The appcast commit on main triggers a Vercel deploy of apps/web shortly."
+        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). Appcast uploaded to Supabase Storage; getzerro.app/appcast.xml serves it via the Vercel redirect."
