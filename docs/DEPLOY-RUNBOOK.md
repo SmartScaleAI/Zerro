@@ -160,15 +160,21 @@ notes.
   picks. Same 6 models everywhere by design — call out the behavior change.
 
 **Slack release notification:** every production release (`release-app.yml`)
-posts that version's release notes to Slack as its final step, sourced from the
-SAME `apps/desktop/Zerro/WhatsNew/Changelog.swift` entry the in-app What's New
+posts to Slack as its final step, and the post always fires. The message lists
+**all app changes** in the release (every `apps/desktop/` commit since the
+previous `app-v*` tag, from the git log — internal and user-facing alike, so
+the team sees everything that shipped) plus the user-facing **What's New**
+highlights on top when the version has one, sourced from the SAME
+`apps/desktop/Zerro/WhatsNew/Changelog.swift` entry the in-app What's New
 window shows (parsed at release time by
 `apps/desktop/Scripts/changelog_to_slack.py` — no second copy of the notes).
-Requires the `SLACK_RELEASE_WEBHOOK_URL` GitHub Actions repository secret; when
-it's unset the step skips silently. If the released commit has no
-`Changelog.swift` entry for the version, the post is skipped with a workflow
-warning — the release itself still succeeds either way (the step is
-best-effort by design).
+A release with no `Changelog.swift` entry still posts, with a visible ⚠️ flag
+line in the What's New section instead — no build failure; internal-only
+releases are expected, and a forgotten entry gets noticed rather than
+swallowed. The in-app What's New window is unaffected (still user-facing
+only). Requires the `SLACK_RELEASE_WEBHOOK_URL` GitHub Actions repository
+secret; when it's unset the step skips silently. The step is best-effort by
+design — a Slack hiccup warns but never fails the release.
 
 ---
 
