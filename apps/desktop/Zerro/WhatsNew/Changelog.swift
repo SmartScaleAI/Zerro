@@ -243,13 +243,6 @@ enum Changelog {
             ]
         ),
         ChangelogEntry(
-            version: "1.4.9",
-            date: releaseDate(2026, 6, 22),
-            highlights: [
-                ChangelogHighlight("New free trials now start with 30 credits.", kind: .note),
-            ]
-        ),
-        ChangelogEntry(
             version: "1.4.8",
             date: releaseDate(2026, 6, 22),
             highlights: [
