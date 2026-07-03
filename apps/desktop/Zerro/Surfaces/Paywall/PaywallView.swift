@@ -626,7 +626,7 @@ private struct ManagedPrivacyNote: View {
 private struct AddCreditsCard: View {
     var body: some View {
         OptionCardChrome(padding: VFSpacing.lg) {
-            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits ($5\u{2013}$300). Credits are added to your balance and carry over for 12 months.")
+            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
@@ -636,7 +636,6 @@ private struct AddCreditsCard: View {
             OnboardingPrimaryButton(
                 "Add Credits",
                 isEnabled: BillingLinks.topupCheckoutURL != nil,
-                tint: .vfDevAccent,
                 action: openCheckout
             )
         }
