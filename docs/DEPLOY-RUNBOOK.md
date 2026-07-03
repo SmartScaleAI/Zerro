@@ -141,6 +141,14 @@ Full detail in `LEMONSQUEEZY-SETUP-CHECKLIST.md`; the launch actions:
 Release the multi-model app build via Sparkle (appcast). Keep the
 backend-to-app window short — most users auto-update.
 
+**Every app release:** add the new version's entry to the TOP of
+`apps/desktop/Zerro/WhatsNew/Changelog.swift` in the same PR that bumps
+`VERSION` / `CFBundleShortVersionString`. The in-app "What's New" window
+auto-pops once per version update, but ONLY when the current version has an
+entry — a release without one silently skips the pop (defensive guard in
+`WhatsNewPolicy`), so forgetting this means users never see that version's
+notes.
+
 **Release-note callouts (required):**
 
 - **D1 — Managed users on an old app build:** an un-updated app sends no
@@ -150,6 +158,17 @@ backend-to-app window short — most users auto-update.
 - **E5 — Existing BYOK users move off gpt-4o:** the registry has no gpt-4o, so
   an updated BYOK install runs `gpt-5.4-mini` (fallback) or whatever the user
   picks. Same 6 models everywhere by design — call out the behavior change.
+
+**Slack release notification:** every production release (`release-app.yml`)
+posts that version's release notes to Slack as its final step, sourced from the
+SAME `apps/desktop/Zerro/WhatsNew/Changelog.swift` entry the in-app What's New
+window shows (parsed at release time by
+`apps/desktop/Scripts/changelog_to_slack.py` — no second copy of the notes).
+Requires the `SLACK_RELEASE_WEBHOOK_URL` GitHub Actions repository secret; when
+it's unset the step skips silently. If the released commit has no
+`Changelog.swift` entry for the version, the post is skipped with a workflow
+warning — the release itself still succeeds either way (the step is
+best-effort by design).
 
 ---
 

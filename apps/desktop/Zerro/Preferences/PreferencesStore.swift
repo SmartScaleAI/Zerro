@@ -118,6 +118,17 @@ final class PreferencesStore {
         /// can re-trigger the tour.
         static let toolbarWalkthroughSeen = "vf.areaSelector.toolbarWalkthroughSeen"
 
+        // What's New (changelog window).
+        /// The window's footer checkbox — "Show changelog after each update".
+        /// Default ON (opt-out); gates only the launch-time auto-pop, never
+        /// the About → What's New row. Resettable.
+        static let showWhatsNewOnUpdate = "vf.whatsNew.showOnUpdate"
+        /// The newest version whose What's New the user has already seen (or
+        /// that was silently seeded on first launch). nil = never recorded.
+        /// NOT resettable — like `localModelVersion` it tracks real history;
+        /// wiping it on "Reset to Defaults" would re-pop the changelog.
+        static let lastSeenWhatsNewVersion = "vf.whatsNew.lastSeenVersion"
+
         /// Every UserDefaults key persisted via this store. "Reset to
         /// Defaults" in App Behavior wipes exactly this set — never the
         /// Keychain entry, never the prompt history file, never the
@@ -144,11 +155,14 @@ final class PreferencesStore {
             devNetworkFilterDisabled,
             sttEngine,
             toolbarWalkthroughSeen,
+            showWhatsNewOnUpdate,
             // NOTE: `localModelVersion` / `localModelDownloadedAt` are deliberately
             // NOT here. They track an on-disk file (~547 MB) that a settings reset
             // does not delete; wiping them would tell the app "no model" while the
             // file is still present. `LocalModelManager` reconciles them against
             // the actual file integrity, so they stay out of the reset set.
+            // `lastSeenWhatsNewVersion` is likewise excluded — it tracks real
+            // history, and a settings reset must not re-pop the changelog.
         ]
     }
 
@@ -380,6 +394,30 @@ final class PreferencesStore {
         didSet { defaults.set(toolbarWalkthroughSeen, forKey: Keys.toolbarWalkthroughSeen) }
     }
 
+    // MARK: - What's New (changelog window)
+
+    /// The What's New footer checkbox — "Show changelog after each update".
+    /// Default ON (opt-out) so users see the first post-adoption changelog.
+    /// Gates only the launch-time auto-pop (`WhatsNewPolicy`); the About →
+    /// What's New row always works.
+    var showWhatsNewOnUpdate: Bool {
+        didSet { defaults.set(showWhatsNewOnUpdate, forKey: Keys.showWhatsNewOnUpdate) }
+    }
+
+    /// The newest version whose What's New the user has already seen (or that
+    /// was silently seeded on first launch). nil = never recorded. Written by
+    /// ZerroApp's launch reconcile after every `WhatsNewPolicy` decision, so
+    /// the window fires at most once per version. Survives a settings reset.
+    var lastSeenWhatsNewVersion: String? {
+        didSet {
+            if let lastSeenWhatsNewVersion {
+                defaults.set(lastSeenWhatsNewVersion, forKey: Keys.lastSeenWhatsNewVersion)
+            } else {
+                defaults.removeObject(forKey: Keys.lastSeenWhatsNewVersion)
+            }
+        }
+    }
+
     // MARK: - Init
 
     init(defaults: UserDefaults = .standard) {
@@ -462,6 +500,10 @@ final class PreferencesStore {
         // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
         // (the walkthrough hasn't been seen on a fresh install).
         self.toolbarWalkthroughSeen = defaults.bool(forKey: Keys.toolbarWalkthroughSeen)
+        // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
+        // the ON default instead of UserDefaults' false-for-missing.
+        self.showWhatsNewOnUpdate = defaults.object(forKey: Keys.showWhatsNewOnUpdate) as? Bool ?? true
+        self.lastSeenWhatsNewVersion = defaults.string(forKey: Keys.lastSeenWhatsNewVersion)
     }
 
     // MARK: - Reset
@@ -495,8 +537,10 @@ final class PreferencesStore {
         devNetworkFilterDisabled = false
         sttEngine = .auto
         toolbarWalkthroughSeen = false
+        showWhatsNewOnUpdate = true
         // `localModelVersion` / `localModelDownloadedAt` are intentionally left
         // untouched here — they mirror the on-disk model file, which a settings
-        // reset does not delete.
+        // reset does not delete. `lastSeenWhatsNewVersion` likewise: it tracks
+        // real history, and a reset must not cause a spurious changelog re-pop.
     }
 }

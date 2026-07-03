@@ -464,3 +464,45 @@ jobs:
 
       - name: Done
         run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). Appcast uploaded to Supabase Storage; getzerro.app/appcast.xml serves it via the Vercel redirect."
+
+      # ----------------------------------------------------------------------
+      # Post the release notes to Slack — the SAME notes shown in the in-app
+      # What's New window (parsed from Changelog.swift at release time; no
+      # second copy of the notes exists). Best-effort: the release is already
+      # live by this point, so a Slack hiccup only warns, never fails the job.
+      # Skips cleanly when the SLACK_RELEASE_WEBHOOK_URL secret is unset (safe
+      # on forks / before the webhook exists) or when the released commit has
+      # no Changelog.swift entry for this version.
+      #
+      # working-directory is overridden to the repo root, and the changelog is
+      # read by COMMIT SHA (git show), not from the working tree — that pins
+      # the notes to the exact released commit regardless of what earlier
+      # steps did to the checkout, for tag pushes and workflow_dispatch alike.
+      - name: Notify Slack of release
+        if: success()
+        working-directory: .
+        env:
+          SLACK_RELEASE_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          VER: ${{ steps.ver.outputs.marketing }}
+          BUILD: ${{ steps.ver.outputs.build }}
+        run: |
+          set -euo pipefail   # never add `set -x` — it would echo the webhook URL
+          if [ -z "${SLACK_RELEASE_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_RELEASE_WEBHOOK_URL not set — skipping Slack notification."
+            exit 0
+          fi
+          git show "$GITHUB_SHA:apps/desktop/Zerro/WhatsNew/Changelog.swift" \
+            | python3 apps/desktop/Scripts/changelog_to_slack.py \
+                --version "$VER" --build "$BUILD" > payload.json || true
+          if [ ! -s payload.json ]; then
+            echo "::warning::No Changelog.swift entry for $VER — skipping Slack post."
+            exit 0
+          fi
+          code="$(curl -s -o /tmp/slack_resp -w '%{http_code}' -X POST \
+            -H 'Content-type: application/json' \
+            --data @payload.json "$SLACK_RELEASE_WEBHOOK_URL" || echo 000)"
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::warning::Slack notification failed (HTTP $code) — release already published."
+          else
+            echo "Posted release notes for $VER to Slack."
+          fi

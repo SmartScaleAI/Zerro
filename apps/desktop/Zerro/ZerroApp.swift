@@ -80,6 +80,16 @@ struct ZerroApp: App {
     /// drowned out by the dead ones in practice.
     private static var didRegisterGlobalShortcuts = false
 
+    /// Whether THIS launch auto-pops the "What's New" changelog window.
+    /// Decided exactly once inside init's one-shot block (from
+    /// `WhatsNewPolicy.decide` — version changed + checkbox on + onboarding
+    /// complete + notes exist), then read by the Window scene's
+    /// `.defaultLaunchBehavior` on every body evaluation. A static (not
+    /// @State) because deciding also bumps the persisted `lastSeen` marker —
+    /// the flag must survive SwiftUI's App.init re-invocations without
+    /// re-running the policy against the already-bumped marker.
+    private static var shouldPresentWhatsNewOnLaunch = false
+
     /// True when the process is hosting a SwiftUI `#Preview`, not a real
     /// launch. Xcode sets `XCODE_RUNNING_FOR_PREVIEWS=1` in the preview
     /// agent's environment. The `@main` App is still instantiated to host a
@@ -327,6 +337,42 @@ struct ZerroApp: App {
                 state?.sweepOrphanedDevSnapshots()
                 guard !offeredDevRecovery else { return }
                 await state?.recoverOrphanedRecordingIfAny(trigger: .launch)
+            }
+
+            // What's New: decide the launch auto-pop ONCE (the policy is pure;
+            // the side effects live here). Both .present and .seedOnly record
+            // the current version, and a suppressed .none still moves the
+            // marker forward, so the window fires at most once per version and
+            // a skipped version is never re-evaluated. In the one-shot block
+            // deliberately: a SwiftUI App.init re-invocation must not re-run
+            // the policy against the already-bumped marker, and previews must
+            // never auto-present.
+            let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+            switch WhatsNewPolicy.decide(
+                current: currentVersion,
+                lastSeen: prefs.lastSeenWhatsNewVersion,
+                autoShowEnabled: prefs.showWhatsNewOnUpdate,
+                onboardingComplete: onb.hasCompletedOnboarding,
+                hasEntry: Changelog.entry(for: currentVersion) != nil
+            ) {
+            case .present:
+                // Auto-pop everywhere EXCEPT Staging (internal test channel —
+                // the pop is noise there). The marker still advances below, and
+                // the About → What's New row still opens the window manually in
+                // every build.
+                if !Build.isStaging {
+                    Self.shouldPresentWhatsNewOnLaunch = true
+                    AppDelegate.shouldPresentWhatsNewOnLaunch = true
+                    WhatsNewScene.autoPresentedThisLaunch = true
+                }
+                prefs.lastSeenWhatsNewVersion = currentVersion
+                Log.breadcrumb(category: .appLifecycle, message: "whats-new auto-pop")
+            case .seedOnly:
+                prefs.lastSeenWhatsNewVersion = currentVersion
+            case .none:
+                if prefs.lastSeenWhatsNewVersion != currentVersion {
+                    prefs.lastSeenWhatsNewVersion = currentVersion
+                }
             }
 
             // Dev Mode (Phase 1): for a returning Dev Mode user, warm agent
@@ -594,6 +640,29 @@ struct ZerroApp: App {
             width: FeedbackScene.preferredWidth,
             height: FeedbackScene.preferredHeight
         )
+
+        // "What's New" changelog window. Auto-presents at launch only when
+        // init's one-shot policy check flipped the static (version changed +
+        // checkbox on + onboarding complete + notes exist — the onboarding
+        // pattern above); otherwise suppressed, and opened manually from the
+        // Settings About "What's New" row via openWindow(id:). The AppDelegate
+        // handles NSApp.activate for the auto-pop case.
+        Window("Zerro \u{2014} What\u{2019}s New", id: WhatsNewScene.windowID) {
+            WhatsNewView()
+                .dockIconVisibility(windowID: WhatsNewScene.windowID)
+                .disablesWindowRestoration()
+                // The footer's "Show changelog after each update" switch binds
+                // straight to the store.
+                .environment(preferences)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(Self.shouldPresentWhatsNewOnLaunch ? .presented : .suppressed)
+        .defaultSize(
+            width: WhatsNewScene.preferredWidth,
+            height: WhatsNewScene.preferredHeight
+        )
     }
 
     // MARK: - Hotkey gating
@@ -833,6 +902,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `applicationDidFinishLaunching`.
     nonisolated(unsafe) static var shouldPresentOnboardingOnLaunch: Bool = false
 
+    /// Set by `ZerroApp.init`'s one-shot block when `WhatsNewPolicy` decides
+    /// this launch auto-pops the changelog window. Read once in
+    /// `applicationDidFinishLaunching` to activate the app so the
+    /// scene-mounted window actually surfaces (mirrors onboarding above).
+    /// Never true alongside onboarding — the policy requires onboarding
+    /// to be complete.
+    nonisolated(unsafe) static var shouldPresentWhatsNewOnLaunch: Bool = false
+
     /// Set by `OnboardingWindowView.onAppear`. Used by `openOnboarding`
     /// to re-open the window from the hotkey handler when the user has
     /// closed it but onboarding is incomplete or a permission was
@@ -903,6 +980,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // to bring the app forward so the window has key focus in an
         // .accessory-policy menu-bar app.
         if Self.shouldPresentOnboardingOnLaunch {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        // Same treatment for the What's New auto-pop (mutually exclusive with
+        // onboarding by policy — see WhatsNewPolicy): the scene is already
+        // mounted via .presented; activation brings it forward.
+        if Self.shouldPresentWhatsNewOnLaunch {
             NSApp.activate(ignoringOtherApps: true)
         }
 
