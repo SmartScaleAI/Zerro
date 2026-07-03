@@ -10,7 +10,7 @@ import {
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description:
-    "How Zerro collects, uses, and protects your data — including what happens to your screen recordings and audio.",
+    "How Zerro collects, uses, and protects your data, including what happens to your screen recordings and audio.",
   alternates: { canonical: "/privacy" },
 }
 
@@ -24,7 +24,7 @@ export default function PrivacyPage() {
           Zerro is operated by <Strong>SmartScale Solutions LLC</Strong>{" "}
           (&ldquo;SmartScale&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;). Zerro
           is a macOS menu-bar app that lets you record a region of your screen,
-          dictate what you want, and receive exactly what you need — an agent
+          dictate what you want, and receive exactly what you need: an agent
           prompt, a message, a snippet, a document, or a clear answer to your
           question. This policy explains what data we collect through the
           Zerro app and the getzerro.app website, how we use it, and the
@@ -45,14 +45,14 @@ export default function PrivacyPage() {
             <Strong>We do not store your recordings.</Strong> Screen frames,
             audio, and transcripts are held briefly on your device and in
             memory during generation, and are never written to our database.
-            Our generation log has no content columns by design — it records
+            Our generation log has no content columns by design; it records
             only token counts, model, estimated cost, and success.
           </li>
           <li>
             <Strong>Processing starts on your Mac.</Strong> Your recording is
             prepared locally, and best-effort secret redaction runs on your Mac
             before anything is uploaded. Redaction covers detected on-screen
-            text only — your spoken audio is uploaded as recorded.
+            text only; your spoken audio is uploaded as recorded.
           </li>
           <li>
             <Strong>On the BYOK plan, recordings never touch our servers.</Strong>{" "}
@@ -65,7 +65,7 @@ export default function PrivacyPage() {
           </li>
           <li>
             <Strong>Anonymous analytics are optional.</Strong> The app collects
-            anonymous usage and crash diagnostics (metadata only — never your
+            anonymous usage and crash diagnostics (metadata only, never your
             recordings, transcripts, or prompts) to improve reliability, and
             you can turn it off any time in Settings.
           </li>
@@ -94,7 +94,7 @@ export default function PrivacyPage() {
           detected secrets before upload. This masking is best-effort: it scans
           on-screen text for common structured secrets (such as API keys and
           tokens), so it can miss things, and it does not apply to your spoken
-          audio — your narration is uploaded and transcribed as recorded. The
+          audio; your narration is uploaded and transcribed as recorded. The
           frames and audio are then sent to our generation service, where the
           audio is transcribed and the content is sent to the third-party AI
           model you selected (OpenAI, Google (Gemini), or Anthropic) to produce
@@ -128,22 +128,22 @@ export default function PrivacyPage() {
         </P>
         <P>
           <Strong>Dev Mode (optional).</Strong> If you turn on Dev Mode, Zerro
-          launches Claude Code — Anthropic&rsquo;s coding-agent CLI — locally on
+          launches Claude Code (Anthropic&rsquo;s coding-agent CLI) locally on
           your Mac, inside the project folder you choose. Acting at your
           direction, the agent can read and modify files in that folder and run
           commands there; it runs under sandboxing and permission controls that
           scope its access to your project. To match your recording to the right
           project, Zerro can read the address of your active browser tab via
           Apple Events, but it only ever uses a local (localhost) address to
-          detect the development-server port — any non-local address is
+          detect the development-server port; any non-local address is
           discarded the instant it is seen, and is never stored, logged, or
           transmitted. Your project files stay on your Mac and are not sent to
           SmartScale; when the agent runs, it communicates with Anthropic under
           its own terms to carry out the work you request.
         </P>
         <P>
-          <Strong>Usage data.</Strong> We record per-generation metadata —
-          token counts, estimated cost, model, provider, and success — to
+          <Strong>Usage data.</Strong> We record per-generation metadata
+          (token counts, estimated cost, model, provider, and success) to
           operate credits and billing. We also process IP addresses and
           session identifiers for rate limiting and abuse prevention.
         </P>
@@ -153,27 +153,27 @@ export default function PrivacyPage() {
           only a hashed version of the code, never the raw code. To prevent
           trial abuse, we also collect a one-way hash of a hardware identifier
           to limit free trials to one per device. The underlying identifier
-          never leaves your Mac — only the hash is sent — and it is used solely
+          never leaves your Mac (only the hash is sent), and it is used solely
           for fraud prevention, never for tracking or advertising.
         </P>
         <P>
           <Strong>App analytics and crash reports.</Strong> The Zerro desktop
           app uses PostHog to collect anonymous product-usage events (such as
           completing onboarding, starting a recording, or copying a result) and
-          diagnostic crash and error reports. These contain only metadata —
-          event names, timings, app version, model identifiers, and error types
-          — and never your recordings, transcripts, generated prompts, file
-          paths, or API keys. This data is associated with an anonymous device
+          diagnostic crash and error reports. These contain only metadata
+          (event names, timings, app version, model identifiers, and error
+          types) and never your recordings, transcripts, generated prompts,
+          file paths, or API keys. This data is associated with an anonymous device
           identifier, not your name or email. You can turn it off at any time in
           the app under Settings &rarr; &ldquo;Send Anonymous Usage Data &amp;
           Crash Reports.&rdquo;
         </P>
         <P>
           <Strong>Website analytics.</Strong> The getzerro.app website uses
-          PostHog to collect anonymous product-usage metadata — page views,
+          PostHog to collect anonymous product-usage metadata (page views,
           referrer and campaign source, device and browser type, and
           interaction events such as clicking a download button or expanding an
-          FAQ — along with aggregated heatmaps of where visitors click and
+          FAQ), along with aggregated heatmaps of where visitors click and
           scroll. This is metadata only and is not tied to your name or email.
           We do not record your browsing session, and the site is cookieless:
           PostHog sets no cross-site tracking cookies and keeps no identifier
@@ -184,8 +184,8 @@ export default function PrivacyPage() {
           through an affiliate link (a getzerro.app address carrying an
           &ldquo;aff&rdquo; code), we send that code to our server keyed to your
           public IP address so that a later purchase can be credited to the
-          referrer. Because checkout happens inside the Mac app — a separate
-          browser context — the app also passes its analytics identifier into
+          referrer. Because checkout happens inside the Mac app (a separate
+          browser context), the app also passes its analytics identifier into
           the Lemon Squeezy checkout so that a completed subscription can be
           matched back to the app&rsquo;s usage events. Where this identifier is
           linked to a checkout or subscription in this way it is pseudonymous
@@ -221,7 +221,7 @@ export default function PrivacyPage() {
           Anthropic&rsquo;s model API above), <Strong>Lemon Squeezy</Strong>{" "}
           (payments, as merchant of record), <Strong>Resend</Strong>{" "}
           (transactional email), <Strong>Slack</Strong> (internal routing of
-          in-app feedback and issue reports you choose to send — which include
+          in-app feedback and issue reports you choose to send, which include
           your email address when you are signed in), <Strong>PostHog</Strong>{" "}
           (app and website analytics and crash reporting), and{" "}
           <Strong>Vercel</Strong> (website hosting). AI providers process your
@@ -279,8 +279,8 @@ export default function PrivacyPage() {
           authentication, rate limits, and least-privilege access. Some account
           data, such as your email address, is necessarily stored in readable
           form so we can operate billing and trials. No system is perfectly
-          secure, but we design so that the most sensitive data — your screen
-          and voice — is held by us for the shortest possible time, or not at
+          secure, but we design so that the most sensitive data (your screen
+          and voice) is held by us for the shortest possible time, or not at
           all.
         </P>
       </LegalSection>

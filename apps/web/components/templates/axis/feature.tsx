@@ -132,7 +132,7 @@ const steps: Step[] = [
     icon: Cpu,
     title: "Prepped on your Mac, then AI",
     description:
-      "Your Mac prepares the recording and masks on-screen secrets first. Then one AI call creates the result — Managed in the cloud, or BYOK with your own key.",
+      "Your Mac prepares the recording and masks on-screen secrets first. Then one AI call creates the result: Managed in the cloud, or BYOK with your own key.",
     visual: <ProcessingVisual />,
   },
   {
@@ -140,7 +140,7 @@ const steps: Step[] = [
     icon: ClipboardPaste,
     title: "Paste it anywhere",
     description:
-      "It lands on your clipboard — agent prompt, message, snippet, or document — ready to drop into Cursor, your inbox, a sheet, or wherever it's headed.",
+      "It lands on your clipboard (agent prompt, message, snippet, or document), ready to drop into Cursor, your inbox, a sheet, or wherever it's headed.",
     visual: <PastePromptVisual />,
   },
 ]
