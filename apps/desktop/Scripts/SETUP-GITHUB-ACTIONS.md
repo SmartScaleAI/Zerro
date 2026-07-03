@@ -157,6 +157,13 @@ commit for that.
 - [ ] `SPARKLE_PRIVATE_KEY`
 - [ ] `SITE_REPO_TOKEN`
 
+Optional (the release succeeds without it; the step skips when unset):
+
+- [ ] `SLACK_RELEASE_WEBHOOK_URL` — Slack Incoming Webhook for the `#releases`
+      channel; the release workflow's final step posts the version's What's New
+      notes there. Separate from the feedback function's `SLACK_WEBHOOK_URL`,
+      which lives in Supabase secrets (different system, different channel).
+
 **In Zerro's workflow file:** `SITE_REPO` = `SmartScaleAI/smartscale-website` ✓ and
 `SITE_APPCAST_PATH` confirmed against where the file actually lives in smartscale-website.
 
