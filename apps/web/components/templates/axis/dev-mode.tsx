@@ -604,22 +604,26 @@ const DevMode = () => {
             {/* Recording ring — the same pulsing green halo the app shows while
                 DevMode is actively capturing. Spans edge-to-edge as a sharp
                 full-width band; inner content stays constrained for readability. */}
-            <motion.div
-                className="relative rounded-none border border-green-500/30 px-4 py-12 sm:py-16"
-                animate={{
-                    // Inward pulse: an inset green glow that draws in from the
-                    // edges toward the section. It never fully retracts — the
-                    // floor sits roughly halfway so the glow always reads as
-                    // "live", then breathes outward slowly to match the native
-                    // macOS recording ring's calm cadence.
-                    boxShadow: [
-                        "0 0 0 1.2px rgba(34,197,94,0.42), inset 0 0 60px -8px rgba(34,197,94,0.42)",
-                        "0 0 0 1.6px rgba(34,197,94,0.66), inset 0 0 92px -6px rgba(34,197,94,0.62)",
-                        "0 0 0 1.2px rgba(34,197,94,0.42), inset 0 0 60px -8px rgba(34,197,94,0.42)",
-                    ],
-                }}
-                transition={{ duration: 4.2, ease: "easeInOut", repeat: Infinity }}
-            >
+            <div className="relative px-4 py-12 sm:py-16">
+                {/* Ring visuals mirror the app's DevRingView: a crisp 5px edge
+                    line (half visible inside the edge, softened ~2px) plus a
+                    soft inward glow, pulsing opacity-only between the 0.70
+                    floor and 1.0 on a 1.9s ease-in-out breathe each way (3.8s
+                    round trip). The glow band is widened from the app's
+                    14px/22px stroke to suit the web section's larger canvas.
+                    The shadow itself is static so the pulse is a cheap
+                    composited fade rather than a per-frame box-shadow repaint —
+                    the web analog of the app's drawingGroup + opacity pulse. */}
+                <motion.div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0"
+                    style={{
+                        boxShadow:
+                            "inset 0 0 2px 2.5px rgba(34,197,94,0.8), inset 0 0 36px 12px rgba(34,197,94,0.4)",
+                    }}
+                    animate={{ opacity: [0.7, 1, 0.7] }}
+                    transition={{ duration: 3.8, ease: "easeInOut", repeat: Infinity }}
+                />
             <div className="mx-auto w-full max-w-7xl">
             {/* Centered section header — eyebrow + heading sit above the hero */}
             <div className="mx-auto mb-10 flex max-w-2xl flex-col items-center gap-3 text-center lg:mb-14">
@@ -701,7 +705,7 @@ const DevMode = () => {
                 </p>
             </div>
             </div>
-            </motion.div>
+            </div>
         </motion.section>
     );
 };
