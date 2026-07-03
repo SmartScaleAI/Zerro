@@ -275,7 +275,7 @@ struct PaywallView: View {
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
+                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo if you choose yearly billing."
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with
@@ -846,7 +846,7 @@ private struct OptionCardChrome<Content: View>: View {
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
                 .strokeBorder(
-                    highlighted ? Color.vfBrandAccent.opacity(0.55) : Color.vfHairline,
+                    highlighted ? Color.vfDevAccent.opacity(0.55) : Color.vfHairline,
                     lineWidth: 1
                 )
         )

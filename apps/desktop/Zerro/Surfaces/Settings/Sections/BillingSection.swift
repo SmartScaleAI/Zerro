@@ -272,7 +272,7 @@ private struct CurrentPlanRow: View {
     private var managedDescription: String {
         let limit = entitlements.managedSnapshot.map { $0.planCreditsLimit ?? $0.creditsLimit }
         let allowance = limit.map { "\($0)" } ?? "300"
-        return "\(allowance) credits every month. $15/month, or $12/month billed yearly."
+        return "\(allowance) credits every month. $15/month, or $12/month if you choose yearly billing."
     }
 
     /// The compact trial pill text. Shows the remaining credit balance when
@@ -537,7 +537,7 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month billed yearly \u{2014} 300 credits every month, all six models."
+        return "$15/month, or $12/month if you choose yearly billing \u{2014} 300 credits every month, all six models."
     }
 }
 
