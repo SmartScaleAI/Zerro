@@ -159,6 +159,17 @@ notes.
   an updated BYOK install runs `gpt-5.4-mini` (fallback) or whatever the user
   picks. Same 6 models everywhere by design — call out the behavior change.
 
+**Slack release notification:** every production release (`release-app.yml`)
+posts that version's release notes to Slack as its final step, sourced from the
+SAME `apps/desktop/Zerro/WhatsNew/Changelog.swift` entry the in-app What's New
+window shows (parsed at release time by
+`apps/desktop/Scripts/changelog_to_slack.py` — no second copy of the notes).
+Requires the `SLACK_RELEASE_WEBHOOK_URL` GitHub Actions repository secret; when
+it's unset the step skips silently. If the released commit has no
+`Changelog.swift` entry for the version, the post is skipped with a workflow
+warning — the release itself still succeeds either way (the step is
+best-effort by design).
+
 ---
 
 ## Pre-launch verification checklist
