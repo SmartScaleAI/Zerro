@@ -77,6 +77,17 @@ extension AppState {
             if case .outOfCreditsAtStart = reason {
                 return .outOfCreditsStart(headline: reason.headline, detail: reason.detail)
             }
+            // Config-type failure (missing/invalid API key, or the on-device model
+            // not installed): route the PRIMARY to open Settings at the right pane
+            // instead of Retry / reopen-area-selector — the fix lives in Settings,
+            // and a re-run fails identically until it's made. Checked here (like
+            // `.outOfCreditsAtStart`) so it never falls through to the generic
+            // Cancel/Retry `.error` card. These reasons are non-retryable, so
+            // `canRetryFailure` is already false for them; this just gives them a
+            // more useful primary than the reopen-area-selector fallback.
+            if let pane = reason.settingsDeepLink {
+                return .openSettings(headline: reason.headline, detail: reason.detail, pane: pane)
+            }
             // Retryable failures get the expanded card so the user can read
             // the real error and retry from there; everything else keeps the
             // compact amber capsule unchanged. `canRetryFailure` is re-evaluated

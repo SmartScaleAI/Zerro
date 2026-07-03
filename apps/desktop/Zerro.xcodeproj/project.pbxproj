@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA01F0A12FDE000000000001 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = AA01F0A12FDE000000000002 /* PostHog */; };
+		AA02F0A12FDE000000000012 /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = AA02F0A12FDE000000000011 /* whisper */; };
 		FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FF3B566F2FCC52E400F27154 /* Sparkle */; };
 		FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */; };
 /* End PBXBuildFile section */
@@ -70,6 +71,7 @@
 				FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */,
 				FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */,
 				AA01F0A12FDE000000000001 /* PostHog in Frameworks */,
+				AA02F0A12FDE000000000012 /* whisper in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -159,6 +161,7 @@
 				FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */,
 				FF3B566F2FCC52E400F27154 /* Sparkle */,
 				AA01F0A12FDE000000000002 /* PostHog */,
+				AA02F0A12FDE000000000011 /* whisper */,
 			);
 			productName = Zerro;
 			productReference = FF8546CF2FC74ACC000EB1A6 /* Zerro.app */;
@@ -193,6 +196,7 @@
 			mainGroup = FF8546C62FC74ACC000EB1A6;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				AA02F0A12FDE000000000010 /* XCLocalSwiftPackageReference "ThirdParty/WhisperFramework" */,
 				FF90F6FB2FC7C346004BFBAD /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 				FF3B566E2FCC52E400F27154 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				FFEE62E22FDE451A004132FA /* XCRemoteSwiftPackageReference "posthog-ios" */,
@@ -716,6 +720,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		AA02F0A12FDE000000000010 /* XCLocalSwiftPackageReference "ThirdParty/WhisperFramework" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ThirdParty/WhisperFramework;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		FF3B566E2FCC52E400F27154 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -748,6 +759,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FFEE62E22FDE451A004132FA /* XCRemoteSwiftPackageReference "posthog-ios" */;
 			productName = PostHog;
+		};
+		AA02F0A12FDE000000000011 /* whisper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA02F0A12FDE000000000010 /* XCLocalSwiftPackageReference "ThirdParty/WhisperFramework" */;
+			productName = whisper;
 		};
 		FF3B566F2FCC52E400F27154 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;

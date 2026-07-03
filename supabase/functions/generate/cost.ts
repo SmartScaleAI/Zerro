@@ -7,6 +7,11 @@
 // generation_log.est_cost_usd — token counts + dollars only, NEVER content
 // (§14.5).
 //
+// Note: the BYOK client path can now transcribe ON-DEVICE (whisper.cpp, $0 STT
+// — see AppState.sttCostUSD `isLocal`). This managed/server path is UNCHANGED and
+// always uses cloud STT (STT_MODEL), so the per-minute STT estimate below stays
+// correct here.
+//
 // Pricing is a per-`${provider}:${model}` table. An unknown key yields a null
 // estimate (logged as a warning) rather than a wrong number — the column is
 // informational and must never block a generation. Lookups key on the

@@ -44,6 +44,38 @@ enum CreditDisplay {
         balance == 1 ? "1 credit" : "\(balance) credits"
     }
 
+    /// Grouped-thousands formatter for the larger credit numbers (a banked
+    /// top-up balance can run into the thousands). The grouping separator is
+    /// pinned to "," so the rendered string is locale-stable — the billing copy
+    /// is English-only, and the tests assert the exact "1,289" grouping.
+    private static let groupedFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        f.groupingSeparator = ","
+        return f
+    }()
+
+    /// A bare grouped-thousands number, e.g. "1,289" — for callers that supply
+    /// their own unit/suffix (the top-up "{N} left" caption). `combinedHeadline`
+    /// builds on the same formatter for the "{N} credits" headline, keeping the
+    /// number formatting in this one source of truth.
+    static func grouped(_ value: Int) -> String {
+        groupedFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    /// "1,289 credits" / "1 credit" — the COMBINED spendable balance (plan +
+    /// top-up, F4) as the meter headline, with grouped thousands and the §1.5
+    /// singular. At or below zero it reads "Out of Credits" via the shared
+    /// `balanceLabel` rule (the one source of truth — a raw negative is never
+    /// surfaced). Replaces the old "N of {cap} credits" headline, which
+    /// over-reported for top-up holders ("1,289 of 300 credits"); the meter now
+    /// splits the two pools into separately-scaled bars instead.
+    static func combinedHeadline(_ combined: Int) -> String {
+        guard combined > 0 else { return balanceLabel(combined) }
+        return combined == 1 ? "1 credit" : "\(grouped(combined)) credits"
+    }
+
     /// The balance readout, with the shared "out of credits" rule in ONE place:
     /// `"Out of Credits"` once the balance is at or below zero — the server may
     /// have charged into the negative on the one final uncapped generation, and
@@ -56,13 +88,6 @@ enum CreditDisplay {
     }
 
     // MARK: - Usage meter (6F)
-
-    /// The meter headline: "248 of 300 credits". `combined` is the full
-    /// spendable balance (plan + top-up, F4) and CAN exceed `planLimit` for a
-    /// top-up holder — that's expected; the breakdown line explains it.
-    static func meterHeadline(combined: Int, planLimit: Int) -> String {
-        "\(combined) of \(planLimit) credits"
-    }
 
     /// Fraction of the PLAN allowance still unspent, for the meter bar
     /// (6F.1: the bar tracks plan consumption — the thing that resets —

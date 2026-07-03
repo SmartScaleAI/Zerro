@@ -376,6 +376,8 @@ private struct BackChevron: View {
     store.add(prompt: "Polish the Pulse login form.")
     return SettingsView()
         .environment(PreferencesStore())
+        .environment(LocalModelManager(preferences: PreferencesStore()))
+        .environment(ProviderKeyPresence())
         .environment(PermissionsManager())
         .environment(OnboardingState())
         .environment(LaunchAtLoginController())

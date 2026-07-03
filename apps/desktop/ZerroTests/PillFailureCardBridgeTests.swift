@@ -62,20 +62,88 @@ final class PillFailureCardBridgeTests: XCTestCase {
 
     func testNonRetryableFailureKeepsCompactErrorPill() {
         let appState = AppState()
-        // Missing API key is non-retryable; even with a processed recording the
-        // bridge must keep the small amber capsule.
+        // A non-retryable, NON-config failure (recording too short) keeps the small
+        // amber Cancel/Retry capsule — even with a processed recording on disk.
+        // (Config failures like `.apiKeyMissing` now route to `.openSettings` — see
+        // `testConfigFailuresMapToOpenSettingsCard`.)
         appState.processedRecording = makeProcessedRecording()
         appState.lastFailureDetail = "should be ignored"
-        appState.state = .failed(reason: .apiKeyMissing)
+        appState.state = .failed(reason: .recordingTooShort)
 
         XCTAssertFalse(appState.canRetryFailure)
 
         guard case .error(let headline, let detail, let retryable) = appState.pillState else {
             return XCTFail("non-retryable failure should map to .error, got \(String(describing: appState.pillState))")
         }
-        XCTAssertEqual(headline, RecordingFailureReason.apiKeyMissing.headline)
-        XCTAssertEqual(detail, RecordingFailureReason.apiKeyMissing.detail)
+        XCTAssertEqual(headline, RecordingFailureReason.recordingTooShort.headline)
+        XCTAssertEqual(detail, RecordingFailureReason.recordingTooShort.detail)
         XCTAssertFalse(retryable)
+    }
+
+    // MARK: - Config failures → "Open Settings" card (UX-A)
+
+    /// The three config reasons (missing/invalid key, model not installed) map to
+    /// the dedicated `.openSettings` card deep-linked to Account & Billing — NOT
+    /// the Cancel/Retry `.error` card or the reopen-area-selector fallback. Checked
+    /// even WITH a processed recording on disk (a re-run fails identically until the
+    /// config is fixed, so the fix is in Settings).
+    func testConfigFailuresMapToOpenSettingsCard() {
+        for reason in [RecordingFailureReason.apiKeyMissing, .localModelUnavailable, .apiAuth] {
+            let appState = AppState()
+            appState.processedRecording = makeProcessedRecording()
+            appState.state = .failed(reason: reason)
+
+            XCTAssertFalse(appState.canRetryFailure, "\(reason) is non-retryable")
+            guard case .openSettings(let headline, let detail, let pane) = appState.pillState else {
+                return XCTFail("\(reason) should map to .openSettings, got \(String(describing: appState.pillState))")
+            }
+            XCTAssertEqual(headline, reason.headline)
+            XCTAssertEqual(detail, reason.detail)
+            XCTAssertEqual(pane, .accountBilling)
+        }
+    }
+
+    /// A non-config failure never produces the open-settings card (regression
+    /// guard for the special-case ordering).
+    func testNonConfigFailureIsNotOpenSettings() {
+        let appState = AppState()
+        appState.processedRecording = makeProcessedRecording()
+        appState.state = .failed(reason: .recordingTooShort)
+        if case .openSettings = appState.pillState {
+            XCTFail("a non-config failure must not map to .openSettings")
+        }
+    }
+
+    /// The config card's primary button label is the single "Open Settings"
+    /// constant (task 5 — easy to swap).
+    func testOpenSettingsPrimaryButtonLabel() {
+        XCTAssertEqual(PillView.openSettingsButtonTitle, "Open Settings")
+    }
+
+    /// `settingsDeepLink` classifier: the three config reasons deep-link to Account
+    /// & Billing; a sampling of others do not.
+    func testSettingsDeepLinkClassifier() {
+        XCTAssertEqual(RecordingFailureReason.apiKeyMissing.settingsDeepLink, .accountBilling)
+        XCTAssertEqual(RecordingFailureReason.localModelUnavailable.settingsDeepLink, .accountBilling)
+        XCTAssertEqual(RecordingFailureReason.apiAuth.settingsDeepLink, .accountBilling)
+        XCTAssertNil(RecordingFailureReason.networkOffline.settingsDeepLink)
+        XCTAssertNil(RecordingFailureReason.providerError.settingsDeepLink)
+        XCTAssertNil(RecordingFailureReason.recordingTooShort.settingsDeepLink)
+    }
+
+    /// `openSettings(to:)` preselects the pane and dismisses the failure pill.
+    func testOpenSettingsActionSetsPendingPaneAndDismisses() {
+        let appState = AppState()
+        appState.processedRecording = makeProcessedRecording()
+        appState.state = .failed(reason: .apiKeyMissing)
+        AppDelegate.pendingSettingsCategory = nil
+
+        appState.openSettings(to: .accountBilling)
+
+        XCTAssertEqual(AppDelegate.pendingSettingsCategory, .accountBilling,
+                       "the pane is stashed for SettingsView.onAppear to consume")
+        XCTAssertEqual(appState.state, .idle, "opening Settings dismisses the failure pill")
+        AppDelegate.pendingSettingsCategory = nil   // cleanup shared static
     }
 
     func testRetryableFailureWithoutProcessedRecordingKeepsCompactPill() {

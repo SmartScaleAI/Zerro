@@ -272,7 +272,7 @@ private struct CurrentPlanRow: View {
     private var managedDescription: String {
         let limit = entitlements.managedSnapshot.map { $0.planCreditsLimit ?? $0.creditsLimit }
         let allowance = limit.map { "\($0)" } ?? "300"
-        return "\(allowance) credits every month. $15/month, or $12/month billed yearly."
+        return "\(allowance) credits every month. $15/month, or $12/month if you choose yearly billing."
     }
 
     /// The compact trial pill text. Shows the remaining credit balance when
@@ -537,7 +537,7 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month billed yearly \u{2014} 300 credits every month, all six models."
+        return "$15/month, or $12/month if you choose yearly billing \u{2014} 300 credits every month, all six models."
     }
 }
 
@@ -582,12 +582,15 @@ private func openCheckout(_ url: URL?, product: BillingLinks.CheckoutProduct, tr
 /// The glanceable usage card at the top of the Managed billing section —
 /// Managed/Trial ONLY (the BYOK pane never composes it).
 ///
-/// • Headline: the COMBINED balance (plan + top-up — matches the picker, F4)
-///   against the plan cap. A top-up holder's headline can exceed the cap;
-///   the breakdown line explains it.
-/// • Bar: PLAN-credit consumption only (`plan_credits_used/_limit`) — the
-///   thing that resets. Hidden when the backend/cache predates the breakdown
-///   fields rather than guessed from the combined number.
+/// • Headline: the COMBINED balance (plan + top-up — matches the picker, F4),
+///   with grouped thousands. No "of {cap}" — a top-up holder's balance can run
+///   well over the monthly cap, so the cap lives on the plan bar instead.
+/// • Bars: two separately-scaled pools so neither can read over 100% — a green
+///   MONTHLY PLAN bar (`plan_credits_used/_limit`, the thing that resets) and a
+///   blue TOP-UP PACKS bar (banked credits, a constant-full indicator). The
+///   plan bar is hidden when the backend/cache predates the breakdown fields
+///   (never guessed from the combined number); the top-up bar only shows when a
+///   banked balance exists.
 /// • Trial: same card against the trial grant. The bar draws against the
 ///   grant total (`trial_credits_limit`, cached from verify/resume — E4);
 ///   when that's unknown (older server / pre-update cache) the trial
@@ -621,16 +624,21 @@ private struct UsageMeterRow: View {
 
     @ViewBuilder
     private func managedMeter(_ snapshot: ManagedEntitlementSnapshot) -> some View {
+        // Headline: the COMBINED spendable balance (plan + top-up, matches the
+        // picker — F4). No "of {cap}" any more; a top-up holder's balance can
+        // run well over the monthly cap, so the cap lives on the per-pool plan
+        // bar below instead of producing nonsense like "1,289 of 300".
         HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-            Text(CreditDisplay.meterHeadline(
-                combined: snapshot.creditsRemaining,
-                planLimit: snapshot.planCreditsLimit ?? snapshot.creditsLimit
-            ))
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Color.vfTextPrimary)
-            Text("remaining this month")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
+            Text(CreditDisplay.combinedHeadline(snapshot.creditsRemaining))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.vfTextPrimary)
+            // "Out of Credits" is self-contained — only the positive headline
+            // takes the "available" suffix (never "Out of Credits available").
+            if snapshot.creditsRemaining > 0 {
+                Text("available")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
             Spacer(minLength: 0)
             if let reset = BillingDateFormat.resetDate(snapshot.resetDate) {
                 Text("Resets \(reset)")
@@ -639,17 +647,78 @@ private struct UsageMeterRow: View {
             }
         }
 
-        if let used = snapshot.planCreditsUsed, let limit = snapshot.planCreditsLimit {
-            meterBar(fraction: CreditDisplay.planFractionRemaining(planUsed: used, planLimit: limit))
-            if let topup = snapshot.topupCreditsRemaining, topup > 0 {
-                Text("Plan \(max(0, limit - used)) + top-up \(topup). Top-up credits survive the monthly reset and expire 12 months from purchase.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.vfTextTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+        // Two separately-scaled bars — one per pool — so neither can read over
+        // 100%. A slightly larger gap than the card's default row spacing
+        // (VFSpacing.sm) keeps them reading as distinct pools rather than one
+        // stacked meter. Each pool is opt-in: the plan bar needs the F4
+        // breakdown fields (absent on a legacy snapshot → no bar, as before),
+        // the top-up bar only when a banked balance exists.
+        let showsPlanBar = snapshot.planCreditsUsed != nil && snapshot.planCreditsLimit != nil
+        let showsTopupBar = (snapshot.topupCreditsRemaining ?? 0) > 0
+        if showsPlanBar || showsTopupBar {
+            VStack(alignment: .leading, spacing: VFSpacing.md) {
+                if let used = snapshot.planCreditsUsed, let limit = snapshot.planCreditsLimit {
+                    planBar(used: used, limit: limit)
+                }
+                if let topup = snapshot.topupCreditsRemaining, topup > 0 {
+                    topupBar(remaining: topup)
+                }
             }
         }
 
         topupPrompt(balance: snapshot.creditsRemaining)
+    }
+
+    /// MONTHLY PLAN pool: the plan-credit consumption that resets each month
+    /// (`plan_credits_used/_limit`). Scaled against the plan cap, so it can
+    /// never read over 100% even for a top-up holder.
+    private func planBar(used: Int, limit: Int) -> some View {
+        VStack(alignment: .leading, spacing: VFSpacing.xs) {
+            HStack(spacing: VFSpacing.sm) {
+                legendDot(.vfDevAccent)
+                Text("Monthly plan")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.vfTextSecondary)
+                Spacer(minLength: 0)
+                Text(planBarCaption(used: used, limit: limit))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
+            meterBar(
+                fraction: CreditDisplay.planFractionRemaining(planUsed: used, planLimit: limit),
+                tint: .vfDevAccent
+            )
+        }
+    }
+
+    // Just "{remaining} of {limit}" — the reset date is shown once, in the
+    // headline, so the plan caption doesn't repeat it.
+    private func planBarCaption(used: Int, limit: Int) -> String {
+        "\(max(0, limit - used)) of \(limit)"
+    }
+
+    /// TOP-UP PACKS pool: banked credits that survive the monthly reset. A
+    /// deliberately constant-full bar — there is no purchased-total in the
+    /// snapshot to deplete against, so it's a "you have banked credits"
+    /// indicator, not a consumption gauge. The exact balance is in the caption.
+    private func topupBar(remaining: Int) -> some View {
+        VStack(alignment: .leading, spacing: VFSpacing.xs) {
+            HStack(spacing: VFSpacing.sm) {
+                legendDot(.vfAccentBlue)
+                Text("Top-up packs")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.vfTextSecondary)
+                Spacer(minLength: 0)
+                Text("\(CreditDisplay.grouped(remaining)) left")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
+            meterBar(fraction: 1.0, tint: .vfAccentBlue)
+            Text("Survives the monthly reset \u{00B7} expires 12 months after purchase.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: Trial
@@ -688,16 +757,32 @@ private struct UsageMeterRow: View {
 
     // MARK: Shared pieces
 
-    private func meterBar(fraction: Double) -> some View {
+    /// A single rounded progress bar. `tint` defaults to the green plan accent
+    /// so the trial caller (and any future single-pool bar) is unchanged; the
+    /// managed meter passes an explicit tint per pool — green for the monthly
+    /// plan, blue for top-up packs — so the two bars never rely on color alone
+    /// (each carries its own caption + legend dot).
+    private func meterBar(fraction: Double, tint: Color = .vfDevAccent) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.vfPillBackground)
+                // A subtle lighter overlay rather than vfPillBackground (which is
+                // the same #202022 as the card, making a near-full bar's empty
+                // end invisible). Reads on any card background.
+                Capsule().fill(Color.white.opacity(0.10))
                 Capsule()
-                    .fill(Color.vfDevAccent)
+                    .fill(tint)
                     .frame(width: max(0, geo.size.width * fraction))
             }
         }
         .frame(height: 6)
+    }
+
+    /// A small filled legend dot, paired with each bar's caption so the pools
+    /// are distinguishable without relying on the bar color alone.
+    private func legendDot(_ color: Color) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
     }
 
     private func isLow(balance: Int) -> Bool {
@@ -810,6 +895,27 @@ private struct DevRevalidateRow: View {
         .environment(EntitlementStore.preview(
             .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))
         ))
+        .environment(PreferencesStore())
+        .padding()
+        .frame(width: 720)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Plan & Credits · managed + top-up") {
+    // A top-up holder: combined balance (1,289) runs well over the monthly cap
+    // (300), so both bars are visible — green plan + blue top-up — and neither
+    // reads over 100%. Uses the snapshot-injecting preview factory because the
+    // `.managed` state can't express a top-up balance (devSetState forces 0).
+    BillingSection()
+        .environment(EntitlementStore.preview(managedSnapshot: ManagedEntitlementSnapshot(
+            status: .active,
+            creditsRemaining: 1289,
+            creditsLimit: 300,
+            resetDate: .now.addingTimeInterval(86_400 * 27),
+            planCreditsUsed: 11,
+            planCreditsLimit: 300,
+            topupCreditsRemaining: 1000
+        )))
         .environment(PreferencesStore())
         .padding()
         .frame(width: 720)

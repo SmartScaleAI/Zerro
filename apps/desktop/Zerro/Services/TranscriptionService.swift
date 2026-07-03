@@ -119,4 +119,10 @@ enum TranscriptionError: Error {
     /// for local debugging instead. See `OpenAITranscriptionService`.
     case server(status: Int)
     case decodeFailure(underlying: Error)
+    /// A required local model file is missing / not yet downloaded. Thrown only
+    /// by the on-device engine (`WhisperCppTranscriptionService`) when its
+    /// injected model path doesn't exist. Deliberately NOT mapped to a
+    /// user-facing `RecordingFailureReason` yet — the local path isn't wired
+    /// into the pipeline in this phase, so there's no surface that can raise it.
+    case modelUnavailable
 }

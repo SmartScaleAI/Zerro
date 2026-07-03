@@ -61,6 +61,32 @@ final class AreaSelectorState {
 
     // MARK: - Drag state
 
+    /// Which part of an existing selection a press grabbed. Drives both the
+    /// resize math and the hover cursor. Corners move two edges; edge
+    /// midpoints move one.
+    enum Handle: Equatable, Sendable {
+        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+    }
+
+    /// What the in-flight left-drag is doing. `.none` between gestures — the
+    /// controller's dragged/up routing keys off this, so a press that was
+    /// consumed by a toolbar control (neither `beginDrag` nor `beginEdit`
+    /// ran) can never resize or move the settled selection.
+    enum DragInteraction: Equatable {
+        case none
+        case creating                 // drawing a new rect (the original behavior)
+        case resizing(Handle)         // dragging a handle of a settled rect
+        case moving                   // dragging the interior of a settled rect
+    }
+
+    private(set) var interaction: DragInteraction = .none
+
+    /// Anchor captured at grab time so a move is computed as a delta from the
+    /// gesture start rather than the absolute cursor position (prevents the
+    /// rect "jumping" so its origin snaps under the cursor on first move).
+    private var dragAnchorRect: CGRect?      // selection rect at mouseDown
+    private var dragAnchorPoint: CGPoint?    // cursor location at mouseDown
+
     /// View-local point (top-left origin) of the mouseDown that
     /// started the current selection. nil before any drag has
     /// started; persists after mouseUp so the rect remains rendered
@@ -72,9 +98,11 @@ final class AreaSelectorState {
     /// mouseUp.
     private(set) var dragCurrent: CGPoint?
 
-    /// True between mouseDown and mouseUp. Drives the 4-handle
-    /// (during-drag) vs. 8-handle (settled) visual branch — the
-    /// 8-handle settled branch arrives in Checkpoint 3.
+    /// True between mouseDown and mouseUp — for create, resize, and move
+    /// gestures alike. Drives the 4-handle (during-drag) vs. 8-handle
+    /// (settled) visual branch and nils `confirmableSelectionRect`, so the
+    /// toolbar hides while actively adjusting exactly as it does during the
+    /// initial draw.
     private(set) var isDragging: Bool = false
 
     /// The current selection in view-local, top-left coordinates,
@@ -95,14 +123,14 @@ final class AreaSelectorState {
 
     /// Minimum confirmable selection, in view-local points (per axis).
     /// Selections smaller than this are treated like a zero-size
-    /// selection — confirm is a no-op. Rationale: a sub-100pt region
+    /// selection — confirm is a no-op. Rationale: a region this small
     /// carries almost no useful visual context for the model, and after
     /// retina backing-scale and H.264's even-dimension requirement, tiny
-    /// regions risk a degenerate or zero-frame capture. 100pt sits above
-    /// any encoder floor while still allowing a "narrate one panel"
+    /// regions risk a degenerate or zero-frame capture. 150pt sits well
+    /// above any encoder floor while still allowing a "narrate one panel"
     /// selection. Shared by the controller's confirm gate and the view's
     /// Record-button visibility.
-    static let minimumSelectionSize: CGFloat = 100
+    static let minimumSelectionSize: CGFloat = 150
 
     /// The settled, confirmable selection in view-local (top-left)
     /// coordinates, or nil if there's nothing to confirm yet. Drives
@@ -121,6 +149,30 @@ final class AreaSelectorState {
             guard overlaySize.width > 0, overlaySize.height > 0 else { return nil }
             return CGRect(origin: .zero, size: overlaySize)
         }
+    }
+
+    /// True in `.area` mode when a SETTLED selection is below
+    /// `minimumSelectionSize` on either axis — drawn but not large enough to
+    /// record. Drives every red "too small" affordance (border, handles,
+    /// readout, message). Deliberately quiet while `isDragging`: every drag
+    /// STARTS undersized, so live-red would flash at the beginning of each
+    /// selection — the error only appears once the user releases an
+    /// undersized rect. The exact inverse of what makes
+    /// `confirmableSelectionRect` non-nil in `.area` mode.
+    var isSelectionTooSmall: Bool {
+        guard mode == .area, !isDragging, let rect = selectionRect else { return false }
+        return rect.width < Self.minimumSelectionSize || rect.height < Self.minimumSelectionSize
+    }
+
+    /// Monotonic counter bumped when Return/Enter is refused on an
+    /// undersized selection. The view keys a brief icon bounce on the
+    /// too-small message off changes, so the refusal reads as feedback
+    /// rather than a silent no-op (the message itself is already standing —
+    /// it follows `isSelectionTooSmall`).
+    private(set) var undersizedConfirmPulse: Int = 0
+
+    func noteUndersizedConfirmAttempt() {
+        undersizedConfirmPulse += 1
     }
 
     /// Hover feedback for the floating Record button. The overlay's
@@ -879,6 +931,83 @@ final class AreaSelectorState {
         devValidationMessage = message
     }
 
+    // MARK: - Toolbar walkthrough (first-run coach-marks — state machine)
+    //
+    // First-run tour of the toolbar's five controls. This model owns ONLY the
+    // step cursor + the Dev Mode display snapshot; rendering, Back/Next
+    // hit-testing, the seen-flag write, and analytics are controller/view
+    // work in later phases. Deliberately free of preference writes and
+    // analytics calls so the machine stays unit-testable in isolation.
+
+    /// The active walkthrough step, or nil when the walkthrough is inactive.
+    /// Observable so the scrim/callout layers (later phases) react to step
+    /// changes the same way they react to hover flags.
+    private(set) var toolbarWalkthroughStep: ToolbarWalkthroughStep? = nil
+
+    /// The user's real Dev Mode value, snapshotted at walkthrough start — the
+    /// agent/record steps borrow Dev Mode for display, and end restores this.
+    private var devModeBeforeWalkthrough: Bool? = nil
+
+    /// Begin the walkthrough at the first step, snapshotting the current
+    /// Dev Mode so `endToolbarWalkthrough` can hand it back.
+    func startToolbarWalkthrough() {
+        devModeBeforeWalkthrough = isDevMode
+        toolbarWalkthroughStep = .mode
+        applyWalkthroughStepMode()
+    }
+
+    /// Advance one step ("Next"). From the last step ("Got it") this ends
+    /// the walkthrough as completed.
+    func advanceToolbarWalkthrough() {
+        guard let step = toolbarWalkthroughStep else { return }
+        if let next = ToolbarWalkthroughStep(rawValue: step.rawValue + 1) {
+            toolbarWalkthroughStep = next
+            applyWalkthroughStepMode()
+        } else {
+            endToolbarWalkthrough(completed: true)
+        }
+    }
+
+    /// Step back one ("Back" — hidden on the first step). Clamped at
+    /// `.mode`: backing out of the first step is a no-op.
+    func toolbarWalkthroughBack() {
+        guard let step = toolbarWalkthroughStep,
+              let previous = ToolbarWalkthroughStep(rawValue: step.rawValue - 1)
+        else { return }
+        toolbarWalkthroughStep = previous
+        applyWalkthroughStepMode()
+    }
+
+    /// End the walkthrough, restoring the user's real Dev Mode. `completed`
+    /// distinguishes "Got it" (true) from an Esc dismiss (false) — both end
+    /// identically in state; the controller uses the flag for the seen-flag
+    /// write + analytics in a later phase.
+    func endToolbarWalkthrough(completed: Bool) {
+        if let restored = devModeBeforeWalkthrough {
+            setDevModeForDisplay(restored)
+        }
+        devModeBeforeWalkthrough = nil
+        toolbarWalkthroughStep = nil
+    }
+
+    /// Render the toolbar in the mode the current step teaches (Dev for the
+    /// agent/record steps, Artifact otherwise) — display-only, never persisted.
+    private func applyWalkthroughStepMode() {
+        guard let step = toolbarWalkthroughStep else { return }
+        setDevModeForDisplay(step.showsDevControls)
+    }
+
+    /// Set the in-memory `isDevMode` for DISPLAY only. Unlike `setDevMode`
+    /// (whose controller callers persist `preferences.devModeEnabled`), this
+    /// must never reach a code path that writes the preference — the
+    /// walkthrough borrows Dev Mode to put the agent-settings icon on screen
+    /// and hands the real value back on end. It also skips `setDevMode`'s
+    /// menu-closing side effects: a walkthrough step change isn't a user
+    /// mode click.
+    func setDevModeForDisplay(_ on: Bool) {
+        if isDevMode != on { isDevMode = on }
+    }
+
     // MARK: - Mutations driven by AreaSelectorEventView
 
     func beginDrag(at point: CGPoint) {
@@ -889,6 +1018,7 @@ final class AreaSelectorState {
         dragOrigin = point
         dragCurrent = point
         isDragging = true
+        interaction = .creating
     }
 
     func updateDrag(to point: CGPoint) {
@@ -898,6 +1028,88 @@ final class AreaSelectorState {
     func endDrag(at point: CGPoint) {
         dragCurrent = point
         isDragging = false
+        interaction = .none
+    }
+
+    // MARK: - Editing a settled selection (resize / move)
+
+    /// Begin editing an existing, settled selection. Normalizes the stored
+    /// points so dragOrigin == top-left and dragCurrent == bottom-right,
+    /// which lets the resize math touch exactly one coordinate per moved
+    /// edge. No-op without a selection or for a non-edit `kind` — only the
+    /// controller's handle/interior hit-test calls this, always with
+    /// `.resizing` or `.moving`.
+    func beginEdit(_ kind: DragInteraction, at point: CGPoint) {
+        guard let rect = selectionRect else { return }
+        switch kind {
+        case .resizing, .moving: break
+        case .none, .creating: return
+        }
+        dragOrigin = CGPoint(x: rect.minX, y: rect.minY)  // top-left
+        dragCurrent = CGPoint(x: rect.maxX, y: rect.maxY) // bottom-right
+        dragAnchorRect = rect
+        dragAnchorPoint = point
+        interaction = kind
+        isDragging = true   // hide the toolbar while adjusting, like a create drag
+        mode = .area        // editing is only meaningful in area mode
+    }
+
+    /// Drag the grabbed handle to `point`, updating only the coordinate(s)
+    /// that handle owns. Each axis PINS at `minimumSelectionSize` rather
+    /// than flipping through the opposite edge — a deliberate edge drag
+    /// "sticks" at the floor, so the region never drops below the
+    /// confirmable minimum mid-resize.
+    func updateResize(to point: CGPoint) {
+        guard case .resizing(let handle) = interaction,
+              var origin = dragOrigin, var current = dragCurrent else { return }
+        let minSize = Self.minimumSelectionSize
+        // origin = top-left, current = bottom-right (beginEdit normalized).
+        switch handle {
+        case .left, .topLeft, .bottomLeft:
+            origin.x = min(point.x, current.x - minSize)
+        case .right, .topRight, .bottomRight:
+            current.x = max(point.x, origin.x + minSize)
+        default:
+            break
+        }
+        switch handle {
+        case .top, .topLeft, .topRight:
+            origin.y = min(point.y, current.y - minSize)
+        case .bottom, .bottomLeft, .bottomRight:
+            current.y = max(point.y, origin.y + minSize)
+        default:
+            break
+        }
+        dragOrigin = origin
+        dragCurrent = current
+    }
+
+    /// Translate the whole selection by the delta from the grab point,
+    /// clamped inside the overlay bounds so the region can't be shoved
+    /// off-screen. Size never changes.
+    func updateMove(to point: CGPoint) {
+        guard interaction == .moving,
+              let anchorRect = dragAnchorRect, let anchorPoint = dragAnchorPoint else { return }
+        var rect = anchorRect.offsetBy(
+            dx: point.x - anchorPoint.x,
+            dy: point.y - anchorPoint.y
+        )
+        let maxX = max(0, overlaySize.width - rect.width)
+        let maxY = max(0, overlaySize.height - rect.height)
+        rect.origin.x = min(max(0, rect.origin.x), maxX)
+        rect.origin.y = min(max(0, rect.origin.y), maxY)
+        dragOrigin = CGPoint(x: rect.minX, y: rect.minY)
+        dragCurrent = CGPoint(x: rect.maxX, y: rect.maxY)
+    }
+
+    /// End a resize/move gesture: the selection settles and the toolbar
+    /// (via `confirmableSelectionRect`) reappears, exactly as after an
+    /// initial draw.
+    func endEdit() {
+        isDragging = false
+        interaction = .none
+        dragAnchorRect = nil
+        dragAnchorPoint = nil
     }
 
     // MARK: - Full-screen mode
@@ -915,6 +1127,9 @@ final class AreaSelectorState {
         dragOrigin = nil
         dragCurrent = nil
         isDragging = false
+        interaction = .none
+        dragAnchorRect = nil
+        dragAnchorPoint = nil
         isRecordButtonHovered = false
     }
 
@@ -926,5 +1141,70 @@ final class AreaSelectorState {
 
     func confirm(with rect: SelectionRect) {
         onConfirm?(rect)
+    }
+}
+
+// MARK: - Toolbar walkthrough steps
+
+/// The five stops of the first-run toolbar walkthrough, one per toolbar
+/// control, ordered left→right to match the toolbar layout. Ordered via
+/// `Int` raw value so advance/back are trivial arithmetic, and
+/// `CaseIterable` so tests and any step indicator iterate the same
+/// source-of-truth ordering (mirrors `OnboardingStep`).
+enum ToolbarWalkthroughStep: Int, CaseIterable {
+    case mode = 0
+    case model
+    case mic
+    case agent
+    case record
+
+    /// Stable identifier for analytics — decoupled from `rawValue` (an index
+    /// that shifts if steps are reordered/inserted), so it must stay constant
+    /// across releases (mirrors `OnboardingStep.analyticsName`).
+    var analyticsName: String {
+        switch self {
+        case .mode:   return "mode"
+        case .model:  return "model"
+        case .mic:    return "mic"
+        case .agent:  return "agent"
+        case .record: return "record"
+        }
+    }
+
+    /// Callout headline.
+    var title: String {
+        switch self {
+        case .mode:   return "Choose what Zerro makes"
+        case .model:  return "Pick the AI model"
+        case .mic:    return "Choose your mic"
+        case .agent:  return "Set up your coding agent"
+        case .record: return "Start recording"
+        }
+    }
+
+    /// Callout body copy.
+    var body: String {
+        switch self {
+        case .mode:
+            return "Artifact turns your recording into a ready-to-use output, like a prompt or snippet. Dev Mode sends it straight to a coding agent to make the change for you."
+        case .model:
+            return "This model reads your screen and voice. Tap to switch. The current model's name shows here."
+        case .mic:
+            return "Zerro records what you say while you point and talk. Pick your input device here."
+        case .agent:
+            return "In Dev Mode, choose which agent runs and which project folder it edits."
+        case .record:
+            return "Press this (or Return) to begin. You get up to 3 minutes."
+        }
+    }
+
+    /// Whether this step needs the toolbar rendered in Dev Mode — the
+    /// agent-settings icon only exists there, and Record is taught in the
+    /// same (Dev) layout it was just revealed in.
+    var showsDevControls: Bool {
+        switch self {
+        case .mode, .model, .mic: return false
+        case .agent, .record:     return true
+        }
     }
 }

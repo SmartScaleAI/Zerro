@@ -88,15 +88,45 @@ struct RecentPromptsView: View {
         // with the hand-rolled dark Settings look.
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(recentPrompts.prompts) { entry in
-                    SidebarRow(entry: entry, isSelected: selectedID == entry.id) {
-                        selectedID = entry.id
+                ForEach(groupedPrompts, id: \.label) { group in
+                    Text(group.label)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.vfTextTertiary)
+                        .padding(.horizontal, VFSpacing.sm + VFSpacing.xs)
+                        .padding(.top, VFSpacing.md)
+                        .padding(.bottom, VFSpacing.xs)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(group.entries) { entry in
+                        SidebarRow(entry: entry, isSelected: selectedID == entry.id) {
+                            selectedID = entry.id
+                        }
                     }
                 }
             }
             .padding(.vertical, VFSpacing.xs)
         }
         .background(Color.vfPanelBackground)
+    }
+
+    /// View-only date sections over the store's flat, newest-first list.
+    /// Selection and delete still operate on `recentPrompts.prompts`
+    /// directly — grouping never reorders or filters entries.
+    private var groupedPrompts: [(label: String, entries: [RecentPrompt])] {
+        let calendar = Calendar.current
+        var today: [RecentPrompt] = []
+        var yesterday: [RecentPrompt] = []
+        var earlier: [RecentPrompt] = []
+        for entry in recentPrompts.prompts {
+            if calendar.isDateInToday(entry.timestamp) {
+                today.append(entry)
+            } else if calendar.isDateInYesterday(entry.timestamp) {
+                yesterday.append(entry)
+            } else {
+                earlier.append(entry)
+            }
+        }
+        return [("Today", today), ("Yesterday", yesterday), ("Earlier", earlier)]
+            .filter { !$0.1.isEmpty }
     }
 
     @ViewBuilder
@@ -183,13 +213,13 @@ private struct SidebarRow: View {
             HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
                 Image(systemName: entry.displayIconName)
                     .font(.system(size: 11))
-                    .foregroundStyle(isSelected ? Color.vfTextSecondary : Color.vfTextTertiary)
+                    .foregroundStyle(isSelected ? Color.vfAccentBlue : Color.vfTextTertiary)
                     .frame(width: 14)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.title)
                         .font(.system(size: 13))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .lineLimit(2)
+                        .foregroundStyle(isSelected ? Color.vfAccentBlue : Color.vfTextPrimary)
+                        .lineLimit(1)
                         .truncationMode(.tail)
                     Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
                         .font(.system(size: 11))
@@ -213,10 +243,10 @@ private struct SidebarRow: View {
         .onHover { isHovered = $0 }
     }
 
-    // Three tiers built from the same tokens as `SettingsNavigationRow`:
-    // clear → faint hover → subtle gray selection.
+    // Three tiers: clear → faint hover → accent-tinted selection, so the
+    // active row reads unmistakably against the hover state.
     private var fill: Color {
-        if isSelected { return Color.white.opacity(0.07) }
+        if isSelected { return Color.vfAccentBlue.opacity(0.16) }
         if isHovered { return Color.white.opacity(0.03) }
         return Color.clear
     }
@@ -236,31 +266,17 @@ private struct DetailPane: View {
     let onCopy: () -> Void
     let onDelete: () -> Void
 
+    @State private var isConfirmingDelete = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: VFSpacing.md) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-                        Image(systemName: entry.displayIconName)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.vfTextTertiary)
-                        Text(entry.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.vfTextPrimary)
-                            .lineLimit(2)
-                    }
-                    Text(Self.absolute.string(from: entry.timestamp))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.vfTextSecondary)
-                }
-                Spacer()
-                actions
-            }
+            header
             // Explicit 0.5pt hairline matching the column↔detail seam weight
             // (the system Divider rendered heavier than the new column seam).
             Rectangle()
                 .fill(Color.vfHairline)
                 .frame(height: 0.5)
+            toolbar
             ScrollView {
                 // Phase 7: render from the v2 fields — chat text above the
                 // artifact body, the same visual pattern as the pill (no raw
@@ -309,7 +325,27 @@ private struct DetailPane: View {
         )
     }
 
-    private var actions: some View {
+    /// Metadata line above a full-width title row — the actions moved into
+    /// `toolbar` so a two-line title never competes with buttons for width.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: VFSpacing.xs) {
+            HStack(spacing: VFSpacing.sm) {
+                Image(systemName: entry.displayIconName)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextTertiary)
+                Text(Self.absolute.string(from: entry.timestamp))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextSecondary)
+            }
+            Text(entry.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.vfTextPrimary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var toolbar: some View {
         HStack(spacing: VFSpacing.sm) {
             Button(action: onCopy) {
                 HStack(spacing: 4) {
@@ -321,11 +357,22 @@ private struct DetailPane: View {
             }
             .buttonStyle(SettingsSecondaryButtonStyle())
 
-            Button(action: onDelete) {
+            Spacer()
+
+            Button {
+                isConfirmingDelete = true
+            } label: {
                 Image(systemName: "trash")
             }
             .buttonStyle(SettingsDestructiveButtonStyle())
             .help("Delete this prompt")
+            .confirmationDialog(
+                "Delete this prompt?",
+                isPresented: $isConfirmingDelete
+            ) {
+                Button("Delete", role: .destructive, action: onDelete)
+                Button("Cancel", role: .cancel) {}
+            }
         }
     }
 

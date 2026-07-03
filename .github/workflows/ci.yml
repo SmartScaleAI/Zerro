@@ -112,6 +112,35 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # ---- on-device whisper model (WhisperCppTranscriptionServiceTests) ----
+      # That suite runs the REAL whisper engine against a small tiny.en model
+      # (~31 MB) that is intentionally NOT committed to the repo. We pre-place it
+      # at the EXACT cache path the test reads from
+      # (~/Library/Caches/ZerroTests/whisper-models) so the test picks it up via
+      # its checksum-verified cache branch and runs for real. This deliberately
+      # does NOT rely on env vars reaching the test: an xcodebuild unit-test host
+      # does not inherit the job environment. Two guards keep this from going
+      # silently blind: the download step fails the job on any fetch/checksum
+      # error, and the post-test step below fails the job if the engine test
+      # didn't actually run. (The test's skip-when-offline path is local-dev only.)
+      - name: Cache whisper test model
+        id: whisper-model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/Library/Caches/ZerroTests/whisper-models
+          key: whisper-model-ggml-tiny.en-q5_1-c77c5766
+
+      - name: Pre-download whisper test model (on cache miss)
+        if: steps.whisper-model.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          DIR="$HOME/Library/Caches/ZerroTests/whisper-models"
+          mkdir -p "$DIR"
+          curl -fSL --retry 3 -o "$DIR/ggml-tiny.en-q5_1.bin" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin"
+          echo "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b  $DIR/ggml-tiny.en-q5_1.bin" \
+            | shasum -a 256 -c -
+
       # Build + run the REQUIRED slice of the ZerroTests bundle: everything
       # except the quarantined subprocess/IPC suites (QUARANTINE_SUITES, defined
       # at the workflow level). Debug config, macOS destination, code signing
@@ -161,6 +190,22 @@ jobs:
             echo "::error::ZerroTests target did not execute any tests."
             exit 1
           fi
+
+      # The on-device whisper engine test MUST have run for real here. With the
+      # tiny.en model pre-placed in the cache above, the test can't reach its
+      # offline-skip path, so a skip (or an absent line) means the model
+      # pre-download/cache regressed — fail loudly rather than let the engine
+      # coverage go silently blind.
+      - name: Confirm on-device whisper engine test ran
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/swift-test.log"
+          if ! grep -qE "testTranscribeProducesExpectedTranscript[]'].* passed" "$LOG"; then
+            echo "::error::On-device whisper engine test did not pass (skipped or absent). Check the tiny.en model pre-download/cache step."
+            grep -nE "WhisperCppTranscriptionServiceTests|tiny.en model unavailable" "$LOG" || true
+            exit 1
+          fi
+          echo "On-device whisper engine test ran for real."
 
       # Defense-in-depth for the quarantine invariant: assert that NONE of the
       # quarantined suites executed in this required slice. If a future edit (or

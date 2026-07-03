@@ -425,9 +425,14 @@ final class EntitlementStore {
     /// single decision AppState reads at generation time. Splitting it out keeps
     /// the policy (which path) here and the mechanism (run it) in AppState.
     ///
-    /// `hasOwnAPIKey` is whether the user has their own OpenAI key on file: a
-    /// trial user WITH a key funds generation locally (their dime, the existing
-    /// path); only a trial user WITHOUT a key needs server-funded credits.
+    /// `canGenerateLocally` is whether the user can fund a generation entirely
+    /// themselves — at least one chat key AND a usable transcription path (a
+    /// local model, or an OpenAI key for cloud Whisper); see
+    /// `AppState.canGenerateLocally`. A trial user who CAN self-fund routes
+    /// `.local` (their dime, the existing path); only a trial user who can't
+    /// needs server-funded credits. (Pre-Local-Whisper this was OpenAI-key-only;
+    /// Phase 4 generalized it so a Claude/Gemini keyholder with the on-device
+    /// model also self-funds.)
     enum GenerationRoute: Equatable {
         /// Direct OpenAI with the user's own key (BYOK, or trial-on-own-key).
         case local
@@ -439,7 +444,7 @@ final class EntitlementStore {
         case trialNeedsEmail
     }
 
-    func generationRoute(hasOwnAPIKey: Bool) -> GenerationRoute {
+    func generationRoute(canGenerateLocally: Bool) -> GenerationRoute {
         switch state {
         case .managed:
             return .managedProxy
@@ -449,7 +454,7 @@ final class EntitlementStore {
             // The record-start gate already blocks `.expired`; defensive default.
             return .local
         case .trial:
-            if hasOwnAPIKey { return .local }
+            if canGenerateLocally { return .local }
             if trialCredits?.hasActiveTrialToken == true { return .trialProxy }
             // H1 decouple: a token that merely expired is NOT a re-verify. If the
             // email was EVER verified (a remembered email on file), the proxy path
@@ -490,9 +495,11 @@ final class EntitlementStore {
     /// `canGenerate` gate fails open. The server proxy remains the spend
     /// authority regardless.
     ///
-    /// `hasOwnAPIKey` is whether the user has their own OpenAI key on file (the
-    /// gate reads the Keychain); only `.byok` consults it.
-    func preflightBlock(hasOwnAPIKey: Bool) -> PreflightBlock? {
+    /// `canGenerateLocally` is whether the user can fund a generation themselves —
+    /// a chat key AND a usable transcription path (see `AppState.canGenerateLocally`).
+    /// Only `.byok` consults it: a BYOK user with no self-funding setup is routed
+    /// to fix it before recording.
+    func preflightBlock(canGenerateLocally: Bool) -> PreflightBlock? {
         switch state {
         case .managed:
             // The credit/status decision is the SERVER's; the gate only surfaces
@@ -503,11 +510,13 @@ final class EntitlementStore {
             if snapshot.creditsRemaining <= 0 { return .outOfCredits }
             return nil
         case .byok:
-            // BYOK funds generation locally. A confirmed-absent key would fail
-            // post-recording with `.apiKeyMissing`; catch it now and route them
-            // to add it. A Keychain read blip reports `hasOwnAPIKey == true`
-            // (the key slot fails toward "present"), so a flaky read never blocks.
-            return hasOwnAPIKey ? nil : .apiKeyMissing
+            // BYOK funds generation locally. If the user has no self-funding setup
+            // — no chat key, or no usable transcription path — the recording would
+            // fail post-capture (`.apiKeyMissing`); catch it now and route them to
+            // add what's missing. In production (sttEngine `.auto`, no on-device
+            // model) this is EXACTLY the old "has an OpenAI key?" check, since
+            // OpenAI is the only transcription path until a model is installed.
+            return canGenerateLocally ? nil : .apiKeyMissing
         case .trial, .expired:
             // Trial-exhausted is already mapped to `.expired` by the dual-expiry
             // in `computeState` (so the `canGenerate` gate → paywall catches it);
@@ -992,6 +1001,21 @@ final class EntitlementStore {
             defaults: .ephemeralPreview()
         )
         store.devSetState(state)
+        return store
+    }
+
+    /// Preview convenience: a Managed store pinned to an explicit snapshot,
+    /// including a top-up balance that the `.managed` state's synthesized
+    /// snapshot can't express (`devSetState` forces `topupCreditsRemaining: 0`).
+    /// DEBUG/preview scaffolding only — no backend/DTO/data-model change. Setting
+    /// the `private(set) managedSnapshot` is legal here because this factory
+    /// lives in the same file as its declaration.
+    static func preview(managedSnapshot snapshot: ManagedEntitlementSnapshot) -> EntitlementStore {
+        let store = preview(.managed(
+            creditsRemaining: snapshot.creditsRemaining,
+            resetDate: snapshot.resetDate ?? .distantFuture
+        ))
+        store.managedSnapshot = snapshot
         return store
     }
 
