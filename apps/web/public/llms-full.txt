@@ -46,6 +46,19 @@ The prompt writes itself — you get a structured Markdown prompt with clear sec
 
 ---
 
+## The difference — stop typing it, just say it
+
+Today, getting your screen's context to an AI means screenshotting a few parts of
+your screen, pasting them into ChatGPT or your coding agent, and typing out — in
+detail — what you want. Writing that description out is the slow, tedious part.
+
+With Zerro, you present your screen instead: hit a hotkey, frame the region, and
+talk through what you want out loud. Zerro turns it into exactly what you need — a
+prompt, message, snippet, doc, or answer — ready to paste wherever it goes. Same
+context, a fraction of the effort.
+
+---
+
 ## Built right — native, local-first, no surprises
 
 Zerro is built the way you'd build it if it were your tool.
@@ -62,24 +75,6 @@ Zerro is built the way you'd build it if it were your tool.
   Gatekeeper will not complain.
 - **Sparkle auto-updates.** Updates ship through Sparkle, the standard for indie
   Mac apps. You stay current without thinking about it.
-
----
-
-## How it compares
-
-Dictation tools give you text. Screen recorders give you a video. Zerro gives your
-agent a prompt. This comparison reflects Zerro's positioning; competitor
-capabilities change over time, so check each product for current details.
-
-| Feature | Zerro | Wispr Flow | Loom |
-| --- | --- | --- | --- |
-| Primary input | Screen + voice | Voice | Screen + voice |
-| Output | Structured prompt | Dictated text | Video link |
-| Built for AI coding agents | Yes | No | No |
-| Local-first processing | Yes | No | No |
-| Bring your own API keys | Yes | No | No |
-| Native macOS app | Yes | Yes | No |
-| Pricing model | One-time ($69) | Subscription | Subscription |
 
 ---
 

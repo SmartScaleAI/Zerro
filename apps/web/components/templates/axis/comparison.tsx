@@ -1,110 +1,150 @@
-import { Check } from "lucide-react"
+import {
+  Camera,
+  ClipboardCheck,
+  Crop,
+  Images,
+  Keyboard,
+  Mic,
+  type LucideIcon,
+} from "lucide-react"
 import { GradientField } from "@/components/ui/gradient-field"
 
-// Server Component — a factual comparison table. Rendered as real <table> markup
-// so it's machine-readable (crawlers + AI tools parse it directly) and needs no
-// client JS. Competitor cells are deliberately conservative and objective: input
-// type, output, where processing runs, keys, platform, pricing model — no
-// disparagement. Framed as Zerro's positioning.
-//
-// Visually it's styled like a pricing table: each product is a vertical lane with
-// dashed row separators, and the first lane (Zerro) reads as an elevated card that
-// rises above the header and drops below the last row to hold a CTA. That elevated
-// card is a decorative, aria-hidden sibling of the <table>, positioned over the
-// first product column — so the semantic table stays intact for crawlers/AI.
+// Server Component — a before/after contrast. Zerro isn't positioned against
+// other products here; the comparison is the manual workflow people already use
+// (screenshot, paste, type out a description) vs. presenting the screen and
+// saying it. Plain heading + list markup so it stays machine-readable, no
+// client JS.
 
-type Cell = string | boolean
-
-type Row = {
-  label: string
-  sub?: string
-  zerro: Cell
-  wispr: Cell
-  loom: Cell
+type Step = {
+  icon: LucideIcon
+  text: string
 }
 
-const COLUMNS = ["Zerro", "Wispr Flow", "Loom"] as const
+type Column = {
+  /** Heading id — labels the column's step list for assistive tech. */
+  id: string
+  label: string
+  steps: Step[]
+  footnote: string
+}
 
-// Column template (must match the highlight card's horizontal band below):
-// label gutter 32%, then three equal product columns of 22.666% each. The first
-// product column therefore spans 32% → 54.666% (center 43.333%, width 22.666%).
-const COL_TEMPLATE = ["32%", "22.666%", "22.666%", "22.666%"] as const
-const HILITE_LEFT = "43.333%"
-const HILITE_WIDTH = "22.666%"
+const BEFORE: Column = {
+  id: "comparison-before",
+  label: "The way you do it now",
+  steps: [
+    { icon: Camera, text: "Screenshot a few parts of your screen" },
+    { icon: Images, text: "Paste them into your coding agent" },
+    { icon: Keyboard, text: "Type out, in detail, what you want" },
+  ],
+  footnote: "Writing that description out is the slow, tedious part.",
+}
 
-const rows: Row[] = [
-  {
-    label: "Primary input",
-    zerro: "Screen + voice",
-    wispr: "Voice",
-    loom: "Screen + voice",
-  },
-  {
-    label: "Output",
-    zerro: "Ready-to-use output",
-    wispr: "Dictated text",
-    loom: "Video link",
-  },
-  {
-    label: "Formats output for the task",
-    sub: "Prompt, message, snippet, or doc.",
-    zerro: true,
-    wispr: false,
-    loom: false,
-  },
-  {
-    label: "Local-first processing",
-    zerro: true,
-    wispr: false,
-    loom: false,
-  },
-  {
-    label: "Bring your own API keys",
-    zerro: true,
-    wispr: false,
-    loom: false,
-  },
-  {
-    label: "Native macOS app",
-    zerro: true,
-    wispr: true,
-    loom: false,
-  },
-  {
-    label: "Pricing model",
-    sub: "Pay once, own it forever.",
-    zerro: "Subscription / One-time",
-    wispr: "Subscription",
-    loom: "Subscription",
-  },
-]
+const AFTER: Column = {
+  id: "comparison-after",
+  label: "With Zerro",
+  steps: [
+    { icon: Crop, text: "Hotkey, then record your screen" },
+    { icon: Mic, text: "Talk through what you want, out loud" },
+    {
+      icon: ClipboardCheck,
+      text: "Paste the finished result wherever it goes",
+    },
+  ],
+  footnote: "Say it instead of typing it. Same context, a fraction of the effort.",
+}
 
-function CellValue({ value, emphasize }: { value: Cell; emphasize?: boolean }) {
-  if (typeof value === "boolean") {
-    return value ? (
-      <Check
-        className={
-          emphasize
-            ? "mx-auto h-5 w-5 text-primary"
-            : "mx-auto h-5 w-5 text-white/80"
-        }
-        strokeWidth={2.2}
-        aria-label="Yes"
-      />
-    ) : (
-      <span className="text-white/45" aria-label="No">
-        &mdash;
-      </span>
-    )
-  }
+function ColumnCard({
+  column,
+  featured,
+}: {
+  column: Column
+  featured?: boolean
+}) {
   return (
-    <span
+    <div
       className={
-        emphasize ? "text-sm font-medium text-white" : "text-sm text-white/80"
+        featured
+          ? // Featured-lane treatment: teal accent ring (pricing Managed card),
+            // with the glow split into four directional shadows whose hues
+            // mirror the GradientField's corner blobs (blue top-left, teal
+            // top-right, purple bottom-left, green bottom-right) — so the glow
+            // reads as the card's own gradient bleeding outward.
+            "relative overflow-hidden rounded-3xl p-6 ring-1 ring-[#28a082]/40 shadow-[0_0_0_1px_rgba(40,160,130,0.22),-28px_-20px_80px_-24px_rgba(60,100,200,0.3),28px_-20px_80px_-24px_rgba(40,160,130,0.3),-28px_20px_80px_-24px_rgba(140,60,200,0.28),28px_20px_80px_-24px_rgba(60,140,100,0.3)] sm:p-8"
+          : // Opaque fill (page background + the same 4% white tint) and a
+            // raised z-index so the featured card's glow — painted later in
+            // the DOM — can't bleed over or show through this card.
+            "relative z-10 rounded-3xl bg-background bg-[linear-gradient(rgba(255,255,255,0.04),rgba(255,255,255,0.04))] p-6 ring-1 ring-white/15 sm:p-8"
       }
     >
-      {value}
-    </span>
+      {featured && (
+        <>
+          {/* Same solid gradient surface the pricing section uses as its
+              backdrop, filling the card... */}
+          <GradientField solid edgeFade="none" className="inset-0" />
+          {/* ...muted by a matte glass layer over it — the pricing BYOK card's
+              frosted recipe — so the gradient reads as a soft tint rather than
+              at full vibrance. */}
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-black/30 backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+          />
+        </>
+      )}
+
+      <div className="relative">
+        <h3
+          id={column.id}
+          className={
+            featured
+              ? "inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-white"
+              : "text-lg font-medium tracking-tight text-white/80"
+          }
+        >
+          {featured && (
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-white" />
+          )}
+          {column.label}
+        </h3>
+
+        <ol
+          aria-labelledby={column.id}
+          className="mt-4 flex flex-col divide-y divide-dashed divide-white/10"
+        >
+          {column.steps.map((step) => (
+            <li key={step.text} className="flex items-start gap-3.5 py-4">
+              <step.icon
+                aria-hidden="true"
+                className={
+                  featured
+                    ? "mt-0.5 h-5 w-5 shrink-0 text-primary"
+                    : "mt-0.5 h-5 w-5 shrink-0 text-white/60"
+                }
+                strokeWidth={2}
+              />
+              <span
+                className={
+                  featured
+                    ? "text-sm leading-relaxed font-medium text-white"
+                    : "text-sm leading-relaxed text-white/85"
+                }
+              >
+                {step.text}
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        <p
+          className={
+            featured
+              ? "border-t border-dashed border-white/10 pt-4 text-sm text-white/60"
+              : "border-t border-dashed border-white/10 pt-4 text-sm text-white/50"
+          }
+        >
+          {column.footnote}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -113,124 +153,21 @@ const Comparison = () => {
     <section id="comparison" className="relative mx-auto max-w-5xl px-4">
       <div className="flex flex-col items-center gap-3 text-center">
         <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
-          How it compares
+          The difference
         </p>
         <h2 className="max-w-2xl text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">
-          A different category.
+          Stop Typing It. Just Say It
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
-          Dictation tools give you text. Screen recorders give you a video.
-          Zerro gives you the finished result — a prompt, message, snippet, or
-          document, or a straight answer to your question.
+          Record your screen, say what you want, and Zerro turns it into exactly
+          what you need. No typing a description by hand.
         </p>
       </div>
 
-      {/* pt leaves room for the floating "Recommended" pill above the card;
-          pb leaves room for the CTA footer at the bottom of the card.
-          The scroll container is capped at the viewport width (minus the px-4
-          page gutter) with a *definite* max-width — a percentage like w-full
-          can't resolve during intrinsic sizing, so the 640px table would
-          otherwise widen the whole page. With a definite cap the table scrolls
-          inside this box on narrow screens instead. */}
-      <div className="relative max-w-[calc(100vw-2rem)] overflow-x-auto pt-10 pb-12 lg:max-w-none">
-        <div className="relative mx-auto w-full min-w-[640px]">
-          {/* Elevated Zerro lane — a decorative card behind the first product
-              column. Spans that column's horizontal band (43.333% center,
-              22.666% wide) and hugs the table vertically: its top sits flush
-              with the header row and its bottom wraps the CTA footer, with no
-              extra space above or below. aria-hidden: it carries no data — the
-              <table> below is the source of truth. */}
-          <div
-            aria-hidden="true"
-            className="absolute top-0 bottom-0 z-0 -translate-x-1/2 overflow-hidden rounded-3xl bg-white/[0.06] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
-            style={{ left: HILITE_LEFT, width: HILITE_WIDTH }}
-          >
-            {/* Ambient multi-color spotlight pooled inside the Zerro card — the
-                same GradientField used in the hero, masked to a soft ellipse so
-                it glows from within the card rather than smearing the edges. */}
-            <GradientField
-              edgeFade="vertical"
-              solid={false}
-              className="inset-0 opacity-100 blur-[80px]"
-              style={{
-                maskImage:
-                  "radial-gradient(ellipse 70% 60% at 50% 35%, black 30%, transparent 80%)",
-                WebkitMaskImage:
-                  "radial-gradient(ellipse 70% 60% at 50% 35%, black 30%, transparent 80%)",
-              }}
-            />
-          </div>
-
-          <table className="relative z-10 w-full table-fixed border-collapse text-left">
-            <colgroup>
-              {COL_TEMPLATE.map((w, i) => (
-                <col key={i} style={{ width: w }} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr className="border-b border-dashed border-white/10">
-                <th className="px-5 py-4">
-                  <span className="sr-only">Feature</span>
-                </th>
-                {COLUMNS.map((col, i) => (
-                  <th
-                    key={col}
-                    className={
-                      i === 0
-                        ? "px-5 py-5 text-center text-sm font-semibold text-white"
-                        : "px-5 py-5 text-center text-sm font-medium text-white/80"
-                    }
-                    scope="col"
-                  >
-                    {i === 0 ? (
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-1.5 w-1.5 rounded-full bg-white" />
-                        {col}
-                      </span>
-                    ) : (
-                      col
-                    )}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={row.label}
-                  className="border-b border-dashed border-white/10 last:border-b-0"
-                >
-                  <th
-                    scope="row"
-                    className="px-5 py-4 align-top text-sm font-normal text-white/80"
-                  >
-                    {row.label}
-                    {row.sub && (
-                      <span className="mt-1 block text-sm font-normal text-white/40">
-                        {row.sub}
-                      </span>
-                    )}
-                  </th>
-                  <td className="px-5 py-4 text-center">
-                    <CellValue value={row.zerro} emphasize />
-                  </td>
-                  <td className="px-5 py-4 text-center">
-                    <CellValue value={row.wispr} />
-                  </td>
-                  <td className="px-5 py-4 text-center">
-                    <CellValue value={row.loom} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="mt-10 grid grid-cols-1 gap-6 lg:mt-12 lg:grid-cols-2">
+        <ColumnCard column={BEFORE} />
+        <ColumnCard column={AFTER} featured />
       </div>
-
-      <p className="text-center text-sm text-muted-foreground">
-        Comparison reflects Zerro&apos;s positioning. Competitor capabilities
-        change over time — check each product for current details.
-      </p>
     </section>
   )
 }
