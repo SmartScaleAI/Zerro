@@ -275,7 +275,7 @@ struct PaywallView: View {
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo billed yearly."
+                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo if you choose yearly billing."
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with
@@ -626,7 +626,7 @@ private struct ManagedPrivacyNote: View {
 private struct AddCreditsCard: View {
     var body: some View {
         OptionCardChrome(padding: VFSpacing.lg) {
-            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits ($5\u{2013}$300). Credits are added to your balance and carry over for 12 months.")
+            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
@@ -636,7 +636,6 @@ private struct AddCreditsCard: View {
             OnboardingPrimaryButton(
                 "Add Credits",
                 isEnabled: BillingLinks.topupCheckoutURL != nil,
-                tint: .vfDevAccent,
                 action: openCheckout
             )
         }
@@ -846,7 +845,7 @@ private struct OptionCardChrome<Content: View>: View {
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
                 .strokeBorder(
-                    highlighted ? Color.vfBrandAccent.opacity(0.55) : Color.vfHairline,
+                    highlighted ? Color.vfDevAccent.opacity(0.55) : Color.vfHairline,
                     lineWidth: 1
                 )
         )
