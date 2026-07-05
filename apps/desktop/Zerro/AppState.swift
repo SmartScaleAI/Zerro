@@ -1796,7 +1796,12 @@ final class AppState {
             // bounds the edits rather than leaving an orphaned process writing.
             // KEEP the snapshot on disk for a future quit-recovery (tracked
             // follow-up) — the agent may have edited, so it's the only undo.
-            devDispatchCoordinator.cancel()
+            // G-02: `terminateNow()`, NOT `cancel()` — cancel's terminate is an
+            // async queue hop, and `applicationShouldTerminate` returns
+            // `.terminateNow` right after this, so the app could exit before
+            // the hop ran, orphaning the agent's whole process tree. This one
+            // SIGKILLs the process group inline before returning.
+            devDispatchCoordinator.terminateNow()
         case .reviewingPrompt:
             // Ask Permission: suspended at the pre-agent review gate — the agent
             // NEVER ran, so the tree is untouched and the checkpoint protects

@@ -350,6 +350,145 @@ final class DevAgentRunnerTests: XCTestCase {
         ClaudeCodeAgentRunner().cancel()
     }
 
+    // MARK: - G-02: terminate targets the process GROUP, not just the pid
+
+    func testAgentSpawnsAsItsOwnProcessGroupLeader() async throws {
+        // The group-kill mechanism rests on the agent LEADING its own process
+        // group (descendants inherit it) — assert that directly, and that the
+        // group is NOT Zerro's own (a group signal must never hit the app).
+        let bin = try makeScript("groupleader", """
+        #!/bin/sh
+        echo $$ > "$PWD/pid.txt"
+        while true; do echo '{"type":"system"}'; sleep 0.2; done
+        """)
+        let runner = ClaudeCodeAgentRunner()
+        async let runResult = runner.run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .unrestricted, prompt: "go", projectURL: scratch,
+            timeouts: DevRunTimeouts(stall: 60, killGrace: 1),
+            onEvent: { _ in })
+        let pid = try await waitForPIDFile("pid.txt")
+
+        XCTAssertEqual(getpgid(pid), pid, "the agent must lead its own process group")
+        XCTAssertNotEqual(getpgid(pid), getpgid(0), "the agent must not share Zerro's group")
+
+        runner.cancel()
+        let result = await runResult
+        XCTAssertEqual(result, .failed(.cancelled))
+    }
+
+    func testCancelKillsAgentsChildProcesses() async throws {
+        // The G-02 orphan scenario: the agent backgrounds a child that writes a
+        // sentinel file after a delay. Cancel must reap the WHOLE tree — the old
+        // single-pid terminate left the child running, and the sentinel appeared
+        // after the run "ended".
+        let bin = try makeChildSentinelProbe("cancelchildren")
+        let runner = ClaudeCodeAgentRunner()
+        let start = Date()
+        async let runResult = runner.run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .unrestricted, prompt: "go", projectURL: scratch,
+            timeouts: DevRunTimeouts(stall: 60, killGrace: 1),
+            onEvent: { _ in })
+        let childPID = try await waitForPIDFile("child.txt")
+
+        runner.cancel()
+        let result = await runResult
+        XCTAssertEqual(result, .failed(.cancelled))
+
+        // The backgrounded child dies with the group (SIGTERM suffices here).
+        let childDied = await waitUntil(timeout: 5) { kill(childPID, 0) != 0 }
+        XCTAssertTrue(childDied, "the agent's child must die with the group on cancel")
+        // Outwait the sentinel delay from the spawn, then prove the child never
+        // got to write — it was killed before its `sleep 2` elapsed.
+        try await sleepPast(start, total: 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sentinelPath),
+                       "the child was killed before it wrote — no orphan survived cancel")
+    }
+
+    func testCancelKillsChildrenUnderSandboxExecWrapper() async throws {
+        // Same tree-reap contract under the §5c sandbox-exec wrapper (fenced
+        // tier): sandbox-exec exec-replaces into the agent at the same pid, so
+        // the process GROUP — created at spawn — must still cover the agent's
+        // children.
+        try XCTSkipUnless(DevSeatbeltSandbox.isAvailable(),
+                          "sandbox-exec unavailable — the fenced spawn would fail closed")
+        try await withWrapperValve(disabled: false) {
+            let bin = try makeChildSentinelProbe("fencedchildren")
+            let runner = ClaudeCodeAgentRunner()
+            let start = Date()
+            async let runResult = runner.run(
+                entry: entry(path: bin, format: .streamJSON),
+                tier: .askPermission, prompt: "go", projectURL: scratch,
+                timeouts: DevRunTimeouts(stall: 60, killGrace: 1),
+                onEvent: { _ in })
+            let childPID = try await waitForPIDFile("child.txt")
+
+            runner.cancel()
+            let result = await runResult
+            XCTAssertEqual(result, .failed(.cancelled))
+
+            let childDied = await waitUntil(timeout: 5) { kill(childPID, 0) != 0 }
+            XCTAssertTrue(childDied, "the child must die with the group even under sandbox-exec")
+            try await sleepPast(start, total: 3)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: sentinelPath),
+                           "no orphan may survive cancel under the wrapper")
+        }
+    }
+
+    func testTerminateNowSynchronouslyKillsProcessGroup() async throws {
+        // The quit path (G-02 problem 2). Both the agent and its child TRAP
+        // SIGTERM, and the grace is far longer than the test — so the ONLY thing
+        // that can kill them promptly is the inline group SIGKILL. Asserting the
+        // tree is dead right after terminateNow() returns proves the kill was
+        // sent synchronously (the old async cancel() would still work here, but
+        // dies with the app on a real quit — see the runner's queue.sync doc)
+        // and skipped the SIGTERM→grace shape entirely.
+        let bin = try makeScript("terminatenow", """
+        #!/bin/sh
+        trap '' TERM
+        ( trap '' TERM; sleep 2; echo escaped > "$PWD/sentinel.txt" ) &
+        echo $! > "$PWD/child.txt"
+        while true; do echo '{"type":"system"}'; sleep 0.2; done
+        """)
+        let runner = ClaudeCodeAgentRunner()
+        let start = Date()
+        async let runResult = runner.run(
+            entry: entry(path: bin, format: .streamJSON),
+            tier: .unrestricted, prompt: "go", projectURL: scratch,
+            // A grace far longer than the test: if terminateNow went through the
+            // graceful SIGTERM→grace path, the TERM-trapping tree would outlive
+            // every assertion below.
+            timeouts: DevRunTimeouts(stall: 60, killGrace: 30),
+            onEvent: { _ in })
+        let childPID = try await waitForPIDFile("child.txt")
+
+        let callStart = Date()
+        runner.terminateNow()
+        XCTAssertLessThan(Date().timeIntervalSince(callStart), 1.0,
+                          "terminateNow must return promptly — quit must never hang")
+
+        // SIGKILL was already SENT when the call returned; only scheduler/reap
+        // latency remains. A TERM-trapping child dying at all proves SIGKILL; it
+        // dying now (not after the 30s grace) proves it was inline.
+        let childDied = await waitUntil(timeout: 5) { kill(childPID, 0) != 0 }
+        XCTAssertTrue(childDied, "the TERM-trapping child must be SIGKILLed with the group")
+        let result = await runResult
+        XCTAssertEqual(result, .failed(.cancelled))
+        XCTAssertLessThan(Date().timeIntervalSince(callStart), 10,
+                          "the whole teardown resolved without the 30s grace — the kill was inline")
+
+        try await sleepPast(start, total: 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sentinelPath),
+                       "the child was killed before it wrote — no orphan survived quit")
+    }
+
+    func testTerminateNowWhenIdleIsHarmless() {
+        // No run in flight → the quit-path terminate is a no-op, must not crash
+        // (and must not block).
+        ClaudeCodeAgentRunner().terminateNow()
+    }
+
     func testMissingExecutablePathFailsToSpawn() async throws {
         var e = entry(path: scratch.appendingPathComponent("does-not-exist"), format: .streamJSON)
         e = DevAgentEntry(
@@ -1533,6 +1672,62 @@ final class DevAgentRunnerTests: XCTestCase {
         try body.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
+    }
+
+    // MARK: G-02 process-tree helpers
+
+    /// A fake agent that backgrounds a child which writes `sentinel.txt` after a
+    /// 2s delay, records the child's pid in `child.txt`, then streams forever.
+    /// If a terminate reaps only the agent pid, the orphaned child survives and
+    /// the sentinel appears — the G-02 failure the tree tests assert against.
+    private func makeChildSentinelProbe(_ name: String) throws -> URL {
+        try makeScript(name, """
+        #!/bin/sh
+        ( sleep 2; echo escaped > "$PWD/sentinel.txt" ) &
+        echo $! > "$PWD/child.txt"
+        while true; do echo '{"type":"system"}'; sleep 0.2; done
+        """)
+    }
+
+    private var sentinelPath: String { scratch.appendingPathComponent("sentinel.txt").path }
+
+    /// Wait for the probe to write its pid file (spawn is async), then parse it.
+    private func waitForPIDFile(_ name: String, timeout: TimeInterval = 5) async throws -> pid_t {
+        let url = scratch.appendingPathComponent(name)
+        let appeared = await waitUntil(timeout: timeout) {
+            // Written by `echo` (create + write aren't atomic): require the
+            // trailing newline so a half-written file isn't parsed as pid 0.
+            (try? String(contentsOf: url, encoding: .utf8))?.contains("\n") == true
+        }
+        guard appeared,
+              let raw = try? String(contentsOf: url, encoding: .utf8),
+              let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              pid > 0
+        else {
+            struct NoPID: Error {}
+            XCTFail("probe never wrote a usable \(name)")
+            throw NoPID()
+        }
+        return pid
+    }
+
+    /// Poll `condition` (~every 50ms) until it holds or `timeout` elapses.
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return condition()
+    }
+
+    /// Sleep until `total` seconds have passed since `start` (no-op if already
+    /// past) — used to outwait the sentinel child's write delay.
+    private func sleepPast(_ start: Date, total: TimeInterval) async throws {
+        let remaining = total - Date().timeIntervalSince(start)
+        if remaining > 0 {
+            try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
     }
 }
 
