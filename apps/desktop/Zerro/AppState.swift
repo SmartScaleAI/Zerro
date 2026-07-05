@@ -580,6 +580,33 @@ final class AppState {
             if case .done = state {
                 pendingPaidStore.clear()
             }
+            // I-02: release anything parked on the next return to idle — e.g.
+            // a Sparkle install-and-relaunch postponed mid-recording or
+            // mid-Dev-dispatch. Take the array first so a callback that
+            // re-registers isn't fired again in the same sweep.
+            if state == .idle, !onNextIdleCallbacks.isEmpty {
+                let callbacks = onNextIdleCallbacks
+                onNextIdleCallbacks = []
+                for callback in callbacks { callback() }
+            }
+        }
+    }
+
+    /// Callbacks parked by `onNextIdle(_:)`, fired in registration order and
+    /// cleared by `state`'s `didSet` on the next transition to `.idle`.
+    @ObservationIgnored private var onNextIdleCallbacks: [@MainActor () -> Void] = []
+
+    /// Runs `callback` when the app next returns to `.idle` — immediately if
+    /// it already is. One-shot: the callback fires exactly once and is not
+    /// re-armed for later idle transitions. I-02: lets the Sparkle updater
+    /// delegate postpone an install-and-relaunch that would otherwise kill an
+    /// active recording or Dev-Mode dispatch, without the delegate reaching
+    /// into the state machine itself.
+    func onNextIdle(_ callback: @escaping @MainActor () -> Void) {
+        if state == .idle {
+            callback()
+        } else {
+            onNextIdleCallbacks.append(callback)
         }
     }
     var elapsedSeconds: Double = 0

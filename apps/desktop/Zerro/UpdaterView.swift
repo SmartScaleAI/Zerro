@@ -37,9 +37,30 @@ import SwiftUI
 /// applies whenever the policy defers.
 final class UpdateWindowUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     private let currentWindowEnd: () -> Date?
+    /// I-02: whether the app is mid-work (recording, processing, or any
+    /// Dev-Mode dispatch state) — i.e. anything but a fully idle state
+    /// machine. Read fresh on each relaunch request.
+    private let isBusy: @MainActor () -> Bool
+    /// I-02: schedules a one-shot callback for the app's next return to
+    /// idle (production: `AppState.onNextIdle`).
+    private let onNextIdle: @MainActor (_ callback: @escaping @MainActor () -> Void) -> Void
 
-    init(currentWindowEnd: @escaping () -> Date?) {
+    /// The install-and-relaunch block Sparkle handed over while the app was
+    /// busy, waiting for the next idle transition. Non-nil also means an
+    /// idle callback is already armed — a second postpone request while one
+    /// is pending just replaces the stashed block (the latest update cycle
+    /// wins) without arming a second callback, so the relaunch still fires
+    /// exactly once.
+    private var pendingRelaunch: (() -> Void)?
+
+    init(
+        currentWindowEnd: @escaping () -> Date?,
+        isBusy: @escaping @MainActor () -> Bool,
+        onNextIdle: @escaping @MainActor (_ callback: @escaping @MainActor () -> Void) -> Void
+    ) {
         self.currentWindowEnd = currentWindowEnd
+        self.isBusy = isBusy
+        self.onNextIdle = onNextIdle
     }
 
     func bestValidUpdate(in appcast: SUAppcast, for updater: SPUUpdater) -> SUAppcastItem? {
@@ -56,6 +77,45 @@ final class UpdateWindowUpdaterDelegate: NSObject, SPUUpdaterDelegate {
         case .bestInWindow(let index):
             return appcast.items[index]
         }
+    }
+
+    // MARK: - Idle-gated relaunch (I-02)
+
+    /// Sparkle's postpone-relaunch hook (Sparkle 2.9.2 selector
+    /// `updater:shouldPostponeRelaunchForUpdate:untilInvokingBlock:`).
+    /// Without this, an automatic update can install-and-relaunch the app
+    /// mid-recording or mid-Dev-run, killing the in-flight work. Sparkle
+    /// invokes delegate callbacks on the main thread (same `assumeIsolated`
+    /// pattern as `didAbortWithError` below).
+    func updater(
+        _ updater: SPUUpdater,
+        shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+        untilInvokingBlock installHandler: @escaping () -> Void
+    ) -> Bool {
+        MainActor.assumeIsolated {
+            shouldPostponeRelaunch(untilInvoking: installHandler)
+        }
+    }
+
+    /// Sparkle-free core of the postpone decision, split out so tests can
+    /// drive it without constructing an `SPUUpdater`. Idle → false (Sparkle
+    /// relaunches immediately, unchanged behavior). Busy → true, stashing
+    /// `installHandler` to run on the next idle transition. The stash-then-arm
+    /// order guarantees at most one armed idle callback per pending relaunch,
+    /// and the take-before-invoke in the callback guards against a double
+    /// fire ever running the handler twice.
+    func shouldPostponeRelaunch(untilInvoking installHandler: @escaping () -> Void) -> Bool {
+        guard isBusy() else { return false }
+        let alreadyArmed = pendingRelaunch != nil
+        pendingRelaunch = installHandler
+        if !alreadyArmed {
+            onNextIdle { [weak self] in
+                guard let self, let handler = self.pendingRelaunch else { return }
+                self.pendingRelaunch = nil
+                handler()
+            }
+        }
+        return true
     }
 
     // MARK: - Auto-update failure reporting
@@ -112,17 +172,29 @@ final class UpdaterViewModel: ObservableObject {
     private let updaterDelegate: UpdateWindowUpdaterDelegate
     private var cancellable: AnyCancellable?
 
-    init() {
+    /// The busy/idle pair feeds the I-02 relaunch gate and is wired to the
+    /// live `AppState` by `ZerroApp`. The defaults ("never busy", "idle now")
+    /// reproduce the ungated behavior for the bare `UpdaterViewModel()`
+    /// call sites (`#Preview`s), which have no state machine to consult.
+    init(
+        isBusy: @escaping @MainActor () -> Bool = { false },
+        onNextIdle: @escaping @MainActor (_ callback: @escaping @MainActor () -> Void) -> Void = { $0() }
+    ) {
         // startingUpdater: true → Sparkle begins its automatic-check
         // schedule immediately (per the user's preference plist). The
-        // updater delegate applies the E7 BYOK update-window filter (and
-        // nothing else); nil userDriverDelegate → default update UI.
-        let delegate = UpdateWindowUpdaterDelegate(currentWindowEnd: {
-            UpdateWindowPolicy.currentWindowEnd(
-                kindSlot: KeychainStore.licenseProductKind,
-                createdAtSlot: KeychainStore.byokLicenseCreatedAt
-            )
-        })
+        // updater delegate applies the E7 BYOK update-window filter and
+        // the I-02 idle relaunch gate (and nothing else); nil
+        // userDriverDelegate → default update UI.
+        let delegate = UpdateWindowUpdaterDelegate(
+            currentWindowEnd: {
+                UpdateWindowPolicy.currentWindowEnd(
+                    kindSlot: KeychainStore.licenseProductKind,
+                    createdAtSlot: KeychainStore.byokLicenseCreatedAt
+                )
+            },
+            isBusy: isBusy,
+            onNextIdle: onNextIdle
+        )
         self.updaterDelegate = delegate
         // `startingUpdater: true` kicks off Sparkle's automatic-check
         // schedule (appcast network fetch + first-launch permission flow) the

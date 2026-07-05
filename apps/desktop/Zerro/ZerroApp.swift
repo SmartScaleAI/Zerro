@@ -63,8 +63,10 @@ struct ZerroApp: App {
     /// session — owning it inside the MenuBarExtra content closure
     /// would tear down `SPUStandardUpdaterController` every time the
     /// dropdown closes, killing automatic update checks and any
-    /// in-flight download UI (Phase 4 lifetime learning).
-    @StateObject private var updater = UpdaterViewModel()
+    /// in-flight download UI (Phase 4 lifetime learning). Assigned in
+    /// `init` (not a property default) so the I-02 relaunch gate can
+    /// capture the AppState built there.
+    @StateObject private var updater: UpdaterViewModel
 
     /// Guard so the hotkey handler is appended to the library's handler
     /// list exactly once across the app's lifetime. SwiftUI re-invokes
@@ -181,6 +183,18 @@ struct ZerroApp: App {
         // manager's sole `stateDidChange` owner (never clobbered here).
         state.modelManager = modelManager
         _appState = State(initialValue: state)
+        // I-02: gate Sparkle's install-and-relaunch on the state machine
+        // being fully idle, so an automatic update can't kill an active
+        // recording or Dev-Mode dispatch. `StateObject(wrappedValue:)` is an
+        // @autoclosure evaluated only when SwiftUI first installs the
+        // storage box — on that FIRST init, `state` here is the same
+        // instance persisted into `_appState` above, so the gate reads the
+        // live state machine; throwaway re-init instances are never
+        // evaluated (same lifetime dance as the hotkey guard above).
+        _updater = StateObject(wrappedValue: UpdaterViewModel(
+            isBusy: { state.state != .idle },
+            onNextIdle: { state.onNextIdle($0) }
+        ))
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
