@@ -141,6 +141,62 @@ final class RecentPromptStoreTests: XCTestCase {
         XCTAssertTrue(store.prompts.isEmpty)
     }
 
+    // MARK: I-01 hardening — owner-only perms + backup exclusion
+
+    private func posixPermissions(atPath path: String) throws -> UInt16 {
+        let attrs = try FileManager.default.attributesOfItem(atPath: path)
+        return try XCTUnwrap(attrs[.posixPermissions] as? NSNumber).uint16Value
+    }
+
+    func testSaveSetsOwnerOnlyFilePermissions() throws {
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "plaintext prompt body")
+        XCTAssertEqual(try posixPermissions(atPath: fileURL.path), 0o600)
+    }
+
+    func testPermissionsRestoredOnEverySave() throws {
+        // The .atomic write replaces the file wholesale, resetting perms
+        // to the umask default — hardening must reapply on each save.
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "one")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: fileURL.path
+        )
+        store.add(prompt: "two")
+        XCTAssertEqual(try posixPermissions(atPath: fileURL.path), 0o600)
+    }
+
+    func testSaveSetsParentDirectoryOwnerOnly() throws {
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "p")
+        XCTAssertEqual(
+            try posixPermissions(atPath: fileURL.deletingLastPathComponent().path),
+            0o700
+        )
+    }
+
+    func testSaveTightensPreExistingParentDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "p")
+        XCTAssertEqual(
+            try posixPermissions(atPath: fileURL.deletingLastPathComponent().path),
+            0o700
+        )
+    }
+
+    func testSaveExcludesFileFromBackup() throws {
+        let store = RecentPromptStore(fileURL: fileURL)
+        store.add(prompt: "p")
+        let values = try fileURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
     // MARK: Phase 5 — per-type display + copy semantics
 
     private func entry(
