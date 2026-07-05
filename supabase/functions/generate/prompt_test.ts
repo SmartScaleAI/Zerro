@@ -59,9 +59,50 @@ Deno.test("composedSystemPrompt() carries the v2 artifact contract, not the v1 m
   assert(!p.includes("goes straight to the clipboard"), "v1 clipboard paragraph must be gone");
 });
 
-// Dev Mode (Phase 1, Milestone 5) — `mode:"dev"` selects the repo-scoped
-// prompt. Structural assertions, not a byte-mirror (the dev prompt has no md
-// source); it must stay in sync with the Swift `devText` by review.
+// Dev Mode (Phase 1, Milestone 5 + J-01) — `mode:"dev"` selects the
+// repo-scoped prompt. Byte-identity with the in-repo dev mirror (and thus
+// with the Swift `devText`, which PromptDevMirrorTests enforces against the
+// same file) replaces the old "sync by review" regime. The dev mirror's
+// fence is FOUR backticks — the prompt itself contains a three-backtick
+// zerro_anchors block.
+const DEV_MIRROR_URL = new URL(
+  "../../../apps/desktop/Scripts/artifact-eval/prompt-dev.md",
+  import.meta.url,
+);
+
+Deno.test("composedSystemPrompt('dev') is byte-identical to the locked in-repo dev mirror", async () => {
+  let md: string;
+  try {
+    md = await Deno.readTextFile(DEV_MIRROR_URL);
+  } catch (e) {
+    throw new Error(
+      `could not read the dev prompt mirror at ${DEV_MIRROR_URL.pathname} — ` +
+        `run the suite with --allow-read from supabase/functions/ inside the repo (${e})`,
+    );
+  }
+  const fence = md.match(/\n````\n([\s\S]*?)\n````\n/);
+  assert(fence, "prompt-dev.md has no four-backtick fenced block — the mirror format changed?");
+
+  const composed = composedSystemPrompt("dev");
+  const mirror = fence[1];
+  if (composed !== mirror) {
+    // Same first-divergence diagnostic as the PROMPT_V2 test above.
+    const n = Math.min(composed.length, mirror.length);
+    let i = 0;
+    while (i < n && composed[i] === mirror[i]) i++;
+    throw new Error(
+      `prompt.ts PROMPT_DEV drifted from prompt-dev.md at char ${i}: ` +
+        `composed …${JSON.stringify(composed.slice(Math.max(0, i - 40), i + 40))}… vs ` +
+        `mirror …${JSON.stringify(mirror.slice(Math.max(0, i - 40), i + 40))}… ` +
+        `(lengths ${composed.length} vs ${mirror.length})`,
+    );
+  }
+  assertEquals(composed.length, 8_721, "locked dev prompt length — update alongside an intentional prompt change");
+});
+
+// Structural canary kept alongside the byte-mirror: these assert the CONTRACT
+// (body shape, fences, constraints), so an intentional rewrite that keeps all
+// three copies in sync but drops a §6/§11 requirement still fails loudly.
 Deno.test("composedSystemPrompt('dev') is the repo-scoped Dev Mode variant", () => {
   const dev = composedSystemPrompt("dev");
   const normal = composedSystemPrompt();

@@ -21,6 +21,14 @@
 // mirror from the repo and compares) — drift fails the suite instead of relying
 // on this comment. Tuning the text is a product decision: re-run the artifact
 // eval (eval-models.mjs --artifact) and update the canonical doc's changelog.
+//
+// The Dev Mode prompt (PROMPT_DEV, J-01) is its OWN byte-mirror set with the
+// same all-or-none rule:
+//   - in-repo mirror:  apps/desktop/Scripts/artifact-eval/prompt-dev.md
+//                      (first FOUR-backtick fenced block)
+//   - THIS FILE        (PROMPT_DEV, Managed path)
+//   - Swift copy:      Zerro/Services/PromptGenerationSystemPrompt.swift devText
+// Enforced by prompt_test.ts here and PromptDevMirrorTests.swift on the client.
 // =============================================================================
 
 const PROMPT_V2 = `You convert a screen recording into clean text output. Your input is:
@@ -152,9 +160,12 @@ I didn't catch a request in this recording — you walked through the screen and
 ---`;
 
 // =============================================================================
-// Dev Mode prompt (design §6 + §11). Kept textually in sync with the Swift
-// `PromptGenerationSystemPrompt.devText` (BYOK path) — both change together.
-// NOT part of the prompt-v2.md byte-mirror set (that covers PROMPT_V2 only).
+// Dev Mode prompt (design §6 + §11). Byte-identical to the first fenced block
+// of apps/desktop/Scripts/artifact-eval/prompt-dev.md and to the Swift
+// `PromptGenerationSystemPrompt.devText` (BYOK path) — every edit updates all
+// three or none (J-01). Enforced by prompt_test.ts against the mirror; the
+// Swift twin is PromptDevMirrorTests. Separate mirror set from prompt-v2.md
+// (that covers PROMPT_V2 only).
 //
 // Server still OWNS the text: the client only SELECTS between two locked,
 // product-IP prompts (normal vs dev) via the `mode` field — it never supplies

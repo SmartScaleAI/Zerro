@@ -26,6 +26,15 @@
 //  ZerroTests/PromptV2MirrorTests.swift (reads the mirror via #filePath) —
 //  drift fails the suite, mirroring the server's prompt_test.ts.
 //
+//  The Dev Mode prompt (`devText`, J-01) is its OWN byte-mirror set with the
+//  same all-or-none rule:
+//    - in-repo mirror:  Scripts/artifact-eval/prompt-dev.md
+//                       (first FOUR-backtick fenced block)
+//    - THIS FILE        (`devText`, BYOK path)
+//    - server copy:     supabase/functions/generate/prompt.ts PROMPT_DEV
+//  Enforced by ZerroTests/PromptDevMirrorTests.swift and the server's
+//  prompt_test.ts against the same mirror.
+//
 //  Change discipline: tuning this is a product decision, not an
 //  implementation one. Re-run the artifact eval (eval-models.mjs --artifact)
 //  and update the canonical doc's changelog with any edit.
@@ -182,11 +191,12 @@ enum PromptGenerationSystemPrompt {
     ---
     """
 
-    /// Dev Mode system prompt (design §6 + §11). NOT byte-mirrored to
-    /// prompt-v2.md (that mirror covers the normal prompt only); it is instead
-    /// kept textually in sync with the server's `PROMPT_DEV` in
-    /// `supabase/functions/generate/prompt.ts` — both this and that file change
-    /// together. The output still uses the ZERRO_ARTIFACT fence with
+    /// Dev Mode system prompt (design §6 + §11). Byte-identical to the first
+    /// fenced block of `Scripts/artifact-eval/prompt-dev.md` (enforced by
+    /// PromptDevMirrorTests, J-01) and to the server's `PROMPT_DEV` in
+    /// `supabase/functions/generate/prompt.ts` (enforced against the same
+    /// mirror by its prompt_test.ts) — every edit updates all three or none.
+    /// The output still uses the ZERRO_ARTIFACT fence with
     /// `type="agent_prompt"`, so the existing ArtifactParser extracts the body;
     /// the BODY follows the Goal/Changes/Scope spec the local agent acts on.
     static let devText: String = """
