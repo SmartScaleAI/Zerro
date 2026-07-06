@@ -193,4 +193,33 @@ final class BYOKRoutingTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "gpt-5.4-mini")
     }
+
+    /// B-04: the OpenAI BYOK body pins a `max_completion_tokens` output cap —
+    /// the CURRENT param, not the deprecated `max_tokens` (the GPT-5.x family
+    /// rejects the old one) — mirroring the server's OPENAI_MAX_OUTPUT_TOKENS
+    /// so a runaway generation is bounded on the user's key too.
+    func testOpenAIBodyPinsMaxCompletionTokensCap() throws {
+        let (timeline, _) = try makeTimeline()
+        let data = try OpenAIPromptGenerationService.encodeBody(
+            timeline: timeline, systemPrompt: "SYSTEM"
+        )
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["max_completion_tokens"] as? Int, 16384)
+        XCTAssertNil(json["max_tokens"], "must use max_completion_tokens, never the deprecated max_tokens")
+    }
+
+    /// B-04: the Gemini BYOK generationConfig pins a `maxOutputTokens` cap,
+    /// mirroring the server's GEMINI_MAX_OUTPUT_TOKENS — alongside (not
+    /// replacing) the existing thinkingConfig.
+    func testGeminiBodyPinsMaxOutputTokensCap() throws {
+        let (timeline, _) = try makeTimeline()
+        let data = try GeminiPromptGenerationService.encodeBody(
+            timeline: timeline, systemPrompt: "SYSTEM"
+        )
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let config = try XCTUnwrap(json["generationConfig"] as? [String: Any])
+        XCTAssertEqual(config["maxOutputTokens"] as? Int, 16384)
+        let thinking = try XCTUnwrap(config["thinkingConfig"] as? [String: Any])
+        XCTAssertEqual(thinking["thinkingLevel"] as? String, "low")
+    }
 }
