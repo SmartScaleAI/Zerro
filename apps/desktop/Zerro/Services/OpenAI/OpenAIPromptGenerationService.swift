@@ -60,6 +60,22 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         self.model = model
     }
 
+    /// Typed mapping from the Chat Completions response status to the error
+    /// thrown for it — nil for 2xx success. Factored out of `generatePrompt`
+    /// so the mapping is unit-testable without a live request. 401 AND 403
+    /// both map to `.auth` (J-02): OpenAI returns 403 for rejected keys and
+    /// permission/region denials, which previously fell through to `.server`
+    /// and surfaced as a misleading transient-outage message. A 429 reaching
+    /// here means performWithRetry's single retry also got 429.
+    static func error(forStatus status: Int) -> PromptGenerationError? {
+        switch status {
+        case 200...299: return nil
+        case 401, 403: return .auth
+        case 429: return .rateLimited
+        default: return .server(status: status)
+        }
+    }
+
     func generatePrompt(
         timeline: InterleavedTimeline,
         systemPrompt: String
@@ -96,21 +112,16 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             throw PromptGenerationError.network(underlying: error)
         }
 
-        switch response.statusCode {
-        case 200...299:
-            break
-        case 401:
-            throw PromptGenerationError.auth
-        case 429:
-            throw PromptGenerationError.rateLimited
-        default:
-            // Log the provider's error body `.private` for local debugging
-            // only — it must NOT ride into the typed error, which can reach
-            // the error tracker, where the exception value is scrubbed by length, not by
-            // content. The error keeps just the status code.
-            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-            Log.promptGen.error("Chat Completions non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
-            throw PromptGenerationError.server(status: response.statusCode)
+        if let statusError = Self.error(forStatus: response.statusCode) {
+            if case .server = statusError {
+                // Log the provider's error body `.private` for local debugging
+                // only — it must NOT ride into the typed error, which can reach
+                // the error tracker, where the exception value is scrubbed by length, not by
+                // content. The error keeps just the status code.
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                Log.promptGen.error("Chat Completions non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
+            }
+            throw statusError
         }
 
         let decoded: ChatResponse
