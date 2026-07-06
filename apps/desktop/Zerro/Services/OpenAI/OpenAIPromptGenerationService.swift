@@ -15,6 +15,7 @@
 //              Content-Type:  application/json
 //    Body:     {
 //      "model": "gpt-4o",
+//      "max_completion_tokens": 16384,
 //      "messages": [
 //        {"role": "system", "content": "<locked PromptGenerationSystemPrompt>"},
 //        {"role": "user", "content": [
@@ -55,6 +56,17 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// The model id to run (e.g. "gpt-5.4-mini"). Selected per generation by
     /// BYOKRouting.
     let model: String
+
+    /// B-04 — output-token cap so a BYOK generation on the user's own key is
+    /// bounded instead of running to the model's default max. Mirrors the
+    /// server adapter's OPENAI_MAX_OUTPUT_TOKENS
+    /// (supabase/functions/generate/providers/openai.ts) — the value can't be
+    /// shared across Swift/TS, so KEEP IN SYNC. Typical output is ~1k tokens;
+    /// 16384 is ample headroom (a normal response never truncates — only a
+    /// runaway is cut, surfaced as `.truncated` via finish_reason "length").
+    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` —
+    /// matching the server and required by the GPT-5.x family.
+    private nonisolated static let maxCompletionTokens = 16384
 
     init(model: String = OpenAIPromptGenerationService.defaultModel) {
         self.model = model
@@ -219,7 +231,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             messages: [
                 .systemMessage(content: systemPrompt),
                 .userMessage(content: userContent)
-            ]
+            ],
+            maxCompletionTokens: maxCompletionTokens
         )
 
         do {
@@ -251,6 +264,13 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     private nonisolated struct ChatRequest: Encodable {
         let model: String
         let messages: [Message]
+        /// B-04 output cap — see `maxCompletionTokens`.
+        let maxCompletionTokens: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case model, messages
+            case maxCompletionTokens = "max_completion_tokens"
+        }
     }
 
     private nonisolated enum Message: Encodable {
