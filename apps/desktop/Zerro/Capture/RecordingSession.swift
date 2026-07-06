@@ -728,6 +728,15 @@ final class RecordingSession: NSObject {
         }
     }
 
+    /// True while capture is live — from `start()` flipping `.running` until a
+    /// terminal path (stop / cancel / fail / sleep-abandon) begins finalize.
+    /// False before start and for the entire finalize window, INCLUDING a
+    /// manual stop's (where AppState's `state` still reads `.recording` /
+    /// `.wrappingUp` while the writer finishes). AppState's mid-session
+    /// revocation guard reads this to tell a live capture (destructive
+    /// teardown valid) from a completed one that must be preserved (F-11).
+    var isCapturing: Bool { lifecycleState == .running }
+
     func stop() {
         guard lifecycleState == .running else { return }
         lifecycleState = .finishing

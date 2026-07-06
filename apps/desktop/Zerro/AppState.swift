@@ -1129,8 +1129,17 @@ final class AppState {
 
     /// The live capture session. Held strongly while recording so its
     /// callbacks (onElapsed, onFinish) stay valid; cleared on session
-    /// completion / cancel so memory is reclaimed.
-    private var recordingSession: RecordingSession?
+    /// completion / cancel so memory is reclaimed. Internal (not private)
+    /// so the F-11 revocation-guard tests can install an unstarted session
+    /// and observe whether the handler tore it down.
+    var recordingSession: RecordingSession?
+
+    /// F-11 test seam for the revocation guard's capture-liveness read —
+    /// mirrors `localModelStateProvider`. `nil` (production) reads the live
+    /// session's `isCapturing`; tests inject a value so both guard branches
+    /// can be driven without a started ScreenCaptureKit capture (a real
+    /// `.running` session needs TCC grants a unit test doesn't have).
+    @ObservationIgnored var captureLivenessProvider: (() -> Bool)?
 
     #if STAGING
     /// Staging-only amber "you're recording against Staging" frame around the
@@ -1504,16 +1513,62 @@ final class AppState {
         }
     }
 
+    /// F-11 — PURE predicate: may a mid-session TCC revocation destructively
+    /// tear down the recording (cancel the session, discard the file, show
+    /// `.failed`)? True ONLY while capture is genuinely live:
+    ///   • `state` is a live-capture state — `.recording` or `.wrappingUp`
+    ///     (the 150–180s countdown is still appending samples, so a genuine
+    ///     revocation there breaks the capture mid-stream and must fail).
+    ///     `.autoStopped` is the auto-stop finalize window: capture already
+    ///     completed and the writer is finishing the FULL recording, so it
+    ///     is protected unconditionally.
+    ///   • AND the session is still appending (`captureIsLive`) — false
+    ///     during a MANUAL stop's finalize, where `state` deliberately stays
+    ///     `.recording`/`.wrappingUp` while the writer finishes (see
+    ///     `stopRecording`), so state alone can't tell that window apart
+    ///     from live capture.
+    /// Today `.autoStopped` always implies `captureIsLive == false` (the
+    /// transition calls `session.stop()` synchronously), so the state check
+    /// is redundancy — kept so the protection survives if that coupling ever
+    /// loosens, and to document which states are the finalize window. The
+    /// invariant both checks serve: a revocation must NEVER discard a
+    /// recording whose capture has already completed.
+    static func shouldFailOnMidSessionRevocation(
+        state: RecordingState, captureIsLive: Bool
+    ) -> Bool {
+        (state == .recording || state == .wrappingUp) && captureIsLive
+    }
+
     /// Fired by PermissionsManager.startMonitoring when Screen Recording
     /// or Microphone TCC flips away from .granted during an active
-    /// recording. Tears down the writer (which writes whatever it can
-    /// finalize, then no-ops the partial file) and sets the dedicated
-    /// failure state directly so the user sees the right copy
-    /// immediately. We don't wait for handleSessionFinish(.cancelled) to
-    /// drive the state — that branch is guarded so it won't overwrite
-    /// the failure we set here.
-    private func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
+    /// recording. While capture is LIVE this tears down the writer (which
+    /// writes whatever it can finalize, then no-ops the partial file) and
+    /// sets the dedicated failure state directly so the user sees the
+    /// right copy immediately. We don't wait for
+    /// handleSessionFinish(.cancelled) to drive the state — that branch is
+    /// guarded so it won't overwrite the failure we set here.
+    ///
+    /// F-11: the destructive path is gated on capture actually being live
+    /// (`shouldFailOnMidSessionRevocation`). If the flip lands once capture
+    /// has completed — the `.autoStopped` finalize window, or a manual
+    /// stop's finalize — the recording is already fully captured and the
+    /// old unconditional teardown threw it away: `session.cancel()` no-ops
+    /// on a finishing session, but `state = .failed` made
+    /// `handleSessionFinish`'s failed-state short-circuit orphan the
+    /// finished file. Instead we only stop the monitor and return, letting
+    /// the normal finalize path (`handleSessionFinish` → `.processing`)
+    /// produce the recording. Finalizing needs no TCC — no more samples
+    /// are appended — so the revocation can't corrupt the completed
+    /// capture. Internal (not private) so the F-11 tests can drive it.
+    func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
         guard isRecordingActive, let session = recordingSession else { return }
+        let captureIsLive = captureLivenessProvider?() ?? session.isCapturing
+        guard Self.shouldFailOnMidSessionRevocation(state: state, captureIsLive: captureIsLive) else {
+            // Failure-reason case name is .public — no user content.
+            Log.state.notice("permission revoked during finalize — preserving completed recording: \(String(describing: kind), privacy: .public)")
+            permissions?.stopMonitoring()
+            return
+        }
         // Failure-reason case name is .public — no user content.
         Log.state.notice("permission revoked mid-session: \(String(describing: kind), privacy: .public)")
         // Phase 13A: breadcrumb at .warning level. The trail will read
