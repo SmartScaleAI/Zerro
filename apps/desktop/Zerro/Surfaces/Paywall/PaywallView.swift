@@ -101,9 +101,11 @@ struct PaywallCopy: Equatable {
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
+    /// Carries the B-07 metering-floor note (the shared CreditDisplay string)
+    /// so the credits-focused paywall states it too.
     static let topup = PaywallCopy(
         headline: "Add Credits",
-        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months.",
+        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months. \(CreditDisplay.minimumChargeNote)",
         windowTitle: "Add Credits"
     )
     /// Entitled user managing their plan — de-emphasize the sell.
