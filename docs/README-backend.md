@@ -33,7 +33,7 @@ and `Documents/zerro-billing-implementation-plan.md` (Phase D).
 
 ```
 supabase/
-  config.toml                         # verify_jwt=false for all 3 functions (see notes)
+  config.toml                         # verify_jwt=false for all 10 functions (see notes)
   migrations/
     20260601120000_billing_schema.sql        # tables + consume_credit() + check_rate_limit()
     20260601120100_billing_rls.sql           # RLS deny-by-default on every table
@@ -76,6 +76,8 @@ supabase/
                                       #   prompt.ts (byte-mirror of Scripts/artifact-eval/
                                       #   convert-prompt-v1.md, enforced by prompt_test.ts),
                                       #   config.ts (+ handler_test.ts)
+    feedback/                         # in-app feedback/issue reports → Slack relay (public,
+                                      #   validated + length-capped in code; SLACK_WEBHOOK_URL secret)
     refresh-agent-models/             # Dev Mode manifest WRITER (daily cron + manual w/ secret):
                                       #   fetch live Anthropic model list → curate (regex) → rank
                                       #   newest-first → upsert → vanished→inactive sweep. Never
@@ -85,6 +87,8 @@ supabase/
     agent-models/                     # Dev Mode manifest READER: public GET, active rows grouped
                                       #   by provider, ordered by rank, 1h Cache-Control. No auth.
                                       #   group.ts, index.ts (+ group_test.ts)
+    affiliate/                        # affiliate click/attribution endpoint (public; website posts
+                                      #   ?aff clicks, app matches by salted-hashed IP before checkout)
   test/run-curl-tests.sh              # post-deploy verification battery
 README-backend.md                     # this file
 ```
@@ -204,7 +208,7 @@ supabase secrets set AFFILIATE_IP_SALT="$(openssl rand -hex 32)"  # affiliate �
 # Phase 5: supabase secrets set LS_VARIANT_YEARLY="<yearly-id>" \
 #          LS_VARIANT_TOPUP_BOOST="<boost-variant-id>" LS_VARIANT_TOPUP_POWER="<power-variant-id>"
 
-# 3. Deploy the six functions. --no-verify-jwt is REQUIRED on all six
+# 3. Deploy the ten functions. --no-verify-jwt is REQUIRED on all ten
 #    (see "Why --no-verify-jwt" below). config.toml already encodes this, but
 #    pass the flag explicitly so a config drift can't silently re-enable the
 #    gateway JWT gate.
@@ -214,6 +218,8 @@ supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate            --no-verify-jwt
 supabase functions deploy trial-start         --no-verify-jwt
 supabase functions deploy convert             --no-verify-jwt
+# In-app feedback relay (needs the SLACK_WEBHOOK_URL secret set):
+supabase functions deploy feedback            --no-verify-jwt
 # Dev Mode model manifest (see "Dev Mode model manifest" below):
 supabase functions deploy refresh-agent-models --no-verify-jwt
 supabase functions deploy agent-models         --no-verify-jwt
@@ -244,6 +250,16 @@ for different reasons:
   mid-trial with no credential yet. Security is the per-email/per-IP rate limit +
   a hashed, TTL'd, attempt-limited code + a disposable-domain block + the
   one-grant-per-email cap, all in code.
+- **feedback** — an **unauthenticated public** endpoint, exactly like
+  `trial-start`: the in-app feedback dialog must work signed-out, so there is no
+  Supabase JWT to verify. Security is in code — a kind allow-list + trimmed,
+  length-capped fields — and the only side effect is a POST to the server-held
+  `SLACK_WEBHOOK_URL` secret (never echoed or logged).
+- **affiliate** — a **public** attribution endpoint with no Supabase JWT at
+  either call site (the website posts `?aff` click codes; the app fetches the
+  code matched to its own public IP just before checkout). Protection is in
+  code: matching is keyed on the caller's OWN public IP (unforgeable for another
+  visitor) and IPs are stored only as salted hashes (`AFFILIATE_IP_SALT`).
 - **refresh-agent-models** (Dev Mode manifest) — the caller is the daily pg_cron
   job (server-side `net.http_post`), not an app with a Supabase JWT. Security is
   the shared `REFRESH_CRON_SECRET` checked in code against the `x-refresh-secret`
@@ -251,6 +267,69 @@ for different reasons:
 - **agent-models** (Dev Mode manifest) — a **public** read of public model ids
   (no credential, no user data). The app reads it at launch with no session, so
   there is nothing to verify; the write path stays service-role-only via RLS.
+
+---
+
+## Rollback
+
+There is no one-button rollback; each layer reverts differently. **The database
+is the paid-state source of truth** (spend lives in `usage_periods` /
+`trial_grants` / `topup_credits` / `idempotency_cache`) — treat it with the
+most care.
+
+### Edge functions — redeploy the prior revision's code
+
+Rolling a function back = deploying the code from the last good git revision:
+
+```bash
+# Restore the function's source from the last good revision, then redeploy.
+git checkout <prev-good-sha> -- supabase/functions/<name>
+supabase functions deploy <name> --no-verify-jwt
+
+# If _shared/ changed in the bad deploy too, restore it alongside (every
+# function bundles _shared/ at deploy time):
+git checkout <prev-good-sha> -- supabase/functions/_shared supabase/functions/<name>
+```
+
+Afterwards land the revert in git properly (a `git revert` PR) — otherwise the
+next routine deploy silently re-ships the bad code your working-tree checkout
+just rolled back.
+
+### Migrations — forward-only (compensate, never delete)
+
+Never roll back by deleting or editing an applied migration file: prod's
+migration history (and every preview/shadow replay) already recorded it, and
+removing the file only makes the histories diverge. Undo a bad migration with
+a **new compensating migration** — drop what it added, restore the prior
+function/trigger definition — and push that forward through the normal deploy.
+
+Emergency only (data corruption, not just bad DDL): restore from PITR/backup
+(Dashboard → Database → Backups). Because the DB is the source of truth for
+paid state, a point-in-time restore **rewinds real spend and entitlement
+mirrors** — restore to the newest safe instant, expect to reconcile credits
+spent/webhooks received after that instant, and prefer a compensating
+migration whenever the damage is schema-level rather than data-level.
+
+### Secrets — re-set the prior value
+
+```bash
+supabase secrets set NAME="<previous value>"
+```
+
+Takes effect on new invocations shortly after (no redeploy needed); verify
+with a probe request. A secret shared with a third party
+(`LEMONSQUEEZY_WEBHOOK_SECRET`, `REFRESH_CRON_SECRET`'s Vault copy) must be
+reverted on **both** sides or the pair stops matching.
+
+### Partial deploys — reconcile both layers
+
+A release is not atomic across layers: `supabase db push` may have applied a
+migration even though the function deploy that followed failed (or vice
+versa). After any failed deploy, check BOTH sides — `supabase migration list`
+for what actually applied, and the dashboard's function versions for what's
+live — then reconcile with a compensating migration plus a redeploy of the
+prior function code (above). Never hand-edit prod schema to "match" the old
+function.
 
 ---
 

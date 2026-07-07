@@ -44,10 +44,17 @@ supabase functions deploy session              --no-verify-jwt
 supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate             --no-verify-jwt
 supabase functions deploy trial-start          --no-verify-jwt
+supabase functions deploy convert              --no-verify-jwt
+supabase functions deploy feedback             --no-verify-jwt
+supabase functions deploy refresh-agent-models --no-verify-jwt
+supabase functions deploy agent-models         --no-verify-jwt
+supabase functions deploy affiliate            --no-verify-jwt
 ```
 
-`--no-verify-jwt` is REQUIRED on all five (see README-backend.md → "Why
-`--no-verify-jwt`").
+`--no-verify-jwt` is REQUIRED on all ten (see README-backend.md → "Why
+`--no-verify-jwt`"). The full current function set is the ten in
+`supabase/config.toml` — deploy them all so a runbook-driven redeploy can't
+leave a function on stale code.
 
 ## 3. Set / confirm prod secrets
 
