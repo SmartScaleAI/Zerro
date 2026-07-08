@@ -3,9 +3,10 @@
 // =============================================================================
 // Deployed with verify_jwt = false at the Supabase GATEWAY (see config.toml):
 // the Zerro app posts here unauthenticated (the in-app dialog works signed-out),
-// exactly like `trial-start`. There is no credential to verify — the payload is
-// short, validated, and length-capped in code, and the only side effect is a
-// POST to a server-held Slack webhook. The webhook URL is a secret
+// exactly like `trial-start`. There is no credential to verify, so the C-04
+// hardening posture is: the payload is short, validated, and length-capped in
+// code; every user string is mrkdwn-escaped before it reaches Slack (slack.ts);
+// and a per-IP rate limit bounds relay spam. The webhook URL is a secret
 // (SLACK_WEBHOOK_URL) and is NEVER echoed back to the client or logged.
 //
 // Wire shape (matches FeedbackService.swift):
@@ -18,10 +19,17 @@
 //   → 200 { ok: true } on success
 //   → 400 { error: "invalid_body" | "invalid_kind" | "invalid_message" }
 //   → 405 { error: "method_not_allowed" }
+//   → 429 { error: "rate_limited" } past the per-IP cap (or limiter failure)
 //   → 502 { error: "slack_delivery_failed" } when Slack returns non-2xx.
 
 import { requireEnv } from "../_shared/env.ts";
 import { handlePreflight, json } from "../_shared/http.ts";
+import { serviceClient } from "../_shared/db.ts";
+import {
+  FEEDBACK_RATE_LIMIT_PER_IP,
+  FEEDBACK_RATE_LIMIT_WINDOW_SECONDS,
+} from "./config.ts";
+import { buildSlackPayload, validateEmail } from "./slack.ts";
 
 /// Hard caps mirrored on the client (FeedbackService) so a well-behaved app
 /// never trips them; enforced here too because the endpoint is unauthenticated.
@@ -30,13 +38,39 @@ const MESSAGE_MAX = 4000;
 /// context block, so bound them rather than trusting client length.
 const META_MAX = 200;
 
-type FeedbackKind = "issue" | "feedback";
-
 function clampMeta(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (trimmed === "") return null;
   return trimmed.slice(0, META_MAX);
+}
+
+/** First hop of x-forwarded-for (the gateway-appended client IP), mirroring
+ * trial-start. */
+function clientIp(req: Request): string {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
+  return req.headers.get("x-real-ip") ?? "unknown";
+}
+
+/** Per-IP fixed-window gate (check_rate_limit, the same limiter trial-start
+ * uses). TRUE = allowed. Fails CLOSED: this is an unauthenticated relay into
+ * Slack, so a broken limiter must reject rather than degrade into an unbounded
+ * spam channel — the opposite call from trial-start, where fail-open protects
+ * a legitimate signup that has other hard caps behind it. */
+async function withinRate(ip: string): Promise<boolean> {
+  const { data, error } = await serviceClient().rpc("check_rate_limit", {
+    p_key: `feedback:${ip}`,
+    p_max: FEEDBACK_RATE_LIMIT_PER_IP,
+    p_window_seconds: FEEDBACK_RATE_LIMIT_WINDOW_SECONDS,
+  });
+  if (error) {
+    console.error(
+      JSON.stringify({ fn: "feedback", op: "rateLimit", error: error.message }),
+    );
+    return false;
+  }
+  return data === true;
 }
 
 Deno.serve(async (req: Request) => {
@@ -72,12 +106,20 @@ Deno.serve(async (req: Request) => {
 
   const appVersion = clampMeta(raw.app_version);
   const osVersion = clampMeta(raw.os_version);
-  const userEmail = clampMeta(raw.user_email);
+  // Self-reported and unauthenticated: keep only plausible addresses; the
+  // Slack context line labels whatever survives as "(unverified)".
+  const userEmail = validateEmail(clampMeta(raw.user_email));
+
+  // Per-IP rate gate BEFORE the Slack POST — the only quantitative abuse
+  // bound on this endpoint.
+  if (!(await withinRate(clientIp(req)))) {
+    return json({ error: "rate_limited" }, 429);
+  }
 
   const webhook = requireEnv("SLACK_WEBHOOK_URL");
 
   const payload = buildSlackPayload({
-    kind: kind as FeedbackKind,
+    kind,
     message,
     appVersion,
     osVersion,
@@ -116,55 +158,3 @@ Deno.serve(async (req: Request) => {
   console.log(JSON.stringify({ fn: "feedback", ok: true, kind }));
   return json({ ok: true }, 200);
 });
-
-// MARK: - Slack Block Kit
-
-interface FeedbackInput {
-  kind: FeedbackKind;
-  message: string;
-  appVersion: string | null;
-  osVersion: string | null;
-  userEmail: string | null;
-}
-
-/// Builds the Block Kit message: a header that names the kind, a section with
-/// the user's verbatim message, and a context line carrying the diagnostic
-/// trailer + a timestamp.
-function buildSlackPayload(input: FeedbackInput) {
-  const headerText = input.kind === "issue"
-    ? "🐞 New issue report"
-    : "💡 New feedback";
-
-  const account = input.userEmail ?? "not signed in";
-  const appVersion = input.appVersion ?? "unknown";
-  const osVersion = input.osVersion ?? "unknown";
-  const timestamp = new Date().toISOString();
-
-  return {
-    // `text` is the notification fallback shown in Slack push/preview.
-    text: headerText,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: headerText, emoji: true },
-      },
-      {
-        type: "section",
-        // `mrkdwn` so multi-line messages render with line breaks; the message
-        // is user content, so it is NOT formatted as code or interpolated into
-        // any other markup.
-        text: { type: "mrkdwn", text: input.message },
-      },
-      {
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text:
-              `Zerro ${appVersion} · macOS ${osVersion} · ${account} · ${timestamp}`,
-          },
-        ],
-      },
-    ],
-  };
-}
