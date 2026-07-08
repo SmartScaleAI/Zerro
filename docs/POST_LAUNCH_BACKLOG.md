@@ -50,7 +50,7 @@ accept as immediate post-launch.**
 | A-15 | Rate limiter: sliding window + alert on the fail-open path. |
 | A-03 | Derive webhook event name from the signed body, not the `X-Event-Name` header. |
 | A-14 | pg_cron sweep for `webhook_events` / `rate_limits` growth. |
-| D-03 | Move `pg_net` out of the `public` schema. |
+| D-03 | Move `pg_net` out of the `public` schema. **ACCEPTED / won't-fix (2026-07-08):** non-relocatable + objects already in the `net` schema (not `public`), so the `extension_in_public` lint is cosmetic; the only fix is a risky drop/recreate of managed infra. See PRE_RELEASE_REVIEW_LOG.md. |
 | E-03 | Keychain `…ThisDeviceOnly` for the trial slots specifically. |
 | E-08 | Log `url.host`/scheme (not full `absoluteString`) — also flows into the diagnostics blob. |
 | I-03 | Defer anonymous launch telemetry until after consent (or disclose default-on). |
