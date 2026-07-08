@@ -110,10 +110,15 @@ export interface WebhookStore {
   deletePendingKey(orderId: string): Promise<void>;
 
   // ---- Trial↔subscription link (conversion) ---------------------------------
-  /** The id of a VERIFIED trial grant with this id, or null. Used to validate an
-   *  explicit checkout `custom_data.trial_grant_id` exists before we link to it
-   *  (an unconfirmed id would violate the FK and 500 the webhook). */
-  getVerifiedTrialGrantIdById(grantId: string): Promise<string | null>;
+  /** A VERIFIED trial grant with this id (its email_normalized rides along so
+   *  the caller can email-gate it), or null. Used to validate an explicit
+   *  checkout `custom_data.trial_grant_id` exists before we link to it (an
+   *  unconfirmed id would violate the FK and 500 the webhook) AND that it
+   *  belongs to the BUYER (A-06 — custom_data is client-controlled/unsigned,
+   *  so the id alone proves nothing). */
+  getVerifiedTrialGrantById(
+    grantId: string,
+  ): Promise<{ id: string; email_normalized: string | null } | null>;
   /** The id of a VERIFIED trial grant whose email_normalized matches, or null.
    *  `normalizedEmail` MUST be the AGGRESSIVE trial form (see
    *  _shared/email-normalize.ts) — the subscription's lowercased-only email is
@@ -273,15 +278,17 @@ export class SupabaseWebhookStore implements WebhookStore {
 
   // ---- Trial↔subscription link (conversion) ---------------------------------
 
-  async getVerifiedTrialGrantIdById(grantId: string): Promise<string | null> {
+  async getVerifiedTrialGrantById(
+    grantId: string,
+  ): Promise<{ id: string; email_normalized: string | null } | null> {
     const { data, error } = await this.db
       .from("trial_grants")
-      .select("id")
+      .select("id, email_normalized")
       .eq("id", grantId)
       .not("verified_at", "is", null)
       .maybeSingle();
     if (error) throw error;
-    return (data as { id: string } | null)?.id ?? null;
+    return (data as { id: string; email_normalized: string | null } | null) ?? null;
   }
 
   async getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null> {

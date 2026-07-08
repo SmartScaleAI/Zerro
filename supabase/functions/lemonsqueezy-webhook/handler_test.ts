@@ -153,9 +153,11 @@ class InMemoryWebhookStore implements WebhookStore {
     return Promise.resolve();
   }
 
-  getVerifiedTrialGrantIdById(grantId: string): Promise<string | null> {
+  getVerifiedTrialGrantById(
+    grantId: string,
+  ): Promise<{ id: string; email_normalized: string | null } | null> {
     const g = this.trialGrants.find((x) => x.id === grantId && x.verified);
-    return Promise.resolve(g ? g.id : null);
+    return Promise.resolve(g ? { id: g.id, email_normalized: g.email_normalized } : null);
   }
   getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null> {
     const g = this.trialGrants.find((x) => x.email_normalized === normalizedEmail && x.verified);
@@ -347,13 +349,74 @@ Deno.test("subscription_updated refreshes a changed email; an event without one 
 // ===========================================================================
 // §2b — trial↔subscription conversion link (consume_combined_credit groundwork)
 // ===========================================================================
-Deno.test("conversion link: explicit custom_data.trial_grant_id wins (validated, set once)", async () => {
+/** Run `body` with console.log captured; returns the parsed
+ * trial_grant_email_mismatch actions it emitted (A-06). */
+async function captureMismatchActions(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(String(args[0]));
+  };
+  try {
+    await body();
+  } finally {
+    console.log = original;
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.action === "trial_grant_email_mismatch");
+}
+
+Deno.test("conversion link: explicit trial_grant_id with MATCHING grant email → linked (A-06)", async () => {
   const store = new InMemoryWebhookStore();
   const GRANT = "11111111-1111-4111-8111-111111111111";
-  store.seedTrialGrant(GRANT, "someone-else@example.com"); // email does NOT match the buyer
+  // Default buyer email is Buyer@Example.com → aggressive form buyer@example.com.
+  store.seedTrialGrant(GRANT, "buyer@example.com");
   await deliver(store, "subscription_created", subPayload({ trial_grant_id: GRANT }));
-  // Linked by the explicit id even though the email wouldn't match.
   assertEquals(store.sub("ls_1")!.trial_grant_id, GRANT);
+});
+
+Deno.test("conversion link: explicit id for a STRANGER's grant → not linked + mismatch logged (A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const STRANGERS_GRANT = "66666666-6666-4666-8666-666666666666";
+  store.seedTrialGrant(STRANGERS_GRANT, "someone-else@example.com"); // verified, not the buyer's
+  const mismatches = await captureMismatchActions(async () => {
+    await deliver(store, "subscription_created", subPayload({ trial_grant_id: STRANGERS_GRANT }));
+  });
+  // The buyer has no grant of their own → nothing to link. No credit theft.
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
+  assertEquals(mismatches.length, 1);
+  assertEquals(mismatches[0].event, "subscription_created");
+});
+
+Deno.test("conversion link: mismatched explicit id falls through to the buyer's OWN grant (A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const STRANGERS_GRANT = "77777777-7777-4777-8777-777777777777";
+  const OWN_GRANT = "88888888-8888-4888-8888-888888888888";
+  store.seedTrialGrant(STRANGERS_GRANT, "someone-else@example.com");
+  store.seedTrialGrant(OWN_GRANT, "buyer@example.com");
+  await deliver(store, "subscription_created", subPayload({ trial_grant_id: STRANGERS_GRANT }));
+  // The injected id is rejected; the email path resolves the buyer's own grant.
+  assertEquals(store.sub("ls_1")!.trial_grant_id, OWN_GRANT);
+});
+
+Deno.test("conversion link: explicit id but buyer email missing → not linked (fail-safe, A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const GRANT = "99999999-9999-4999-8999-999999999999";
+  store.seedTrialGrant(GRANT, "someone@example.com");
+  await deliver(
+    store,
+    "subscription_created",
+    subPayload({ trial_grant_id: GRANT, user_email: null }),
+  );
+  // With no buyer email there is nothing to prove ownership against — never link.
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
 });
 
 Deno.test("conversion link: unknown explicit id is ignored, email fallback links", async () => {

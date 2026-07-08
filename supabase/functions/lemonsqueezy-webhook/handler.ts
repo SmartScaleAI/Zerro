@@ -663,11 +663,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * Link a converting subscriber to their trial grant (subscriptions.trial_grant_id).
- * Two resolution paths, in priority order:
+ * Two resolution paths, in priority order — BOTH email-gated (A-06: checkout
+ * `custom_data` is CLIENT-controlled and covered by no signature, so an
+ * explicit grant id alone proves nothing — trusting it let a buyer absorb a
+ * stranger's remaining trial credits by pasting that stranger's grant id into
+ * their own checkout):
  *   1. An explicit `meta.custom_data.trial_grant_id` plumbed through checkout —
- *      normalization-free and exact. Validated against the DB first, because an
- *      unknown id would violate the FK and 500 the webhook (LS would then retry
- *      forever); an invalid/unknown id silently falls through to (2).
+ *      exact and normalization-free, but accepted ONLY when the grant resolves
+ *      as VERIFIED (an unknown id would violate the FK and 500 the webhook;
+ *      LS would then retry forever) AND its email_normalized equals the
+ *      buyer's own trial-normalized email. A resolved-but-mismatched grant
+ *      logs `trial_grant_email_mismatch` and falls through to (2), which by
+ *      construction can only ever find the buyer's OWN grant.
  *   2. The buyer email, re-normalized to the AGGRESSIVE trial form (Gmail
  *      dots/+tags collapsed — subscriptions store only the lowercased form), and
  *      matched against a verified trial_grants row.
@@ -682,15 +689,29 @@ async function linkTrialGrantOnConversion(
 ): Promise<void> {
   let grantId: string | null = null;
 
+  // The buyer identity that gates BOTH paths: the signed payload's own
+  // user_email, in the aggressive trial normalization.
+  const buyerTrialEmail = attrs.user_email ? normalizeTrialEmail(String(attrs.user_email)) : null;
+
   const custom = payload.meta?.custom_data as { trial_grant_id?: unknown } | null | undefined;
   const explicit = typeof custom?.trial_grant_id === "string" ? custom.trial_grant_id.trim().toLowerCase() : "";
   if (UUID_RE.test(explicit)) {
-    grantId = await deps.store.getVerifiedTrialGrantIdById(explicit);
+    const grant = await deps.store.getVerifiedTrialGrantById(explicit);
+    if (grant) {
+      if (buyerTrialEmail !== null && grant.email_normalized === buyerTrialEmail) {
+        grantId = grant.id;
+      } else {
+        // A verified grant that does NOT belong to this buyer (or the buyer
+        // has no usable email to prove it does). Never link on the explicit
+        // id — fall through to the email path, which can only resolve the
+        // buyer's own grant.
+        logAction("subscription_created", subscriptionId, "trial_grant_email_mismatch");
+      }
+    }
   }
 
-  if (!grantId) {
-    const norm = attrs.user_email ? normalizeTrialEmail(String(attrs.user_email)) : null;
-    if (norm) grantId = await deps.store.getVerifiedTrialGrantIdByEmail(norm);
+  if (!grantId && buyerTrialEmail) {
+    grantId = await deps.store.getVerifiedTrialGrantIdByEmail(buyerTrialEmail);
   }
 
   if (grantId) {
