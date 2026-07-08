@@ -127,6 +127,7 @@ the runtime — do NOT set them yourself.**
 | `SESSION_JWT_SECRET` | ✅ | HS256 signing secret for the short-lived session tokens. Generate a long random string (`openssl rand -hex 32`). |
 | `AFFILIATE_IP_SALT` | ✅ (for `affiliate`) | Secret salt mixed into the IP hash the `affiliate` function stores (`sha256(salt‖ip)`), so the raw visitor IP is never persisted. Generate a long random string (`openssl rand -hex 32`) and **never rotate it casually** — changing it orphans all unconverted clicks (their hashes stop matching). Required by the `affiliate` function; unset → the function 500s. |
 | `AFFILIATE_MATCH_WINDOW_HOURS` | optional | How long after a click a purchase can still be attributed by IP match (default `720` = 30 days). Lower = fewer false matches on shared networks; higher = catches more delayed conversions. |
+| `AFFILIATE_RATE_LIMIT_PER_IP` / `AFFILIATE_RATE_LIMIT_WINDOW_SECONDS` | optional | **C-08** per-IP `affiliate` POST throttle (defaults `20` per `3600`s, reusing `check_rate_limit`). Defense-in-depth behind the unique(`ip_hash`) upsert; over the cap the POST still answers `{ ok: true }` (record is best-effort — the throttle never surfaces to the landing page). **Fails OPEN on limiter error** — the endpoint spends no money/email and the GET already fails soft, so a broken limiter must not break landing-page recording. |
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | ✅ | The signing secret you enter when creating the webhook in LemonSqueezy. The webhook verifies `X-Signature` against it. |
 | `LEMONSQUEEZY_API_KEY` | ⚠️ **G** | A LemonSqueezy **API key** (Settings → API), distinct from the webhook secret. Powers the §14.6 **missed-webhook staleness re-check** in `session`: when the mirror is stale, `session` calls `GET /v1/subscriptions/{id}` to confirm the sub is still live before minting. **Unset → the guard is disabled and `session` fails OPEN** (logged); set it before launch so a dropped `cancelled` webhook can't keep minting tokens forever. |
 | `SESSION_STALENESS_SECONDS` | optional | How stale the mirror may be before `session` does the live re-check (default = `SESSION_TOKEN_TTL_SECONDS`). |
@@ -600,6 +601,25 @@ the cap is enforced on `trial_grants`, not the log).
 without a logic change.
 
 ---
+
+## The `affiliate` flow — hardening notes (C-08)
+
+`affiliate` POST's `record()` is now an **upsert deduped per `ip_hash`**
+(unique index `affiliate_referrals_ip_hash_unique`, migration
+`20260708120000_affiliate_referrals_dedup_ip.sql`): one row per visitor IP,
+latest code + timestamp win. The unauthenticated endpoint can no longer be
+used as an insert amplifier — table growth is bounded by distinct visitor IPs,
+not by request volume. `created_at` is written explicitly on the upsert so a
+refreshed click restarts the attribution window; the windowed GET
+(`latestCode`) and the 30-day prune cron are unchanged. A per-IP POST throttle
+(`AFFILIATE_RATE_LIMIT_PER_IP`, fail-open — see the secrets table) bounds
+write churn as defense-in-depth.
+
+**Self-referral** (a buyer opening their own affiliate link before purchasing)
+is deliberately NOT policed by the function — it cannot distinguish an
+affiliate's IP from a buyer's. It is handled by **LemonSqueezy's self-referral
+clawback**, an owner-side dashboard setting in the LS affiliate configuration,
+not by code.
 
 ## Verify (no app needed)
 
