@@ -188,16 +188,30 @@ async function sign(body: string): Promise<string> {
   return toHex(await hmacSha256(SECRET, body));
 }
 
-/** Deliver a webhook with a VALID signature (unless `badSig` is given). */
+/** Stamp meta.event_name into the payload — the SIGNED body is the
+ * authoritative event carrier post-A-03. Preserves other meta fields
+ * (custom_data). */
+function withEventName(payload: unknown, eventName: string) {
+  const obj = payload as { meta?: Record<string, unknown> };
+  return { ...obj, meta: { ...(obj.meta ?? {}), event_name: eventName } };
+}
+
+/** Deliver a webhook with a VALID signature (unless `badSig` is given). A-03:
+ * the event name rides in the SIGNED body (meta.event_name) and is echoed in
+ * the X-Event-Name header, matching a real LS delivery where both are present
+ * and equal. `headerOverride` lets the A-03 tests send a mismatched (string)
+ * or absent (null) header. */
 async function deliver(
   store: InMemoryWebhookStore,
   eventName: string,
   payload: unknown,
   badSig?: string | null,
+  headerOverride?: string | null,
 ) {
-  const raw = JSON.stringify(payload);
+  const raw = JSON.stringify(withEventName(payload, eventName));
   const signature = badSig === undefined ? await sign(raw) : badSig;
-  return await handleWebhook(raw, signature, eventName, deps(store));
+  const header = headerOverride === undefined ? eventName : headerOverride;
+  return await handleWebhook(raw, signature, header, deps(store));
 }
 
 function subPayload(over: {
@@ -219,7 +233,9 @@ function subPayload(over: {
     }
     : undefined;
   return {
-    meta: { event_name: "placeholder", custom_data: customData },
+    // meta.event_name is stamped by deliver()/withEventName — the signed body
+    // is the authoritative carrier (A-03), so the builder never hardcodes it.
+    meta: { custom_data: customData },
     data: {
       type: "subscriptions",
       id: over.id ?? "ls_1",
@@ -245,7 +261,8 @@ function invoicePayload(over: {
   created_at?: string;
 } = {}) {
   return {
-    meta: { event_name: "placeholder" },
+    // meta.event_name stamped by deliver()/withEventName (A-03).
+    meta: {},
     data: {
       type: "subscription-invoices",
       id: over.invoiceId ?? "inv_1",
@@ -447,7 +464,7 @@ const BAD_CONFIG = {
 
 /** Deliver a validly-signed webhook under an INJECTED (bad) config verdict. */
 async function deliverBadConfig(store: InMemoryWebhookStore, eventName: string, payload: unknown) {
-  const raw = JSON.stringify(payload);
+  const raw = JSON.stringify(withEventName(payload, eventName));
   const signature = await sign(raw);
   return await handleWebhook(raw, signature, eventName, { ...deps(store), configCheck: BAD_CONFIG });
 }
@@ -859,4 +876,75 @@ Deno.test("unparseable body (valid signature) → 400", async () => {
   const raw = "{not json";
   const res = await handleWebhook(raw, await sign(raw), "subscription_created", deps(store));
   assertEquals(res.status, 400);
+});
+
+// ===========================================================================
+// §A-03 — the unsigned X-Event-Name header must influence NOTHING
+// ===========================================================================
+/** Run `body` with console.warn captured; returns the parsed
+ * event_name_header_mismatch warnings it emitted. */
+async function captureMismatchWarns(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    lines.push(String(args[0]));
+  };
+  try {
+    await body();
+  } finally {
+    console.warn = original;
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.note === "event_name_header_mismatch");
+}
+
+Deno.test("A-03: header spoof — signed subscription_created with X-Event-Name=order_refunded routes on the BODY", async () => {
+  const store = new InMemoryWebhookStore();
+  const warns = await captureMismatchWarns(async () => {
+    const res = await deliver(store, "subscription_created", subPayload(), undefined, "order_refunded");
+    assertEquals(res.status, 200);
+  });
+  // Routed as subscription_created: the mirror row exists and is ACTIVE — the
+  // forged header did not steer the delivery down the refund path.
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.subs[0].status, "active");
+  // …and the tamper signal was logged (log-and-proceed, never a reject).
+  assertEquals(warns.length, 1);
+  assertEquals(warns[0].event, "subscription_created");
+  assertEquals(warns[0].header_event, "order_refunded");
+});
+
+Deno.test("A-03: idempotency key ignores the header — replay with a DIFFERENT header still dedups", async () => {
+  const store = new InMemoryWebhookStore();
+  const r1 = await deliver(store, "subscription_created", subPayload());
+  assertEquals(r1.status, 200);
+  assertEquals(r1.body, "ok");
+  const warns = await captureMismatchWarns(async () => {
+    // Same signed body, forged header: pre-A-03 the header changed the
+    // ${eventName}:${resourceId}:${updatedAt} key and the replay re-processed.
+    const r2 = await deliver(store, "subscription_created", subPayload(), undefined, "totally_different");
+    assertEquals(r2.status, 200);
+    assertEquals(r2.body, "ok (duplicate)");
+  });
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.periodsFor("sub-1").length, 1); // no double period roll
+  assertEquals(warns.length, 1); // the mismatch is still surfaced on the duplicate
+});
+
+Deno.test("A-03: header absent — routing works from meta.event_name alone, no warning", async () => {
+  const store = new InMemoryWebhookStore();
+  const warns = await captureMismatchWarns(async () => {
+    const res = await deliver(store, "subscription_created", subPayload(), undefined, null);
+    assertEquals(res.status, 200);
+  });
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.subs[0].status, "active");
+  assertEquals(warns.length, 0);
 });

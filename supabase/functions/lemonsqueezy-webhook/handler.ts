@@ -9,7 +9,9 @@
 //
 // Flow:
 //   1. Verify X-Signature over the RAW body (401 on fail) before any work.
-//   2. Parse; derive event_name + the COMPOSITE idempotency key.
+//   2. Parse; derive event_name from the SIGNED body (meta.event_name) + the
+//      COMPOSITE idempotency key. The unsigned X-Event-Name header is only an
+//      advisory cross-check (A-03) — it influences nothing.
 //   3. recordEvent → "duplicate" → 200 no-op; "fresh" → proceed.
 //   4. Dispatch the event; mutate the mirror. Stale/out-of-order events
 //      (strictly-older updated_at than what we hold) are 200 no-ops.
@@ -205,8 +207,10 @@ function normalizeSubscriberEmail(raw: unknown): string | null {
 
 /**
  * Handle a raw webhook delivery. `rawBody` MUST be the exact bytes received (the
- * signature is HMAC'd over them); `signature` is the X-Signature header; the
- * `X-Event-Name` header (if present) wins over meta.event_name.
+ * signature is HMAC'd over them); `signature` is the X-Signature header. The
+ * event name is taken from the SIGNED body (meta.event_name) — A-03: the
+ * `X-Event-Name` header is unsigned/forgeable, so it is only an advisory
+ * cross-check (a mismatch logs a warning; the body value proceeds).
  */
 export async function handleWebhook(
   rawBody: string,
@@ -226,8 +230,25 @@ export async function handleWebhook(
     return { status: 400, body: "unparseable body" };
   }
 
-  const eventName = eventNameHeader ?? payload.meta?.event_name ?? "";
+  // A-03: the event name comes SOLELY from the HMAC-signed body. The
+  // X-Event-Name header is not covered by the signature, so trusting it let a
+  // replay of one validly-signed body be re-routed (and re-keyed for
+  // idempotency) as a different event.
+  const eventName = payload.meta?.event_name ?? "";
   if (!eventName) return { status: 400, body: "missing event name" };
+
+  // Defense-in-depth cross-check: a header that disagrees with the signed body
+  // is a tamper/replay signal worth logging — but hard-rejecting a critical
+  // billing webhook on an unsigned header quirk risks dropping legit events,
+  // so log ONCE per delivery and proceed on the body value.
+  if (eventNameHeader !== null && eventNameHeader !== eventName) {
+    console.warn(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      event: eventName,
+      header_event: eventNameHeader,
+      note: "event_name_header_mismatch",
+    }));
+  }
 
   // A-01: fail loud on an unsafe yearly-variant config BEFORE recording the
   // idempotency key, so a rejected (5xx) subscription event is cleanly retried.
