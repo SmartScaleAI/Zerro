@@ -567,6 +567,20 @@ email never travels onward) and return `{ token, expires_at,
 trial_credits_remaining, trial_credits_limit }` (the limit is the grant total,
 so the app's trial meter has a denominator — E4).
 
+**Rate-limit fail posture (C-07).** `check_rate_limit` errors no longer fail
+open across the board — the posture is per key: the **per-IP** limit fails
+**CLOSED** (429 — it's the broad anti-abuse bound on an unauthenticated
+endpoint, so a limiter outage must not silently erase it), the **per-email**
+limit fails **OPEN** (it also meters legitimate verify retries, so an outage
+must not lock a real user out of a code already in their inbox), and the
+**send sub-limit** fails **CLOSED** (it only gates outbound mail, so a broken
+limiter must not re-open the email-bomb — the request still answers the
+uniform `code_sent`, leaking nothing). Every limiter error, regardless of
+posture, emits a stable structured line: `{ fn:"trial-start",
+event:"rate_limiter_error", key_kind:"ip"|"email"|"send",
+failed_closed:<bool>, error:<message> }` — point an ops log alert at
+`event:"rate_limiter_error"`.
+
 **The `generate` trial branch.** A `kind:"trial"` token resolves the
 `trial_grants` row by grant id, then runs the IDENTICAL pipeline as a subscription
 (input fuse → per-identity rate limit → concurrency cap of **1** via

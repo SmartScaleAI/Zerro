@@ -78,21 +78,32 @@ function clientIp(req: Request): string {
   return req.headers.get("x-real-ip") ?? "unknown";
 }
 
-/** Combined per-email + per-IP rate gate. TRUE = allowed. */
+/** Combined per-email + per-IP rate gate. TRUE = allowed. C-07: the two keys
+ * carry DIFFERENT limiter-error postures (the old blanket fail-open silently
+ * disabled every abuse bound whenever check_rate_limit broke). */
 async function withinRate(store: TrialStore, email: string, ip: string): Promise<boolean> {
   // Hash the email into the rate-limit key so the limiter table never holds a
-  // raw address.
+  // raw address. Per-email fails OPEN on limiter error: this key also meters
+  // legitimate verify retries, so a limiter outage must not lock a real user
+  // out of a code already sitting in their inbox — the per-IP and send caps
+  // (both fail-closed) still bound abuse during the outage.
   const emailKeyHash = await sha256Hex(email);
   const okEmail = await store.rateLimitOk(
     `trial:email:${emailKeyHash}`,
     TRIAL_RATE_LIMIT_PER_EMAIL,
     TRIAL_RATE_LIMIT_WINDOW_SECONDS,
+    "allow",
+    "email",
   );
   if (!okEmail) return false;
+  // Per-IP fails CLOSED: it is the broad anti-abuse bound on an
+  // unauthenticated endpoint, so a broken limiter must not silently erase it.
   const okIp = await store.rateLimitOk(
     `trial:ip:${ip}`,
     TRIAL_RATE_LIMIT_PER_IP,
     TRIAL_RATE_LIMIT_WINDOW_SECONDS,
+    "deny",
+    "ip",
   );
   return okIp;
 }
@@ -210,13 +221,16 @@ async function handleRequest(
   // answer the uniform code_sent — surfacing the throttle would re-open the
   // very oracle the uniform response closes. Checked BEFORE the code upsert
   // so an over-limit request can't clobber the still-valid code from the last
-  // real send. NOTE: this reuses the fail-OPEN rateLimitOk for now; C-07
-  // revisits fail-open globally.
+  // real send. C-07: fails CLOSED on limiter error — this gate only stops
+  // outbound mail, so a broken limiter must not re-open the email-bomb; the
+  // deny path below still answers the uniform code_sent, so nothing leaks.
   const sendKeyHash = await sha256Hex(email);
   const sendOk = await deps.store.rateLimitOk(
     `trial:send:${sendKeyHash}`,
     TRIAL_SEND_LIMIT_PER_EMAIL,
     TRIAL_SEND_WINDOW_SECONDS,
+    "deny",
+    "send",
   );
   if (!sendOk) {
     return json({ status: "code_sent" }, 200);
