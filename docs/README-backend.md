@@ -167,6 +167,7 @@ the runtime — do NOT set them yourself.**
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
 | `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
 | `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
+| `TRIAL_SEND_LIMIT_PER_EMAIL` / `TRIAL_SEND_WINDOW_SECONDS` | optional | **C-05** per-email **send sub-limit** (defaults `5` per `86400`s = 1 day): a second, tighter counter consumed only when a verification email is actually about to be sent, so a code-request loop can't email-bomb one inbox (the request limits above are shared with verify/resume and sized looser). Past the cap the request still returns the uniform `code_sent` — revealing the throttle would re-open the enumeration oracle — but no mail goes out. |
 | `TRIAL_DEVICE_BINDING_ENABLED` | optional | Trial device binding kill switch (default `true`). The app sends a SHA-256 hash of a hardware UUID (`device_id_hash`); a second grant from a Mac that already trialed is hard-blocked regardless of email (`verify_trial_grant` + the partial unique index on `device_id_hash`). Set `false` to disable the cap (degrade to the email-only cap) without an app release if it misfires. The raw UUID never leaves the device; the DB holds only the hash. |
 | `SLACK_WEBHOOK_URL` | ✅ (for `feedback`) | Slack Incoming Webhook the `feedback` function relays in-app reports to. Server-held only — never echoed to the client or logged. Unset → `feedback` 500s. |
 | `FEEDBACK_RATE_LIMIT_PER_IP` / `_WINDOW_SECONDS` | optional | Per-IP `feedback` rate limit (defaults `5` per `3600`s, reusing `check_rate_limit`). The endpoint is unauthenticated, so this is the only quantitative bound on Slack relay spam; **limiter errors fail closed** (reject with 429, never fall open into an unbounded relay). |
@@ -543,12 +544,16 @@ function, two actions:
 
 **`{ action: "request", email }`** — normalize the email (lowercase + trim; Gmail
 dots/`+tags` collapsed so they can't farm the cap), reject disposable domains
-(`422`), rate-limit per email + per IP (`429`). If the email already verified and
-spent every credit → `{ status: "already_used" }` (no email sent). Otherwise mint
-a 6-digit code, store its **SHA-256 hash** with a short TTL (`trial_codes`,
-default 10 min, attempts reset to 0), and send it via **Resend** from the verified
-`getzerro.app` sender. A Resend failure → `502 { error: "send_failed" }`. Success
-→ `{ status: "code_sent" }`.
+(`422`), rate-limit per email + per IP (`429`). Otherwise mint a 6-digit code,
+store its **SHA-256 hash** with a short TTL (`trial_codes`, default 10 min,
+attempts reset to 0), and send it via **Resend** from the verified `getzerro.app`
+sender. A Resend failure → `502 { error: "send_failed" }`. Success →
+`{ status: "code_sent" }` — and **uniformly so (C-05)**: an email that already
+verified and spent every credit, or one past the per-email **send sub-limit**
+(`TRIAL_SEND_LIMIT_PER_EMAIL`), gets the SAME `code_sent` body with **no email
+sent**, so `request` can't be used by an unauthenticated prober to enumerate
+which addresses have (or exhausted) a trial. The true `already_used` surfaces
+only at `verify`/`resume`, after the caller proves control of the mailbox.
 
 **`{ action: "verify", email, code }`** — look up the pending code, check TTL +
 attempts (expired/over-attempts → burn it), **constant-time compare the hashes**

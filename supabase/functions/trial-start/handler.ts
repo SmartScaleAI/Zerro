@@ -16,9 +16,12 @@
 //
 // Two actions on one function (dispatched on the `action` field):
 //   request — { action:"request", email } → normalize, block disposables,
-//             rate-limit, (refuse if this email already used its trial),
-//             generate a 6-digit code, store its HASH with a short TTL, and
-//             email it via Resend. Returns { status:"code_sent" }.
+//             rate-limit, generate a 6-digit code, store its HASH with a short
+//             TTL, and email it via Resend. Returns { status:"code_sent" } —
+//             UNIFORMLY (C-05): an already-exhausted email gets the SAME body
+//             with no send, so `request` never works as an email-enumeration
+//             oracle; the true already_used only surfaces at verify/resume,
+//             after the caller proves control of the mailbox.
 //   verify  — { action:"verify", email, code } → look up the pending code,
 //             constant-time compare the hash, check TTL + attempts, then
 //             create-once the grant (verify_trial_grant) and mint a short-lived
@@ -56,6 +59,8 @@ import {
   TRIAL_RATE_LIMIT_PER_EMAIL,
   TRIAL_RATE_LIMIT_PER_IP,
   TRIAL_RATE_LIMIT_WINDOW_SECONDS,
+  TRIAL_SEND_LIMIT_PER_EMAIL,
+  TRIAL_SEND_WINDOW_SECONDS,
   TRIAL_TOKEN_TTL_SECONDS,
 } from "./config.ts";
 
@@ -176,17 +181,45 @@ async function handleRequest(
   }
 
   // One grant per email, ever. If this email already verified AND spent all its
-  // credits, refuse up front — no point emailing a code it can't use.
+  // credits, a new code can't unlock anything — but DON'T say so here. C-05:
+  // `request` answers an unauthenticated prober, so every email state
+  // (brand-new, verified-with-credits, exhausted) gets the SAME
+  // { status: "code_sent" }; for the exhausted email we just skip the send.
+  // The true already_used still surfaces — at verify/resume, AFTER the caller
+  // proves control of the mailbox. (The early returns above are NOT email
+  // oracles: device_trial_used reflects the caller's own device and
+  // disposable_email the domain's class, not this address's trial state.)
   const grant = await deps.store.loadGrantByEmail(email);
   if (grant && grant.verified_at) {
     const remaining = Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
     if (remaining <= 0) {
-      return json({ status: "already_used" }, 200);
+      return json({ status: "code_sent" }, 200);
     }
     // Verified but with credits left (e.g. the app lost its in-memory token on
     // reinstall): allow a re-request → re-verify to re-mint a token. This grants
     // NO new credits (verify_trial_grant never resets) — the code is still the
     // gate.
+  }
+
+  // C-05 email-bomb sub-limit: a second, TIGHTER per-email counter consumed
+  // only when a code email is actually about to go out (every ineligible path
+  // has already returned) — the request limiter in withinRate is shared with
+  // verify/resume and sized for that, so it alone lets a code-request loop
+  // bomb one inbox. Hashed-email key: the limiter table never holds a raw
+  // address (mirrors withinRate). Past the cap we SKIP the send but still
+  // answer the uniform code_sent — surfacing the throttle would re-open the
+  // very oracle the uniform response closes. Checked BEFORE the code upsert
+  // so an over-limit request can't clobber the still-valid code from the last
+  // real send. NOTE: this reuses the fail-OPEN rateLimitOk for now; C-07
+  // revisits fail-open globally.
+  const sendKeyHash = await sha256Hex(email);
+  const sendOk = await deps.store.rateLimitOk(
+    `trial:send:${sendKeyHash}`,
+    TRIAL_SEND_LIMIT_PER_EMAIL,
+    TRIAL_SEND_WINDOW_SECONDS,
+  );
+  if (!sendOk) {
+    return json({ status: "code_sent" }, 200);
   }
 
   const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
