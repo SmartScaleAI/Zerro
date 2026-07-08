@@ -65,9 +65,13 @@ async function withinRate(ip: string): Promise<boolean> {
     p_window_seconds: FEEDBACK_RATE_LIMIT_WINDOW_SECONDS,
   });
   if (error) {
-    console.error(
-      JSON.stringify({ fn: "feedback", op: "rateLimit", error: error.message }),
-    );
+    // event:"rate_limiter_error" is the shared ops alert hook (A-15).
+    console.error(JSON.stringify({
+      fn: "feedback",
+      event: "rate_limiter_error",
+      failed_closed: true,
+      error: error.message,
+    }));
     return false;
   }
   return data === true;

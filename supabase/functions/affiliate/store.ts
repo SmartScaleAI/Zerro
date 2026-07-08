@@ -48,7 +48,13 @@ export class SupabaseAffiliateStore implements AffiliateStore {
       // endpoint sends no email and spends no credits, and the GET already
       // fails soft — a broken limiter must not break landing-page recording.
       // The unique(ip_hash) upsert keeps even an unthrottled flood bounded.
-      console.error(JSON.stringify({ fn: "affiliate", op: "rateLimit", error: error.message }));
+      // event:"rate_limiter_error" is the shared ops alert hook (A-15).
+      console.error(JSON.stringify({
+        fn: "affiliate",
+        event: "rate_limiter_error",
+        failed_closed: false,
+        error: error.message,
+      }));
       return true;
     }
     return data === true;
