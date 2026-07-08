@@ -1130,7 +1130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     static func handleCheckoutReturn(_ url: URL) {
         guard let parsed = CheckoutReturn.parse(url) else {
-            Log.billing.notice("deep link: ignoring \(url.absoluteString, privacy: .public)")
+            // E-08: scheme + host ONLY (the host is the deep-link action) — the
+            // query/fragment can carry a license_key, and .public os_log lands
+            // in Console, sysdiagnose, and the diagnostics blob.
+            Log.billing.notice("deep link: ignoring \(url.scheme ?? "?", privacy: .public)://\(url.host ?? "?", privacy: .public)")
             return
         }
         guard let entitlements else {
