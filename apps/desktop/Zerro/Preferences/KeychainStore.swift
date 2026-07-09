@@ -38,12 +38,18 @@
 //       proves the logic within the debug scope — see the reinstall-test
 //       note below for the authoritative procedure.
 //
-//   (c) Writes set `kSecAttrAccessibleAfterFirstUnlock` (see `write()`) so
-//       entitlement evaluation can read these from launch / background
-//       lifecycle points after the first post-reboot unlock. This does not
-//       weaken persistence; it's the right class for app-lifecycle secrets
-//       not tied to active user interaction. No `kSecAttrSynchronizable` —
-//       these are device-local, not iCloud-Keychain-synced.
+//   (c) Writes set the slot's `accessible` protection class (see `write()`),
+//       `kSecAttrAccessibleAfterFirstUnlock` by default, so entitlement
+//       evaluation can read these from launch / background lifecycle points
+//       after the first post-reboot unlock. This does not weaken persistence;
+//       it's the right class for app-lifecycle secrets not tied to active
+//       user interaction. No `kSecAttrSynchronizable` — these are
+//       device-local, not iCloud-Keychain-synced. E-03: the TRIAL slots
+//       (`trialEmail` / `trialToken`) use the `…ThisDeviceOnly` variant so
+//       trial data — device-bound server-side via the per-Mac grant cap — is
+//       additionally excluded from encrypted backups and Migration Assistant;
+//       the license/BYOK and provider-key slots deliberately stay
+//       AfterFirstUnlock so they survive a backup restore / migration.
 //
 //  MARK: - How to actually test reinstall persistence
 //  --------------------------------------------------
@@ -109,6 +115,20 @@ extension KeychainSlot {
 struct KeychainStore: KeychainSlot {
     let service: String
     let account: String
+    /// Protection class applied on write. AfterFirstUnlock by default (items
+    /// survive backup restore / Migration Assistant — right for license/BYOK);
+    /// the trial slots opt into `…ThisDeviceOnly` (E-03, see the file header).
+    let accessible: CFString
+
+    init(
+        service: String,
+        account: String,
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlock
+    ) {
+        self.service = service
+        self.account = account
+        self.accessible = accessible
+    }
 
     /// Convenience: the stored string, or `nil` for either "absent" or a
     /// read failure. Sufficient for the API-key flow, which treats both the
@@ -155,19 +175,22 @@ struct KeychainStore: KeychainSlot {
         ]
         // Accessibility is set on BOTH paths so the value is readable from
         // launch / background lifecycle points after first unlock, and so an
-        // item written before this attribute existed gets upgraded on its
-        // next write. `kSecAttrAccessible` is a write-time attribute only —
-        // reads (see `readResult()`) match on class+service+account and are
-        // unaffected. See the file header for why AfterFirstUnlock.
+        // item written before this attribute existed — or under a previous
+        // class — gets UPGRADED on its next write (that's how pre-E-03 trial
+        // items migrate to ThisDeviceOnly without a forced re-write: the
+        // token rewrites on every verify/resume, the email on verify).
+        // `kSecAttrAccessible` is a write-time attribute only — reads (see
+        // `readResult()`) match on class+service+account and are unaffected.
+        // See the file header for the per-slot class choice.
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: accessible
         ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var insert = query
             insert[kSecValueData as String] = data
-            insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            insert[kSecAttrAccessible as String] = accessible
             SecItemAdd(insert as CFDictionary, nil)
         }
     }
@@ -268,7 +291,13 @@ extension KeychainStore {
     // the other billing slots.
 
     /// The last email a trial user successfully verified, for re-display only.
-    static let trialEmail = KeychainStore(service: defaultService, account: "trial_email")
+    /// E-03: ThisDeviceOnly — trial slots must not ride backups / Migration
+    /// Assistant to another Mac (the grant is device-bound server-side).
+    static let trialEmail = KeychainStore(
+        service: defaultService,
+        account: "trial_email",
+        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    )
 
     /// The short-lived trial session token + its expiry (encoded `token|epoch`).
     /// PERSISTED (not just in-memory) because, unlike the Managed session token —
@@ -280,7 +309,12 @@ extension KeychainStore {
     /// the just-granted trial would read as unverified the moment the user
     /// records. Low-sensitivity (a ≤30-min bearer for capped trial credits); the
     /// abuse bound is the server-side per-email grant cap, not this token.
-    static let trialToken = KeychainStore(service: defaultService, account: "trial_token")
+    /// E-03: ThisDeviceOnly — same rationale as `trialEmail` above.
+    static let trialToken = KeychainStore(
+        service: defaultService,
+        account: "trial_token",
+        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    )
 
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
