@@ -844,6 +844,7 @@ final class RecordingSession: NSObject {
         lifecycleState = .finishing
         removeCaptureMonitors()
 
+        let stream = self.stream
         let outputURL = self.outputURL
         // Mark THIS fragment as deliberately abandoned so launch/wake recovery
         // offers it — and nothing else. Written synchronously, before the async
@@ -862,6 +863,12 @@ final class RecordingSession: NSObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lifecycleState = .finished
+                // F-09: stop the SCStream so the screen-recording indicator clears
+                // deterministically — releasing the stream alone doesn't,
+                // especially across sleep→wake. Mirrors finalize(); does NOT touch
+                // the .mov (recovery marker + writer release already happened
+                // above).
+                if let stream { try? await stream.stopCapture() }
                 // teardownCaptureStack removes the stream outputs + releases the
                 // SCStream (stopping delivery); it never touches the .mov.
                 self.teardownCaptureStack()
