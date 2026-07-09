@@ -614,6 +614,13 @@ private struct UsageMeterRow: View {
             case .byok, .expired:
                 EmptyView()
             }
+            // B-07: the 1-credit metering floor, stated once where credits are
+            // explained (both pools, managed + trial). Shared string so the
+            // paywall copy phrases it identically.
+            Text(CreditDisplay.minimumChargeNote)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, RowMetrics.horizontalPadding)
         .padding(.vertical, RowMetrics.verticalPaddingTall)

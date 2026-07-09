@@ -1,14 +1,17 @@
 name: CI
 
 # Pull-request checks for the two long-lived branches we merge into.
-# Unit-level only: Swift (desktop app) + Deno (Supabase edge functions).
+# Unit-level only: Swift (desktop app) + Deno (Supabase edge functions) + SQL
+# (the supabase/test/*_test.sql money-logic assertions — A-02, sql-tests below).
 #
-# Why no DB-lint / migration job here:
+# Why no DB-lint / migration-validation job here:
 #   Database migrations are already validated on every PR by the Supabase
 #   preview branch's `migrate` step (it applies supabase/migrations against a
 #   throwaway branch database and fails the PR on a bad migration). Duplicating
 #   that here would only add a slower, less authoritative second signal, so this
-#   workflow deliberately omits it.
+#   workflow deliberately omits it. (sql-tests below also applies the migrations
+#   to a throwaway LOCAL database, but that is setup for the *_test.sql
+#   assertions — the preview branch stays the authoritative migration gate.)
 on:
   pull_request:
     branches:
@@ -67,6 +70,7 @@ jobs:
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
       edge: ${{ steps.filter.outputs.edge }}
+      db: ${{ steps.filter.outputs.db }}
     steps:
       # Pinned to a full commit SHA (supply-chain hardening, matching
       # release-app.yml). Trailing comment is the human-readable tag the SHA
@@ -80,6 +84,10 @@ jobs:
               - 'apps/desktop/**'
             edge:
               - 'supabase/functions/**'
+            db:
+              - 'supabase/migrations/**'
+              - 'supabase/test/**'
+              - 'supabase/config.toml'
 
   # ---------------------------------------------------------------------------
   # Swift unit tests for the macOS app. Only runs when the desktop app changed.
@@ -329,6 +337,75 @@ jobs:
         run: deno test --allow-env --allow-read
 
   # ---------------------------------------------------------------------------
+  # SQL money-logic tests (A-02). The supabase/test/*_test.sql files pin the
+  # overspend + yearly-refresh invariants: each runs in ONE transaction that is
+  # rolled back at the end and signals failure via RAISE EXCEPTION, so
+  # `psql -v ON_ERROR_STOP=1` exits non-zero on any violated invariant. This job
+  # applies the FULL migration set to a throwaway local Postgres and runs every
+  # test file against it.
+  #
+  # Why the Supabase CLI's local DB and not a stock `postgres` service
+  # container: the migration set enables pg_cron + pg_net (20260611120000,
+  # 20260618120100), which the stock image lacks — the Supabase Postgres image
+  # ships both, so `supabase db start` replays all migrations cleanly.
+  sql-tests:
+    needs: changes
+    if: needs.changes.outputs.db == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # The CLI's local-db defaults: supabase/config.toml sets no [db] port
+      # override, so the container listens on 54322 as postgres/postgres.
+      DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      # Pinned to a full commit SHA (supply-chain hardening, matching the other
+      # actions here). The CLI version is pinned too; bump both deliberately.
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520  # v3.0.0
+        with:
+          version: "2.106.0"
+
+      # Brings up the local database container (Supabase Postgres image — has
+      # pg_cron/pg_net) and applies every migration under supabase/migrations.
+      # A migration that can't replay from scratch fails HERE, before any test.
+      - name: Start local database (applies all migrations)
+        run: supabase db start
+
+      # Guard against a silently empty schema (e.g. a CLI behavior change that
+      # stops `db start` from applying migrations): a function created by a
+      # late migration must exist, or the ROLLED-BACK tests below could pass
+      # vacuously against the wrong database.
+      - name: Confirm migrations applied
+        run: |
+          set -euo pipefail
+          COUNT="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -tAc \
+            "select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'refresh_yearly_credit_periods'")"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Migrations did not apply (refresh_yearly_credit_periods missing) — supabase db start no longer replays supabase/migrations?"
+            exit 1
+          fi
+          echo "Migrations applied (refresh_yearly_credit_periods present)."
+
+      # Run every SQL test file. ON_ERROR_STOP makes any RAISE EXCEPTION (or
+      # SQL error) exit psql non-zero and fail the job. The glob guard keeps
+      # this gate from going silently green if the test files move.
+      - name: Run SQL tests
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(supabase/test/*_test.sql)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::No supabase/test/*_test.sql files found — the SQL test gate would be silently empty."
+            exit 1
+          fi
+          for f in "${FILES[@]}"; do
+            echo "== $f"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+  # ---------------------------------------------------------------------------
   # Invariant guard for the Sparkle auto-update feed. The website serves
   # getzerro.app/appcast.xml from EITHER a committed file
   # (apps/web/public/appcast.xml) OR — once that file is removed — a Vercel
@@ -379,7 +456,7 @@ jobs:
   # quarantined subprocess suites must never block the gate, so their flakes (or
   # real failures) stay advisory-only and are surfaced as that job's own check.
   ci-passed:
-    needs: [swift-tests, edge-tests, appcast-feed-guard]
+    needs: [swift-tests, edge-tests, sql-tests, appcast-feed-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -388,15 +465,17 @@ jobs:
           set -euo pipefail
           swift='${{ needs.swift-tests.result }}'
           edge='${{ needs.edge-tests.result }}'
+          sql='${{ needs.sql-tests.result }}'
           feed='${{ needs.appcast-feed-guard.result }}'
           echo "swift-tests:        $swift"
           echo "edge-tests:         $edge"
+          echo "sql-tests:          $sql"
           echo "appcast-feed-guard: $feed"
           # A path-gated job that didn't run is `skipped` — that's fine.
           # appcast-feed-guard is not path-gated, so it is `success`/`failure`.
           # Anything that isn't `success`/`skipped` (i.e. failure or cancelled)
           # fails the gate.
-          for r in "$swift" "$edge" "$feed"; do
+          for r in "$swift" "$edge" "$sql" "$feed"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;
