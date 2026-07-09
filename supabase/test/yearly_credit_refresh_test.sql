@@ -31,12 +31,12 @@ create temp table fixture (label text primary key, sub_id uuid not null);
 insert into public.subscriptions
   (id, ls_subscription_id, tier, status, billing_interval, current_period_end, credits_limit)
 values
-  (gen_random_uuid(), 'test_yearly_A', 'pro', 'active',    'yearly',  now() - interval '1 month 1 day' + interval '1 year', 300),
-  (gen_random_uuid(), 'test_month_B',  'pro', 'active',    'monthly', now() + interval '29 days',                            300),
-  (gen_random_uuid(), 'test_yearly_C', 'pro', 'active',    'yearly',  now() - interval '3 months 1 day' + interval '1 year', 300),
-  (gen_random_uuid(), 'test_yearly_D', 'pro', 'active',    'yearly',  now() - interval '1 month',                            300),
-  (gen_random_uuid(), 'test_yearly_E', 'pro', 'cancelled', 'yearly',  now() - interval '2 months 1 day' + interval '1 year', 300),
-  (gen_random_uuid(), 'test_yearly_F', 'pro', 'active',    'yearly',  now() - interval '11 months 1 day' + interval '1 year', 300);
+  (gen_random_uuid(), 'test_yearly_A', 'managed', 'active',    'yearly',  now() - interval '1 month 1 day' + interval '1 year', 300),
+  (gen_random_uuid(), 'test_month_B',  'managed', 'active',    'monthly', now() + interval '29 days',                            300),
+  (gen_random_uuid(), 'test_yearly_C', 'managed', 'active',    'yearly',  now() - interval '3 months 1 day' + interval '1 year', 300),
+  (gen_random_uuid(), 'test_yearly_D', 'managed', 'active',    'yearly',  now() - interval '1 month',                            300),
+  (gen_random_uuid(), 'test_yearly_E', 'managed', 'cancelled', 'yearly',  now() - interval '2 months 1 day' + interval '1 year', 300),
+  (gen_random_uuid(), 'test_yearly_F', 'managed', 'active',    'yearly',  now() - interval '11 months 1 day' + interval '1 year', 300);
 
 insert into fixture
 select replace(ls_subscription_id, 'test_', ''), id
