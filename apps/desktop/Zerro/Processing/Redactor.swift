@@ -62,6 +62,24 @@ enum Redactor {
         } catch {
             // OCR is best-effort — a Vision failure must not derail extraction.
             Log.processing.error("OCR failed: \(error.localizedDescription, privacy: .private)")
+            // F-03: telemeter the failure — silently returning un-redacted left
+            // an invisible redaction gap. Bounded metadata ONLY: the redact flag
+            // (was a secret-bearing frame left un-painted?) and the coarse
+            // numeric Vision error code — never the description (it can embed a
+            // path), the image, or any recognized text. Hop to the main actor
+            // for Analytics.capture (process() runs off-main), mirroring
+            // MetricKitObserver; the chokepoint provides the consent gate
+            // (I-03) + DEBUG no-op for free. Fires for both Redactor callers
+            // (keyframe pipeline + DevAnchorPipeline) — both are redaction
+            // paths. The empty-results branch below is deliberately NOT
+            // telemetered (blank frames are expected, high-volume noise).
+            let errorCode = (error as NSError).code
+            Task { @MainActor in
+                Analytics.capture("ocr_failed", [
+                    "redact": redact,
+                    "error_code": errorCode,
+                ])
+            }
             return Output(image: image, text: "", lines: [])
         }
 

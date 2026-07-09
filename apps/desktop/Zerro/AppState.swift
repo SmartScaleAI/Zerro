@@ -2423,6 +2423,18 @@ final class AppState {
                 // pill in place.
                 self.runPromptGeneration(processed: result)
             } catch {
+                // F-12: reclaim the source .mov now, on EVERY failure exit,
+                // instead of leaving the raw screen recording in temp until
+                // the next launch sweep — mirroring the success branch above.
+                // Placed BEFORE the state guard so the raced-cancel sub-path
+                // reclaims it too. Safe: processing failures are
+                // non-retryable-in-place (Retry re-records; it never
+                // reprocesses this source), and the pipeline already removed
+                // its own partial working dir before rethrowing. Best-effort;
+                // a no-op if the dev-retain path already moved the source
+                // into the working dir.
+                Task.detached(priority: .utility) { WorkingDirectory.remove(at: sourceURL) }
+                self.lastRecordingURL = nil
                 Log.processing.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 // Disk-full and too-short/empty recordings get actionable

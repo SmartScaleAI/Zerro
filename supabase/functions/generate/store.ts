@@ -262,7 +262,13 @@ export class SupabaseBillingStore implements BillingStore {
     if (error) {
       // Fail OPEN: a broken limiter must not lock out a paying user. Spend is
       // still gated by the credit check + consume_credit.
-      console.error(JSON.stringify({ fn: "generate", op: "rateLimit", error: error.message }));
+      // event:"rate_limiter_error" is the shared ops alert hook (A-15).
+      console.error(JSON.stringify({
+        fn: "generate",
+        event: "rate_limiter_error",
+        failed_closed: false,
+        error: error.message,
+      }));
       return true;
     }
     return data === true;

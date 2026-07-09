@@ -9,7 +9,9 @@
 //
 // Flow:
 //   1. Verify X-Signature over the RAW body (401 on fail) before any work.
-//   2. Parse; derive event_name + the COMPOSITE idempotency key.
+//   2. Parse; derive event_name from the SIGNED body (meta.event_name) + the
+//      COMPOSITE idempotency key. The unsigned X-Event-Name header is only an
+//      advisory cross-check (A-03) — it influences nothing.
 //   3. recordEvent → "duplicate" → 200 no-op; "fresh" → proceed.
 //   4. Dispatch the event; mutate the mirror. Stale/out-of-order events
 //      (strictly-older updated_at than what we hold) are 200 no-ops.
@@ -205,8 +207,10 @@ function normalizeSubscriberEmail(raw: unknown): string | null {
 
 /**
  * Handle a raw webhook delivery. `rawBody` MUST be the exact bytes received (the
- * signature is HMAC'd over them); `signature` is the X-Signature header; the
- * `X-Event-Name` header (if present) wins over meta.event_name.
+ * signature is HMAC'd over them); `signature` is the X-Signature header. The
+ * event name is taken from the SIGNED body (meta.event_name) — A-03: the
+ * `X-Event-Name` header is unsigned/forgeable, so it is only an advisory
+ * cross-check (a mismatch logs a warning; the body value proceeds).
  */
 export async function handleWebhook(
   rawBody: string,
@@ -226,8 +230,25 @@ export async function handleWebhook(
     return { status: 400, body: "unparseable body" };
   }
 
-  const eventName = eventNameHeader ?? payload.meta?.event_name ?? "";
+  // A-03: the event name comes SOLELY from the HMAC-signed body. The
+  // X-Event-Name header is not covered by the signature, so trusting it let a
+  // replay of one validly-signed body be re-routed (and re-keyed for
+  // idempotency) as a different event.
+  const eventName = payload.meta?.event_name ?? "";
   if (!eventName) return { status: 400, body: "missing event name" };
+
+  // Defense-in-depth cross-check: a header that disagrees with the signed body
+  // is a tamper/replay signal worth logging — but hard-rejecting a critical
+  // billing webhook on an unsigned header quirk risks dropping legit events,
+  // so log ONCE per delivery and proceed on the body value.
+  if (eventNameHeader !== null && eventNameHeader !== eventName) {
+    console.warn(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      event: eventName,
+      header_event: eventNameHeader,
+      note: "event_name_header_mismatch",
+    }));
+  }
 
   // A-01: fail loud on an unsafe yearly-variant config BEFORE recording the
   // idempotency key, so a rejected (5xx) subscription event is cleanly retried.
@@ -642,11 +663,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * Link a converting subscriber to their trial grant (subscriptions.trial_grant_id).
- * Two resolution paths, in priority order:
+ * Two resolution paths, in priority order — BOTH email-gated (A-06: checkout
+ * `custom_data` is CLIENT-controlled and covered by no signature, so an
+ * explicit grant id alone proves nothing — trusting it let a buyer absorb a
+ * stranger's remaining trial credits by pasting that stranger's grant id into
+ * their own checkout):
  *   1. An explicit `meta.custom_data.trial_grant_id` plumbed through checkout —
- *      normalization-free and exact. Validated against the DB first, because an
- *      unknown id would violate the FK and 500 the webhook (LS would then retry
- *      forever); an invalid/unknown id silently falls through to (2).
+ *      exact and normalization-free, but accepted ONLY when the grant resolves
+ *      as VERIFIED (an unknown id would violate the FK and 500 the webhook;
+ *      LS would then retry forever) AND its email_normalized equals the
+ *      buyer's own trial-normalized email. A resolved-but-mismatched grant
+ *      logs `trial_grant_email_mismatch` and falls through to (2), which by
+ *      construction can only ever find the buyer's OWN grant.
  *   2. The buyer email, re-normalized to the AGGRESSIVE trial form (Gmail
  *      dots/+tags collapsed — subscriptions store only the lowercased form), and
  *      matched against a verified trial_grants row.
@@ -661,15 +689,29 @@ async function linkTrialGrantOnConversion(
 ): Promise<void> {
   let grantId: string | null = null;
 
+  // The buyer identity that gates BOTH paths: the signed payload's own
+  // user_email, in the aggressive trial normalization.
+  const buyerTrialEmail = attrs.user_email ? normalizeTrialEmail(String(attrs.user_email)) : null;
+
   const custom = payload.meta?.custom_data as { trial_grant_id?: unknown } | null | undefined;
   const explicit = typeof custom?.trial_grant_id === "string" ? custom.trial_grant_id.trim().toLowerCase() : "";
   if (UUID_RE.test(explicit)) {
-    grantId = await deps.store.getVerifiedTrialGrantIdById(explicit);
+    const grant = await deps.store.getVerifiedTrialGrantById(explicit);
+    if (grant) {
+      if (buyerTrialEmail !== null && grant.email_normalized === buyerTrialEmail) {
+        grantId = grant.id;
+      } else {
+        // A verified grant that does NOT belong to this buyer (or the buyer
+        // has no usable email to prove it does). Never link on the explicit
+        // id — fall through to the email path, which can only resolve the
+        // buyer's own grant.
+        logAction("subscription_created", subscriptionId, "trial_grant_email_mismatch");
+      }
+    }
   }
 
-  if (!grantId) {
-    const norm = attrs.user_email ? normalizeTrialEmail(String(attrs.user_email)) : null;
-    if (norm) grantId = await deps.store.getVerifiedTrialGrantIdByEmail(norm);
+  if (!grantId && buyerTrialEmail) {
+    grantId = await deps.store.getVerifiedTrialGrantIdByEmail(buyerTrialEmail);
   }
 
   if (grantId) {

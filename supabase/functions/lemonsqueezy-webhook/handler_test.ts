@@ -153,9 +153,11 @@ class InMemoryWebhookStore implements WebhookStore {
     return Promise.resolve();
   }
 
-  getVerifiedTrialGrantIdById(grantId: string): Promise<string | null> {
+  getVerifiedTrialGrantById(
+    grantId: string,
+  ): Promise<{ id: string; email_normalized: string | null } | null> {
     const g = this.trialGrants.find((x) => x.id === grantId && x.verified);
-    return Promise.resolve(g ? g.id : null);
+    return Promise.resolve(g ? { id: g.id, email_normalized: g.email_normalized } : null);
   }
   getVerifiedTrialGrantIdByEmail(normalizedEmail: string): Promise<string | null> {
     const g = this.trialGrants.find((x) => x.email_normalized === normalizedEmail && x.verified);
@@ -188,16 +190,30 @@ async function sign(body: string): Promise<string> {
   return toHex(await hmacSha256(SECRET, body));
 }
 
-/** Deliver a webhook with a VALID signature (unless `badSig` is given). */
+/** Stamp meta.event_name into the payload — the SIGNED body is the
+ * authoritative event carrier post-A-03. Preserves other meta fields
+ * (custom_data). */
+function withEventName(payload: unknown, eventName: string) {
+  const obj = payload as { meta?: Record<string, unknown> };
+  return { ...obj, meta: { ...(obj.meta ?? {}), event_name: eventName } };
+}
+
+/** Deliver a webhook with a VALID signature (unless `badSig` is given). A-03:
+ * the event name rides in the SIGNED body (meta.event_name) and is echoed in
+ * the X-Event-Name header, matching a real LS delivery where both are present
+ * and equal. `headerOverride` lets the A-03 tests send a mismatched (string)
+ * or absent (null) header. */
 async function deliver(
   store: InMemoryWebhookStore,
   eventName: string,
   payload: unknown,
   badSig?: string | null,
+  headerOverride?: string | null,
 ) {
-  const raw = JSON.stringify(payload);
+  const raw = JSON.stringify(withEventName(payload, eventName));
   const signature = badSig === undefined ? await sign(raw) : badSig;
-  return await handleWebhook(raw, signature, eventName, deps(store));
+  const header = headerOverride === undefined ? eventName : headerOverride;
+  return await handleWebhook(raw, signature, header, deps(store));
 }
 
 function subPayload(over: {
@@ -219,7 +235,9 @@ function subPayload(over: {
     }
     : undefined;
   return {
-    meta: { event_name: "placeholder", custom_data: customData },
+    // meta.event_name is stamped by deliver()/withEventName — the signed body
+    // is the authoritative carrier (A-03), so the builder never hardcodes it.
+    meta: { custom_data: customData },
     data: {
       type: "subscriptions",
       id: over.id ?? "ls_1",
@@ -245,7 +263,8 @@ function invoicePayload(over: {
   created_at?: string;
 } = {}) {
   return {
-    meta: { event_name: "placeholder" },
+    // meta.event_name stamped by deliver()/withEventName (A-03).
+    meta: {},
     data: {
       type: "subscription-invoices",
       id: over.invoiceId ?? "inv_1",
@@ -330,13 +349,74 @@ Deno.test("subscription_updated refreshes a changed email; an event without one 
 // ===========================================================================
 // §2b — trial↔subscription conversion link (consume_combined_credit groundwork)
 // ===========================================================================
-Deno.test("conversion link: explicit custom_data.trial_grant_id wins (validated, set once)", async () => {
+/** Run `body` with console.log captured; returns the parsed
+ * trial_grant_email_mismatch actions it emitted (A-06). */
+async function captureMismatchActions(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(String(args[0]));
+  };
+  try {
+    await body();
+  } finally {
+    console.log = original;
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.action === "trial_grant_email_mismatch");
+}
+
+Deno.test("conversion link: explicit trial_grant_id with MATCHING grant email → linked (A-06)", async () => {
   const store = new InMemoryWebhookStore();
   const GRANT = "11111111-1111-4111-8111-111111111111";
-  store.seedTrialGrant(GRANT, "someone-else@example.com"); // email does NOT match the buyer
+  // Default buyer email is Buyer@Example.com → aggressive form buyer@example.com.
+  store.seedTrialGrant(GRANT, "buyer@example.com");
   await deliver(store, "subscription_created", subPayload({ trial_grant_id: GRANT }));
-  // Linked by the explicit id even though the email wouldn't match.
   assertEquals(store.sub("ls_1")!.trial_grant_id, GRANT);
+});
+
+Deno.test("conversion link: explicit id for a STRANGER's grant → not linked + mismatch logged (A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const STRANGERS_GRANT = "66666666-6666-4666-8666-666666666666";
+  store.seedTrialGrant(STRANGERS_GRANT, "someone-else@example.com"); // verified, not the buyer's
+  const mismatches = await captureMismatchActions(async () => {
+    await deliver(store, "subscription_created", subPayload({ trial_grant_id: STRANGERS_GRANT }));
+  });
+  // The buyer has no grant of their own → nothing to link. No credit theft.
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
+  assertEquals(mismatches.length, 1);
+  assertEquals(mismatches[0].event, "subscription_created");
+});
+
+Deno.test("conversion link: mismatched explicit id falls through to the buyer's OWN grant (A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const STRANGERS_GRANT = "77777777-7777-4777-8777-777777777777";
+  const OWN_GRANT = "88888888-8888-4888-8888-888888888888";
+  store.seedTrialGrant(STRANGERS_GRANT, "someone-else@example.com");
+  store.seedTrialGrant(OWN_GRANT, "buyer@example.com");
+  await deliver(store, "subscription_created", subPayload({ trial_grant_id: STRANGERS_GRANT }));
+  // The injected id is rejected; the email path resolves the buyer's own grant.
+  assertEquals(store.sub("ls_1")!.trial_grant_id, OWN_GRANT);
+});
+
+Deno.test("conversion link: explicit id but buyer email missing → not linked (fail-safe, A-06)", async () => {
+  const store = new InMemoryWebhookStore();
+  const GRANT = "99999999-9999-4999-8999-999999999999";
+  store.seedTrialGrant(GRANT, "someone@example.com");
+  await deliver(
+    store,
+    "subscription_created",
+    subPayload({ trial_grant_id: GRANT, user_email: null }),
+  );
+  // With no buyer email there is nothing to prove ownership against — never link.
+  assertEquals(store.sub("ls_1")!.trial_grant_id ?? null, null);
 });
 
 Deno.test("conversion link: unknown explicit id is ignored, email fallback links", async () => {
@@ -447,7 +527,7 @@ const BAD_CONFIG = {
 
 /** Deliver a validly-signed webhook under an INJECTED (bad) config verdict. */
 async function deliverBadConfig(store: InMemoryWebhookStore, eventName: string, payload: unknown) {
-  const raw = JSON.stringify(payload);
+  const raw = JSON.stringify(withEventName(payload, eventName));
   const signature = await sign(raw);
   return await handleWebhook(raw, signature, eventName, { ...deps(store), configCheck: BAD_CONFIG });
 }
@@ -859,4 +939,75 @@ Deno.test("unparseable body (valid signature) → 400", async () => {
   const raw = "{not json";
   const res = await handleWebhook(raw, await sign(raw), "subscription_created", deps(store));
   assertEquals(res.status, 400);
+});
+
+// ===========================================================================
+// §A-03 — the unsigned X-Event-Name header must influence NOTHING
+// ===========================================================================
+/** Run `body` with console.warn captured; returns the parsed
+ * event_name_header_mismatch warnings it emitted. */
+async function captureMismatchWarns(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    lines.push(String(args[0]));
+  };
+  try {
+    await body();
+  } finally {
+    console.warn = original;
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.note === "event_name_header_mismatch");
+}
+
+Deno.test("A-03: header spoof — signed subscription_created with X-Event-Name=order_refunded routes on the BODY", async () => {
+  const store = new InMemoryWebhookStore();
+  const warns = await captureMismatchWarns(async () => {
+    const res = await deliver(store, "subscription_created", subPayload(), undefined, "order_refunded");
+    assertEquals(res.status, 200);
+  });
+  // Routed as subscription_created: the mirror row exists and is ACTIVE — the
+  // forged header did not steer the delivery down the refund path.
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.subs[0].status, "active");
+  // …and the tamper signal was logged (log-and-proceed, never a reject).
+  assertEquals(warns.length, 1);
+  assertEquals(warns[0].event, "subscription_created");
+  assertEquals(warns[0].header_event, "order_refunded");
+});
+
+Deno.test("A-03: idempotency key ignores the header — replay with a DIFFERENT header still dedups", async () => {
+  const store = new InMemoryWebhookStore();
+  const r1 = await deliver(store, "subscription_created", subPayload());
+  assertEquals(r1.status, 200);
+  assertEquals(r1.body, "ok");
+  const warns = await captureMismatchWarns(async () => {
+    // Same signed body, forged header: pre-A-03 the header changed the
+    // ${eventName}:${resourceId}:${updatedAt} key and the replay re-processed.
+    const r2 = await deliver(store, "subscription_created", subPayload(), undefined, "totally_different");
+    assertEquals(r2.status, 200);
+    assertEquals(r2.body, "ok (duplicate)");
+  });
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.periodsFor("sub-1").length, 1); // no double period roll
+  assertEquals(warns.length, 1); // the mismatch is still surfaced on the duplicate
+});
+
+Deno.test("A-03: header absent — routing works from meta.event_name alone, no warning", async () => {
+  const store = new InMemoryWebhookStore();
+  const warns = await captureMismatchWarns(async () => {
+    const res = await deliver(store, "subscription_created", subPayload(), undefined, null);
+    assertEquals(res.status, 200);
+  });
+  assertEquals(store.subs.length, 1);
+  assertEquals(store.subs[0].status, "active");
+  assertEquals(warns.length, 0);
 });

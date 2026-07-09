@@ -40,6 +40,19 @@ export const TRIAL_RATE_LIMIT_PER_EMAIL = optionalEnvInt("TRIAL_RATE_LIMIT_PER_E
 // Requests per IP per window — higher (shared NATs) but still bounds bulk abuse.
 export const TRIAL_RATE_LIMIT_PER_IP = optionalEnvInt("TRIAL_RATE_LIMIT_PER_IP", 30);
 
+// ---- Per-email SEND sub-limit (C-05) ----------------------------------------
+// A second, tighter counter consumed ONLY when a verification email is actually
+// about to be sent. The request limits above are shared with verify/resume and
+// sized for that, so on their own they let a code-request loop email-bomb one
+// inbox. Small max over a LONG window; past the cap the request still answers
+// the uniform code_sent (never reveal the throttle — that would re-open the
+// enumeration oracle) but no mail goes out.
+export const TRIAL_SEND_LIMIT_PER_EMAIL = optionalEnvInt("TRIAL_SEND_LIMIT_PER_EMAIL", 5);
+export const TRIAL_SEND_WINDOW_SECONDS = optionalEnvInt(
+  "TRIAL_SEND_WINDOW_SECONDS",
+  24 * 60 * 60, // 1 day window
+);
+
 // ---- Trial device binding (trial-abuse hardening) ---------------------------
 // The one-grant-per-physical-Mac cap. The app sends a SHA-256 hash of a hardware
 // UUID (`device_id_hash`); a second grant from a device that already trialed is

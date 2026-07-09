@@ -177,6 +177,16 @@ final class OnboardingState {
         defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
     }
 
+    /// Static consent read for the LAUNCH BOOTSTRAP (I-03): the inverse of
+    /// `needsConsent`, callable before any OnboardingState instance exists.
+    /// Same Keys/currentTermsVersion source of truth. Telemetry startup
+    /// (CrashReporting.start → Analytics.start) is gated on this in ZerroApp's
+    /// one-shot block, so nothing transmits before the user has accepted the
+    /// consent step.
+    static func hasCurrentConsent(defaults: UserDefaults = .standard) -> Bool {
+        defaults.string(forKey: Keys.termsAcceptedVersion) == currentTermsVersion
+    }
+
     /// Whether the onboarding window should auto-present at launch: either
     /// onboarding isn't finished, or finished users owe fresh consent. Read
     /// by `ZerroApp` to drive the window's launch behavior.
@@ -193,6 +203,20 @@ final class OnboardingState {
         defaults.set(Self.currentTermsVersion, forKey: Keys.privacyAcceptedVersion)
         isReconsenting = false
         Log.billing.notice("terms consent recorded locally — version \(Self.currentTermsVersion, privacy: .public)")
+
+        // I-03: telemetry startup was DEFERRED at bootstrap when this launch
+        // lacked current consent (first run, or a finished user owing
+        // re-consent). Fire the one-shot hook now, AFTER the consent record is
+        // written — this single call site covers BOTH accept paths. The
+        // analytics toggle has already persisted the user's opt-in/out choice
+        // (CrashReporting.isEnabledDefaultsKey via @AppStorage), so
+        // Analytics.start() reads the correct optOut on its first event.
+        // Nil-out before invoking → strictly one-shot (Analytics.start is
+        // additionally didStart-guarded).
+        if let startTelemetry = AppDelegate.startTelemetryOnConsent {
+            AppDelegate.startTelemetryOnConsent = nil
+            startTelemetry()
+        }
 
         // DEFERRED Phase 22.1 — server-side acceptance record.
         // Consent is collected BEFORE the email-verification step, so there is

@@ -2,6 +2,11 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { sha256Hex } from "../_shared/crypto.ts";
 import { verifySessionToken } from "../_shared/jwt.ts";
 import { handleTrialStart, type TrialStartDeps } from "./handler.ts";
+import {
+  type RateLimitKeyKind,
+  type RateLimitOnError,
+  rateLimiterErrorVerdict,
+} from "./ratelimit.ts";
 import { EmailSendError, type EmailSender } from "./resend.ts";
 import type { TrialCodeRow, TrialGrantRow, TrialStore, VerifyGrantResult } from "./store.ts";
 
@@ -26,6 +31,15 @@ class InMemoryTrialStore implements TrialStore {
   grants = new Map<string, Grant>(); // email → grant
   codes = new Map<string, Code>(); // email → code
   rateOk = true;
+  /** Per-key call counts — rateLimitOk models a real fixed-window counter so
+   * the C-05 send sub-limit is exercisable (the window is ignored: every test
+   * runs inside a single window). `rateOk = false` still force-denies all. */
+  rateCounts = new Map<string, number>();
+  /** C-07 limiter-outage mode: keys starting with this prefix (e.g.
+   * "trial:ip:") behave as if the check_rate_limit RPC errored, routed
+   * through the SAME rateLimiterErrorVerdict as the production impl — so the
+   * tests pin the real posture + alert-log shape. */
+  errorKeyPrefix: string | null = null;
   private nextId = 1;
 
   loadGrantByEmail(email: string): Promise<TrialGrantRow | null> {
@@ -90,8 +104,20 @@ class InMemoryTrialStore implements TrialStore {
     }
     return false;
   }
-  rateLimitOk(): Promise<boolean> {
-    return Promise.resolve(this.rateOk);
+  rateLimitOk(
+    key: string,
+    max: number,
+    _windowSeconds: number,
+    onError: RateLimitOnError,
+    keyKind: RateLimitKeyKind,
+  ): Promise<boolean> {
+    if (this.errorKeyPrefix !== null && key.startsWith(this.errorKeyPrefix)) {
+      return Promise.resolve(rateLimiterErrorVerdict(keyKind, onError, "rpc_unavailable (stub)"));
+    }
+    if (!this.rateOk) return Promise.resolve(false);
+    const n = (this.rateCounts.get(key) ?? 0) + 1;
+    this.rateCounts.set(key, n);
+    return Promise.resolve(n <= max);
   }
 }
 
@@ -152,14 +178,153 @@ Deno.test("request: rate-limited → 429, no email sent", async () => {
   assertEquals(email.sent.length, 0);
 });
 
-Deno.test("request: already-verified + exhausted → already_used, no email", async () => {
+Deno.test("request: already-verified + exhausted → uniform code_sent, NO email (C-05)", async () => {
   const store = new InMemoryTrialStore();
   store.grants.set("a@b.com", { id: "g1", verified: true, limit: 15, used: 15 });
   const email = new StubEmailSender();
   const res = await handleTrialStart(req({ action: "request", email: "a@b.com" }), deps(store, email));
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).status, "already_used");
+  // NOT already_used: that would tell an unauthenticated prober this email is
+  // a known (spent) trial user. The truth waits for verify/resume.
+  assertEquals((await res.json()).status, "code_sent");
+  assertEquals(email.sent.length, 0); // …but nothing is actually sent
+});
+
+Deno.test("request: byte-identical code_sent for new / with-credits / exhausted (C-05 oracle closed)", async () => {
+  const store = new InMemoryTrialStore();
+  store.grants.set("credits@b.com", { id: "g1", verified: true, limit: 30, used: 3 });
+  store.grants.set("spent@b.com", { id: "g2", verified: true, limit: 30, used: 30 });
+  const email = new StubEmailSender();
+
+  const statuses: number[] = [];
+  const bodies: string[] = [];
+  for (const addr of ["new@b.com", "credits@b.com", "spent@b.com"]) {
+    const res = await handleTrialStart(req({ action: "request", email: addr }), deps(store, email));
+    statuses.push(res.status);
+    bodies.push(await res.text());
+  }
+  assertEquals(statuses, [200, 200, 200]);
+  // Byte-identical bodies — the response carries zero signal about the
+  // email's trial state.
+  assertEquals(bodies[1], bodies[0]);
+  assertEquals(bodies[2], bodies[0]);
+  assertEquals(JSON.parse(bodies[0]).status, "code_sent");
+  // …yet only the eligible addresses actually received a code.
+  assertEquals(email.sent.map((s) => s.to), ["new@b.com", "credits@b.com"]);
+});
+
+Deno.test("verify: exhausted grant still surfaces already_used AFTER mailbox proof (C-05)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  // A valid pending code obtained before the pool ran out (request no longer
+  // issues one for an exhausted email).
+  const code = "123456";
+  store.codes.set("a@b.com", {
+    codeHash: await sha256Hex(code),
+    expiresAt: (NOW + 60) * 1000,
+    attempts: 0,
+  });
+  store.grants.set("a@b.com", { id: "g1", verified: true, limit: 15, used: 15 });
+
+  const res = await handleTrialStart(req({ action: "verify", email: "a@b.com", code }), deps(store, email));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.status, "already_used"); // fine HERE: mailbox control proven
+  assertEquals(json.token, undefined);
+});
+
+Deno.test("request: send sub-limit caps mails per email, response stays code_sent (C-05)", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  // 7 requests stay under the request limiter (8/email/window) but exceed the
+  // send sub-limit (TRIAL_SEND_LIMIT_PER_EMAIL default 5): exactly 5 mails go
+  // out, and EVERY response is the same code_sent — the throttle is never
+  // revealed (that would re-open the oracle).
+  for (let i = 0; i < 7; i++) {
+    const res = await handleTrialStart(req({ action: "request", email: "a@b.com" }), deps(store, email));
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).status, "code_sent");
+  }
+  assertEquals(email.sent.length, 5);
+  // The throttled requests did NOT clobber the last real code: the stored hash
+  // still matches the 5th (last actually-emailed) code, so it stays verifiable.
+  const stored = store.codes.get("a@b.com")!;
+  assertEquals(stored.codeHash, await sha256Hex(email.sent.at(-1)!.code));
+});
+
+// ---- C-07: per-key limiter-error posture -------------------------------------
+/** Run `body` with console.error captured; returns the parsed
+ * rate_limiter_error events it emitted. */
+async function captureLimiterAlerts(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    lines.push(String(args[0]));
+  };
+  try {
+    await body();
+  } finally {
+    console.error = original;
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.event === "rate_limiter_error");
+}
+
+Deno.test("limiter error: per-IP key fails CLOSED → 429, no email (C-07)", async () => {
+  const store = new InMemoryTrialStore();
+  store.errorKeyPrefix = "trial:ip:";
+  const email = new StubEmailSender();
+  const alerts = await captureLimiterAlerts(async () => {
+    const res = await handleTrialStart(req({ action: "request", email: "a@b.com" }), deps(store, email));
+    assertEquals(res.status, 429);
+    assertEquals((await res.json()).error, "rate_limited");
+  });
   assertEquals(email.sent.length, 0);
+  // The alert fired with the stable, greppable shape ops keys on.
+  assertEquals(alerts.length, 1);
+  assertEquals(alerts[0].fn, "trial-start");
+  assertEquals(alerts[0].key_kind, "ip");
+  assertEquals(alerts[0].failed_closed, true);
+  assert(typeof alerts[0].error === "string" && alerts[0].error.length > 0);
+});
+
+Deno.test("limiter error: send sub-limit fails CLOSED but stays uniform code_sent (C-07)", async () => {
+  const store = new InMemoryTrialStore();
+  store.errorKeyPrefix = "trial:send:";
+  const email = new StubEmailSender();
+  const alerts = await captureLimiterAlerts(async () => {
+    const res = await handleTrialStart(req({ action: "request", email: "a@b.com" }), deps(store, email));
+    // Fail closed must NOT leak: the response is indistinguishable from a send.
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).status, "code_sent");
+  });
+  assertEquals(email.sent.length, 0); // …but no mail went out
+  assertEquals(store.codes.size, 0); // and no orphan code was stored
+  assertEquals(alerts.length, 1);
+  assertEquals(alerts[0].key_kind, "send");
+  assertEquals(alerts[0].failed_closed, true);
+});
+
+Deno.test("limiter error: per-email key fails OPEN → request proceeds, code sent (C-07)", async () => {
+  const store = new InMemoryTrialStore();
+  store.errorKeyPrefix = "trial:email:";
+  const email = new StubEmailSender();
+  const alerts = await captureLimiterAlerts(async () => {
+    const res = await handleTrialStart(req({ action: "request", email: "a@b.com" }), deps(store, email));
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).status, "code_sent");
+  });
+  assertEquals(email.sent.length, 1); // fail open: the legit flow continues
+  assertEquals(alerts.length, 1); // …but the outage is still alerted
+  assertEquals(alerts[0].key_kind, "email");
+  assertEquals(alerts[0].failed_closed, false);
 });
 
 Deno.test("request: Resend failure → 502 send_failed", async () => {

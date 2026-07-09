@@ -16,13 +16,22 @@
 
 import { sha256Hex } from "../_shared/crypto.ts";
 import { handlePreflight, json } from "../_shared/http.ts";
+import {
+  AFFILIATE_RATE_LIMIT_PER_IP,
+  AFFILIATE_RATE_LIMIT_WINDOW_SECONDS,
+} from "./config.ts";
 
 /** The persistence surface the handler needs — a fake stands in for unit tests. */
 export interface AffiliateStore {
-  /** Append a (ip_hash, aff_code) row. Throws on a real DB failure. */
+  /** Record the latest (ip_hash → aff_code) mapping. C-08: an UPSERT keyed on
+   * the unique ip_hash — one row per visitor IP, latest code + timestamp win.
+   * Throws on a real DB failure. */
   record(ipHash: string, affCode: string): Promise<void>;
   /** The most recent aff_code for `ipHash` at/after `sinceISO`, or null. */
   latestCode(ipHash: string, sinceISO: string): Promise<string | null>;
+  /** TRUE if within the limit for the current window (check_rate_limit). The
+   * impl fails OPEN on limiter error — see store.ts for the C-08 rationale. */
+  rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
 }
 
 export interface AffiliateDeps {
@@ -80,6 +89,19 @@ export async function handleAffiliate(req: Request, deps: AffiliateDeps): Promis
     }
     const aff = normalizeAffCode((body as { aff?: unknown })?.aff);
     if (!aff) return json({ error: "bad_aff" }, 400);
+
+    // C-08 defense-in-depth: per-IP POST throttle. The unique(ip_hash) upsert
+    // below is the structural amplifier fix; this just bounds write/RPC churn
+    // from a hammering client. Over the cap → the SAME { ok: true }: recording
+    // is best-effort, and neither the landing page nor checkout should ever
+    // see (or be able to probe) the throttle. Limiter errors fail OPEN inside
+    // the store impl.
+    const allowed = await deps.store.rateLimitOk(
+      `affiliate:${ipHash}`,
+      AFFILIATE_RATE_LIMIT_PER_IP,
+      AFFILIATE_RATE_LIMIT_WINDOW_SECONDS,
+    );
+    if (!allowed) return json({ ok: true });
 
     try {
       await deps.store.record(ipHash, aff);
