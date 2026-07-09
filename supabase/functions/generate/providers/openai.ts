@@ -190,11 +190,15 @@ export class OpenAIChatClient extends OpenAITransport implements ChatClient {
       // A 200 with no usable content is not retryable (we'd just get it again).
       throw new ProviderError("openai_empty_content", false, 200, "openai");
     }
+    // A missing usage block means the token counts are UNKNOWN (B-06): report
+    // null, not 0, so the cost math falls back to fallbackCredits upstream. A
+    // real generation always carries usage; this only fires when it's absent.
+    const usage = json?.usage;
     return {
       provider: "openai",
       content: text,
-      inputTokens: Number(json?.usage?.prompt_tokens ?? 0),
-      outputTokens: Number(json?.usage?.completion_tokens ?? 0),
+      inputTokens: usage ? Number(usage.prompt_tokens ?? 0) : null,
+      outputTokens: usage ? Number(usage.completion_tokens ?? 0) : null,
       model: String(json?.model ?? this.chatModel),
     };
   }

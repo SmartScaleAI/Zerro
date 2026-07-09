@@ -138,12 +138,15 @@ export class AnthropicChatClient implements ChatClient {
       );
     }
 
-    const usage = json?.usage ?? {};
+    // A missing usage block means the token counts are UNKNOWN (B-06): report
+    // null, not 0, so the cost math falls back to fallbackCredits upstream. A
+    // real generation always carries usage; this only fires when it's absent.
+    const usage = json?.usage;
     return {
       provider: "anthropic",
       content: text,
-      inputTokens: Number(usage.input_tokens ?? 0),
-      outputTokens: Number(usage.output_tokens ?? 0),
+      inputTokens: usage ? Number(usage.input_tokens ?? 0) : null,
+      outputTokens: usage ? Number(usage.output_tokens ?? 0) : null,
       model: String(json?.model ?? this.chatModel),
     };
   }

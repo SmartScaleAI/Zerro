@@ -12,7 +12,7 @@ import {
 } from "./providers/types.ts";
 import { composedSystemPrompt } from "./prompt.ts";
 import { creditCostForModel, estimatedCostUsd } from "./cost.ts";
-import { MODEL_REGISTRY } from "./models.ts";
+import { MODEL_REGISTRY, modelById } from "./models.ts";
 import { GENERATE_SLOT_STALE_SECONDS, PROVIDER_TIMEOUT_MS, slotStaleSeconds } from "./config.ts";
 import { SlotTable } from "../_shared/slot_table_fake.ts";
 import type { BillingStore, CombinedSpendResult, GenerationLogRow, IdempotentResult, SubRow } from "./store.ts";
@@ -217,8 +217,9 @@ class StubProvider implements SttClient, ChatClient {
   // exactly 4 credits and Opus to 10 — the amounts this suite's balance
   // arithmetic is written against. The charge is `ceil(est_cost_usd/0.01)`
   // (cost.ts), so credit amounts below are metered cost, not a fixed price.
-  chatInputTokens = 2000;
-  chatOutputTokens = 3500;
+  // `null` = the provider omitted its usage block entirely (B-06).
+  chatInputTokens: number | null = 2000;
+  chatOutputTokens: number | null = 3500;
 
   async transcribe(_audio: AudioInput, opts?: { words?: boolean }) {
     this.transcribeCalls++;
@@ -1375,6 +1376,35 @@ Deno.test("metering: a heavy real cost is charged straight through, never blocks
   // read it instead of deriving the toast from any fixed/fallback table.
   assertEquals(json.credits_charged, metered);
   assertEquals(store.used.get("sub-1"), metered);
+});
+
+Deno.test("B-06: missing provider usage → null tokens logged, fallbackCredits charged", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  // The provider omitted its usage block: the adapter reports null tokens.
+  openai.chatInputTokens = null;
+  openai.chatOutputTokens = null;
+  const res = await handleGenerate(
+    // gpt-5.5's fallback (11) differs from this stub workload's metered charge
+    // (12), so the assertion below can tell the fallback path apart.
+    makeReq(await mintToken(), makeBody({ model: "gpt-5.5" })),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 200); // unknown usage changes the AMOUNT, never the outcome
+
+  const fallback = modelById("gpt-5.5")!.fallbackCredits;
+  // The old `?? 0` coalesce priced the chat at a finite $0, so STT alone set
+  // the charge (~1 credit). The fallback must apply instead.
+  assert(fallback > 2, `fallback must exceed the STT-only undercharge, got ${fallback}`);
+  const json = await res.json();
+  assertEquals(json.credits_charged, fallback);
+  assertEquals(json.credits_remaining, 100 - fallback);
+  assertEquals(store.used.get("sub-1"), fallback);
+  // The log records the truth: unknown tokens and cost stay null, never 0.
+  assertEquals(store.log[0].tokensIn, null);
+  assertEquals(store.log[0].tokensOut, null);
+  assertEquals(store.log[0].estCostUsd, null);
+  assertEquals(store.log[0].creditsUsed, fallback);
 });
 
 Deno.test("plan exhausted but top-up available → generates and spends the top-up bucket", async () => {

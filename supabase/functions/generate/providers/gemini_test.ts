@@ -235,3 +235,20 @@ Deno.test("GeminiChatClient.chat: 403 auth → non-retryable", async () => {
     f.restore();
   }
 });
+
+Deno.test("GeminiChatClient.chat: absent usageMetadata block → null tokens, not 0 (B-06)", async () => {
+  // `usageMetadata: undefined` in the spread makes JSON.stringify DROP the key —
+  // the response carries no usage block at all. The adapter must report unknown
+  // (null) so the cost math charges fallbackCredits, never a $0 chat. (A present
+  // block with only thoughtsTokenCount missing keeps the per-field `?? 0`.)
+  const f = stubFetch(() => okResponse({ usageMetadata: undefined }));
+  try {
+    const res = await new GeminiChatClient("k", "gemini-3.5-flash", "low")
+      .chat("SYS", [{ type: "text", text: "hi" }]);
+    assertEquals(res.inputTokens, null);
+    assertEquals(res.outputTokens, null);
+    assertEquals(res.content, "RESULT"); // the result itself is still usable
+  } finally {
+    f.restore();
+  }
+});

@@ -112,3 +112,31 @@ Deno.test("creditCostForModel: unknown model throws (caller bug — validation i
 // gate: the one final generation is uncapped and metered on the REAL post-chat
 // cost, so there is no longer a pre-chat estimate to test. See handler step 8
 // (the `remaining < 1` floor gate) for the only remaining credit decision.
+
+// ---- B-06: a missing usage block must fall back, never undercharge ----------
+
+Deno.test("chatCostUsd: null tokens (usage block absent) → null even on a PRICED model", () => {
+  // The old `?? 0` coalesce made a usage-less response look like a finite $0
+  // chat, so STT alone set the charge (~1-2 credits). Null tokens must yield a
+  // null (unknown) cost so creditCostForModel charges fallbackCredits instead.
+  assertEquals(chatCostUsd("openai", "gpt-4o", null, M), null);
+  assertEquals(chatCostUsd("openai", "gpt-4o", M, null), null);
+  assertEquals(chatCostUsd("anthropic", "claude-opus-4-7", null, null), null);
+});
+
+Deno.test("estimatedCostUsd: null tokens → null total (never a partial STT-only number)", () => {
+  assertEquals(estimatedCostUsd(60, "openai", "gpt-5.5", null, M), null);
+  assertEquals(estimatedCostUsd(60, "openai", "gpt-5.5", M, null), null);
+  assertEquals(estimatedCostUsd(60, "gemini", "gemini-3.5-flash", null, null), null);
+});
+
+Deno.test("B-06: null-usage generation on a priced model charges exactly fallbackCredits", () => {
+  // End-to-end through the cost helpers: usage absent → null est → the model's
+  // fallbackCredits, NOT the ~1-credit STT-only charge the 0-coalesce produced.
+  for (const id of ["gemini-3.5-flash", "claude-opus-4-7", "gpt-5.5"]) {
+    const entry = modelById(id)!;
+    const est = estimatedCostUsd(60, entry.provider, id, null, null);
+    assertEquals(est, null, id);
+    assertEquals(creditCostForModel(id, est), entry.fallbackCredits, id);
+  }
+});
