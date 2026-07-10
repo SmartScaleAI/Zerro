@@ -671,6 +671,12 @@ final class AppState {
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
+    /// G-08: true while the runner reports the agent stalled (no output for
+    /// `timeouts.stall` seconds). ADVISORY only — the runner never kills on a
+    /// stall; this just swaps the running pill's substatus for a non-alarming
+    /// "seems stuck — Cancel?" nudge toward the pill's existing Cancel. Cleared
+    /// by the runner's next-output notification, at run end, and on teardown.
+    var devAgentStalled = false
     /// The diff stat captured on `.devDone`, used for the generated fallback
     /// summary line ("Updated N files (+x −y)") when the agent gave no summary.
     var devDiffStat: GitDiffStat?
@@ -1140,6 +1146,18 @@ final class AppState {
     /// can be driven without a started ScreenCaptureKit capture (a real
     /// `.running` session needs TCC grants a unit test doesn't have).
     @ObservationIgnored var captureLivenessProvider: (() -> Bool)?
+
+    /// G-07 test seam for the recovery-marker write-failure telemetry —
+    /// mirrors `captureLivenessProvider`. `nil` (production) routes to
+    /// `Analytics.capture` (inert in tests, so a spy is the only way to pin
+    /// fires-on-failure / silent-on-success).
+    @ObservationIgnored var devRecoveryTelemetry: ((String, [String: Any]) -> Void)?
+
+    /// Dedupes the G-07 write-failure event to at most one per dispatch — the
+    /// marker is persisted twice per run (the approve gate, then the
+    /// `.dispatching` phase), and a disk that failed the first write fails the
+    /// second identically. Reset at every dispatch start and teardown.
+    @ObservationIgnored private var devRecoveryMarkerFailureReported = false
 
     #if STAGING
     /// Staging-only amber "you're recording against Staging" frame around the
@@ -1733,6 +1751,7 @@ final class AppState {
         devRecoveryStore.clear()
         pendingDevRecovery = nil
         devRecoveryRevertFailed = false
+        devRecoveryMarkerFailureReported = false
         devCancelInFlight = false
         devAgentStarted = false
         devDispatchStartTime = nil
@@ -1741,6 +1760,7 @@ final class AppState {
         recordingAgentID = nil
         recordingAgentModelID = nil
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
@@ -3533,12 +3553,14 @@ final class AppState {
         devDispatchStartTime = Date()
 
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
         devFailure = nil
         devCancelInFlight = false
         devAgentStarted = false
+        devRecoveryMarkerFailureReported = false
         // New dispatch → new generation token; any prior in-flight confirm/outcome
         // is now stale and will be dropped.
         devDispatchGeneration += 1
@@ -3574,6 +3596,13 @@ final class AppState {
                 // auto-apply path is unchanged.
                 confirmGate: { [weak self] in
                     await self?.awaitReviewApproval(gen: gen, prompt: body) ?? false
+                },
+                // G-08: the runner's stall watchdog (notify, never kill). Drives
+                // the pill's "seems stuck — Cancel?" nudge; the generation guard
+                // drops a late notification from a superseded dispatch.
+                onStall: { [weak self] stalled in
+                    guard let self, self.devDispatchGeneration == gen else { return }
+                    self.applyDevAgentStall(stalled)
                 },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
@@ -3617,6 +3646,18 @@ final class AppState {
         }
     }
 
+    /// Apply the runner's stall notification (G-08): `true` after
+    /// `timeouts.stall` seconds of agent silence, `false` on the next output.
+    /// ADVISORY only — the agent is never auto-killed (the runner's
+    /// notify-never-kill contract); the flag just swaps the running pill's
+    /// substatus for a nudge toward its existing Cancel. Ignored mid-cancel: the
+    /// pill has already left the cancellable card, and a late `true` from the
+    /// SIGTERM grace window must not resurrect it.
+    func applyDevAgentStall(_ stalled: Bool) {
+        guard !devCancelInFlight else { return }
+        devAgentStalled = stalled
+    }
+
     /// Persist the durable quit-recovery marker for the current dispatch. Built
     /// from the just-taken checkpoint (`devCheckpoint` is set by the coordinator's
     /// `onCheckpoint` before the agent runs) + the service's project URL + the
@@ -3635,7 +3676,19 @@ final class AppState {
             createdAt: Date(),
             agentName: recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName }
         )
-        devRecoveryStore.save(marker)
+        guard !devRecoveryStore.save(marker) else { return }
+        // G-07: the marker never landed, so THIS run is not crash-recoverable —
+        // a quit mid-edit would leave half-applied changes with no cross-launch
+        // Undo. The run itself continues (losing the marker only costs
+        // recoverability — the safe failure), but the failure must be
+        // observable beyond the store's .private device log: a bounded,
+        // metadata-only event (at most one per dispatch) carries the rate.
+        guard !devRecoveryMarkerFailureReported else { return }
+        devRecoveryMarkerFailureReported = true
+        let capture = devRecoveryTelemetry ?? { Analytics.capture($0, $1) }
+        capture("dev_recovery_marker_write_failed", [
+            "agent_id": recordingAgentID ?? "unknown",
+        ])
     }
 
     // MARK: - Dev Mode anchor resolution analytics
@@ -3832,6 +3885,8 @@ final class AppState {
         // A safe-cancel owns its own teardown (terminate → auto-revert → idle),
         // so don't render the terminated agent's outcome as a `.devFailed` card.
         guard !devCancelInFlight else { return }
+        // The run is over either way — a stall nudge must not outlive it (G-08).
+        devAgentStalled = false
         let durationMs = devDispatchDurationMs()
         switch outcome {
         case .succeeded(let success):
@@ -4053,6 +4108,9 @@ final class AppState {
         let runningTask = devDispatchTask
         devCancelInFlight = true
         devDispatchTask = nil
+        // The cancel supersedes any stall nudge (and `applyDevAgentStall` is
+        // gated off while the cancel is in flight).
+        devAgentStalled = false
         state = .devReverting
         // If suspended at the Ask Permission review gate, resolve it false so the
         // dispatch unblocks and returns (the agent never ran → the revert below is
