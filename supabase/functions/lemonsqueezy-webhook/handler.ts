@@ -255,13 +255,18 @@ export async function handleWebhook(
   const configFailure = await guardYearlyConfig(eventName, deps.configCheck ?? CONFIG_CHECK);
   if (configFailure) return configFailure;
 
-  // Composite idempotency key (see header). Fall back to the signature only if
-  // the resource id is missing (shouldn't happen — JSON:API requires `id`).
+  // Composite idempotency key (see header), with the VERIFIED X-Signature
+  // appended as a discriminator (A-09): the signature is an HMAC over the exact
+  // raw bytes, already authenticated above, so a legit redelivery (identical
+  // body) shares it and still dedups — while a different signed body whose
+  // forged data.id/updated_at mimics a legitimate event's can no longer collide
+  // with (and thereby suppress) that event. Fall back to the signature alone
+  // only if the resource id is missing (shouldn't happen — JSON:API requires
+  // `id`).
   const resourceId = payload.data?.id ?? "";
   const updatedAt = (payload.data?.attributes as { updated_at?: string } | undefined)?.updated_at ?? "";
-  const eventId = resourceId
-    ? `${eventName}:${resourceId}:${updatedAt}`
-    : (signature ?? "").trim().toLowerCase();
+  const sig = (signature ?? "").trim().toLowerCase();
+  const eventId = resourceId ? `${eventName}:${resourceId}:${updatedAt}:${sig}` : sig;
 
   // 3. Idempotency.
   let recorded: "fresh" | "duplicate";

@@ -311,6 +311,25 @@ Deno.test("replay: identical event delivered twice → processed once (composite
 });
 
 // ===========================================================================
+// §A-09 — the verified X-Signature discriminates the idempotency key
+// ===========================================================================
+Deno.test("A-09: same eventName/resourceId/updatedAt but DIFFERENT bodies → no collision, both process", async () => {
+  const store = new InMemoryWebhookStore();
+  // Two validly-signed deliveries that share the pre-A-09 composite key
+  // (subscription_created:ls_1:<same updated_at>) but differ in body — so
+  // their signatures differ. Pre-A-09 the second was wrongly deduped; a forger
+  // could suppress a legit event by front-running its key.
+  const r1 = await deliver(store, "subscription_created", subPayload({ user_email: "first@example.com" }));
+  assertEquals(r1.body, "ok");
+  const r2 = await deliver(store, "subscription_created", subPayload({ user_email: "second@example.com" }));
+  assertEquals(r2.status, 200);
+  assertEquals(r2.body, "ok"); // NOT "ok (duplicate)"
+  // The second (equal-timestamp, not stale) event applied.
+  assertEquals(store.sub("ls_1")!.email_normalized, "second@example.com");
+  assertEquals(store.events.size, 2); // two distinct ledger keys
+});
+
+// ===========================================================================
 // §2b — buyer email mirrored to email_normalized (human identification)
 // ===========================================================================
 Deno.test("subscription_created mirrors user_email → email_normalized (lowercased+trimmed)", async () => {
