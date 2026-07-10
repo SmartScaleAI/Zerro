@@ -237,9 +237,14 @@ enum WorkingDirectory {
             // M5: a working dir holding a paid-block recording (Continue-after-pay)
             // carries the pending-paid marker. Spare it so the recording survives
             // a quit during checkout — the restore path / an intentional dismiss
-            // is the only thing that removes it. Cheap best-effort file probe;
-            // genuinely orphaned `zerro-work-` dirs (no marker) are still reclaimed.
-            if containsPendingPaidMarker(entry) { continue }
+            // is the only thing that removes it. F-16: only a FRESH marker
+            // spares the dir. An orphaned marker — the UserDefaults pointer
+            // lost without the marker's delete (a corrupt pointer `clear()`
+            // couldn't decode, a defaults reset) — used to shield its
+            // directory from EVERY future sweep, so stale paid-block dirs
+            // accumulated forever. Genuinely orphaned `zerro-work-` dirs (no
+            // marker) are still reclaimed immediately.
+            if hasFreshPendingPaidMarker(entry) { continue }
             do {
                 try fm.removeItem(at: entry)
                 removed += 1
@@ -265,4 +270,37 @@ enum WorkingDirectory {
         let marker = dir.appendingPathComponent(pendingPaidMarkerName)
         return FileManager.default.fileExists(atPath: marker.path)
     }
+
+    /// F-16 — whether `dir` holds a pending-paid marker FRESH enough to spare
+    /// the directory from the sweep. Staleness reuses
+    /// `PendingPaidGenerationStore.maxAge` — the same bar the launch restore
+    /// applies to the `UserDefaults` pointer — read from the marker's own
+    /// `createdAt` (the marker body is a copy of the pending record). A marker
+    /// that can't be read or decoded is treated as STALE: it's garbage no
+    /// restore path can use (restore reads the pointer, never the marker), and
+    /// the sweep errs toward reclaiming. The launch restore runs BEFORE the
+    /// sweep and clears/discards anything it can't resume, so a live held
+    /// recording is always freshly stamped when the sweep sees it.
+    nonisolated static func hasFreshPendingPaidMarker(_ dir: URL, now: Date = Date()) -> Bool {
+        let marker = dir.appendingPathComponent(pendingPaidMarkerName)
+        guard let data = try? Data(contentsOf: marker),
+              let stamp = try? pendingPaidMarkerDecoder.decode(PendingPaidMarkerStamp.self, from: data)
+        else { return false }
+        return now.timeIntervalSince(stamp.createdAt) <= PendingPaidGenerationStore.maxAge
+    }
+
+    /// Minimal decode of the pending-paid marker: just the freshness stamp.
+    /// `nonisolated` so the synthesized `Decodable` conformance is callable
+    /// from the nonisolated sweep path.
+    private nonisolated struct PendingPaidMarkerStamp: Decodable {
+        let createdAt: Date
+    }
+
+    /// Dates in the marker are epoch seconds — the
+    /// `PendingPaidGenerationStore` encoder contract.
+    nonisolated private static let pendingPaidMarkerDecoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .secondsSince1970
+        return d
+    }()
 }

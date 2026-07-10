@@ -128,6 +128,50 @@ final class PendingPaidGenerationTests: XCTestCase {
                        "an unmarked orphan working dir must still be reclaimed")
     }
 
+    /// F-16: a marker whose record has outlived any plausible checkout no
+    /// longer shields its directory — the sweep reclaims it instead of sparing
+    /// it on every launch forever (the orphaned-marker leak: a pointer lost
+    /// without the marker's delete).
+    func testSweepReclaimsStaleMarkedDir() throws {
+        let dir = try makeWorkingDir()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        let old = Date().addingTimeInterval(-(PendingPaidGenerationStore.maxAge + 60))
+        store.save(makePending(dir: dir, createdAt: old))
+        XCTAssertTrue(WorkingDirectory.containsPendingPaidMarker(dir))
+        XCTAssertFalse(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path),
+                       "a stale paid-block working dir must be reclaimed, not spared forever")
+    }
+
+    /// F-16: an unreadable/garbage marker (which no restore path can use —
+    /// restore reads the UserDefaults pointer, never the marker) reads as
+    /// stale, so the sweep errs toward reclaiming.
+    func testSweepReclaimsDirWithGarbageMarker() throws {
+        let dir = try makeWorkingDir()
+        try Data("not json".utf8).write(to: markerURL(dir))
+        XCTAssertFalse(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
+
+    /// F-16 guard-rail: a freshly-saved marker still spares its dir — the
+    /// staleness gate must not weaken the quit-during-checkout protection.
+    func testFreshMarkerStillSparesDir() throws {
+        let dir = try makeWorkingDir()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        store.save(makePending(dir: dir))
+        XCTAssertTrue(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path))
+    }
+
     // MARK: - Manifest round-trip + reconstruction
 
     func testManifestRoundTripReconstructsRecordingWithInjectedKey() throws {

@@ -99,8 +99,12 @@ final class PendingPaidGenerationStore {
 
     /// Records older than this are treated as orphaned — no real checkout takes
     /// a week. A restore that finds a record this old clears it and falls back
-    /// to idle rather than re-surfacing an ancient recording.
-    static let maxAge: TimeInterval = 7 * 24 * 60 * 60
+    /// to idle rather than re-surfacing an ancient recording. The same bar
+    /// governs the marker file's sweep protection (F-16,
+    /// `WorkingDirectory.hasFreshPendingPaidMarker`), so the pointer and the
+    /// dir it shields age out together. `nonisolated`: read from the
+    /// nonisolated sweep path (a plain immutable constant).
+    nonisolated static let maxAge: TimeInterval = 7 * 24 * 60 * 60
 
     private let defaults: UserDefaults
     private static let key = "pending_paid_generation_v1"
