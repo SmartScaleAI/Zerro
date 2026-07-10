@@ -755,7 +755,14 @@ final class AppState {
 
     /// Combined confidence below this is "low" → flagged amber on the review
     /// card's target row (the one the user most needs to check before approving).
-    static let devLowConfidenceThreshold = 0.45
+    /// Also the F-10 hint gate: an anchor whose CLIENT confidence is below this
+    /// ships a SOFTENED "may have been referring to" prompt hint instead of the
+    /// definitive "pointed here" (see `anchorHint`), so a shaky dwell can't
+    /// assert a false certainty to the model. One threshold on purpose — the
+    /// card's amber flag and the prompt's hedged hint always agree on what
+    /// "low confidence" means. `nonisolated`: read by the nonisolated
+    /// `writeAnchorFrames` path (a plain immutable Double).
+    nonisolated static let devLowConfidenceThreshold = 0.45
 
     /// One shared coordinator (and its single runner) so the cap-1 dispatch
     /// guard spans the app, not one call.
@@ -3889,8 +3896,12 @@ final class AppState {
             guard let b64 = a.markedJPEGBase64, let data = Data(base64Encoded: b64) else { continue }
             let url = dir.appendingPathComponent("anchor-\(a.refIndex).jpg")
             guard (try? data.write(to: url, options: .atomic)) != nil else { continue }
-            let nearby = a.ocrStrings.prefix(8).joined(separator: ", ")
-            let hint = "DEIXIS REFERENCE \(a.refIndex): the developer pointed here while saying \"\(a.candidate.phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+            let hint = anchorHint(
+                refIndex: a.refIndex,
+                phrase: a.candidate.phrase,
+                ocrStrings: a.ocrStrings,
+                clientConfidence: a.clientConfidence
+            )
             frames.append(ExtractedFrame(
                 url: url,
                 timestamp: CMTime(seconds: baseSeconds + 1 + Double(a.refIndex), preferredTimescale: 600),
@@ -3899,6 +3910,27 @@ final class AppState {
             ))
         }
         return frames
+    }
+
+    /// The `DEIXIS REFERENCE` hint attached to one anchor frame, gated on the
+    /// anchor's CLIENT confidence (F-10). At or above
+    /// `devLowConfidenceThreshold` the hint is the definitive "pointed here"
+    /// phrasing, byte-identical to before the gate. Below it — a loose dwell,
+    /// a last-known position, empty space — the phrasing is HEDGED ("may have
+    /// been referring near here", "best guess") so a shaky anchor doesn't
+    /// assert a false certainty the model would then anchor its edit on. Pure
+    /// + `nonisolated`, so the gate is unit-testable without a recording.
+    nonisolated static func anchorHint(
+        refIndex: Int,
+        phrase: String,
+        ocrStrings: [String],
+        clientConfidence: Double
+    ) -> String {
+        let nearby = ocrStrings.prefix(8).joined(separator: ", ")
+        guard clientConfidence < devLowConfidenceThreshold else {
+            return "DEIXIS REFERENCE \(refIndex): the developer pointed here while saying \"\(phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+        }
+        return "DEIXIS REFERENCE \(refIndex): the developer MAY have been referring near here while saying \"\(phrase)\" — this anchor is low-confidence, so treat it as a hint, not a certainty. The crosshair marks the best guess. Nearby on-screen text: \(nearby)"
     }
 
     private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
