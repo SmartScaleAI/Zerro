@@ -67,7 +67,11 @@ enum ArtifactParser {
     /// `scrubFenceTokens` mirror in `eval-models.mjs`.
     private nonisolated static let openFenceToken =
         /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/
-    private nonisolated static let openFenceStraggler = /<<<ZERRO_ARTIFACT[^\n]*/
+    /// J-05: `[^>\n]*` stops at the first chevron and `(?:>+|$)` then consumes
+    /// the closing chevron run — a malformed-but-chevron'd token is removed
+    /// WITHOUT eating the real content after its `>>>`; a chevron-less
+    /// truncated token still matches to end of line via the `$` alternative.
+    private nonisolated static let openFenceStraggler = /<<<ZERRO_ARTIFACT[^>\n]*(?:>+|$)/
     private nonisolated static let closeFenceToken = /<<<END_ZERRO_ARTIFACT>*/
 
     /// Contract cap on the model-written title; over-length warns only.

@@ -476,7 +476,10 @@ const ARTIFACT_OPEN_RECOVERY = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^
 // generation leaving one open fence and no close) must never show the raw wire
 // delimiter; this strips it from the fallback text while keeping real spillover.
 const OPEN_FENCE_TOKEN_RE = /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/g;
-const OPEN_FENCE_STRAGGLER_RE = /<<<ZERRO_ARTIFACT[^\n]*/g;
+// J-05: [^>\n]* stops at the first chevron, (?:>+|$) consumes the closing
+// chevron run — malformed-but-chevron'd tokens drop without eating the real
+// content after `>>>`; chevron-less truncated tokens still scrub to EOL via $.
+const OPEN_FENCE_STRAGGLER_RE = /<<<ZERRO_ARTIFACT[^>\n]*(?:>+|$)/g;
 const CLOSE_FENCE_TOKEN_RE = /<<<END_ZERRO_ARTIFACT>*/g;
 function scrubFenceTokens(text) {
   return text
