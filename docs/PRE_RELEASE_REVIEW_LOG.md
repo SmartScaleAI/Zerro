@@ -119,7 +119,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **E-04** Reliability · 🟡 — crash-restored Dev-Mode paid-block resumes via non-dev path (degrades; no double-charge).
 - **E-05** Payments/UX · 🟡 — hardcoded paywall price literals can drift from LS.
 - **E-06** Reliability · 🟡 — paywall CTAs render enabled when checkout URL unresolved.
-- **E-07** UX · 🟡 — trial credit line not network-refreshed on activation (acceptable).
+- **E-07** UX · ✅ accepted (2026-07-10) — trial credit line not network-refreshed on activation. Display-only staleness, bounded: the server enforces the trial cap on every generation regardless of what the client shows, and multi-device trial drift is a non-issue at this stage. No code change; revisit only if multi-device trial use becomes real.
 - **E-08** Privacy · 🟡 — non-checkout `zerro://` URLs logged at `.public` + flow into diagnostics blob (confirmed I). Log host/scheme only.
 - **E-09** Code quality · 🟡 — `displayedCreditsRemaining` unclamped (latent; render clamps).
 - **E-10** Code quality · 🟡 — money-path invariants under-tested (idempotency-key stability, fail-safe dispatch).
