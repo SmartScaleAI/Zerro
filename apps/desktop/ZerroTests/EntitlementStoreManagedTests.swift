@@ -161,6 +161,43 @@ final class EntitlementStoreManagedTests: XCTestCase {
         XCTAssertFalse(trial.routesThroughManagedProxy)     // → direct OpenAI
     }
 
+    // MARK: - Displayed credits clamp (E-09)
+
+    /// Builds a Managed store whose `/entitlement` refresh returns the given
+    /// balance, so the displayed-credits read can be checked against it.
+    private func makeManagedStore(serverCreditsRemaining: Int) async -> EntitlementStore {
+        let keySlot = InMemoryKeychainSlot("KEY")
+        let transport = StubManagedTransport()
+        transport.enqueue(ManagedFixtures.sessionJSON(token: "TOK"), status: 200)
+        transport.enqueue(
+            ManagedFixtures.entitlementJSON(status: "active", creditsRemaining: serverCreditsRemaining),
+            status: 200
+        )
+        let store = EntitlementStore(
+            licenseService: makeLicense(present: true),
+            sessionTokens: SessionTokenManager(licenseKeySlot: keySlot, transport: transport),
+            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.managed.rawValue),
+            defaults: .ephemeralPreview()
+        )
+        await store.refreshManagedEntitlement()
+        return store
+    }
+
+    /// A server snapshot that over-drained (negative `credits_remaining`) must
+    /// read as 0 — the clamp lives at the source (`displayedCreditsRemaining`),
+    /// so no consumer can ever see a raw negative.
+    func testNegativeManagedBalanceDisplaysAsZero() async {
+        let store = await makeManagedStore(serverCreditsRemaining: -7)
+        XCTAssertEqual(store.currentDisplayedCredits, 0,
+                       "a negative underlying balance must clamp to 0 at the source")
+    }
+
+    /// Guard-rail: the clamp must not touch a normal positive balance.
+    func testPositiveManagedBalanceDisplaysUnchanged() async {
+        let store = await makeManagedStore(serverCreditsRemaining: 42)
+        XCTAssertEqual(store.currentDisplayedCredits, 42)
+    }
+
     // MARK: - Conversion link (trial_grant_id → checkout custom_data)
 
     func testTrialGrantIdForCheckoutPassesThroughFromTrialLayer() async throws {
