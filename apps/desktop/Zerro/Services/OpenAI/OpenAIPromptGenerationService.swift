@@ -78,12 +78,17 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// both map to `.auth` (J-02): OpenAI returns 403 for rejected keys and
     /// permission/region denials, which previously fell through to `.server`
     /// and surfaced as a misleading transient-outage message. A 429 reaching
-    /// here means performWithRetry's single retry also got 429.
-    static func error(forStatus status: Int) -> PromptGenerationError? {
+    /// here is either quota exhaustion (`insufficient_quota` body, J-03 —
+    /// performWithRetry deliberately didn't retry it) or a rate limit that
+    /// outlived performWithRetry's single retry; `body` tells them apart.
+    static func error(forStatus status: Int, body: Data = Data()) -> PromptGenerationError? {
         switch status {
         case 200...299: return nil
         case 401, 403: return .auth
-        case 429: return .rateLimited
+        case 429:
+            return OpenAIClient.isQuotaExhausted429(status: status, body: body)
+                ? .quotaExhausted
+                : .rateLimited
         default: return .server(status: status)
         }
     }
@@ -124,7 +129,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             throw PromptGenerationError.network(underlying: error)
         }
 
-        if let statusError = Self.error(forStatus: response.statusCode) {
+        if let statusError = Self.error(forStatus: response.statusCode, body: data) {
             if case .server = statusError {
                 // Log the provider's error body `.private` for local debugging
                 // only — it must NOT ride into the typed error, which can reach

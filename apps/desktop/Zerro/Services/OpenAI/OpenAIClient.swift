@@ -69,7 +69,20 @@ enum OpenAIClient {
 
     // MARK: - Single-retry-on-429
 
-    /// Performs `request` via the shared session, with one retry on
+    /// Fallback wait before the single 429 retry when the response carries
+    /// no parseable `Retry-After`.
+    static let defaultRetryAfterSeconds: TimeInterval = 2.0
+
+    /// J-04 — upper bound on the honored `Retry-After`. The pill sits in
+    /// "generating" for this whole wait, so a provider sending
+    /// `Retry-After: 3600` must not wedge it for an hour; anything longer
+    /// than this is treated as "sustained rate-limiting" and the retry runs
+    /// (and surfaces `.rateLimited`) after the capped wait instead. All
+    /// three BYOK providers route their 429s through `performWithRetry`,
+    /// so this single bound covers them all.
+    static let maxRetryAfterSeconds: TimeInterval = 30
+
+    /// Performs `request` via `session`, with one retry on
     /// HTTP 429. Respects `Retry-After` (in seconds) if present,
     /// falls back to a 2-second wait. Returns the response on success
     /// AND on non-429 errors — interpretation (auth vs server vs
@@ -81,7 +94,17 @@ enum OpenAIClient {
     /// handles the rare burst case; persistent rate-limiting deserves
     /// a user-visible message (not a hidden backoff that makes the
     /// pill appear stuck).
-    static func performWithRetry(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    ///
+    /// J-03: a QUOTA-exhausted 429 (OpenAI `insufficient_quota`) is returned
+    /// immediately, without the sleep + retry — it's a billing state, not a
+    /// burst, so the retry can't succeed and would only delay the pill.
+    ///
+    /// `session` is injectable so tests can count requests through a
+    /// URLProtocol stub; production call sites use the shared default.
+    static func performWithRetry(
+        _ request: URLRequest,
+        session: URLSession = OpenAIClient.session
+    ) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             // URLSession should always return HTTPURLResponse for HTTP
@@ -93,8 +116,11 @@ enum OpenAIClient {
         if httpResponse.statusCode != 429 {
             return (data, httpResponse)
         }
+        if isQuotaExhausted429(status: httpResponse.statusCode, body: data) {
+            return (data, httpResponse)
+        }
 
-        let retryAfter = retryAfterSeconds(httpResponse) ?? 2.0
+        let retryAfter = boundedRetryDelay(retryAfterSeconds(httpResponse))
         try await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
 
         let (retryData, retryResponse) = try await session.data(for: request)
@@ -109,6 +135,59 @@ enum OpenAIClient {
             return nil
         }
         return TimeInterval(raw.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// J-04 — the actual pre-retry wait for a parsed `Retry-After` value:
+    /// the default when absent, bounded to `maxRetryAfterSeconds` above and
+    /// zero below (a malformed negative value must not reach the `UInt64`
+    /// nanosecond conversion). Pure so the clamp is unit-testable without a
+    /// stubbed response.
+    static func boundedRetryDelay(_ retryAfterSeconds: TimeInterval?) -> TimeInterval {
+        min(max(retryAfterSeconds ?? defaultRetryAfterSeconds, 0), maxRetryAfterSeconds)
+    }
+
+    // MARK: - Quota-exhausted 429 (J-03)
+
+    /// True iff a 429 response body is OpenAI's QUOTA/billing-exhausted error
+    /// — `error.code`/`error.type` == "insufficient_quota" — as opposed to a
+    /// transient rate-limit 429. Quota exhaustion won't clear in seconds, so
+    /// `performWithRetry` skips its retry and the services map it to the
+    /// dedicated `.quotaExhausted` error instead of the transient copy.
+    ///
+    /// OpenAI is the only provider detected here. Anthropic surfaces credit
+    /// exhaustion as a 400 `invalid_request_error` distinguished only by
+    /// message text, and Gemini folds daily-quota AND per-minute rate limits
+    /// into one 429 RESOURCE_EXHAUSTED shape — neither is a stable signal,
+    /// so both stay on the plain rate-limit path (their bodies simply never
+    /// match this check).
+    static func isQuotaExhausted429(status: Int, body: Data) -> Bool {
+        guard status == 429 else { return false }
+        guard let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: body),
+              let payload = envelope.error else {
+            return false
+        }
+        return payload.code == "insufficient_quota" || payload.type == "insufficient_quota"
+    }
+
+    /// The provider error envelope: `{"error": {"code": ..., "type": ...}}`.
+    /// Decoded leniently — Gemini sends a NUMERIC `code` through the same
+    /// shared plumbing, so a non-string field decodes to nil rather than
+    /// failing the whole envelope.
+    private struct ErrorEnvelope: Decodable {
+        let error: Payload?
+
+        struct Payload: Decodable {
+            let code: String?
+            let type: String?
+
+            private enum CodingKeys: String, CodingKey { case code, type }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = (try? container.decodeIfPresent(String.self, forKey: .code)) ?? nil
+                self.type = (try? container.decodeIfPresent(String.self, forKey: .type)) ?? nil
+            }
+        }
     }
 
     // MARK: - Key validation

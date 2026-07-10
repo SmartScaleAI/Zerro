@@ -92,6 +92,11 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
         case 401, 403:
             throw PromptGenerationError.auth
         case 429:
+            // J-03: Anthropic's 429 is always rate-limiting (`rate_limit_error`).
+            // Credit/quota exhaustion arrives as a 400 `invalid_request_error`
+            // distinguished only by message TEXT ("credit balance is too low"),
+            // which is too brittle to match — so quota stays undetected here
+            // and falls into the generic 400 → `.server` branch below.
             throw PromptGenerationError.rateLimited
         default:
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
