@@ -278,6 +278,15 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
     case artifactUnreadable
+    /// F-07 — the managed client's pre-upload size fuse tripped: the
+    /// recording's audio or encoded payload exceeds the server's `/generate`
+    /// input limit, so NOTHING was uploaded and nothing was charged
+    /// (`ManagedGenerationError.payloadTooLarge`). A real recording (3-minute
+    /// cap, bounded frames) can't produce this, so tripping it means the
+    /// pipeline mis-sized something — reported to the error tracker. NOT
+    /// retryable: the same payload fails identically; the copy points at a
+    /// shorter recording.
+    case recordingTooLarge
 
     // Phase E — Managed proxy failures
     /// Managed: the month's credits are spent and a recording WAS captured — the
@@ -350,7 +359,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .artifactUnreadable,
+             .artifactUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
              .responseTooLong,
@@ -422,6 +431,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response was too long to finish \u{2014} try a shorter recording."
         case .artifactUnreadable:
             return "Couldn\u{2019}t process the recording."
+        case .recordingTooLarge:
+            return "This recording is too large to send \u{2014} try a shorter recording."
         case .outOfCredits:
             return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
         case .outOfCreditsAtStart:
@@ -464,6 +475,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
         case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .recordingTooLarge:         return "Recording too large"
         case .outOfCredits:              return "Out of credits"
         case .outOfCreditsAtStart:       return "Out of credits"
         case .subscriptionInactive:      return "Subscription inactive"
@@ -527,6 +539,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
         case .artifactUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
+        case .recordingTooLarge:
+            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
         case .outOfCredits:
             return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
         case .outOfCreditsAtStart:
@@ -3054,6 +3068,9 @@ final class AppState {
             return .networkOffline
         case .artifactUnreadable:
             return .artifactUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -3107,6 +3124,9 @@ final class AppState {
             return .networkOffline
         case .artifactUnreadable:
             return .artifactUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -4463,6 +4483,9 @@ final class AppState {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
              .processingFailed, .artifactUnreadable,
+             // F-07: a real recording can't exceed the pre-upload fuse, so
+             // tripping it means the pipeline mis-sized something — triage it.
+             .recordingTooLarge,
              .providerError,
              .rateLimited, .providerUnavailable, .responseTooLong:
             return true
@@ -4508,7 +4531,9 @@ final class AppState {
             // Always HTTP 422 (the value-less case predates carrying a status).
             return (422, nil)
         case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .artifactUnreadable:
+             .network, .malformedResponse, .artifactUnreadable,
+             // Client-side pre-upload fuse (F-07) — no HTTP response exists.
+             .payloadTooLarge:
             return nil
         }
     }
@@ -4566,6 +4591,8 @@ final class AppState {
                 return "The generation service returned an unexpected response."
             case .artifactUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
+            case .payloadTooLarge:
+                return "The recording exceeds the upload size limit \u{2014} nothing was sent."
             }
         }
         return error.localizedDescription
