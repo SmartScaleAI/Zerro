@@ -197,7 +197,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **J-05** Reliability · 🟡 — fence-token scrubber deletes trailing real text on malformed open token.
 - **J-06** Code quality · 🟡 — Swift BYOK adapter response/error/truncation paths untested.
 - **J-07** Code quality · 🟡 (info) — interleave wire-rendering triplicated; no cross-language golden fixture; stale `.fuse_hidden*`.
-- **J-08** UX · ⚪ confirm — BYOK needs an OpenAI key for transcription regardless of chat provider; confirm communicated.
+- **J-08** UX · ✅ confirmed — BYOK transcription requirement (on-device model OR OpenAI key, independent of chat provider) is communicated at every surface: the `.apiKeyMissing`/`.localModelUnavailable` failure copy names both paths, the BYOK record-start pre-flight blocks with the same `.apiKeyMissing` copy (`EntitlementStore.preflightBlock`) so a keyless/model-less user never hits a generic error, and Settings states the prerequisites on both the OpenAI-key field ("powers cloud transcription. On-device transcription needs no key.") and the Transcription engine picker's caveat lines. Onboarding is trial-first (no key step), so no gap there. Docs-only.
 
 ### K — Web app, checkout & privacy-copy ✅ reviewed
 **Verdict:** Privacy policy strong; two launch-blockers fixed (K-01/K-02). No service-role secret to client; no exploitable XSS.
