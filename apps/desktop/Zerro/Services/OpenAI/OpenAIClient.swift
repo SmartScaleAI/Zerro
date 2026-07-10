@@ -69,6 +69,19 @@ enum OpenAIClient {
 
     // MARK: - Single-retry-on-429
 
+    /// Fallback wait before the single 429 retry when the response carries
+    /// no parseable `Retry-After`.
+    static let defaultRetryAfterSeconds: TimeInterval = 2.0
+
+    /// J-04 — upper bound on the honored `Retry-After`. The pill sits in
+    /// "generating" for this whole wait, so a provider sending
+    /// `Retry-After: 3600` must not wedge it for an hour; anything longer
+    /// than this is treated as "sustained rate-limiting" and the retry runs
+    /// (and surfaces `.rateLimited`) after the capped wait instead. All
+    /// three BYOK providers route their 429s through `performWithRetry`,
+    /// so this single bound covers them all.
+    static let maxRetryAfterSeconds: TimeInterval = 30
+
     /// Performs `request` via `session`, with one retry on
     /// HTTP 429. Respects `Retry-After` (in seconds) if present,
     /// falls back to a 2-second wait. Returns the response on success
@@ -107,7 +120,7 @@ enum OpenAIClient {
             return (data, httpResponse)
         }
 
-        let retryAfter = retryAfterSeconds(httpResponse) ?? 2.0
+        let retryAfter = boundedRetryDelay(retryAfterSeconds(httpResponse))
         try await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
 
         let (retryData, retryResponse) = try await session.data(for: request)
@@ -122,6 +135,15 @@ enum OpenAIClient {
             return nil
         }
         return TimeInterval(raw.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// J-04 — the actual pre-retry wait for a parsed `Retry-After` value:
+    /// the default when absent, bounded to `maxRetryAfterSeconds` above and
+    /// zero below (a malformed negative value must not reach the `UInt64`
+    /// nanosecond conversion). Pure so the clamp is unit-testable without a
+    /// stubbed response.
+    static func boundedRetryDelay(_ retryAfterSeconds: TimeInterval?) -> TimeInterval {
+        min(max(retryAfterSeconds ?? defaultRetryAfterSeconds, 0), maxRetryAfterSeconds)
     }
 
     // MARK: - Quota-exhausted 429 (J-03)
