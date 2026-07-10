@@ -130,19 +130,20 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **F-01** Privacy · ✅ fixed-in-code — Dev-Mode anchor crops + OCR hints now masked in lock-step (both managed + BYOK; fail-safe-ON default). App build.
 - **F-02** Privacy · ⚪ confirm — best-effort redaction scope / audio-not-redacted = copy/consent. Fixes: H-05 (onboarding), H-08 (settings), K-02 (landing, ✅).
 - **F-03** Privacy · 🟡 — OCR-fail/no-text frame uploads raw; telemeter OCR-fail rate.
-- **F-04** Privacy · 🟡 (decision) — one redaction toggle for managed (third-party) + BYOK; consider a floor for the third-party path.
-- **F-05** Functionality/Cost · 🟡 — Dev Mode appends uncapped anchor frames past the 28-cap.
-- **F-06** Functionality · 🟡 — no-candidates fallback caps at 180 not 28.
-- **F-07** Reliability/Cost · 🟡 — no client-side payload/audio-byte cap pre-upload.
-- **F-08** Performance · 🟡 — no `autoreleasepool` around full-res decode loop (5K spike).
+- **F-04** Privacy · ✅ fixed-in-code (Phase 3, decision: floor) — redaction FORCED ON whenever generation routes through Zerro's servers (`AppState.effectiveRedactSecrets`: toggle OR `routesThroughManagedProxy`, nil → force on; evaluated at `startRecording`, superset-of-dispatch on purpose); the toggle only loosens BYOK. Settings toggle gains an "enforced on your plan" caption for Managed/trial. App build.
+- **F-05** Functionality/Cost · ✅ fixed-in-code (Phase 3) — anchor frames capped at `ProcessingConfig.maxAnchorFrames` (8; worst-case total 28+8=36), highest-confidence kept with original `refIndex` preserved, cap applied BEFORE the expensive per-reference work. App build.
+- **F-06** Functionality · ✅ fixed-in-code (Phase 3) — no-candidates fallback now honors `maxKeyframes` (28), widening its stride so the kept frames still span the recording; min-length guard unchanged. App build.
+- **F-07** Reliability/Cost · ✅ fixed-in-code (Phase 3) — client now mirrors the server's `/generate` input fuse (2 MB audio / 60 MB raw body, `ManagedBackend.maxAudioUploadBytes`/`.maxPayloadUploadBytes`, same strictly-greater-than boundary) across all three encode paths; over-cap fails LOCALLY with the distinct `.recordingTooLarge` pill before any upload or token mint. App build.
+- **F-08** Performance · ✅ fixed-in-code (Phase 3) — per-iteration `autoreleasepool` around each anchor's crop/OCR/redact/encode; the native frame is scoped per iteration (the decode itself is an `await`, outside the pool). Memory-lifetime only. App build.
 - **F-09** Reliability/Privacy · 🟡 — `abandon()` releases SCStream without `stopCapture()` → indicator clear non-deterministic on sleep→wake.
-- **F-10** Functionality · 🟡 — low-confidence deixis anchors ship a definitive "pointed here" hint.
+- **F-10** Functionality · ✅ fixed-in-code (Phase 3) — hint now gated on the anchor's client confidence vs `devLowConfidenceThreshold` (0.45, the review card's amber bar): below → hedged "MAY have been referring near here … best guess"; at/above → byte-identical definitive hint. App build.
 - **F-11** Reliability · 🟡 — auto-stop finalize-window revocation discards a completed 3-min recording (data loss). Gate on `state==.recording`.
 - **F-12** Privacy/Reliability · 🟡 — per-recording sidecars orphaned in temp until next launch sweep.
-- **F-13** Performance · 🟡 (info) — `encodeBody` holds whole payload + base64 (bounded ~20–30MB).
-- **F-14** Performance · 🟡 — `AudioActivity.hasSpeech` decodes whole audio (fine ≤3min).
-- **F-15** Performance/Reliability · 🟡 (info) — CursorTracker 30Hz on MainActor; nil free-space proceeds.
-- **F-16** Code quality · 🟡 (info) — anchor pairing by position; stale paid-block dir lingers.
+- **F-13** Performance · ✅ accepted (Phase 3) — `encodeBody` holds whole payload + base64, bounded ~20–30 MB for a ≤3-min tool.
+- **F-14** Performance · ✅ accepted (Phase 3) — `AudioActivity.hasSpeech` decodes the whole clip, fine ≤3 min.
+- **F-15** Performance/Reliability · ✅ split (Phase 3) — nil free-space read now REFUSES to record (fixed-in-code, `AppState.shouldRefuseRecordingForFreeSpace` — never "nil == OK"); the 30 Hz CursorTracker-on-MainActor poll accepted as info.
+- **F-16** Code quality · ✅ split (Phase 3) — stale paid-block working dir now reclaimed: the sweep spares only a FRESH `pending-paid.json` (marker `createdAt` vs the same 7-day `maxAge` the restore uses; garbage marker = stale) (fixed-in-code); position-based anchor pairing accepted as info.
+- *Phase 3 accepts (F-13, F-14, F-15/F-16 info sub-parts): accepted as bounded/info at current scale (≤3-min recordings, bounded frame counts); revisit if recordings get longer.*
 - **F-17** Code quality · 🟡 — test gaps (OCR-fail redaction, cap boundaries, teardown).
 
 ### G — Dev Mode / agent runner ✅ reviewed

@@ -343,13 +343,8 @@ struct ProcessingPipeline {
             // failed). Fall back to the legacy fixed-interval cadence so a
             // valid recording still yields frames rather than throwing here —
             // a genuinely unreadable asset still fails below when every
-            // full-res decode also fails. The absolute frame ceiling guards
-            // against an over-cap duration slipping past the clamp above.
-            let interval = Self.effectiveSampleInterval()
-            let maxFrames = ProcessingConfig.maxFramesPerMinute * 3
-            selectedSeconds = Array(
-                stride(from: interval, through: cappedDurationSeconds, by: interval).prefix(maxFrames)
-            )
+            // full-res decode also fails.
+            selectedSeconds = Self.fallbackSampleSeconds(cappedDurationSeconds: cappedDurationSeconds)
             Log.processing.error("frame analysis produced no candidates — falling back to fixed-interval sampling")
         }
 
@@ -441,6 +436,28 @@ struct ProcessingPipeline {
     }
 
     // MARK: - Helpers
+
+    /// The fixed-interval fallback times used when Pass-1 analysis yields no
+    /// usable candidates. Capped at `ProcessingConfig.maxKeyframes` — the SAME
+    /// hard ceiling the normal selector path enforces (F-06); the old
+    /// `maxFramesPerMinute * 3` bound alone allowed up to 180 frames, blowing
+    /// past the 28-frame cost/payload budget on a long no-candidates recording.
+    /// When the configured cadence would overshoot the cap, the stride WIDENS
+    /// so the kept frames still span the whole recording instead of clustering
+    /// in its opening minute. Returns [] for a duration too short to yield even
+    /// one time — the caller's empty-times guard then throws, preserving the
+    /// min-length behavior.
+    static func fallbackSampleSeconds(cappedDurationSeconds: Double) -> [Double] {
+        let maxFrames = Swift.min(ProcessingConfig.maxFramesPerMinute * 3, ProcessingConfig.maxKeyframes)
+        guard maxFrames > 0, cappedDurationSeconds > 0 else { return [] }
+        let interval = Swift.max(
+            effectiveSampleInterval(),
+            cappedDurationSeconds / Double(maxFrames)
+        )
+        return Array(
+            stride(from: interval, through: cappedDurationSeconds, by: interval).prefix(maxFrames)
+        )
+    }
 
     /// Resolves the configured `sampleIntervalSeconds` against the
     /// min/maxFramesPerMinute clamps. At today's 2.0s default this is
