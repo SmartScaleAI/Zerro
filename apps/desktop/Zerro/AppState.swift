@@ -1141,6 +1141,18 @@ final class AppState {
     /// `.running` session needs TCC grants a unit test doesn't have).
     @ObservationIgnored var captureLivenessProvider: (() -> Bool)?
 
+    /// G-07 test seam for the recovery-marker write-failure telemetry —
+    /// mirrors `captureLivenessProvider`. `nil` (production) routes to
+    /// `Analytics.capture` (inert in tests, so a spy is the only way to pin
+    /// fires-on-failure / silent-on-success).
+    @ObservationIgnored var devRecoveryTelemetry: ((String, [String: Any]) -> Void)?
+
+    /// Dedupes the G-07 write-failure event to at most one per dispatch — the
+    /// marker is persisted twice per run (the approve gate, then the
+    /// `.dispatching` phase), and a disk that failed the first write fails the
+    /// second identically. Reset at every dispatch start and teardown.
+    @ObservationIgnored private var devRecoveryMarkerFailureReported = false
+
     #if STAGING
     /// Staging-only amber "you're recording against Staging" frame around the
     /// display being recorded. Owned here (rather than in `ZerroApp` like the
@@ -1733,6 +1745,7 @@ final class AppState {
         devRecoveryStore.clear()
         pendingDevRecovery = nil
         devRecoveryRevertFailed = false
+        devRecoveryMarkerFailureReported = false
         devCancelInFlight = false
         devAgentStarted = false
         devDispatchStartTime = nil
@@ -3539,6 +3552,7 @@ final class AppState {
         devFailure = nil
         devCancelInFlight = false
         devAgentStarted = false
+        devRecoveryMarkerFailureReported = false
         // New dispatch → new generation token; any prior in-flight confirm/outcome
         // is now stale and will be dropped.
         devDispatchGeneration += 1
@@ -3635,7 +3649,19 @@ final class AppState {
             createdAt: Date(),
             agentName: recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName }
         )
-        devRecoveryStore.save(marker)
+        guard !devRecoveryStore.save(marker) else { return }
+        // G-07: the marker never landed, so THIS run is not crash-recoverable —
+        // a quit mid-edit would leave half-applied changes with no cross-launch
+        // Undo. The run itself continues (losing the marker only costs
+        // recoverability — the safe failure), but the failure must be
+        // observable beyond the store's .private device log: a bounded,
+        // metadata-only event (at most one per dispatch) carries the rate.
+        guard !devRecoveryMarkerFailureReported else { return }
+        devRecoveryMarkerFailureReported = true
+        let capture = devRecoveryTelemetry ?? { Analytics.capture($0, $1) }
+        capture("dev_recovery_marker_write_failed", [
+            "agent_id": recordingAgentID ?? "unknown",
+        ])
     }
 
     // MARK: - Dev Mode anchor resolution analytics

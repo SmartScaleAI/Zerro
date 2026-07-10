@@ -38,6 +38,7 @@ final class DevRecoveryTests: XCTestCase {
     override func tearDownWithError() throws {
         for url in repos + tempFiles + snapshotDirs { try? FileManager.default.removeItem(at: url) }
         repos = []; tempFiles = []; snapshotDirs = []
+        retainedPrefs = []
     }
 
     // MARK: - Marker round-trip
@@ -107,6 +108,76 @@ final class DevRecoveryTests: XCTestCase {
         let store = DevRecoveryStore(fileURL: makeTempFile())
         store.clear() // nothing saved
         XCTAssertNil(store.load())
+    }
+
+    // MARK: - G-07: a failed marker write is observable
+
+    func testSaveReportsFailureForUnwritableTarget() throws {
+        // An un-creatable target: the "parent directory" is a plain FILE, so
+        // ensureParentDirectoryExists (and the write) must fail.
+        let store = DevRecoveryStore(fileURL: makeUnwritableMarkerURL())
+        XCTAssertFalse(store.save(sampleMarker(projectPath: "/tmp/p")),
+                       "an unwritable target must REPORT the failed write, not swallow it")
+        // And the happy path reports success.
+        let good = DevRecoveryStore(fileURL: makeTempFile())
+        XCTAssertTrue(good.save(sampleMarker(projectPath: "/tmp/p")))
+    }
+
+    func testFailedMarkerWriteFiresTelemetryAtTheApproveGate() async throws {
+        let (app, events) = try makeReviewGateApp(
+            store: DevRecoveryStore(fileURL: makeUnwritableMarkerURL()))
+
+        let task = Task { await app.awaitReviewApproval(gen: 0, prompt: "do X") }
+        await settle { app.state == .reviewingPrompt }
+        app.approveReviewAndProceed()   // → persistDevRecoveryMarker → failed save
+        _ = await task.value
+
+        XCTAssertEqual(events.captured, ["dev_recovery_marker_write_failed"],
+                       "a failed marker write must fire the bounded telemetry event")
+        XCTAssertNil(app.devRecoveryStore.load(), "no marker landed — the run is not crash-recoverable")
+    }
+
+    func testSuccessfulMarkerWriteFiresNoTelemetry() async throws {
+        let (app, events) = try makeReviewGateApp(
+            store: DevRecoveryStore(fileURL: makeTempFile()))
+
+        let task = Task { await app.awaitReviewApproval(gen: 0, prompt: "do X") }
+        await settle { app.state == .reviewingPrompt }
+        app.approveReviewAndProceed()
+        _ = await task.value
+
+        XCTAssertTrue(events.captured.isEmpty, "a landed marker write must fire NO failure event")
+        XCTAssertNotNil(app.devRecoveryStore.load(), "the marker is on disk")
+    }
+
+    /// An AppState paused at the Ask Permission gate with a checkpoint + service
+    /// wired (so `approveReviewAndProceed` reaches the marker persist) and a
+    /// telemetry spy installed. Returns the spy box so tests read what fired.
+    private final class EventBox { var captured: [String] = [] }
+    private var retainedPrefs: [PreferencesStore] = []
+
+    private func makeReviewGateApp(store: DevRecoveryStore) throws -> (AppState, EventBox) {
+        let app = AppState()
+        let prefs = PreferencesStore(defaults: .ephemeralPreview())
+        prefs.devPermissionTier = .askPermission
+        retainedPrefs.append(prefs)   // `app.preferences` is weak
+        app.preferences = prefs
+        app.devRecoveryStore = store
+        app.devCheckpoint = GitCheckpoint(
+            baseSha: "abc123", stashSha: nil, diffBaseSha: nil,
+            untrackedSnapshotDir: nil, untrackedRelativePaths: [])
+        app.devCheckpointService = try GitCheckpointService(projectURL: makeBareDir())
+        let events = EventBox()
+        app.devRecoveryTelemetry = { name, _ in events.captured.append(name) }
+        return (app, events)
+    }
+
+    /// A marker path whose parent "directory" is a plain file → every save fails.
+    private func makeUnwritableMarkerURL() -> URL {
+        let blocker = makeTempFile()
+        try? Data("not a directory".utf8).write(to: blocker)
+        return blocker.appendingPathComponent("sub", isDirectory: true)
+            .appendingPathComponent("dev-recovery.json")
     }
 
     // MARK: - Validation matrix → OFFERED
