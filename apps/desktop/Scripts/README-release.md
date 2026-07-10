@@ -92,15 +92,18 @@ Artifacts land in `dist/` (gitignored): `dist/Zerro.dmg` and `dist/appcast.xml`.
 ## After the script finishes
 
 1. **Test the update path** on the previously shipped build before going live.
-2. **Publish** `Zerro.dmg` and `appcast.xml` to `getzerro.app` (via the site repo /
-   Vercel) so these URLs serve the new files:
-   - `https://getzerro.app/Zerro.dmg`
-   - `https://getzerro.app/appcast.xml`
+2. **Publish** `Zerro.dmg` and `appcast.xml` by upserting them into the public
+   Supabase Storage `downloads` bucket (see the upload steps in
+   `.github/workflows/release-app.yml`) so these URLs serve the new files:
+   - `https://getzerro.app/Zerro.dmg` (Vercel redirect to Storage)
+   - `https://getzerro.app/appcast.xml` (Vercel redirect to Storage)
 3. **Commit + tag:**
    ```bash
    git add -A
    git commit -m "Release 1.0.2 (build 3)"
-   git tag v1.0.2
+   git tag v1.0.2   # bookkeeping only — deliberately NOT app-v1.0.2, which
+                    # would trigger the CI release (release-app.yml) on top
+                    # of this manual one
    git push && git push --tags
    ```
 
@@ -130,7 +133,8 @@ exact offending file.
 
 ## Next: Phase 2 (GitHub Actions)
 
-Once a release goes out cleanly with this script, the same steps lift into a
-tag-triggered GitHub Actions workflow on a `macos-latest` runner. That needs the
-cert as a base64 `.p12` secret, the ASC API key as secrets, and the Sparkle
-private key as a secret. Ask and I'll write it.
+Phase 2 exists and is the normal release path:
+`.github/workflows/release-app.yml`, triggered by `app-v*` tags (created by
+`auto-release.yml` on an `apps/desktop/VERSION` bump, or manually via
+`Scripts/cut-release.sh`). This local script remains only for debugging the
+signing/notarization chain by hand.

@@ -1,8 +1,8 @@
 # Zerro — full site content
 
 > Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
-> instructions into a structured prompt for AI coding agents. Record it. Paste it.
-> Zerro in between.
+> instructions into exactly what you need — an agent prompt, a message, a snippet,
+> a document, or a clear answer. Record it. Paste it. Zerro in between.
 
 This file contains the full marketing-site content as Markdown, for AI tools that
 want deep ingestion. Source: https://getzerro.app
@@ -12,9 +12,11 @@ want deep ingestion. Source: https://getzerro.app
 ## What is Zerro?
 
 Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
-instructions into a structured prompt for AI coding agents. You frame a region of
-your screen, dictate what you want in plain language, and Zerro returns a Markdown
-prompt ready to paste into Cursor, Windsurf, v0, or any agent you already use.
+instructions into exactly what you need: an agent prompt, a ready-to-send message,
+a code or spreadsheet snippet, a written-up document, or a clear answer when you
+just want to understand something. You frame a region of your screen, dictate what
+you want in plain language, and Zerro returns ready-to-use text — paste it into
+Cursor, ChatGPT, Claude, or any tool that takes text, or send it to a person.
 
 Processing is local-first: your recording is prepared on your machine before the AI
 step turns it into a prompt. You can let Zerro handle the AI on the Managed plan —
@@ -23,26 +25,30 @@ provider — or bring your own OpenAI, Google, or
 Anthropic keys, stored in the macOS Keychain, so the request goes straight to the
 provider with no Zerro servers in the middle and no account required.
 
-Think of it as voice dictation for your codebase: instead of plain text, you get a
-structured prompt. There's no new app to learn; the whole flow runs from the menu bar.
+Think of it as voice dictation that can see your screen: instead of raw transcribed
+text, you get the artifact that fits what you asked for. There's no new app to
+learn; the whole flow runs from the menu bar.
 
 ---
 
 ## How it works — Record. Speak. Copy.
 
 1. **Select a region.** Hit the hotkey, drag to frame the part of your screen you
-   want the agent to see. Native macOS crosshair, no window switching.
+   want Zerro to see. Native macOS crosshair, no window switching.
 2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
    Point at things, change your mind, ramble. Zerro records up to 3 minutes.
 3. **Your Mac preps it, then AI.** The recording is prepared locally on your
    machine, with detected on-screen secrets masked. Then an AI call — in the
-   cloud on the Managed plan, or on your own key with BYOK — turns it into a
-   structured prompt.
-4. **Paste the prompt.** A Markdown prompt lands on your clipboard, ready to drop
-   into Cursor, Windsurf, v0, or wherever you ship from.
+   cloud on the Managed plan, or on your own key with BYOK — turns it into the
+   artifact you asked for.
+4. **Paste it anywhere.** The result lands on your clipboard — an agent prompt, a
+   ready-to-send message, a snippet, a document, or a plain-language answer —
+   ready to drop into Cursor, ChatGPT, Claude, or any tool that takes text, or
+   to send to a person.
 
-The prompt writes itself — you get a structured Markdown prompt with clear sections
-(such as Context, Current State, and Request) rather than a raw transcript.
+You get the artifact that fits what you asked for, not a raw transcript — agent
+prompts arrive as structured Markdown with clear sections (such as Context,
+Current State, and Request).
 
 ---
 
@@ -124,18 +130,36 @@ your installed version keeps working after that.
 
 **What is Zerro?**
 Zerro is a native macOS menu-bar app that records a region of your screen and your
-voice, then returns a structured Markdown prompt ready to paste into an AI coding
-agent like Cursor, Windsurf, or v0.
+voice, then returns exactly what you need: an agent prompt, a ready-to-send message,
+a code snippet, a written-up document, or simply a clear answer when you just want
+to understand something. Paste it into any AI tool, or send it to a person.
 
-**Does Zerro work with Cursor?**
-Yes. Zerro puts a structured Markdown prompt on your clipboard, so it works with
-Cursor, Windsurf, v0, or any tool that takes a text prompt. It isn't tied to a
-single agent.
+**What can Zerro create?**
+From a single recording, Zerro returns the artifact that fits what you asked for:
+an agent prompt to hand your AI coding agent, a ready-to-send message, an exact
+code or spreadsheet snippet, or a written-up document. It picks the right type from
+what you say, so you copy something that's ready to use, not raw transcribed text.
+And when you just want to understand something rather than produce an artifact,
+Zerro answers your question in plain language instead.
 
-**Can Zerro replace Wispr Flow?**
-They solve different problems. Wispr Flow is general voice dictation that types text
-for you. Zerro is purpose-built for coding agents: it captures your screen alongside
-your voice and returns a structured prompt, not plain dictated text.
+**Can Zerro just explain something or answer a question?**
+Yes. You don't have to be making an artifact. Point Zerro at a confusing screen, an
+error, a chart, or a contract clause, ask your question out loud, and it answers in
+plain language: no prompt, message, or document required. It's just as happy
+explaining what you're looking at as it is producing something to paste.
+
+**Which AI tools does Zerro work with?**
+Any of them. Zerro puts ready-to-use text on your clipboard, so it works with
+ChatGPT, Claude, Gemini, Cursor, Perplexity, or any tool that takes text. And when
+the artifact is a message or document, it's just as ready to send to a person. It
+isn't tied to a single app.
+
+**Do I need to be a developer to use Zerro?**
+No. If you can show your screen and say what you want, you can use Zerro. It's just
+as useful for drafting a message, grabbing a spreadsheet formula, or writing up
+notes as it is for coding. Plenty of people never touch a coding agent at all. They
+have Zerro turn a confusing screen into a plain-language document, draft a message,
+or pull out the exact snippet they need, no code involved.
 
 **How much does Zerro cost?**
 Everyone starts free with 30 credits — no card, no key, no time limit. After that,
