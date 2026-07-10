@@ -81,10 +81,52 @@ struct PendingPaidGeneration: Codable, Equatable {
     /// has outlived any plausible checkout (see `PendingPaidGenerationStore`).
     let createdAt: Date
 
+    // MARK: Dev Mode context (E-04)
+    //
+    // Optional so a pre-E-04 marker decodes with all three as nil → the
+    // resume runs the normal (non-dev) path, exactly as it did before these
+    // fields existed. Set iff the held recording was a Dev Mode recording;
+    // the presence of `devProjectPath` IS the dev-mode bit on restore
+    // (`recordingIsDevMode` is derived from it).
+
+    /// Absolute path of the project folder the agent runs in (`cwd`), or
+    /// `nil` for a normal recording. Restored into `recordingProjectURL`.
+    let devProjectPath: String?
+    /// The agent registry id the recording dispatches to (`recordingAgentID`).
+    let devAgentID: String?
+    /// The `--model` override for the agent run (`recordingAgentModelID`);
+    /// nil ⇒ the agent's own default.
+    let devAgentModelID: String?
+
+    init(
+        workingDirectoryName: String,
+        idempotencyKey: String,
+        modelID: String,
+        reason: PaidBlockReason,
+        createdAt: Date,
+        devProjectPath: String? = nil,
+        devAgentID: String? = nil,
+        devAgentModelID: String? = nil
+    ) {
+        self.workingDirectoryName = workingDirectoryName
+        self.idempotencyKey = idempotencyKey
+        self.modelID = modelID
+        self.reason = reason
+        self.createdAt = createdAt
+        self.devProjectPath = devProjectPath
+        self.devAgentID = devAgentID
+        self.devAgentModelID = devAgentModelID
+    }
+
     /// The working directory URL resolved against the CURRENT temp dir.
     var workingDirectoryURL: URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(workingDirectoryName, isDirectory: true)
+    }
+
+    /// The Dev-Mode project folder as a URL, or nil for a normal recording.
+    var devProjectURL: URL? {
+        devProjectPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 }
 

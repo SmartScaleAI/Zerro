@@ -4382,7 +4382,13 @@ final class AppState {
             idempotencyKey: processed.idempotencyKey,
             modelID: model,
             reason: paidReason,
-            createdAt: Date()
+            createdAt: Date(),
+            // E-04: carry the Dev-Mode context so a crash-restored resume
+            // re-runs the dev path (dev prompt + agent dispatch) instead of
+            // degrading to the clipboard flow. All nil for a normal recording.
+            devProjectPath: recordingIsDevMode ? recordingProjectURL?.path : nil,
+            devAgentID: recordingIsDevMode ? recordingAgentID : nil,
+            devAgentModelID: recordingIsDevMode ? recordingAgentModelID : nil
         )
         pendingPaidStore.save(pending)
         Log.billing.notice("paid block held for resume (reason=\(String(describing: paidReason), privacy: .public))")
@@ -4438,6 +4444,12 @@ final class AppState {
                     workingDirectory: pending.workingDirectoryURL,
                     idempotencyKey: pending.idempotencyKey
                 )
+                // E-04: with nothing in memory, the persisted pointer is the
+                // only carrier of the Dev-Mode context — reapply it so the
+                // resumed generation keeps the dev path.
+                if processed != nil {
+                    self.restoreDevContext(from: pending)
+                }
             } else {
                 processed = nil
             }
@@ -4503,9 +4515,23 @@ final class AppState {
         }
         processedRecording = processed
         recordingModelID = pending.modelID
+        restoreDevContext(from: pending)
         state = .failed(reason: pending.reason.failureReason)
         Log.billing.notice("restore: held paid recording restored — pill back with Continue")
         return true
+    }
+
+    /// E-04: re-applies a held recording's Dev-Mode context (project folder,
+    /// agent, agent model) so a resumed generation runs the SAME dev path the
+    /// blocked one did — the dev prompt mode, the managed 2-call dev flow, and
+    /// the agent dispatch tail. A pre-E-04 record or a normal recording carries
+    /// no dev fields → no-op, so the non-dev resume stays byte-identical.
+    private func restoreDevContext(from pending: PendingPaidGeneration) {
+        guard let projectURL = pending.devProjectURL else { return }
+        recordingIsDevMode = true
+        recordingProjectURL = projectURL
+        recordingAgentID = pending.devAgentID
+        recordingAgentModelID = pending.devAgentModelID
     }
 
     /// Below this many non-whitespace characters, the transcript is
