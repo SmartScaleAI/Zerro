@@ -194,6 +194,50 @@ final class OnboardingState {
         !hasCompletedOnboarding || needsConsent
     }
 
+    /// Enter re-consent mode: pin the window to the consent step and mark the
+    /// session as reconsenting, so the consent accept DISMISSES (see
+    /// `OnboardingConsentStep.agree`) instead of advancing a completed user
+    /// into the rest of the flow. `init` only catches the stale-terms case at
+    /// launch; the record-attempt gate calls this (H-06) because a prior
+    /// permission jump may have moved `currentStep` off `.consent`, and
+    /// `isReconsenting` is private(set).
+    func beginReconsent() {
+        isReconsenting = true
+        currentStep = .consent
+    }
+
+    // MARK: - Record-attempt gate (H-06)
+
+    /// What a record attempt owes before capture can start, in priority
+    /// order. Pure and static so unit tests pin the ORDER itself: an
+    /// outstanding re-consent must be satisfied BEFORE the permission gate
+    /// can engage. If permissions won while consent was owed, the permission
+    /// flow's tail ran `completeOnboarding()` but never `recordConsent()`,
+    /// so `needsConsent` stayed true and every record attempt re-hijacked
+    /// the window — a re-onboarding loop (H-06).
+    enum RecordGateAction: Equatable {
+        /// First run — onboarding never finished; open the window as-is.
+        case openOnboarding
+        /// Completed user owes fresh consent — pin consent in reconsent mode.
+        case reconsent
+        /// Completed and consented, but a gating permission was revoked.
+        case requestPermissions
+        /// Nothing owed — fall through to the entitlement gate.
+        case proceed
+    }
+
+    nonisolated static func recordGateAction(
+        hasCompletedOnboarding: Bool,
+        needsConsent: Bool,
+        screenGranted: Bool,
+        micGranted: Bool
+    ) -> RecordGateAction {
+        if !hasCompletedOnboarding { return .openOnboarding }
+        if needsConsent { return .reconsent }
+        if !screenGranted || !micGranted { return .requestPermissions }
+        return .proceed
+    }
+
     /// Persist the clickwrap consent record. The affirmative button press is
     /// the consent action; this is the only writer of these keys.
     func recordConsent() {
