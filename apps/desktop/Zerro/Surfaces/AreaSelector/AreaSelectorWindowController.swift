@@ -1432,16 +1432,31 @@ final class AreaSelectorWindowController {
     /// A miss notes the port (so a later pick learns it) and NEVER clears a set
     /// folder. Lives here (not in `BrowserURLReader`) because it mutates app
     /// state/preferences; the live I/O is injected so tests never touch `lsof`.
+    ///
+    /// G-06: every candidate is VALIDATED before adoption (exists + directory +
+    /// `.git`) — a learned cache entry can point at a folder that was deleted or
+    /// moved since it was taught, and silently adopting it would hand Dev Mode a
+    /// phantom project. An invalid candidate is skipped (logged, folder left for
+    /// manual selection); `validateFolder` is injected so the pure tests never
+    /// touch the filesystem.
     @MainActor
     @discardableResult
     static func applyLocalhostAutoMatch(
         url: String?,
         liveFolderForPort: (Int) -> URL?,
         state: AreaSelectorState,
-        preferences: PreferencesStore
+        preferences: PreferencesStore,
+        validateFolder: (URL) -> Bool = { LocalhostPortResolver.isValidProjectFolder($0) }
     ) -> LocalhostAutoMatchOutcome {
-        // Live-first, then the learned cache.
-        let folderForPort: (Int) -> URL? = { liveFolderForPort($0) ?? preferences.projectURL(forPort: $0) }
+        // Live-first, then the learned cache — adopting only a VALIDATED folder.
+        let folderForPort: (Int) -> URL? = { port in
+            for candidate in [liveFolderForPort(port), preferences.projectURL(forPort: port)] {
+                guard let candidate else { continue }
+                if validateFolder(candidate) { return candidate }
+                Log.dev.notice("Auto-match rejected a stale project folder for port \(port, privacy: .public): \(candidate.path, privacy: .private) (missing, not a directory, or no .git)")
+            }
+            return nil
+        }
         switch BrowserURLReader.resolveFolder(forURL: url, folderForPort: folderForPort) {
         case .autoFill(let folder, let port):
             state.setAutoMatchedProject(folder, port: port)
