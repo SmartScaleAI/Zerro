@@ -5,9 +5,10 @@
 /**
  * Direct download URL for the signed/notarized Zerro macOS DMG.
  *
- * Public-facing, stable link. It is redirected (302) to GitHub's "latest release"
- * asset via the `/Zerro.dmg` rewrite in next.config.ts, so this URL never has to
- * change across releases — and any existing links to it keep working.
+ * Public-facing, stable link. It is redirected (307, `permanent: false`) to the
+ * public Supabase Storage `downloads/Zerro.dmg` object — overwritten by CI on
+ * each release — via the `/Zerro.dmg` redirect in next.config.ts, so this URL
+ * never has to change across releases and any existing links to it keep working.
  */
 export const DOWNLOAD_URL = "https://getzerro.app/Zerro.dmg";
 
