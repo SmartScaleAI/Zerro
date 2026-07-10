@@ -93,4 +93,21 @@ final class DevAnchorRedactionTests: XCTestCase {
         XCTAssertFalse(on.ocr.map(\.text).joined().contains("[REDACTED]"))
         XCTAssertTrue(on.ocr.map(\.text).joined(separator: " ").localizedCaseInsensitiveContains("started"))
     }
+
+    /// F-17 — the OCR-FAIL path: when the recognition pass hands `redactCrop`
+    /// an EMPTY hint array (Vision found nothing / failed), the crop PIXELS
+    /// must still be boxed — the pixel pass runs its own full-crop detection
+    /// and does not derive from the hint strings. Guards against a refactor
+    /// that short-circuits redaction on an empty `ocr` array.
+    func testOcrFailStillBoxesTheCropPixels() {
+        let crop = renderCrop("Card: \(secret)")
+        // Vacuous-pass guard: the secret must be legible on the raw crop.
+        XCTAssertTrue(ocrJoined(crop).contains(secret), "OCR did not read the secret off the raw crop")
+
+        let on = DevAnchorPipeline.redactCrop(crop, ocr: [], redact: true)
+        XCTAssertTrue(on.ocr.isEmpty, "no hints in → no hints out")
+        let reread = ocrJoined(on.image)
+        XCTAssertFalse(reread.contains(secret),
+                       "empty OCR hints must not bypass the pixel box pass; still legible: \(reread)")
+    }
 }
