@@ -219,7 +219,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **L-04** Reliability · 🟡 — manual backend deploy, no CI gate, ordering-sensitive, no rollback (with A-02).
 - **L-05** Reliability · 🟡 — deploy runbook lists 5 of 9 edge functions (drift).
 - **L-06** Reliability · 🟡 — `cut-release.sh` emits `v*` tags the workflow no longer triggers on.
-- **L-07** Distribution/Reliability · 🟡 — mutable single `Zerro.dmg` URL → no retention + release-window signature race. Versioned object name.
+- **L-07** Distribution/Reliability · ✅ fixed — release-app.yml uploads each release as the permanent, immutable `downloads/Zerro-<build>.dmg` (the only URL the appcast references; a guard fails the release if any appcast item points at the mutable `Zerro.dmg`, which is now marketing-only), closing the retention gap + release-window signature race. Verified intact 2026-07-10.
 - **L-08** Code quality · 🟡 — stale release docs (tags, workflow filename, two-repo topology). *(Also: the notarize step's error-handler fetches a STALE prior submission log on a submit-403, masking the real error — fix to show the real failure.)*
 - **L-09** Distribution · ⏳ owner-verify — shipped `SUPublicEDKey` (`IV0J9TIWJpe/…`, confirmed 32-byte Ed25519) ↔ CI `SPARKLE_PRIVATE_KEY` must be a pair or auto-update silently breaks for all users. Verify via staging "Check for Updates" (definitive) or `generate_keys -p` vs Info.plist. Owner/manual — needs the private key + a build.
 
