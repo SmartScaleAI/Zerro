@@ -97,7 +97,7 @@ accept as immediate post-launch.**
 | A-13 | Optional JWT `jti`/iat-sanity anti-replay. |
 | B-06 | Report missing usage as null (not `?? 0`) so `fallbackCredits` fires. |
 | C-09 | Make `incrementCodeAttempts` atomic. |
-| D-05 | Re-check the 4 unused indexes before dropping. |
+| D-05 | Re-check the 4 unused indexes before dropping. *Rechecked 2026-07 — deferred, NO drop: every public table is still near-zero scale (0–143 rows), so `idx_scan` counts aren't meaningful (Postgres seq-scans tiny tables regardless of indexes). Indexes retained for scale; re-evaluate once production tables carry real row counts.* |
 | K-05 | Clamp the affiliate beacon `aff` value (length/charset). |
 | K-07 | Fix the `/Zerro.dmg` redirect doc comment. |
 | L-06 | `cut-release.sh` should emit `app-v*` tags (not the no-op `v*`). |
