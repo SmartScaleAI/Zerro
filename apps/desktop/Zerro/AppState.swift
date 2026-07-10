@@ -651,7 +651,10 @@ final class AppState {
     /// device / output mode) and handed to the processing pipeline in
     /// `runProcessing`, so a Settings change applies to the next recording.
     /// Defaults to the privacy-on config default for call sites that don't pass
-    /// one (tests, menu-bar paths).
+    /// one (tests, menu-bar paths). F-04: this is the EFFECTIVE flag — the
+    /// user's toggle FLOORED to ON whenever generation routes through Zerro's
+    /// servers (see `effectiveRedactSecrets`), so the toggle can only loosen
+    /// the BYOK path, never a third-party upload.
     var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
 
     /// Multi-model: the generation model for THIS recording — the capture
@@ -1297,6 +1300,27 @@ final class AppState {
         (freeBytes ?? 0) < minimumFreeBytesToRecord
     }
 
+    /// F-04 — the EFFECTIVE per-recording redaction flag: the user's Settings
+    /// toggle, FLOORED to ON whenever generation routes through Zerro's
+    /// servers (Managed subscription, or a trial holding a live token — the
+    /// same `EntitlementStore.routesThroughManagedProxy` signal the generation
+    /// routing reads). Frames that egress to a third party are always
+    /// redacted; the toggle can only loosen the BYOK path, where the user's
+    /// own key talks straight to their own provider. Evaluated at
+    /// `startRecording` time because the frames are baked during processing,
+    /// before the routing branch runs. Fail-safe: an unavailable routing
+    /// signal (`nil` — no entitlement store wired) errs toward redaction.
+    /// (`routesThroughManagedProxy` is deliberately a SUPERSET of the actual
+    /// dispatch decision — a self-funding trial user whose generation ends up
+    /// running locally still gets the floor. Over-redaction is the safe
+    /// direction.) Pure, so the truth table is unit-testable.
+    nonisolated static func effectiveRedactSecrets(
+        toggle: Bool,
+        routesThroughManagedProxy: Bool?
+    ) -> Bool {
+        toggle || (routesThroughManagedProxy ?? true)
+    }
+
     /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
     /// uses it to start/stop the mid-session TCC monitor around an active
     /// recording so a revocation in System Settings turns into a clean
@@ -1435,7 +1459,14 @@ final class AppState {
         pendingPaidStore.clear()
         isResultExpanded = false
         activeSelection = selection
-        recordingRedactSecrets = redactSecrets
+        // F-04: floor the toggle to ON when this recording's frames will
+        // egress to Zerro's servers (Managed/trial) — the toggle only governs
+        // the BYOK path. Evaluated here because the frames are redacted at
+        // processing time, before the generation routing branch runs.
+        recordingRedactSecrets = Self.effectiveRedactSecrets(
+            toggle: redactSecrets,
+            routesThroughManagedProxy: entitlements?.routesThroughManagedProxy
+        )
         recordingModelID = modelID
         // Dev Mode: carry the toolbar's agent + folder into the recording. nil
         // for a normal recording, which leaves the dev path entirely inert.
