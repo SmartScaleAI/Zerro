@@ -67,16 +67,30 @@ enum DevAnchorPipeline {
             var ocr: [OCRString] = []
             var jpeg: String?
             if let point = c.point, let videoURL = sourceVideoURL,
-               let native = try? await NativeFrameExtractor.frame(atSeconds: c.targetSeconds, from: videoURL),
-               let cropped = NativeFrameExtractor.crop(native, around: (point.x, point.y), cropSize: cropSize) {
-                // OCR the CLEAN crop (the marker must not pollute recognition).
-                let recognized = VisionOCR.recognize(cropped.image, nearTopLeft: cropped.pointInCrop)
-                // F-01: redact the crop pixels + OCR hint in lock step BEFORE the
-                // marker is composited / the crop is encoded (no-op when OFF).
-                let safe = redactCrop(cropped.image, ocr: recognized, redact: redactSecrets)
-                ocr = safe.ocr
-                let marked = AnchorMarker.composite(on: safe.image, atTopLeft: cropped.pointInCrop) ?? safe.image
-                jpeg = NativeFrameExtractor.jpegData(marked).map { $0.base64EncodedString() }
+               let native = try? await NativeFrameExtractor.frame(atSeconds: c.targetSeconds, from: videoURL) {
+                // F-08: everything downstream of the full-res decode — the
+                // crop, the Vision OCR pass, redaction, marker compositing and
+                // the JPEG encode — runs inside a per-iteration
+                // `autoreleasepool` so each anchor's decoded-pixel
+                // intermediates are released before the NEXT anchor decodes.
+                // Without it the autoreleased CG/Vision objects for EVERY
+                // anchor pool until the enclosing scope drains, spiking peak
+                // memory at 5K native resolution. (`native` itself is scoped
+                // to this `if` body, so ARC frees the full-res frame per
+                // iteration; the decode can't join the pool because it's an
+                // `await`.) Behavior-identical — memory lifetime only.
+                (ocr, jpeg) = autoreleasepool { () -> ([OCRString], String?) in
+                    guard let cropped = NativeFrameExtractor.crop(
+                        native, around: (point.x, point.y), cropSize: cropSize
+                    ) else { return ([], nil) }
+                    // OCR the CLEAN crop (the marker must not pollute recognition).
+                    let recognized = VisionOCR.recognize(cropped.image, nearTopLeft: cropped.pointInCrop)
+                    // F-01: redact the crop pixels + OCR hint in lock step BEFORE the
+                    // marker is composited / the crop is encoded (no-op when OFF).
+                    let safe = redactCrop(cropped.image, ocr: recognized, redact: redactSecrets)
+                    let marked = AnchorMarker.composite(on: safe.image, atTopLeft: cropped.pointInCrop) ?? safe.image
+                    return (safe.ocr, NativeFrameExtractor.jpegData(marked).map { $0.base64EncodedString() })
+                }
             }
             out.append(ResolvedDeixisAnchor(
                 refIndex: i,
