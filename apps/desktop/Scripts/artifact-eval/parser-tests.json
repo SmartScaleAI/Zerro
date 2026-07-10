@@ -100,6 +100,28 @@
     }
   },
   {
+    "name": "J-05: malformed open fence (unquoted attrs) with real content after its chevrons keeps the content",
+    "tier": "strict",
+    "input": "chat intro\n<<<ZERRO_ARTIFACT type=doc title=Notes>>> Meeting notes from Tuesday survive.",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false,
+      "chatTextContains": "Meeting notes from Tuesday survive.",
+      "chatTextNotContains": "<<<ZERRO_ARTIFACT"
+    }
+  },
+  {
+    "name": "J-05: chevron-less truncated open fence alone on a line is scrubbed entirely",
+    "tier": "strict",
+    "input": "chat before\n<<<ZERRO_ARTIFACT type=\"doc\" tit",
+    "expect": {
+      "valid": false,
+      "hasArtifact": false,
+      "chatTextContains": "chat before",
+      "chatTextNotContains": "<<<ZERRO_ARTIFACT"
+    }
+  },
+  {
     "name": "two blocks fall back whole",
     "tier": "strict",
     "input": "a\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nb\n<<<END_ZERRO_ARTIFACT>>>\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"U\">>>\nc\n<<<END_ZERRO_ARTIFACT>>>",

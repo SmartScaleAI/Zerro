@@ -529,7 +529,7 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
   };
 }
 
-function usageBody(chat: { inputTokens: number; outputTokens: number; model: string }) {
+function usageBody(chat: { inputTokens: number | null; outputTokens: number | null; model: string }) {
   return { input_tokens: chat.inputTokens, output_tokens: chat.outputTokens, model: chat.model };
 }
 

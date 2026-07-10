@@ -214,3 +214,24 @@ Deno.test("OpenAISttClient.transcribe: multipart + verbose_json, trims segment t
     globalThis.fetch = origFetch;
   }
 });
+
+Deno.test("OpenAIChatClient.chat: absent usage block → null tokens, not 0 (B-06)", async () => {
+  // No usage key in the response at all: the adapter must report unknown (null)
+  // so the cost math charges fallbackCredits, never a $0 chat.
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: "X" }, finish_reason: "stop" }] }),
+        { status: 200 },
+      ),
+    );
+  try {
+    const res = await new OpenAIChatClient("k", "gpt-4o").chat("SYS", [{ type: "text", text: "hi" }]);
+    assertEquals(res.inputTokens, null);
+    assertEquals(res.outputTokens, null);
+    assertEquals(res.content, "X"); // the result itself is still usable
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

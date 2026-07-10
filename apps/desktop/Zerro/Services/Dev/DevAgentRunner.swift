@@ -379,6 +379,13 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         var argv = entry.arguments(tier: tier, model: model)
         let deliverPromptViaStdin = entry.promptDelivery == .stdin
         if entry.promptDelivery == .argument {
+            // G-05: end-of-options separator — a prompt starting with '-'/'--'
+            // (or matching a subcommand like codex exec's `resume`) is the
+            // positional prompt, never parsed as a flag. Live-verified on both
+            // .argument CLIs (codex exec 0.140.0, cursor-agent 2026.06.24):
+            // `-- --version` runs as prompt TEXT, while without `--` the same
+            // string is consumed as a flag.
+            argv.append("--")
             argv.append(prompt)
         }
 

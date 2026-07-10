@@ -803,31 +803,44 @@ struct ZerroApp: App {
             return
         }
 
-        if !onboarding.hasCompletedOnboarding {
-            Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
-            AppDelegate.openOnboarding()
-            return
-        }
-
         // Re-read live OS state in case a permission was revoked while
         // the app was running. We only treat Screen Recording + Mic as
         // gating; Accessibility is informational per Checkpoint 3.
+        // (Prompt-free preflight reads — safe on every attempt, including
+        // ones the earlier gate outcomes below will short-circuit.)
         permissions.refreshStatuses()
         Log.hotkey.info(
             "permission statuses — screen=\(String(describing: permissions.screenRecordingStatus), privacy: .public) mic=\(String(describing: permissions.microphoneStatus), privacy: .public) accessibility=\(String(describing: permissions.accessibilityStatus), privacy: .public)"
         )
 
-        if permissions.screenRecordingStatus != .granted {
-            Log.hotkey.notice("gating: screen recording not granted — opening onboarding @ permissions")
+        // H-06: onboarding / consent / permission gating, in the priority
+        // order pinned by `recordGateAction` (and its unit tests). Consent
+        // MUST outrank the permission jump: routing a consent-owing user to
+        // .permissions lets the flow's tail run completeOnboarding() without
+        // ever running recordConsent(), leaving needsConsent latched true —
+        // every subsequent record attempt re-hijacked onboarding (loop).
+        switch OnboardingState.recordGateAction(
+            hasCompletedOnboarding: onboarding.hasCompletedOnboarding,
+            needsConsent: onboarding.needsConsent,
+            screenGranted: permissions.screenRecordingStatus == .granted,
+            micGranted: permissions.microphoneStatus == .granted
+        ) {
+        case .openOnboarding:
+            Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
+            AppDelegate.openOnboarding()
+            return
+        case .reconsent:
+            Log.hotkey.notice("gating: consent stale — opening onboarding @ consent (reconsent)")
+            onboarding.beginReconsent()
+            AppDelegate.openOnboarding()
+            return
+        case .requestPermissions:
+            Log.hotkey.notice("gating: screen recording or microphone not granted — opening onboarding @ permissions")
             onboarding.jump(to: .permissions)
             AppDelegate.openOnboarding()
             return
-        }
-        if permissions.microphoneStatus != .granted {
-            Log.hotkey.notice("gating: microphone not granted — opening onboarding @ permissions")
-            onboarding.jump(to: .permissions)
-            AppDelegate.openOnboarding()
-            return
+        case .proceed:
+            break
         }
 
         // Phase B freshness point: re-evaluate the trial clock at the

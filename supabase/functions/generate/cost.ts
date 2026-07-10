@@ -79,13 +79,18 @@ export function sttCostUsd(audioDurationSeconds: number): number | null {
   return (audioDurationSeconds / 60) * price.perMinute;
 }
 
-/** Chat cost for the configured chat provider/model from reported token usage. */
+/** Chat cost for the configured chat provider/model from reported token usage.
+ *  Null tokens mean the provider omitted its usage block (B-06) — the cost is
+ *  UNKNOWN, so return null (same contract as an unpriced model) and let
+ *  `creditCostForModel` charge the model's fallbackCredits, never a finite-0
+ *  undercharge. */
 export function chatCostUsd(
   provider: string,
   model: string,
-  inputTokens: number,
-  outputTokens: number,
+  inputTokens: number | null,
+  outputTokens: number | null,
 ): number | null {
+  if (inputTokens === null || outputTokens === null) return null; // usage absent → unpriced → fallback
   const price = CHAT_PRICING[`${provider}:${model}`];
   if (!price) {
     console.warn(JSON.stringify({ fn: "generate", warn: "unpriced_chat", key: `${provider}:${model}` }));
@@ -108,8 +113,8 @@ export function estimatedCostUsd(
   audioDurationSeconds: number,
   chatProvider: string,
   chatModel: string,
-  inputTokens: number,
-  outputTokens: number,
+  inputTokens: number | null,
+  outputTokens: number | null,
 ): number | null {
   const stt = sttCostUsd(audioDurationSeconds);
   const chat = chatCostUsd(chatProvider, chatModel, inputTokens, outputTokens);

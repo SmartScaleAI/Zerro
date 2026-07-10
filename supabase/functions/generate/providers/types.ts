@@ -40,8 +40,12 @@ export interface ChatResult {
   /** Which provider produced this result ("openai" | "gemini") — cost key. */
   provider: string;
   content: string;
-  inputTokens: number;
-  outputTokens: number;
+  /** Reported token usage. `null` when the provider omitted its usage block
+   *  entirely (B-06): "unknown" must stay distinguishable from a real 0, so the
+   *  cost math yields null → the metered charge falls back to the model's
+   *  fallbackCredits instead of underbilling on a finite 0. */
+  inputTokens: number | null;
+  outputTokens: number | null;
   /** The response's reported model version (logging only — NOT the cost key). */
   model: string;
 }

@@ -70,7 +70,8 @@ export interface GenerationLogRow {
  *  carve-out — see idempotency_cache migration). */
 export interface IdempotentResult {
   prompt: string;
-  usage: { input_tokens: number; output_tokens: number; model: string };
+  /** Tokens are null when the provider omitted its usage block (B-06). */
+  usage: { input_tokens: number | null; output_tokens: number | null; model: string };
   creditsRemaining: number;
   /** Credits charged for the ORIGINAL generation (D2) — replayed verbatim so a
    *  retry reports the same charge (the metered amount; every successful
