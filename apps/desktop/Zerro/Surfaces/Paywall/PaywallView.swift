@@ -513,7 +513,14 @@ private struct BuyOnceCard: View {
 
             Spacer(minLength: VFSpacing.xs)
 
-            OnboardingPrimaryButton("Get a license", action: openCheckout)
+            // E-06: softens to disabled while the checkout URL is still a
+            // placeholder (mirrors the top-up card) — no enabled-looking
+            // button that dead-clicks into the placeholder log below.
+            OnboardingPrimaryButton(
+                "Get a license",
+                isEnabled: BillingLinks.byokCheckoutURL != nil,
+                action: openCheckout
+            )
         }
     }
 
@@ -573,7 +580,14 @@ private struct SubscriptionOptionCard: View {
 
             Spacer(minLength: VFSpacing.xs)
 
-            OnboardingPrimaryButton("Subscribe to \(title)", tint: .vfDevAccent, action: openCheckout)
+            // E-06: softens to disabled while the checkout URL is still a
+            // placeholder (mirrors the top-up card) — no dead clicks.
+            OnboardingPrimaryButton(
+                "Subscribe to \(title)",
+                isEnabled: BillingLinks.subscriptionCheckoutURL() != nil,
+                tint: .vfDevAccent,
+                action: openCheckout
+            )
         }
     }
 
