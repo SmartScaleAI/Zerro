@@ -134,6 +134,13 @@ extension AppState {
         case .devAgentDispatching:
             return .devProgress(label: devProgressLabel("Dispatching to the agent\u{2026}"), cancellable: true)
         case .devAgentRunning:
+            // G-08: the runner reported a stall (no output for its stall
+            // window) — swap the substatus for a non-alarming nudge toward the
+            // pill's EXISTING Cancel (the same SIGTERM→SIGKILL safe-cancel).
+            // Advisory only: nothing is auto-killed, the next output clears it.
+            if devAgentStalled {
+                return .devProgress(label: devProgressLabel("Agent seems stuck \u{2014} Cancel?"), cancellable: true)
+            }
             return .devProgress(label: devProgressLabel(devRunSubstatus?.label ?? "Working\u{2026}"), cancellable: true)
         case .devReverting:
             // Restoring the tree — not cancellable (interrupting a revert is the

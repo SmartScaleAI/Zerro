@@ -671,6 +671,12 @@ final class AppState {
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
+    /// G-08: true while the runner reports the agent stalled (no output for
+    /// `timeouts.stall` seconds). ADVISORY only — the runner never kills on a
+    /// stall; this just swaps the running pill's substatus for a non-alarming
+    /// "seems stuck — Cancel?" nudge toward the pill's existing Cancel. Cleared
+    /// by the runner's next-output notification, at run end, and on teardown.
+    var devAgentStalled = false
     /// The diff stat captured on `.devDone`, used for the generated fallback
     /// summary line ("Updated N files (+x −y)") when the agent gave no summary.
     var devDiffStat: GitDiffStat?
@@ -1754,6 +1760,7 @@ final class AppState {
         recordingAgentID = nil
         recordingAgentModelID = nil
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
@@ -3546,6 +3553,7 @@ final class AppState {
         devDispatchStartTime = Date()
 
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
@@ -3589,6 +3597,13 @@ final class AppState {
                 confirmGate: { [weak self] in
                     await self?.awaitReviewApproval(gen: gen, prompt: body) ?? false
                 },
+                // G-08: the runner's stall watchdog (notify, never kill). Drives
+                // the pill's "seems stuck — Cancel?" nudge; the generation guard
+                // drops a late notification from a superseded dispatch.
+                onStall: { [weak self] stalled in
+                    guard let self, self.devDispatchGeneration == gen else { return }
+                    self.applyDevAgentStall(stalled)
+                },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
             // Stale guard: drop the outcome if the recording was torn down or
@@ -3629,6 +3644,18 @@ final class AppState {
             devRunSubstatus = substatus
             state = .devAgentRunning
         }
+    }
+
+    /// Apply the runner's stall notification (G-08): `true` after
+    /// `timeouts.stall` seconds of agent silence, `false` on the next output.
+    /// ADVISORY only — the agent is never auto-killed (the runner's
+    /// notify-never-kill contract); the flag just swaps the running pill's
+    /// substatus for a nudge toward its existing Cancel. Ignored mid-cancel: the
+    /// pill has already left the cancellable card, and a late `true` from the
+    /// SIGTERM grace window must not resurrect it.
+    func applyDevAgentStall(_ stalled: Bool) {
+        guard !devCancelInFlight else { return }
+        devAgentStalled = stalled
     }
 
     /// Persist the durable quit-recovery marker for the current dispatch. Built
@@ -3858,6 +3885,8 @@ final class AppState {
         // A safe-cancel owns its own teardown (terminate → auto-revert → idle),
         // so don't render the terminated agent's outcome as a `.devFailed` card.
         guard !devCancelInFlight else { return }
+        // The run is over either way — a stall nudge must not outlive it (G-08).
+        devAgentStalled = false
         let durationMs = devDispatchDurationMs()
         switch outcome {
         case .succeeded(let success):
@@ -4079,6 +4108,9 @@ final class AppState {
         let runningTask = devDispatchTask
         devCancelInFlight = true
         devDispatchTask = nil
+        // The cancel supersedes any stall nudge (and `applyDevAgentStall` is
+        // gated off while the cancel is in flight).
+        devAgentStalled = false
         state = .devReverting
         // If suspended at the Ask Permission review gate, resolve it false so the
         // dispatch unblocks and returns (the agent never ran → the revert below is
