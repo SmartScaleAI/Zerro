@@ -311,6 +311,25 @@ Deno.test("replay: identical event delivered twice → processed once (composite
 });
 
 // ===========================================================================
+// §A-09 — the verified X-Signature discriminates the idempotency key
+// ===========================================================================
+Deno.test("A-09: same eventName/resourceId/updatedAt but DIFFERENT bodies → no collision, both process", async () => {
+  const store = new InMemoryWebhookStore();
+  // Two validly-signed deliveries that share the pre-A-09 composite key
+  // (subscription_created:ls_1:<same updated_at>) but differ in body — so
+  // their signatures differ. Pre-A-09 the second was wrongly deduped; a forger
+  // could suppress a legit event by front-running its key.
+  const r1 = await deliver(store, "subscription_created", subPayload({ user_email: "first@example.com" }));
+  assertEquals(r1.body, "ok");
+  const r2 = await deliver(store, "subscription_created", subPayload({ user_email: "second@example.com" }));
+  assertEquals(r2.status, 200);
+  assertEquals(r2.body, "ok"); // NOT "ok (duplicate)"
+  // The second (equal-timestamp, not stale) event applied.
+  assertEquals(store.sub("ls_1")!.email_normalized, "second@example.com");
+  assertEquals(store.events.size, 2); // two distinct ledger keys
+});
+
+// ===========================================================================
 // §2b — buyer email mirrored to email_normalized (human identification)
 // ===========================================================================
 Deno.test("subscription_created mirrors user_email → email_normalized (lowercased+trimmed)", async () => {
@@ -909,6 +928,47 @@ Deno.test("license_key_created BEFORE subscription → pending, adopted on subsc
   await deliver(store, "subscription_created", subPayload({ order_id: "order_OOO" }));
   assertEquals(store.sub("ls_1")!.license_key_hash, await sha256Hex("RAWKEY-OOO"));
   assertEquals(store.pending.has("order_OOO"), false); // drained
+});
+
+Deno.test("A-07: subscription_created WITHOUT order_id → 200, structured warn, pending row intact", async () => {
+  const store = new InMemoryWebhookStore();
+  // A license key arrived first and was stashed under its order id.
+  const lk = {
+    meta: { event_name: "license_key_created" },
+    data: { type: "license-keys", id: "lk_3", attributes: { order_id: "order_A07", key: "RAWKEY-A07", customer_id: 5 } },
+  };
+  await deliver(store, "license_key_created", lk);
+  assert(store.pending.has("order_A07")); // stashed
+
+  // The subscription arrives with NO order_id at all → it can never adopt the
+  // pending key. Must not crash, must 200, and must surface the missed adoption.
+  const payload = subPayload();
+  delete (payload.data.attributes as { order_id?: string }).order_id;
+  const warns: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...a: unknown[]) => warns.push(String(a[0]));
+  try {
+    const res = await deliver(store, "subscription_created", payload);
+    assertEquals(res.status, 200);
+  } finally {
+    console.warn = origWarn;
+  }
+  const parsed = warns
+    .map((w) => {
+      try {
+        return JSON.parse(w) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.note === "no_order_id_pending_key_unadopted");
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].event, "subscription_created");
+  assertEquals(parsed[0].subscriptionId, "sub-1");
+  // The pending row is left intact (drained only by adoption or the daily sweep),
+  // and no key hash was linked.
+  assert(store.pending.has("order_A07"));
+  assertEquals(store.sub("ls_1")!.license_key_hash, null);
 });
 
 // ===========================================================================

@@ -130,21 +130,9 @@ export class SupabaseTrialStore implements TrialStore {
   }
 
   async incrementCodeAttempts(email: string): Promise<void> {
-    // Atomic increment via the rpc-free path: a small SQL via .rpc would need a
-    // function; instead read-modify-write is acceptable here because the row is
-    // single-writer per email under the per-email rate limit, and a lost
-    // increment only ever makes brute force HARDER to mount, never easier (the
-    // TTL + 6-digit space are the real bound).
-    const { data } = await this.db
-      .from("trial_codes")
-      .select("attempts")
-      .eq("email_normalized", email)
-      .maybeSingle();
-    const next = (data?.attempts ?? 0) + 1;
-    const { error } = await this.db
-      .from("trial_codes")
-      .update({ attempts: next })
-      .eq("email_normalized", email);
+    // C-09: one atomic UPDATE (attempts = attempts + 1) via RPC — no
+    // read-modify-write window. Missing row = no-op.
+    const { error } = await this.db.rpc("increment_trial_code_attempts", { p_email: email });
     if (error) {
       console.error(JSON.stringify({ fn: "trial-start", op: "incrAttempts", error: error.message }));
     }

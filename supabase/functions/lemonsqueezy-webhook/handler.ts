@@ -255,13 +255,18 @@ export async function handleWebhook(
   const configFailure = await guardYearlyConfig(eventName, deps.configCheck ?? CONFIG_CHECK);
   if (configFailure) return configFailure;
 
-  // Composite idempotency key (see header). Fall back to the signature only if
-  // the resource id is missing (shouldn't happen — JSON:API requires `id`).
+  // Composite idempotency key (see header), with the VERIFIED X-Signature
+  // appended as a discriminator (A-09): the signature is an HMAC over the exact
+  // raw bytes, already authenticated above, so a legit redelivery (identical
+  // body) shares it and still dedups — while a different signed body whose
+  // forged data.id/updated_at mimics a legitimate event's can no longer collide
+  // with (and thereby suppress) that event. Fall back to the signature alone
+  // only if the resource id is missing (shouldn't happen — JSON:API requires
+  // `id`).
   const resourceId = payload.data?.id ?? "";
   const updatedAt = (payload.data?.attributes as { updated_at?: string } | undefined)?.updated_at ?? "";
-  const eventId = resourceId
-    ? `${eventName}:${resourceId}:${updatedAt}`
-    : (signature ?? "").trim().toLowerCase();
+  const sig = (signature ?? "").trim().toLowerCase();
+  const eventId = resourceId ? `${eventName}:${resourceId}:${updatedAt}:${sig}` : sig;
 
   // 3. Idempotency.
   let recorded: "fresh" | "duplicate";
@@ -721,7 +726,20 @@ async function linkTrialGrantOnConversion(
 }
 
 async function adoptPendingLicenseKey(deps: WebhookDeps, subscriptionId: string, orderId: string | null) {
-  if (!orderId) return;
+  if (!orderId) {
+    // A-07: with no order id this subscription can NEVER adopt a pending
+    // license key (pending_license_keys is keyed by order id) — if
+    // license_key_created already stashed one for this purchase it stays
+    // orphaned until the daily retention sweep prunes it. Fails closed, but
+    // must be observable. No key material in the log.
+    console.warn(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      event: "subscription_created",
+      subscriptionId,
+      note: "no_order_id_pending_key_unadopted",
+    }));
+    return;
+  }
   const pending = await deps.store.getPendingKey(orderId);
   if (!pending) return;
   // Link by the subscription id we just upserted (exactly one row), matching the

@@ -27,7 +27,10 @@ function bearer(req: Request): string | null {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
-  if (req.method !== "GET" && req.method !== "POST") {
+  // A-12: GET only. This endpoint reads no body and the app only ever GETs it
+  // (SessionTokenManager / ManagedBackend document "GET /entitlement"), so the
+  // legacy POST acceptance was pure surface.
+  if (req.method !== "GET") {
     return json({ error: "method_not_allowed" }, 405);
   }
 

@@ -66,6 +66,8 @@ class InMemoryTrialStore implements TrialStore {
     });
   }
   incrementCodeAttempts(email: string): Promise<void> {
+    // Mirrors the increment_trial_code_attempts RPC (C-09): a single atomic
+    // attempts = attempts + 1; missing row = no-op.
     const c = this.codes.get(email);
     if (c) c.attempts += 1;
     return Promise.resolve();
