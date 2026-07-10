@@ -62,3 +62,41 @@ Deno.test("rejects a malformed token", async () => {
   assertEquals(await verifySessionToken("not.a.jwt", SECRET), null);
   assertEquals(await verifySessionToken("only-one-part", SECRET), null);
 });
+
+// A-17 — algorithm-confusion pins. verifySessionToken never reads the header's
+// `alg`: it unconditionally recomputes HMAC-SHA256 over header.payload and
+// compares. These tests make that defense EXPLICIT, so a future refactor that
+// starts trusting the attacker-controlled header (the classic alg:none /
+// RS256→HS256 downgrade vector) fails loudly instead of shipping.
+
+const b64url = (s: string) =>
+  btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+Deno.test("rejects an alg:none token (empty signature never verifies)", async () => {
+  const now = 1_000_000;
+  const header = b64url(JSON.stringify({ alg: "none", typ: "JWT" }));
+  const payload = b64url(JSON.stringify({
+    sub: "s",
+    tier: "managed",
+    kind: "subscription",
+    iat: now,
+    exp: now + 99999,
+  }));
+  // Both the spec-shaped alg:none form (empty third segment) and a junk
+  // signature must fail the HMAC compare.
+  assertEquals(await verifySessionToken(`${header}.${payload}.`, SECRET, now + 1), null);
+  assertEquals(await verifySessionToken(`${header}.${payload}.${b64url("x")}`, SECRET, now + 1), null);
+});
+
+Deno.test("rejects a header alg swap on an otherwise-valid token", async () => {
+  const now = 1_000_000;
+  const { token } = await signSessionToken({ sub: "s", tier: "managed" }, SECRET, 60, now);
+  const [, p, s] = token.split(".");
+  // Keep the genuine payload + signature, swap only the header's alg — the
+  // signature was minted over the ORIGINAL header, so verification must fail
+  // (i.e. the header is covered by the MAC, not trusted).
+  for (const alg of ["RS256", "none", "HS512"]) {
+    const forged = b64url(JSON.stringify({ alg, typ: "JWT" }));
+    assertEquals(await verifySessionToken(`${forged}.${p}.${s}`, SECRET, now + 1), null);
+  }
+});
