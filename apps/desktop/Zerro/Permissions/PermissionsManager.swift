@@ -135,10 +135,42 @@ final class PermissionsManager {
     /// permission, which makes it the most reliable signal — more
     /// reliable than `CGPreflightScreenCaptureAccess()` in particular,
     /// which false-negatives in dev builds when the codesign identity
-    /// changes between rebuilds. Refreshed on every poll tick from
-    /// `refreshScreenRecordingViaShareable`. Used as an override path
-    /// inside `computeScreenRecordingStatus`.
+    /// changes between rebuilds. Set by the explicit probes
+    /// (`refreshScreenRecordingViaShareable`,
+    /// `probeScreenRecordingEffectiveness`, the DEBUG WindowList check).
+    ///
+    /// H-09: NOT trusted past the strict check. A probe result is live
+    /// evidence only at the moment it ran — if Screen Recording is revoked
+    /// while the app sits idle, no probe re-runs, and a cached `true` from
+    /// minutes ago would keep `computeScreenRecordingStatus` reporting
+    /// `.granted`, pass the record-start gate, and let SCStream fail at
+    /// capture time instead. `computeScreenRecordingStatus` therefore
+    /// CLEARS this cache whenever the strict CGPreflight read says
+    /// not-granted, so a revocation surfaces as `.denied`/`.notDetermined`
+    /// on the next refresh.
     @ObservationIgnored private var screenRecordingGrantedViaShareable: Bool = false
+
+    #if DEBUG
+    /// H-09 test seam: replaces the strict CGPreflight read inside
+    /// `computeScreenRecordingStatus` so tests can simulate a revocation
+    /// (or a grant) without touching live TCC state. `nil` (production
+    /// and non-permission tests) → the real check. Declared in the class
+    /// body because stored properties can't live in the test-seam
+    /// extension; DEBUG-only so it adds no release surface.
+    @ObservationIgnored var strictScreenRecordingCheckOverrideForTesting: (() -> Bool)?
+    #endif
+
+    /// The strict "does the OS report Screen Recording granted right now"
+    /// read `computeScreenRecordingStatus` keys off — CGPreflight in
+    /// production, the injected override in tests.
+    private func strictScreenRecordingGranted() -> Bool {
+        #if DEBUG
+        if let override = strictScreenRecordingCheckOverrideForTesting {
+            return override()
+        }
+        #endif
+        return Self.isScreenRecordingGranted()
+    }
 
     /// True while a `reactivateApp` boost/revert cycle is outstanding —
     /// from the moment we snapshot window levels until the pending revert
@@ -234,24 +266,20 @@ final class PermissionsManager {
 
     private func computeScreenRecordingStatus() -> PermissionStatus {
         // Cheap, popup-free signal first.
-        if Self.isScreenRecordingGranted() {
+        if strictScreenRecordingGranted() {
             return .granted
         }
-        // Cached result from an explicit fallback probe — set by
-        // `refreshScreenRecordingViaShareable` (debug "Probe Shareable")
-        // or `refreshScreenRecordingViaWindowList` ("Check Again" on the
-        // denied step). We do NOT call either fallback automatically from
-        // this method: on macOS 14+ both `SCShareableContent.current` AND
-        // `CGWindowListCopyWindowInfo` (when reading `kCGWindowName`) can
-        // spawn macOS's "Grant access in Privacy & Security" popup when
-        // permission isn't granted. The previous implementation called
-        // CGWindowList here on every refresh, which fired a duplicate
-        // popup the instant `didBecomeActive` fired post-user-click. Both
-        // fallbacks are now reserved for explicit user actions where one
-        // popup is acceptable.
-        if screenRecordingGrantedViaShareable {
-            return .granted
-        }
+        // H-09: the strict check reads NOT granted, so any cached shareable
+        // success is stale evidence — most importantly after an idle
+        // revocation (Screen Recording toggled off in System Settings with
+        // no probe ever re-running): trusting the cache here would keep
+        // reporting `.granted`, pass the record-start gate, and let SCStream
+        // fail at capture time with a generic error instead of the
+        // actionable denied/permissions flow. Clear it rather than read it,
+        // so the cache can never outlive the OS-level grant. The grant path
+        // is unweakened: a real grant flips the strict check itself, and
+        // the explicit probes still re-set the cache when they run.
+        screenRecordingGrantedViaShareable = false
         // While a popup is in flight, treat the not-granted state as
         // `.notDetermined`. Without this, `hasRequestedScreenRecording`
         // gets committed at request time and the next refresh flips us
@@ -1091,6 +1119,18 @@ extension PermissionsManager {
     /// Whether a screen-recording request is still considered in flight.
     var isAwaitingScreenRecordingResponseForTesting: Bool {
         isAwaitingScreenRecordingResponse
+    }
+
+    /// H-09: seeds the shareable cache as if a live probe had succeeded,
+    /// without running `SCShareableContent.current` (which reads real TCC
+    /// state and can spawn a popup).
+    func seedShareableCacheForTesting(_ granted: Bool) {
+        screenRecordingGrantedViaShareable = granted
+    }
+
+    /// H-09: whether the shareable cache currently holds a granted reading.
+    var isShareableCacheSetForTesting: Bool {
+        screenRecordingGrantedViaShareable
     }
 }
 #endif
