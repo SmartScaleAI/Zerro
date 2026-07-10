@@ -911,6 +911,47 @@ Deno.test("license_key_created BEFORE subscription → pending, adopted on subsc
   assertEquals(store.pending.has("order_OOO"), false); // drained
 });
 
+Deno.test("A-07: subscription_created WITHOUT order_id → 200, structured warn, pending row intact", async () => {
+  const store = new InMemoryWebhookStore();
+  // A license key arrived first and was stashed under its order id.
+  const lk = {
+    meta: { event_name: "license_key_created" },
+    data: { type: "license-keys", id: "lk_3", attributes: { order_id: "order_A07", key: "RAWKEY-A07", customer_id: 5 } },
+  };
+  await deliver(store, "license_key_created", lk);
+  assert(store.pending.has("order_A07")); // stashed
+
+  // The subscription arrives with NO order_id at all → it can never adopt the
+  // pending key. Must not crash, must 200, and must surface the missed adoption.
+  const payload = subPayload();
+  delete (payload.data.attributes as { order_id?: string }).order_id;
+  const warns: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...a: unknown[]) => warns.push(String(a[0]));
+  try {
+    const res = await deliver(store, "subscription_created", payload);
+    assertEquals(res.status, 200);
+  } finally {
+    console.warn = origWarn;
+  }
+  const parsed = warns
+    .map((w) => {
+      try {
+        return JSON.parse(w) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.note === "no_order_id_pending_key_unadopted");
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].event, "subscription_created");
+  assertEquals(parsed[0].subscriptionId, "sub-1");
+  // The pending row is left intact (drained only by adoption or the daily sweep),
+  // and no key hash was linked.
+  assert(store.pending.has("order_A07"));
+  assertEquals(store.sub("ls_1")!.license_key_hash, null);
+});
+
 // ===========================================================================
 // handler error → dedup row rolled back so a genuine retry re-processes
 // ===========================================================================

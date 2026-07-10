@@ -721,7 +721,20 @@ async function linkTrialGrantOnConversion(
 }
 
 async function adoptPendingLicenseKey(deps: WebhookDeps, subscriptionId: string, orderId: string | null) {
-  if (!orderId) return;
+  if (!orderId) {
+    // A-07: with no order id this subscription can NEVER adopt a pending
+    // license key (pending_license_keys is keyed by order id) — if
+    // license_key_created already stashed one for this purchase it stays
+    // orphaned until the daily retention sweep prunes it. Fails closed, but
+    // must be observable. No key material in the log.
+    console.warn(JSON.stringify({
+      fn: "lemonsqueezy-webhook",
+      event: "subscription_created",
+      subscriptionId,
+      note: "no_order_id_pending_key_unadopted",
+    }));
+    return;
+  }
   const pending = await deps.store.getPendingKey(orderId);
   if (!pending) return;
   // Link by the subscription id we just upserted (exactly one row), matching the
