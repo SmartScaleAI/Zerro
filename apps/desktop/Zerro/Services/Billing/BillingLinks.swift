@@ -179,7 +179,10 @@ enum BillingLinks {
     /// any URL whose path still contains a `TODO-` token (the test/live buy-id
     /// switch builds a full URL even from an unfilled id), so a half-filled
     /// product softens the affordance instead of opening a dead checkout.
-    private static func resolvedURL(_ raw: String) -> URL? {
+    /// Internal (not private) so the paywall CTA-gating tests can pin the
+    /// placeholder-resolves-nil rule — the thing that disables the buttons —
+    /// directly (E-06).
+    static func resolvedURL(_ raw: String) -> URL? {
         guard !raw.hasPrefix("TODO"), !raw.contains("TODO-"),
               let url = URL(string: raw), url.scheme != nil else {
             return nil

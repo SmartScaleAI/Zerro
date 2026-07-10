@@ -706,10 +706,15 @@ final class EntitlementStore {
 
     /// The credit balance currently shown for the active state (managed snapshot
     /// or trial pool), or nil for states with no credit balance (byok/expired).
+    /// Clamped non-negative HERE, at the source of truth (E-09): the raw
+    /// associated value can dip below zero (e.g. a server snapshot that
+    /// over-drained), and no consumer — `currentDisplayedCredits`, the `??`
+    /// fallback in `applyGenerationSpend`, any future reader — may ever see a
+    /// raw negative. Rendering keeps its own "Out of Credits" copy at 0.
     private var displayedCreditsRemaining: Int? {
         switch state {
-        case .managed(let creditsRemaining, _): return creditsRemaining
-        case .trial(let creditsRemaining): return creditsRemaining
+        case .managed(let creditsRemaining, _): return max(0, creditsRemaining)
+        case .trial(let creditsRemaining): return creditsRemaining.map { max(0, $0) }
         case .byok, .expired: return nil
         }
     }

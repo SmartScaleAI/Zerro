@@ -116,12 +116,12 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **E-01** Security · ✅ fixed-in-code — deeplink no longer auto-activates: prefills key + explicit Activate; `LicenseService.activate` adds a replace-confirm gate BEFORE any POST/Keychain write (covers deeplink + manual paste; decline leaves license intact); purchase analytics gated on a real user-initiated outcome; parse hardening intact. Full suite green (673). Ships in app build.
 - **E-02** Payments/UX · ✅ fixed (decision: 30) — **live secret confirmed already 30** (digest = sha256("30"); the grant I first saw at 40 was a stale pre-change test row — my earlier "live=40" read was wrong). Web copy + JSON-LD + FAQ (×2 incl. line 41) → 30; `site-config.ts:26` comment + `EntitlementStore.swift:924` fallback → 30. App reads server value dynamically. Vercel deploy pending. (Optional: clear stale 40-limit test grants.)
 - **E-03** Security · 🟡 — Keychain `AfterFirstUnlock` (not `…ThisDeviceOnly`). Confirmed justified; only trial slots merit ThisDeviceOnly.
-- **E-04** Reliability · 🟡 — crash-restored Dev-Mode paid-block resumes via non-dev path (degrades; no double-charge).
-- **E-05** Payments/UX · 🟡 — hardcoded paywall price literals can drift from LS.
-- **E-06** Reliability · 🟡 — paywall CTAs render enabled when checkout URL unresolved.
-- **E-07** UX · 🟡 — trial credit line not network-refreshed on activation (acceptable).
+- **E-04** Reliability · ✅ fixed-in-code (2026-07-10, phase-5-billing) — crash-restored Dev-Mode paid-block resumed via the non-dev path. `PendingPaidGeneration` now persists optional Dev context (project path / agent id / agent model); both restore paths reapply it so the resume keeps the dev prompt + dispatch. Old markers decode nil → non-dev, unchanged. App build.
+- **E-05** Payments/UX · ✅ addressed-in-docs (2026-07-10, phase-5-billing) — hardcoded paywall price literals can drift from LS. Sync step added to DEPLOY-RUNBOOK §5 (launch action 6) + `KEEP IN SYNC` comment at the `Price` literals. Display-only; LS stays the charge truth.
+- **E-06** Reliability · ✅ fixed-in-code (2026-07-10, phase-5-billing) — BYOK/Managed paywall CTAs now disable when their checkout URL is unresolved (mirrors the top-up gate); placeholder log kept as belt-and-suspenders. App build.
+- **E-07** UX · ✅ accepted (2026-07-10) — trial credit line not network-refreshed on activation. Display-only staleness, bounded: the server enforces the trial cap on every generation regardless of what the client shows, and multi-device trial drift is a non-issue at this stage. No code change; revisit only if multi-device trial use becomes real.
 - **E-08** Privacy · 🟡 — non-checkout `zerro://` URLs logged at `.public` + flow into diagnostics blob (confirmed I). Log host/scheme only.
-- **E-09** Code quality · 🟡 — `displayedCreditsRemaining` unclamped (latent; render clamps).
+- **E-09** Code quality · ✅ fixed-in-code (2026-07-10, phase-5-billing) — `displayedCreditsRemaining` now clamps non-negative at the source (`max(0, …)`); the render-side "Out of Credits" handling is unchanged. App build.
 - **E-10** Code quality · 🟡 — money-path invariants under-tested (idempotency-key stability, fail-safe dispatch).
 - **E-11** Security · ✅ resolved (Section L) — Release build defines no `DEBUG`; dev hatches compiled out.
 
