@@ -32,7 +32,8 @@ if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
   exit 1
 fi
 
-TAG="v$VERSION"
+# release-app.yml triggers only on app-v* tags — a bare v* tag is a no-op.
+TAG="app-v$VERSION"
 
 # Run from the repo root regardless of where the script is invoked.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
