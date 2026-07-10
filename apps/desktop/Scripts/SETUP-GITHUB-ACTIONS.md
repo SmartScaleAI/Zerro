@@ -1,7 +1,19 @@
 # One-Time Setup — GitHub Actions Release Automation
 
-Do this once. Afterwards every release is `git tag vX.Y.Z && git push --tags` (in the
-**Zerro** app repo).
+> **Update (2026-07-10, L-08) — this doc predates the monorepo and is partly
+> historical.** The live pipeline is `.github/workflows/release-app.yml` in THIS
+> monorepo, triggered by `app-v*` tags (a bare `v*` tag triggers nothing).
+> Releases normally start from an `apps/desktop/VERSION` bump in the
+> staging → main promotion PR (`auto-release.yml` creates the tag on merge);
+> `Scripts/cut-release.sh` is the manual fallback. The dmg and appcast publish
+> to **Supabase Storage** — there is no separate site repo, no `SITE_REPO_TOKEN`,
+> and no cross-repo appcast commit (the getzerro.app site lives in `apps/web`
+> and serves both via Vercel redirects). Parts 1–3 (Apple signing, notarization,
+> Sparkle secrets) are still accurate; Part 0's `SITE_*` config and Part 4's
+> cross-repo token no longer exist.
+
+Do this once. Afterwards every release is an `apps/desktop/VERSION` bump — or, as a
+manual fallback, `git tag app-vX.Y.Z && git push origin app-vX.Y.Z`.
 
 **Repo map — where everything happens:**
 
@@ -21,7 +33,7 @@ Budget ~45 minutes the first time.
 
 ## Part 0 — Confirm the workflow's config  *(edit in: Zerro · look at: smartscale-website)*
 
-Open `.github/workflows/release.yml` **in the Zerro repo** and check the `env:` block:
+Open `.github/workflows/release-app.yml` **in the Zerro repo** and check the `env:` block:
 
 ```yaml
   SITE_REPO: SmartScaleAI/smartscale-website        # ✓ already set to your site repo
@@ -136,7 +148,7 @@ no workflow.**
 
 Make sure these are committed and pushed to Zerro's main branch:
 
-- `.github/workflows/release.yml`
+- `.github/workflows/release-app.yml`
 - `Scripts/ExportOptions.plist`  (already in the repo)
 
 The Sparkle CLI tools are downloaded fresh by the workflow at runtime — nothing to
@@ -176,8 +188,8 @@ Optional (the release succeeds without it; the step skips when unset):
 1. Commit and push the workflow + Scripts to main.
 2. Tag and push:
    ```bash
-   git tag v1.0.2
-   git push origin v1.0.2
+   git tag app-v1.0.2
+   git push origin app-v1.0.2
    ```
 3. Watch **Zerro → Actions** tab. Green check means:
    - the dmg is on **Zerro → Releases** (that tag's assets), and
@@ -200,8 +212,8 @@ failing step's log in Zerro → Actions. Common first-run issues:
 
 Retry the same version by deleting and re-pushing the tag (in Zerro):
 ```bash
-git tag -d v1.0.2 && git push origin :v1.0.2
-git tag v1.0.2 && git push origin v1.0.2
+git tag -d app-v1.0.2 && git push origin :app-v1.0.2
+git tag app-v1.0.2 && git push origin app-v1.0.2
 ```
 
 ---

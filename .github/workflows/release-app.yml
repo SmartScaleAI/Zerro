@@ -248,14 +248,28 @@ jobs:
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           printf '%s' "$AC_API_KEY_P8" > "$KEY_PATH"
 
+          # Capture the submit output (tee: it still streams to the job log).
+          # On failure THIS output holds the real error for THIS run — an auth
+          # 403 or the rejection status — and, when a submission was actually
+          # created, its id. The old handler asked `notarytool history` for the
+          # newest id instead, which on an auth failure (no submission created)
+          # fetched a PRIOR release's log and masked the real error (L-08).
+          SUBMIT_OUT="$RUNNER_TEMP/notarytool-submit.out"
           if ! xcrun notarytool submit "dist/$DMG_NAME" \
                 --key "$KEY_PATH" \
                 --key-id "$AC_API_KEY_ID" \
                 --issuer "$AC_API_ISSUER_ID" \
-                --wait; then
-            echo "Notarization failed — fetching log…"
-            SUB_ID="$(xcrun notarytool history --key "$KEY_PATH" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" 2>/dev/null | awk '/id:/ {print $2; exit}')"
-            [ -n "${SUB_ID:-}" ] && xcrun notarytool log "$SUB_ID" --key "$KEY_PATH" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" || true
+                --wait 2>&1 | tee "$SUBMIT_OUT"; then
+            echo "::error::notarytool submit failed — its output above is the authoritative error for this run."
+            # Only fetch a log for the submission id parsed from THIS submit's
+            # own output — never from history (that could be an older release).
+            SUB_ID="$(awk '/^[[:space:]]*id: / {print $2; exit}' "$SUBMIT_OUT")"
+            if [ -n "${SUB_ID:-}" ]; then
+              echo "Fetching the notarization log for this run's submission $SUB_ID…"
+              xcrun notarytool log "$SUB_ID" --key "$KEY_PATH" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" || true
+            else
+              echo "No submission id in the submit output — the submission was never created (e.g. an auth failure); the submit error above is the whole story."
+            fi
             rm -f "$KEY_PATH"
             exit 1
           fi

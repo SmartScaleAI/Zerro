@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# cut-release.sh — trigger a CI release for Zerro.
+# cut-release.sh — trigger a CI release for Zerro by hand.
 #
-# Bumps the project's MARKETING_VERSION, commits it, tags the commit, and pushes
-# both the commit and the tag. Pushing the tag triggers
-# .github/workflows/release.yml, which builds, signs, notarizes, packages the
-# .dmg, and publishes the Sparkle appcast.
+# Bumps the project's MARKETING_VERSION, commits it, tags the commit `app-v<version>`,
+# and pushes both the commit and the tag. Pushing the tag triggers
+# .github/workflows/release-app.yml, which builds, signs, notarizes, packages
+# the .dmg, uploads it to Supabase Storage, and publishes the Sparkle appcast.
+# Only `app-v*` tags trigger that workflow — a bare `v*` tag releases nothing.
 #
-# This is the day-to-day release path now that CI exists. (Scripts/release.sh is
-# the older LOCAL build-and-notarize flow, kept for debugging the signing chain
-# by hand — it is not needed for a normal release.)
+# The STANDARD release path doesn't need this script: bump apps/desktop/VERSION
+# in the staging → main promotion PR and .github/workflows/auto-release.yml
+# creates the app-v* tag on merge. This script is the manual fallback for
+# cutting a release directly from main. (Scripts/release.sh is the older LOCAL
+# build-and-notarize flow, kept for debugging the signing chain by hand.)
 #
 # The BUILD number is intentionally NOT set here: CI derives it from the commit
 # count (`git rev-list --count HEAD`), so it is always monotonic and whatever is
@@ -83,4 +86,4 @@ echo "==> Pushing main + $TAG"
 git push origin main
 git push origin "$TAG"
 
-echo "✅ Released $VERSION. CI (release.yml) is now building & deploying — watch the Actions tab."
+echo "✅ Released $VERSION. CI (release-app.yml) is now building & deploying — watch the Actions tab."

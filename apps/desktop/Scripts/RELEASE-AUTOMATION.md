@@ -5,8 +5,12 @@ push a version tag and GitHub does everything — build, sign, notarize, publish
 download, and update the appcast on your website. Existing users auto-update.
 
 ```
-# (in the Zerro app repo)
-git tag v1.0.2 && git push --tags     # ← that's the whole release
+# Standard path: bump apps/desktop/VERSION in the staging → main promotion PR;
+# auto-release.yml tags app-v<version> on merge and release-app.yml builds it.
+#
+# Manual fallback (from main):
+./apps/desktop/Scripts/cut-release.sh 1.0.2        # or by hand:
+git tag app-v1.0.2 && git push origin app-v1.0.2   # only app-v* tags trigger a release
 ```
 
 > **Update (2026-06-26) — appcast retention & versioned downloads (L-07).** The
@@ -21,10 +25,13 @@ git tag v1.0.2 && git push --tags     # ← that's the whole release
 > `generate_appcast` from `origin/main`'s appcast and runs it with
 > `--maximum-versions 0` (preserve all). This retention is what lets the BYOK
 > 1-year update window offer a lapsed user the newest build they're entitled to
-> rather than nothing. **Note:** the surrounding sections below still describe an
-> older two-repo / GitHub-Releases-download flow and are stale (tracked as L-08);
-> the live pipeline is `.github/workflows/release-app.yml` in this monorepo,
-> triggered by `app-v*` tags.
+> rather than nothing. **Note (refreshed 2026-07-10, L-08):** the two-repo /
+> GitHub-Releases-download topology described in the sections below no longer
+> exists and is retained only as historical context. The live pipeline is
+> `.github/workflows/release-app.yml` in this monorepo, triggered by `app-v*`
+> tags (normally created by `auto-release.yml` on an `apps/desktop/VERSION`
+> bump); the dmg and the appcast publish to Supabase Storage, and the
+> getzerro.app site lives in `apps/web`, serving both via Vercel redirects.
 
 ---
 
@@ -87,13 +94,13 @@ One-time setup; never touched per release.
 
 ## What the workflow does (all in the Zerro repo, except the last step)
 
-Triggered by pushing a tag matching `v*` **to the Zerro repo**:
+Triggered by pushing a tag matching `app-v*`:
 
 1. **Checkout** Zerro on a `macos-26` runner (default Xcode 26.4.x, required for the macOS 26.4
    deployment target and Sparkle 2.9.2).
 2. **Import the Developer ID cert** from the secret into a temporary keychain
    (destroyed when the job ends).
-3. **Derive versions from the tag** — `v1.0.2` → marketing version `1.0.2`; build
+3. **Derive versions from the tag** — `app-v1.0.2` → marketing version `1.0.2`; build
    number = commit count (always increasing, which Sparkle requires).
 4. **Archive & export** a Developer ID-signed `Zerro.app`.
 5. **Verify** signature + hardened runtime (fails fast if misconfigured).
@@ -117,7 +124,7 @@ Full click-by-click in `SETUP-GITHUB-ACTIONS.md`. Summary:
 
 | Setup step | Repo |
 |---|---|
-| Commit `.github/workflows/release.yml`, `Scripts/ExportOptions.plist` | **Zerro** |
+| Commit `.github/workflows/release-app.yml`, `Scripts/ExportOptions.plist` | **Zerro** |
 | Create all 8 secrets | **Zerro** → Settings → Secrets and variables → Actions |
 | Create the fine-grained PAT (`SITE_REPO_TOKEN`) | GitHub account settings; scope it to **smartscale-website** with Contents: Read/Write; store it as a secret **in Zerro** |
 | Confirm `SITE_APPCAST_PATH` matches where `appcast.xml` lives | look in **smartscale-website** (likely `public/appcast.xml`); set the value in the workflow file **in Zerro** |
@@ -138,21 +145,24 @@ Secrets to create **in the Zerro repo**: `DEVELOPER_ID_CERT_P12`,
 ## Per-release flow (after setup)
 
 ```bash
-# All in the Zerro app repo:
-git tag v1.0.2
-git push origin v1.0.2
+# Standard: bump apps/desktop/VERSION in the staging → main promotion PR.
+# auto-release.yml tags app-v<version> on merge; release-app.yml builds it.
 
-# Watch Zerro → Actions tab. Green check =
-#   • dmg published on Zerro → Releases
-#   • appcast.xml committed to smartscale-website → Vercel deploys it
+# Manual fallback (from main):
+git tag app-v1.0.2
+git push origin app-v1.0.2
+
+# Watch the Actions tab. Green check =
+#   • versioned dmg uploaded to Supabase Storage (+ GitHub Release asset)
+#   • appcast.xml upserted to Supabase Storage → getzerro.app/appcast.xml serves it
 #   • users on older builds get offered the update
 ```
 
 If a release fails, nothing is published. Fix, then re-tag:
 
 ```bash
-git tag -d v1.0.2 && git push origin :v1.0.2   # remove the bad tag
-git tag v1.0.2 && git push origin v1.0.2       # try again
+git tag -d app-v1.0.2 && git push origin :app-v1.0.2   # remove the bad tag
+git tag app-v1.0.2 && git push origin app-v1.0.2       # try again
 ```
 
 ---
