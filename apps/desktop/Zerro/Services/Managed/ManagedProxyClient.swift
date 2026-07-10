@@ -79,6 +79,14 @@ enum ManagedGenerationError: Error, Equatable {
     /// a clear "too long" state instead of a generic provider error
     /// (handoff-artifact-fence-leak).
     case responseTruncated
+    /// F-07 — the CLIENT-side pre-upload fuse tripped: the recording's audio
+    /// or the encoded request body exceeds the server's `/generate` input fuse
+    /// (`ManagedBackend.maxAudioUploadBytes` / `.maxPayloadUploadBytes`), so
+    /// the upload was never attempted — no bytes left the machine and nothing
+    /// was charged. Thrown from the encode step, BEFORE any network call. A
+    /// real recording (3-min cap, bounded frames) can't produce this; NOT
+    /// retryable — the same payload fails identically.
+    case payloadTooLarge
     /// Transport failure (offline/DNS/timeout). Retryable / offline-class.
     case network(String)
     /// The success body wasn't the JSON shape we expected.
@@ -390,6 +398,12 @@ final class ManagedProxyClient {
         } catch {
             throw ManagedGenerationError.artifactUnreadable
         }
+        // F-07: mirror the server's audio-byte fuse BEFORE base64/upload — an
+        // over-cap file would ride the wire in full only to get the same 413
+        // back. Same strictly-greater-than boundary as the server.
+        guard audioData.count <= ManagedBackend.maxAudioUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
 
         var audio: [String: Any] = [
             "mime": ManagedBackend.audioMime,
@@ -445,13 +459,20 @@ final class ManagedProxyClient {
         // normal recording's body is byte-identical to before.
         if let mode { payload["mode"] = mode }
 
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             // Encoding our own body shouldn't fail; treat as a provider-class
             // input problem rather than crashing.
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        // F-07: mirror the server's raw-body fuse (its cheapest pre-parse
+        // gate) on the exact bytes that would ride the wire.
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     /// Builds the Dev Mode CALL 1 body: `{mode:"dev_transcribe", audio, has_speech}`.
@@ -468,6 +489,11 @@ final class ManagedProxyClient {
             audioData = try Data(contentsOf: audioURL)
         } catch {
             throw ManagedGenerationError.artifactUnreadable
+        }
+        // F-07: same pre-upload audio fuse as `encodeBody` — dev call 1 is
+        // audio-only, so this is the whole payload in practice.
+        guard audioData.count <= ManagedBackend.maxAudioUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
         }
 
         var audio: [String: Any] = [
@@ -486,11 +512,16 @@ final class ManagedProxyClient {
             "audio": audio,
             "has_speech": hasSpeech,
         ]
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     /// Builds the Dev Mode CALL 2 body: `{mode:"dev", model, frames, clicks,
@@ -543,11 +574,18 @@ final class ManagedProxyClient {
             "has_speech": hasSpeech,
             "transcript": transcriptPayload,
         ]
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        // F-07: dev call 2 carries no audio, so the raw-body fuse is the
+        // relevant pre-upload bound (frames + anchor crops + transcript).
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     // MARK: - Parse

@@ -227,13 +227,27 @@ private struct HotkeyRow: View {
 
 private struct RedactSecretsRow: View {
     @Environment(PreferencesStore.self) private var preferences
+    @Environment(EntitlementStore.self) private var entitlements
+
+    private static let baseDescription = "Tries to detect and black out common on-screen secrets \u{2014} API keys, tokens, passwords, and card numbers \u{2014} in both the captured image and the extracted text before upload. Best-effort, so it can miss some, and it never redacts your spoken audio."
+
+    /// F-04: when generation routes through Zerro's servers (Managed/trial)
+    /// redaction is ENFORCED regardless of this switch (the floor in
+    /// `AppState.effectiveRedactSecrets`) — say so, so the switch's remaining
+    /// scope (recordings generated with the user's own keys) is honest. The
+    /// switch stays interactive: it still governs any generation that runs
+    /// with the user's own API keys.
+    private var description: String {
+        guard entitlements.routesThroughManagedProxy else { return Self.baseDescription }
+        return Self.baseDescription + " On your current plan, recordings upload to Zerro\u{2019}s servers, so redaction is always enforced for them \u{2014} this switch only affects recordings generated with your own API keys."
+    }
 
     var body: some View {
         @Bindable var preferences = preferences
 
         SettingsRow(
             label: "Redact Detected Secrets",
-            description: "Tries to detect and black out common on-screen secrets \u{2014} API keys, tokens, passwords, and card numbers \u{2014} in both the captured image and the extracted text before upload. Best-effort, so it can miss some, and it never redacts your spoken audio."
+            description: description
         ) {
             Toggle("Redact Detected Secrets", isOn: $preferences.redactSecrets)
                 .labelsHidden()
@@ -246,6 +260,7 @@ private struct RedactSecretsRow: View {
     CaptureSection()
         .environment(PreferencesStore())
         .environment(PermissionsManager())
+        .environment(EntitlementStore(licenseService: .inMemory()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

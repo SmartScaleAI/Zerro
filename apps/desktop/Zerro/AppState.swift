@@ -279,6 +279,15 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
     case artifactUnreadable
+    /// F-07 — the managed client's pre-upload size fuse tripped: the
+    /// recording's audio or encoded payload exceeds the server's `/generate`
+    /// input limit, so NOTHING was uploaded and nothing was charged
+    /// (`ManagedGenerationError.payloadTooLarge`). A real recording (3-minute
+    /// cap, bounded frames) can't produce this, so tripping it means the
+    /// pipeline mis-sized something — reported to the error tracker. NOT
+    /// retryable: the same payload fails identically; the copy points at a
+    /// shorter recording.
+    case recordingTooLarge
 
     // Phase E — Managed proxy failures
     /// Managed: the month's credits are spent and a recording WAS captured — the
@@ -351,7 +360,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .artifactUnreadable,
+             .artifactUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
              .responseTooLong,
@@ -423,6 +432,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response was too long to finish \u{2014} try a shorter recording."
         case .artifactUnreadable:
             return "Couldn\u{2019}t process the recording."
+        case .recordingTooLarge:
+            return "This recording is too large to send \u{2014} try a shorter recording."
         case .outOfCredits:
             return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
         case .outOfCreditsAtStart:
@@ -465,6 +476,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
         case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .recordingTooLarge:         return "Recording too large"
         case .outOfCredits:              return "Out of credits"
         case .outOfCreditsAtStart:       return "Out of credits"
         case .subscriptionInactive:      return "Subscription inactive"
@@ -528,6 +540,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
         case .artifactUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
+        case .recordingTooLarge:
+            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
         case .outOfCredits:
             return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
         case .outOfCreditsAtStart:
@@ -651,7 +665,10 @@ final class AppState {
     /// device / output mode) and handed to the processing pipeline in
     /// `runProcessing`, so a Settings change applies to the next recording.
     /// Defaults to the privacy-on config default for call sites that don't pass
-    /// one (tests, menu-bar paths).
+    /// one (tests, menu-bar paths). F-04: this is the EFFECTIVE flag — the
+    /// user's toggle FLOORED to ON whenever generation routes through Zerro's
+    /// servers (see `effectiveRedactSecrets`), so the toggle can only loosen
+    /// the BYOK path, never a third-party upload.
     var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
 
     /// Multi-model: the generation model for THIS recording — the capture
@@ -755,7 +772,14 @@ final class AppState {
 
     /// Combined confidence below this is "low" → flagged amber on the review
     /// card's target row (the one the user most needs to check before approving).
-    static let devLowConfidenceThreshold = 0.45
+    /// Also the F-10 hint gate: an anchor whose CLIENT confidence is below this
+    /// ships a SOFTENED "may have been referring to" prompt hint instead of the
+    /// definitive "pointed here" (see `anchorHint`), so a shaky dwell can't
+    /// assert a false certainty to the model. One threshold on purpose — the
+    /// card's amber flag and the prompt's hedged hint always agree on what
+    /// "low confidence" means. `nonisolated`: read by the nonisolated
+    /// `writeAnchorFrames` path (a plain immutable Double).
+    nonisolated static let devLowConfidenceThreshold = 0.45
 
     /// One shared coordinator (and its single runner) so the cap-1 dispatch
     /// guard spans the app, not one call.
@@ -1279,7 +1303,37 @@ final class AppState {
     /// have safely recorded a shorter session. The reactive disk-full
     /// chain walk in `isOutOfSpace` still backstops cases where another
     /// process eats the disk between this check and finalize.
-    static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+    nonisolated static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+
+    /// The record-gate free-space decision, factored pure so the F-15 nil
+    /// contract is unit-testable: a readable capacity refuses below
+    /// `minimumFreeBytesToRecord`, and an UNREADABLE capacity (`nil`) also
+    /// refuses — never "nil == OK". The reactive `isOutOfSpace` chain-walk
+    /// remains the backstop for space vanishing mid-recording.
+    nonisolated static func shouldRefuseRecordingForFreeSpace(_ freeBytes: Int64?) -> Bool {
+        (freeBytes ?? 0) < minimumFreeBytesToRecord
+    }
+
+    /// F-04 — the EFFECTIVE per-recording redaction flag: the user's Settings
+    /// toggle, FLOORED to ON whenever generation routes through Zerro's
+    /// servers (Managed subscription, or a trial holding a live token — the
+    /// same `EntitlementStore.routesThroughManagedProxy` signal the generation
+    /// routing reads). Frames that egress to a third party are always
+    /// redacted; the toggle can only loosen the BYOK path, where the user's
+    /// own key talks straight to their own provider. Evaluated at
+    /// `startRecording` time because the frames are baked during processing,
+    /// before the routing branch runs. Fail-safe: an unavailable routing
+    /// signal (`nil` — no entitlement store wired) errs toward redaction.
+    /// (`routesThroughManagedProxy` is deliberately a SUPERSET of the actual
+    /// dispatch decision — a self-funding trial user whose generation ends up
+    /// running locally still gets the floor. Over-redaction is the safe
+    /// direction.) Pure, so the truth table is unit-testable.
+    nonisolated static func effectiveRedactSecrets(
+        toggle: Bool,
+        routesThroughManagedProxy: Bool?
+    ) -> Bool {
+        toggle || (routesThroughManagedProxy ?? true)
+    }
 
     /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
     /// uses it to start/stop the mid-session TCC monitor around an active
@@ -1385,15 +1439,19 @@ final class AppState {
         // Phase 10: pre-flight free-space check. Refuse upfront with the
         // existing .diskFull copy ("Your Mac is out of storage — free up
         // space and try again.") so the user isn't asked to narrate for
-        // 3 minutes only to lose the recording at finalize. A nil
-        // capacity read is treated as "assume OK" — the reactive
-        // chain-walk in isOutOfSpace still catches a genuine ENOSPC at
-        // write time, so a false-positive refuse here is worse than a
-        // false-positive proceed.
-        if let free = WorkingDirectory.freeBytes(), free < Self.minimumFreeBytesToRecord {
+        // 3 minutes only to lose the recording at finalize. F-15: a nil
+        // capacity read (the OS wouldn't give us a number) is treated as
+        // NOT-OK — refuse with the same disk warning — rather than the old
+        // "assume OK" that silently started a 3-minute narration on a
+        // volume we couldn't size. An unreadable capacity is extremely
+        // rare and correlates with the volume being in trouble; the cost
+        // of a false refuse (record again after checking storage) is far
+        // below the cost of losing a finished narration at finalize.
+        let free = WorkingDirectory.freeBytes()
+        if Self.shouldRefuseRecordingForFreeSpace(free) {
             // Byte counts are .public — capacity metrics, not user content.
             Log.state.notice(
-                "startRecording refused — only \(free, privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
+                "startRecording refused — only \(free.map(String.init(describing:)) ?? "unreadable", privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
             )
             state = .failed(reason: .diskFull)
             return
@@ -1420,7 +1478,14 @@ final class AppState {
         // no-selection record captures the primary display, which is what
         // RecordingSession's resolveDisplay pairs with NSScreen.main.
         recordingDisplayID = selection?.screenDisplayID ?? NSScreen.main?.displayID
-        recordingRedactSecrets = redactSecrets
+        // F-04: floor the toggle to ON when this recording's frames will
+        // egress to Zerro's servers (Managed/trial) — the toggle only governs
+        // the BYOK path. Evaluated here because the frames are redacted at
+        // processing time, before the generation routing branch runs.
+        recordingRedactSecrets = Self.effectiveRedactSecrets(
+            toggle: redactSecrets,
+            routesThroughManagedProxy: entitlements?.routesThroughManagedProxy
+        )
         recordingModelID = modelID
         // Dev Mode: carry the toolbar's agent + folder into the recording. nil
         // for a normal recording, which leaves the dev path entirely inert.
@@ -3073,6 +3138,9 @@ final class AppState {
             return .networkOffline
         case .artifactUnreadable:
             return .artifactUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -3126,6 +3194,9 @@ final class AppState {
             return .networkOffline
         case .artifactUnreadable:
             return .artifactUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -3888,8 +3959,12 @@ final class AppState {
             guard let b64 = a.markedJPEGBase64, let data = Data(base64Encoded: b64) else { continue }
             let url = dir.appendingPathComponent("anchor-\(a.refIndex).jpg")
             guard (try? data.write(to: url, options: .atomic)) != nil else { continue }
-            let nearby = a.ocrStrings.prefix(8).joined(separator: ", ")
-            let hint = "DEIXIS REFERENCE \(a.refIndex): the developer pointed here while saying \"\(a.candidate.phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+            let hint = anchorHint(
+                refIndex: a.refIndex,
+                phrase: a.candidate.phrase,
+                ocrStrings: a.ocrStrings,
+                clientConfidence: a.clientConfidence
+            )
             frames.append(ExtractedFrame(
                 url: url,
                 timestamp: CMTime(seconds: baseSeconds + 1 + Double(a.refIndex), preferredTimescale: 600),
@@ -3898,6 +3973,27 @@ final class AppState {
             ))
         }
         return frames
+    }
+
+    /// The `DEIXIS REFERENCE` hint attached to one anchor frame, gated on the
+    /// anchor's CLIENT confidence (F-10). At or above
+    /// `devLowConfidenceThreshold` the hint is the definitive "pointed here"
+    /// phrasing, byte-identical to before the gate. Below it — a loose dwell,
+    /// a last-known position, empty space — the phrasing is HEDGED ("may have
+    /// been referring near here", "best guess") so a shaky anchor doesn't
+    /// assert a false certainty the model would then anchor its edit on. Pure
+    /// + `nonisolated`, so the gate is unit-testable without a recording.
+    nonisolated static func anchorHint(
+        refIndex: Int,
+        phrase: String,
+        ocrStrings: [String],
+        clientConfidence: Double
+    ) -> String {
+        let nearby = ocrStrings.prefix(8).joined(separator: ", ")
+        guard clientConfidence < devLowConfidenceThreshold else {
+            return "DEIXIS REFERENCE \(refIndex): the developer pointed here while saying \"\(phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+        }
+        return "DEIXIS REFERENCE \(refIndex): the developer MAY have been referring near here while saying \"\(phrase)\" — this anchor is low-confidence, so treat it as a hint, not a certainty. The crosshair marks the best guess. Nearby on-screen text: \(nearby)"
     }
 
     private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
@@ -4482,6 +4578,9 @@ final class AppState {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
              .processingFailed, .artifactUnreadable,
+             // F-07: a real recording can't exceed the pre-upload fuse, so
+             // tripping it means the pipeline mis-sized something — triage it.
+             .recordingTooLarge,
              .providerError,
              .rateLimited, .providerUnavailable, .responseTooLong:
             return true
@@ -4527,7 +4626,9 @@ final class AppState {
             // Always HTTP 422 (the value-less case predates carrying a status).
             return (422, nil)
         case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .artifactUnreadable:
+             .network, .malformedResponse, .artifactUnreadable,
+             // Client-side pre-upload fuse (F-07) — no HTTP response exists.
+             .payloadTooLarge:
             return nil
         }
     }
@@ -4585,6 +4686,8 @@ final class AppState {
                 return "The generation service returned an unexpected response."
             case .artifactUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
+            case .payloadTooLarge:
+                return "The recording exceeds the upload size limit \u{2014} nothing was sent."
             }
         }
         return error.localizedDescription

@@ -154,6 +154,20 @@ enum ManagedBackend {
     /// Frame MIME — the only one the backend accepts (`ALLOWED_FRAME_MIME`).
     static let frameMime = "image/jpeg"
 
+    /// F-07 — client-side mirrors of the server's `/generate` input fuse
+    /// (`supabase/functions/generate/config.ts`), so an oversized recording
+    /// fails FAST and LOCALLY instead of uploading tens of MB only to get the
+    /// same 413 back. Set EQUAL to the server defaults (both sides reject
+    /// strictly-greater-than, so the boundaries agree exactly); a real
+    /// recording sits far below both (≤3 min of 64 kbps mono AAC ≈ 1.44 MB
+    /// audio; ≤36 JPEG frames ≈ a few MB). If the server fuse is retuned via
+    /// secrets these mirrors are only ever too GENEROUS (the server still
+    /// backstops) or too strict (a fast local fail where the server would have
+    /// 413'd anyway at its old value) — never a silent bypass.
+    /// `nonisolated` — read from the off-main encode path.
+    nonisolated static let maxAudioUploadBytes = 2 * 1024 * 1024 // GENERATE_MAX_AUDIO_BYTES
+    nonisolated static let maxPayloadUploadBytes = 60 * 1024 * 1024 // GENERATE_MAX_PAYLOAD_BYTES
+
     /// Lenient ISO-8601 parse for the backend's `expires_at` / `reset_date`
     /// fields, which come from JS `Date.toISOString()` — i.e. WITH fractional
     /// seconds and a trailing `Z` (e.g. `2026-06-01T12:03:00.000Z`). The two
