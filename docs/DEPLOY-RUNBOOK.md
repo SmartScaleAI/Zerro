@@ -142,6 +142,17 @@ Full detail in `LEMONSQUEEZY-SETUP-CHECKLIST.md`; the launch actions:
 5. **Create Boost ($10/200) + Power ($22/500)** one-time products → ids into
    the `LS_VARIANT_TOPUP_*` secrets, checkout URLs into the app's
    `BillingLinks.swift` (ships with the app build, step 6).
+6. **Update the app's paywall price literals if LemonSqueezy prices changed**
+   (E-05) — the app renders hardcoded DISPLAY prices; LemonSqueezy is the
+   source of truth for the actual charge, and nothing keeps the labels in
+   sync. Any LS price change (now or later) must update, in the same app
+   release:
+   - `apps/desktop/Zerro/Surfaces/Paywall/PaywallView.swift` — the `Price`
+     enum ($69 one-time / $15/mo / $144/yr) and the Managed card subtitle's
+     "$12/mo if you choose yearly billing".
+   - `apps/desktop/Zerro/Surfaces/Settings/Sections/BillingSection.swift` —
+     the two "$15/month, or $12/month …" subtitle strings.
+   `grep -rn '\$1[25]/mo\|\$69\|\$144' apps/desktop/Zerro` finds them all.
 
 ## 6. Ship the app build (Phase 6)
 

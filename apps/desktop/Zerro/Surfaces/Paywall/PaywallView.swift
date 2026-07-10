@@ -355,6 +355,10 @@ struct PaywallView: View {
 private enum Price {
     // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
     // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
+    // KEEP IN SYNC with the LemonSqueezy variant prices — see the release
+    // checklist in docs/DEPLOY-RUNBOOK.md §5 (E-05). The Managed card
+    // subtitle's "$12/mo if you choose yearly billing" repeats the yearly
+    // number in prose and must move with it.
     static let byok = "$69 one-time"
     static let managedMonthly = "$15/mo"
     static let managedYearly = "$144/yr"
