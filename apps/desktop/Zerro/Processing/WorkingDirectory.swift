@@ -147,9 +147,11 @@ enum WorkingDirectory {
 
     /// Free bytes available on the volume that backs our temp directory
     /// — the disk we'll write the recording, audio.m4a, and frames to.
-    /// Returns nil if the OS won't give us a number (extremely rare;
-    /// failures here shouldn't block the recording, so callers should
-    /// treat nil as "assume we have space" rather than refuse to start).
+    /// Returns nil if the OS won't give us a number (extremely rare).
+    /// F-15: callers must treat nil CONSERVATIVELY — an unreadable volume
+    /// is not evidence of space, so a gate that assumes space on nil can
+    /// start a 3-minute narration it then loses at finalize (see
+    /// `AppState.shouldRefuseRecordingForFreeSpace`).
     ///
     /// `volumeAvailableCapacityForImportantUsageKey` is the right key
     /// here: it reflects what's *actually* available to a user-initiated

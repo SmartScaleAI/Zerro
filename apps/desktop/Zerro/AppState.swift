@@ -1286,7 +1286,16 @@ final class AppState {
     /// have safely recorded a shorter session. The reactive disk-full
     /// chain walk in `isOutOfSpace` still backstops cases where another
     /// process eats the disk between this check and finalize.
-    static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+    nonisolated static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+
+    /// The record-gate free-space decision, factored pure so the F-15 nil
+    /// contract is unit-testable: a readable capacity refuses below
+    /// `minimumFreeBytesToRecord`, and an UNREADABLE capacity (`nil`) also
+    /// refuses — never "nil == OK". The reactive `isOutOfSpace` chain-walk
+    /// remains the backstop for space vanishing mid-recording.
+    nonisolated static func shouldRefuseRecordingForFreeSpace(_ freeBytes: Int64?) -> Bool {
+        (freeBytes ?? 0) < minimumFreeBytesToRecord
+    }
 
     /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
     /// uses it to start/stop the mid-session TCC monitor around an active
@@ -1392,15 +1401,19 @@ final class AppState {
         // Phase 10: pre-flight free-space check. Refuse upfront with the
         // existing .diskFull copy ("Your Mac is out of storage — free up
         // space and try again.") so the user isn't asked to narrate for
-        // 3 minutes only to lose the recording at finalize. A nil
-        // capacity read is treated as "assume OK" — the reactive
-        // chain-walk in isOutOfSpace still catches a genuine ENOSPC at
-        // write time, so a false-positive refuse here is worse than a
-        // false-positive proceed.
-        if let free = WorkingDirectory.freeBytes(), free < Self.minimumFreeBytesToRecord {
+        // 3 minutes only to lose the recording at finalize. F-15: a nil
+        // capacity read (the OS wouldn't give us a number) is treated as
+        // NOT-OK — refuse with the same disk warning — rather than the old
+        // "assume OK" that silently started a 3-minute narration on a
+        // volume we couldn't size. An unreadable capacity is extremely
+        // rare and correlates with the volume being in trouble; the cost
+        // of a false refuse (record again after checking storage) is far
+        // below the cost of losing a finished narration at finalize.
+        let free = WorkingDirectory.freeBytes()
+        if Self.shouldRefuseRecordingForFreeSpace(free) {
             // Byte counts are .public — capacity metrics, not user content.
             Log.state.notice(
-                "startRecording refused — only \(free, privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
+                "startRecording refused — only \(free.map(String.init(describing:)) ?? "unreadable", privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
             )
             state = .failed(reason: .diskFull)
             return
