@@ -74,9 +74,10 @@ final class DevAgentRunnerTests: XCTestCase {
 
     func testArgumentDeliveryAppendsPromptToArgvAndClosesStdin() async throws {
         // Codex-style `.argument` delivery: the prompt rides as the LAST argv
-        // element (after the tier flags + --model) and stdin is closed empty. Every
-        // tier maps to commands-enabled, so the posture flags live in
-        // `allowCommandsArgs`; `.unrestricted` adds no MCP-disable flags.
+        // element (after the tier flags + --model + the G-05 `--` end-of-options
+        // separator) and stdin is closed empty. Every tier maps to
+        // commands-enabled, so the posture flags live in `allowCommandsArgs`;
+        // `.unrestricted` adds no MCP-disable flags.
         let bin = try makeScript("argcap", """
         #!/bin/sh
         printf '%s\\n' "$@" > "$PWD/argv.txt"
@@ -98,9 +99,63 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(result, .succeeded(summary: nil))
         let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(argv, ["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-5.5", "make it teal"])
+        XCTAssertEqual(argv, ["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--model", "gpt-5.5", "--", "make it teal"])
         let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
         XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
+    }
+
+    func testEndOfOptionsSeparatorGuardsDashLeadingPrompts() async throws {
+        // G-05: `.argument` delivery must emit `--` IMMEDIATELY before the
+        // positional prompt, so a prompt starting with '-'/'--' (or matching a
+        // subcommand like codex exec's `resume`) can never be parsed as a flag
+        // by the agent's own CLI parser. argv goes straight to posix_spawn (no
+        // shell), so the separator is the whole defense. Live-verified that
+        // codex exec 0.140.0 and cursor-agent 2026.06.24 both honor `--`.
+        let bin = try makeScript("dashcap", """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$PWD/argv.txt"
+        cat > /dev/null
+        exit 0
+        """)
+        let e = DevAgentEntry(
+            id: "dashy", displayName: "X", executableName: bin.lastPathComponent,
+            promptDelivery: .argument, outputFormat: .text,
+            baseArgs: ["exec"], editsOnlyArgs: [], allowCommandsArgs: [],
+            installed: true, absolutePath: bin
+        )
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: e, tier: .unrestricted, prompt: "--version",
+            projectURL: scratch, timeouts: fastTimeouts(), onEvent: { _ in }
+        )
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(Array(argv.suffix(2)), ["--", "--version"],
+                       "the prompt must be the positional immediately after the end-of-options separator")
+    }
+
+    func testStdinDeliveryKeepsThePromptOutOfArgv() async throws {
+        // G-05 companion: `.stdin` delivery (Claude Code) has no positional to
+        // protect — the prompt must not appear in argv (and no stray `--`
+        // either); it rides on stdin.
+        let bin = try makeScript("stdincap", """
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$PWD/argv.txt"
+        cat > "$PWD/stdin.txt"
+        exit 0
+        """)
+        let result = await ClaudeCodeAgentRunner().run(
+            entry: entry(path: bin, format: .text),
+            tier: .unrestricted, prompt: "make it teal",
+            projectURL: scratch, timeouts: fastTimeouts(), onEvent: { _ in }
+        )
+        XCTAssertEqual(result, .succeeded(summary: nil))
+        let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertFalse(argv.contains("make it teal"), "stdin delivery must not put the prompt in argv")
+        XCTAssertFalse(argv.contains("--"), "no end-of-options separator without a positional prompt")
+        let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
+        XCTAssertTrue(stdin.contains("make it teal"), "the prompt rides on stdin")
     }
 
     func testNonZeroExitCarriesStderrTail() async throws {
@@ -927,7 +982,7 @@ final class DevAgentRunnerTests: XCTestCase {
         let argv = try String(contentsOf: scratch.appendingPathComponent("argv.txt"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
         XCTAssertEqual(argv, ["-p", "--output-format", "stream-json", "--trust", "--force",
-                              "--model", "claude-opus-4-8-high", "make this button bigger"])
+                              "--model", "claude-opus-4-8-high", "--", "make this button bigger"])
         let stdin = try String(contentsOf: scratch.appendingPathComponent("stdin.txt"), encoding: .utf8)
         XCTAssertTrue(stdin.isEmpty, "argument delivery must not write the prompt to stdin")
     }
