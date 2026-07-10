@@ -141,6 +141,18 @@ struct PillView: View {
     /// "easy to swap"). Rendered by the `.openSettings` case.
     static let openSettingsButtonTitle = "Open Settings"
 
+    /// H-11: the error card's primary-button label, keyed off the state's
+    /// `retryable` flag. A retryable failure re-runs the API stage against
+    /// the recording already on disk — "Retry" is accurate. A non-retryable
+    /// failure's primary dismisses the pill and reopens the area selector to
+    /// re-RECORD (`onErrorRetryRegion`); labeling that "Retry" promised a
+    /// re-run that never happens, so it reads "Record again". Pure so the
+    /// mapping is unit-testable; the action wiring is unchanged (it already
+    /// branches on `retryable`).
+    nonisolated static func errorPrimaryTitle(retryable: Bool) -> String {
+        retryable ? "Retry" : "Record again"
+    }
+
     /// Action closures default to no-ops so `#Preview` blocks can keep
     /// passing literal `PillState` values without ceremony. Production
     /// call sites bind these to `AppState` transitions.
@@ -384,10 +396,11 @@ struct PillView: View {
                 onDismiss: onDismissResult
             )
         case .error(let headline, let detail, let retryable):
-            // Same failure card as `.failureExpanded`, now with a Cancel + Retry
-            // footer. The single primary action re-runs the API stage when the
-            // failure is retryable, else reopens the screen-region selector to
-            // record again (preserving the prior `onRetry ?? onRetryRegion`).
+            // Same failure card as `.failureExpanded`, now with a Cancel +
+            // primary footer. The single primary action re-runs the API stage
+            // when the failure is retryable ("Retry"), else reopens the
+            // screen-region selector to record again ("Record again" — H-11:
+            // the label must promise the action that actually runs).
             ArtifactCardView(
                 artifact: nil,
                 chatText: "",
@@ -402,7 +415,7 @@ struct PillView: View {
                     detail: detail,
                     secondaryTitle: "Cancel",
                     onSecondary: onDismissError,
-                    primaryTitle: "Retry",
+                    primaryTitle: Self.errorPrimaryTitle(retryable: retryable),
                     primaryIcon: "arrow.clockwise",
                     primaryRole: .warning
                 ),
