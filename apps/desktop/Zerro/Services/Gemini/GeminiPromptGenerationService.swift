@@ -99,6 +99,11 @@ struct GeminiPromptGenerationService: PromptGenerationService {
         case 401, 403:
             throw PromptGenerationError.auth
         case 429:
+            // J-03: Gemini folds daily-quota exhaustion AND per-minute rate
+            // limits into the same 429 RESOURCE_EXHAUSTED shape, separable
+            // only by undocumented quotaId strings in the details array —
+            // not a stable signal, so no quota detection here; every 429
+            // stays on the rate-limit path.
             throw PromptGenerationError.rateLimited
         default:
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"

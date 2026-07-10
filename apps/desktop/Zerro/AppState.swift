@@ -243,6 +243,18 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// Provider returned 429 even after our single in-flight retry.
     /// Suggests sustained rate-limiting, not a transient burst.
     case rateLimited
+    /// J-03 — the BYOK provider rejected the request because the USER'S OWN
+    /// account is out of quota/credits (OpenAI's `insufficient_quota` 429).
+    /// Distinct from `.rateLimited`: this doesn't clear in a minute — the fix
+    /// is billing on the provider's side — so the transient copy plus a Retry
+    /// button would be a trap that always fails the same way. Non-retryable;
+    /// the pill's action is "Record again". A user-fixable account condition,
+    /// NOT a Zerro bug — gated out of error-tracker capture like
+    /// `.apiKeyMissing`. Detected cleanly only for OpenAI today: Anthropic
+    /// signals quota via message text on a 400 and Gemini can't separate
+    /// quota from rate limits, so both stay on their existing paths (see the
+    /// adapters' 429 branches).
+    case providerQuotaExhausted
     /// The provider answered but the CONTENT was wrong: decode failures,
     /// schema drift, empty content, the proxy's `malformedResponse` /
     /// `inputRejected`. These mean our contract with the provider broke —
@@ -363,6 +375,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .artifactUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
+             .providerQuotaExhausted,
              .responseTooLong,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
@@ -426,6 +439,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Couldn\u{2019}t connect \u{2014} check your connection."
         case .rateLimited:
             return "Hit a rate limit \u{2014} try again in a minute."
+        case .providerQuotaExhausted:
+            return "Your AI provider account is out of quota or credits \u{2014} top up billing with your provider, then start a new recording."
         case .providerError, .providerUnavailable:
             return "Generation failed \u{2014} try again."
         case .responseTooLong:
@@ -472,6 +487,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .localModelUnavailable:     return "Model needed"
         case .networkOffline:            return "Connection problem"
         case .rateLimited:               return "Rate limited"
+        case .providerQuotaExhausted:    return "Provider quota used up"
         case .providerError:             return "Generation failed"
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
@@ -532,6 +548,8 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
         case .rateLimited:
             return "The service is temporarily limiting requests. Wait a minute, then press Retry \u{2014} your recording is saved and ready to run."
+        case .providerQuotaExhausted:
+            return "Your AI provider reported this account is out of quota or credits \u{2014} not a temporary rate limit, so retrying won\u{2019}t help. Add or top up billing on your provider\u{2019}s site, then start a new recording."
         case .providerError:
             return "The generation service ran into an error while creating your prompt. Your recording is saved \u{2014} press Retry to run it again."
         case .providerUnavailable:
@@ -4615,6 +4633,9 @@ final class AppState {
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull, .noInputCaptured,
              .apiKeyMissing, .apiAuth, .localModelUnavailable, .networkOffline,
+             // J-03: the user's own provider account is out of quota —
+             // user-fixable billing, not a Zerro bug.
+             .providerQuotaExhausted,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -4761,6 +4782,9 @@ final class AppState {
             case .missingAPIKey: return .apiKeyMissing
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
+            // J-03: the user's own OpenAI account is out of quota — billing,
+            // not a transient limit; surfaced with its own non-retryable copy.
+            case .quotaExhausted: return .providerQuotaExhausted
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:
@@ -4789,6 +4813,9 @@ final class AppState {
             case .missingAPIKey: return .apiKeyMissing
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
+            // J-03: the user's own OpenAI account is out of quota — billing,
+            // not a transient limit; surfaced with its own non-retryable copy.
+            case .quotaExhausted: return .providerQuotaExhausted
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:

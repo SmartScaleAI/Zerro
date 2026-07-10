@@ -109,6 +109,12 @@ enum TranscriptionError: Error {
     case missingAPIKey
     case auth
     case rateLimited
+    /// J-03 — a 429 whose body says the user's own provider account is out of
+    /// quota/credits (OpenAI `insufficient_quota`), NOT a transient rate
+    /// limit. `performWithRetry` already skipped its retry for this shape;
+    /// mapped to `.providerQuotaExhausted` so the user is pointed at their
+    /// provider's billing instead of "try again in a minute".
+    case quotaExhausted
     case network(underlying: Error)
     /// Non-2xx provider response. Carries the status code ONLY — useful and
     /// non-sensitive. The raw response body is deliberately NOT an associated
