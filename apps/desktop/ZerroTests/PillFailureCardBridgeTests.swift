@@ -250,4 +250,14 @@ final class PillFailureCardBridgeTests: XCTestCase {
         XCTAssertEqual(detail, RecordingFailureReason.trialCreditsExhausted.detail)
         XCTAssertFalse(entitled, "no entitlement wired → label is Upgrade, not Generate")
     }
+
+    // MARK: - H-11: error-card primary label
+
+    /// The primary's label must promise the action that actually runs: a
+    /// retryable failure re-runs the API stage ("Retry"); a non-retryable one
+    /// dismisses and reopens the area selector to re-record ("Record again").
+    func testErrorPrimaryTitleFollowsRetryability() {
+        XCTAssertEqual(PillView.errorPrimaryTitle(retryable: true), "Retry")
+        XCTAssertEqual(PillView.errorPrimaryTitle(retryable: false), "Record again")
+    }
 }

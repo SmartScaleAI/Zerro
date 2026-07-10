@@ -27,6 +27,7 @@
 //  it scales the published elapsed without affecting the file duration.
 //
 
+import AppKit
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -644,6 +645,19 @@ final class AppState {
     /// session. Consumed by Phase 7's RecordingSession to scope the
     /// capture; `nil` started without a selection (e.g. tests).
     var activeSelection: SelectionRect?
+
+    /// H-07: the display the current (or most recent) recording targets —
+    /// the selection's display when one was made, else whatever
+    /// `NSScreen.main` resolved to at start (matching RecordingSession's
+    /// no-selection primary path). `PillWindowController` places the pill on
+    /// this display so it appears where the user is actually recording in a
+    /// multi-display setup. Deliberately NOT cleared on session teardown:
+    /// the pill outlives the capture session (processing / result / failure
+    /// cards, and the wake-recovery offer for a sleep-interrupted recording),
+    /// and all of those belong on the recorded display. Overwritten by the
+    /// next `startRecording`; the controller falls back to `NSScreen.main`
+    /// when it's nil or the display is gone.
+    private(set) var recordingDisplayID: CGDirectDisplayID?
 
     /// Phase 3: whether to redact detected secrets (pixels + OCR text) for THIS
     /// recording. Captured at `startRecording` time from
@@ -1459,6 +1473,11 @@ final class AppState {
         pendingPaidStore.clear()
         isResultExpanded = false
         activeSelection = selection
+        // H-07: pin the pill's target display for this recording's whole
+        // lifecycle. The selection carries the display it was drawn on; a
+        // no-selection record captures the primary display, which is what
+        // RecordingSession's resolveDisplay pairs with NSScreen.main.
+        recordingDisplayID = selection?.screenDisplayID ?? NSScreen.main?.displayID
         // F-04: floor the toggle to ON when this recording's frames will
         // egress to Zerro's servers (Managed/trial) — the toggle only governs
         // the BYOK path. Evaluated here because the frames are redacted at

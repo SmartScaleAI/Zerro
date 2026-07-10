@@ -5,7 +5,7 @@
 //  Created by Colin Breeding on 5/27/26.
 //
 //  The discrete steps of the first-launch onboarding flow. Ordered
-//  via `Int` raw value so advance/back/jump are trivial arithmetic, and
+//  via `Int` raw value so advance/jump are trivial arithmetic, and
 //  `CaseIterable` so the step-dots indicator and the dev panel both
 //  iterate the same source-of-truth ordering.
 //
