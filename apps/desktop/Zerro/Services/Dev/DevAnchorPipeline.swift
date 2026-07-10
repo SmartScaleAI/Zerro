@@ -56,9 +56,14 @@ enum DevAnchorPipeline {
         cropSize: Int = defaultCropSize,
         redactSecrets: Bool = ProcessingConfig.redactSecretsDefault
     ) async -> [ResolvedDeixisAnchor] {
+        // F-05: bound the anchor count BEFORE the expensive per-reference work
+        // (native frame decode + crop + OCR + a payload frame each) so total
+        // frames — keyframes (≤ maxKeyframes) + anchors — stay bounded no
+        // matter how many referring expressions the narration produced.
+        let selected = cappedCandidates(candidates)
         var out: [ResolvedDeixisAnchor] = []
-        out.reserveCapacity(candidates.count)
-        for (i, c) in candidates.enumerated() {
+        out.reserveCapacity(selected.count)
+        for (i, c) in selected {
             var ocr: [OCRString] = []
             var jpeg: String?
             if let point = c.point, let videoURL = sourceVideoURL,
@@ -82,6 +87,36 @@ enum DevAnchorPipeline {
             ))
         }
         return out
+    }
+
+    /// F-05 — the candidates worth resolving, capped at `maxAnchors`, each
+    /// paired with its ORIGINAL 0-based referring-expression index (the
+    /// `refIndex` the model's anchors pair back on, so dropping a candidate
+    /// never renumbers the survivors). At or under the cap this is the
+    /// identity. Over it, the highest-confidence candidates win, ranked by the
+    /// pre-extraction client confidence (`clientConfidence` with no OCR — the
+    /// best estimate available before any frame is decoded: click > dwell >
+    /// last-known > none), tie-broken by raw dwell stillness and then by
+    /// transcript order. Survivors are returned in transcript order. Pure, so
+    /// the cap is unit-testable without a source video.
+    nonisolated static func cappedCandidates(
+        _ candidates: [CandidateAnchor],
+        maxAnchors: Int = ProcessingConfig.maxAnchorFrames
+    ) -> [(refIndex: Int, candidate: CandidateAnchor)] {
+        let indexed = candidates.enumerated().map { (refIndex: $0.offset, candidate: $0.element) }
+        guard indexed.count > maxAnchors else { return indexed }
+        return indexed
+            .sorted { a, b in
+                let ca = clientConfidence(candidate: a.candidate, ocr: [])
+                let cb = clientConfidence(candidate: b.candidate, ocr: [])
+                if ca != cb { return ca > cb }
+                if a.candidate.dwellConfidence != b.candidate.dwellConfidence {
+                    return a.candidate.dwellConfidence > b.candidate.dwellConfidence
+                }
+                return a.refIndex < b.refIndex
+            }
+            .prefix(Swift.max(0, maxAnchors))
+            .sorted { $0.refIndex < $1.refIndex }
     }
 
     /// F-01 — apply the keyframe redaction contract to a SINGLE anchor crop:
@@ -109,8 +144,10 @@ enum DevAnchorPipeline {
     /// The client confidence signal (§7): a click is certain; a tight dwell over a
     /// clean OCR label is high; a dwell with nothing to label is capped to
     /// medium-low; last-known / empty space is low. The MODEL agreement (from
-    /// generation) is combined via `min` in M6.
-    static func clientConfidence(candidate c: CandidateAnchor, ocr: [OCRString]) -> Double {
+    /// generation) is combined via `min` in M6. `nonisolated` — pure math over
+    /// its arguments, and the F-05 cap ranks candidates with it from a
+    /// nonisolated context.
+    nonisolated static func clientConfidence(candidate c: CandidateAnchor, ocr: [OCRString]) -> Double {
         switch c.source {
         case .click:
             return 1.0
