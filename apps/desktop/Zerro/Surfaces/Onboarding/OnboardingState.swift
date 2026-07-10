@@ -138,11 +138,12 @@ final class OnboardingState {
         }
     }
 
-    func goBack() {
-        if let prev = OnboardingStep(rawValue: currentStep.rawValue - 1) {
-            currentStep = prev
-        }
-    }
+    // Back-navigation is intentionally omitted (H-10): the flow is short and
+    // gate-driven — consent and email verification are one-way gates (the
+    // email step's verified state is view-local, so returning would force a
+    // re-verification), and the only gate-free hops (devMode → permissions,
+    // allSet → devMode) aren't worth the affordance. DEBUG builds navigate
+    // freely via the dev panel's `jump(to:)` buttons.
 
     func jump(to step: OnboardingStep) {
         currentStep = step
