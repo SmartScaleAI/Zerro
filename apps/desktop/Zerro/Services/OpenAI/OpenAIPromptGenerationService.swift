@@ -57,6 +57,15 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// BYOKRouting.
     let model: String
 
+    /// J-06 test seams — behavior-identical defaults at every production call
+    /// site (`nil ??` falls through to the live Keychain read; the shared
+    /// session is what `performWithRetry` used unconditionally before). The
+    /// adapter tests inject a fixed key + a URLProtocol-stubbed session so the
+    /// full `generatePrompt` flow — status mapping, parsing, truncation — runs
+    /// without Keychain or network.
+    var apiKeyOverride: String?
+    var session: URLSession = OpenAIClient.session
+
     /// B-04 — output-token cap so a BYOK generation on the user's own key is
     /// bounded instead of running to the model's default max. Mirrors the
     /// server adapter's OPENAI_MAX_OUTPUT_TOKENS
@@ -97,7 +106,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         timeline: InterleavedTimeline,
         systemPrompt: String
     ) async throws -> PromptGenerationResult {
-        guard let apiKey = OpenAIClient.resolveAPIKey() else {
+        guard let apiKey = apiKeyOverride ?? OpenAIClient.resolveAPIKey() else {
             throw PromptGenerationError.missingAPIKey
         }
 
@@ -124,7 +133,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         let data: Data
         let response: HTTPURLResponse
         do {
-            (data, response) = try await OpenAIClient.performWithRetry(request)
+            (data, response) = try await OpenAIClient.performWithRetry(request, session: session)
         } catch {
             throw PromptGenerationError.network(underlying: error)
         }

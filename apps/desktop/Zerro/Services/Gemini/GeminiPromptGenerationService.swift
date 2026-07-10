@@ -60,11 +60,20 @@ struct GeminiPromptGenerationService: PromptGenerationService {
     /// generation by BYOKRouting.
     let model: String
 
+    /// J-06 test seams — behavior-identical defaults at every production call
+    /// site (`nil ??` falls through to the live Keychain read; the shared
+    /// session is what `performWithRetry` used unconditionally before). The
+    /// adapter tests inject a fixed key + a URLProtocol-stubbed session so the
+    /// full `generatePrompt` flow — status mapping, parsing, truncation — runs
+    /// without Keychain or network.
+    var apiKeyOverride: String?
+    var session: URLSession = OpenAIClient.session
+
     func generatePrompt(
         timeline: InterleavedTimeline,
         systemPrompt: String
     ) async throws -> PromptGenerationResult {
-        guard let apiKey = ProviderKeys.resolveKey(for: .gemini) else {
+        guard let apiKey = apiKeyOverride ?? ProviderKeys.resolveKey(for: .gemini) else {
             throw PromptGenerationError.missingAPIKey
         }
 
@@ -88,7 +97,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
         do {
             // Generic URLSession + single-retry-on-429 plumbing (despite the
             // OpenAIClient namespace, nothing in it is OpenAI-specific).
-            (data, response) = try await OpenAIClient.performWithRetry(request)
+            (data, response) = try await OpenAIClient.performWithRetry(request, session: session)
         } catch {
             throw PromptGenerationError.network(underlying: error)
         }
