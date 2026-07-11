@@ -94,6 +94,18 @@ class ConvertInMemoryStore implements ConvertStore {
     const g = this.trialGrants.get(id);
     return Promise.resolve(g ? Math.max(0, g.limit - g.used) : 0);
   }
+  // X-02: active dev call-1 holds on the grant (generate places them; convert
+  // only observes them in its floor gate). Seed `heldCredits` to simulate a
+  // pending dev settle; `heldKey` names the hold so the exclude-key path is
+  // testable.
+  heldCredits = 0;
+  heldKey: string | null = null;
+  forceHoldsThrow = false;
+  activeHoldCredits(_subId: string | null, _grantId: string | null, excludeKey: string | null) {
+    if (this.forceHoldsThrow) return Promise.reject(new Error("holds read down"));
+    if (this.heldKey !== null && excludeKey === this.heldKey) return Promise.resolve(0);
+    return Promise.resolve(this.heldCredits);
+  }
   consumeTrialCredit(id: string, credits: number): Promise<number | null> {
     this.consumeCalls++;
     if (this.forceConsumeThrow) return Promise.reject(new Error("rpc down"));
@@ -515,6 +527,29 @@ Deno.test("convert: trial floor-check error FAILS CLOSED → refuse, no provider
   const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
   assertEquals(res.status, 503);
   assertEquals(h.chat.calls.length, 0);
+  assertEquals(h.store.trialSlots.size, 0, "slot released after the fail-closed refuse");
+});
+
+Deno.test("convert (X-02): a pending dev call-1 hold reduces the trial floor gate — a reserved credit can't fund a convert", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 29 }); // 1 raw credit left…
+  h.store.heldCredits = 1; // …but it's reserved for a pending dev settle
+  h.store.heldKey = "rec-dev-pending";
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 402);
+  assertEquals((await res.json()).error, "out_of_credits");
+  assertEquals(h.chat.calls.length, 0, "the held credit is not spendable by convert");
+  assertEquals(h.store.consumeCalls, 0);
+});
+
+Deno.test("convert (X-02): a holds-read error FAILS CLOSED → refuse, no provider call", async () => {
+  const h = makeHarness();
+  h.store.seedTrial("grant_1", { limit: 30, used: 0 });
+  h.store.forceHoldsThrow = true;
+  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  assertEquals(res.status, 503);
+  assertEquals((await res.json()).error, "credit_check_failed");
+  assertEquals(h.chat.calls.length, 0, "an unknowable spendable figure never serves a provider call");
   assertEquals(h.store.trialSlots.size, 0, "slot released after the fail-closed refuse");
 });
 
