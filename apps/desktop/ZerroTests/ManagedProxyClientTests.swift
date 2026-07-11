@@ -295,7 +295,9 @@ final class ManagedProxyClientTests: XCTestCase {
             audioURL: ManagedFixtures.tempFile(),
             durationSeconds: 12,
             hasSpeech: true,
-            idempotencyKey: "REC-1:dev-transcribe"
+            // X-02: the recording's BARE key — the same one call 2 sends, so the
+            // server pairs call 1's credit hold with call 2's settle.
+            idempotencyKey: "REC-1"
         )
 
         // The word-level transcript flows back for the deixis resolver.
@@ -309,7 +311,7 @@ final class ManagedProxyClientTests: XCTestCase {
         // The wire body is the dev-transcribe selector + audio + has_speech ONLY.
         let req = gen.requests[0]
         XCTAssertEqual(req.url, ManagedBackend.generateURL)
-        XCTAssertEqual(req.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1:dev-transcribe")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Idempotency-Key"), "REC-1")
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: try XCTUnwrap(req.httpBody)) as? [String: Any])
         XCTAssertEqual(Set(json.keys), ["mode", "audio", "has_speech"])
         XCTAssertEqual(json["mode"] as? String, "dev_transcribe")
@@ -390,6 +392,18 @@ final class ManagedProxyClientTests: XCTestCase {
         let (session, gen) = freshStubs(genStatus: 429, genBody: #"{"error":"rate_limited"}"#)
         let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
         await assertThrows(.rateLimited(status: 429, body: #"{"error":"rate_limited"}"#)) {
+            _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
+        }
+    }
+
+    /// X-02: a call-1 402 (the server refused the pre-Whisper credit hold —
+    /// insufficient SPENDABLE balance) maps to `.outOfCredits`, the same typed
+    /// error a call-2 402 produces, so the app routes to its normal
+    /// credits/paywall UX instead of a generic failure.
+    func testDevTranscribeMapsOutOfCredits() async {
+        let (session, gen) = freshStubs(genStatus: 402, genBody: #"{"error":"out_of_credits"}"#)
+        let (_, proxy) = makeStack(sessionTransport: session, genTransport: gen)
+        await assertThrows(.outOfCredits) {
             _ = try await proxy.devTranscribe(audioURL: ManagedFixtures.tempFile(), durationSeconds: 5)
         }
     }
