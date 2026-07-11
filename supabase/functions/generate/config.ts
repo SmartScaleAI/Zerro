@@ -163,6 +163,27 @@ export const GENERATE_RATE_LIMIT_WINDOW_SECONDS = optionalEnvInt(
 export const GENERATE_RATE_LIMIT_PER_SUB = optionalEnvInt("GENERATE_RATE_LIMIT_PER_SUB", 20);
 
 
+// ---- X-02 deposit-and-settle hold (Dev Mode call 1) --------------------------
+// Call 1 (`dev_transcribe`) places a temporary authorization HOLD so an
+// abandoned call 1 (no paired call 2) can't ride the previously-unmetered free
+// transcription. A hold is a RESERVATION, never a charge: it reduces the
+// SPENDABLE balance (real credits − active holds) until the paired generation
+// SETTLES (consumes the real combined cost + releases the hold atomically,
+// settle_credit_hold) or the TTL lapses.
+//
+// TTL sizing: the hold must comfortably outlive the call-1 → call-2 gap —
+// client-side anchor resolution (seconds), the call-2 request itself (the
+// client's 180s timeout), and one user-driven retry with think time. 10 min
+// covers all of that with headroom while keeping an abandoned reservation
+// short-lived; the pg_cron sweep prunes expired rows every 10 min, and the
+// active-holds SUM ignores them the instant they expire regardless.
+export const GENERATE_HOLD_TTL_SECONDS = optionalEnvInt("GENERATE_HOLD_TTL_SECONDS", 600);
+// The reserved amount. The TRUE cost isn't known pre-transcription, so call 1
+// holds the same 1-credit FLOOR the paired generation is gated on (`remaining
+// < 1`) — enough to stop a spendable-zero identity from free transcriptions,
+// small enough to never lock a paying user out of unrelated balance.
+export const DEV_TRANSCRIBE_HOLD_CREDITS = optionalEnvInt("GENERATE_DEV_HOLD_CREDITS", 1);
+
 // ---- Idempotency cache TTL (M1) --------------------------------------------
 // How long a charged generation's result stays replayable for a retry carrying
 // the same Idempotency-Key. Set to the SHORTEST window that reliably covers the

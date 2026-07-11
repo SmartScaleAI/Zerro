@@ -104,8 +104,9 @@ event), `generation_log` (D2/F writes it; carries `model`/`provider` columns —
 non-content metadata), `rate_limits` (basic limiter), `generation_slots` (D2
 concurrency cap), `trial_generation_slots` (F trial concurrency cap),
 `idempotency_cache` (M1: one charge per recording across retries, incl. the
-exact `credits_charged`). License keys **and** verification codes are stored
-only as a **SHA-256 hash** — never raw.
+exact `credits_charged`), `credit_holds` (X-02: the Dev-Mode call-1
+authorization holds — see "Dev Mode deposit-and-settle" below). License keys
+**and** verification codes are stored only as a **SHA-256 hash** — never raw.
 
 **Atomic credit primitive:** `consume_credit(subscription_id, credits)` —
 spends the model's variable credit price atomically across the TWO buckets:
@@ -160,10 +161,12 @@ the runtime — do NOT set them yourself.**
 | `CHAT_PROVIDER` | optional, legacy | Pre-multi-model default-provider knob (`openai` default / `gemini` / `anthropic`). Since the model registry (Phase 4), **the model is selected per request** and routing ignores this; its remaining effect is which chat key is hard-required at boot. Leave at the default. |
 | `CHAT_MODEL` | optional, legacy | Pre-multi-model default model (default `gpt-4o`). **No longer routes Managed generations** — a request without `model` runs the registry's recommended entry (`gemini-3.5-flash`), see "Model registry" below. |
 | `GEMINI_THINKING_LEVEL` | optional | Gemini thinking depth — `low` (default) or `high`. Applies to Gemini-model generations. `high` adds latency + billed thinking (output) tokens; the rewrite task rarely needs it. |
-| `GENERATE_MAX_AUDIO_SECONDS` / `_MAX_AUDIO_BYTES` / `_MAX_FRAMES` / `_MAX_PAYLOAD_BYTES` | optional | Input fuse (defaults `300`s / `2`MB / `200` / `60`MB). `_MAX_AUDIO_BYTES` is now LOAD-BEARING — it's the pre-Whisper bound on a single (free) Dev-Mode transcription (B-03), sized to a real 3-min 64 kbps recording (≈1.44 MB) + headroom; enforced on both the transcribe and main-generate paths before any Whisper call. The others are generous fuses; lower against measured cost. |
+| `GENERATE_MAX_AUDIO_SECONDS` / `_MAX_AUDIO_BYTES` / `_MAX_FRAMES` / `_MAX_PAYLOAD_BYTES` | optional | Input fuse (defaults `300`s / `2`MB / `200` / `60`MB). `_MAX_AUDIO_BYTES` is LOAD-BEARING — it's the pre-Whisper bound on a single Dev-Mode transcription (B-03; the call is un-charged but X-02 gates it on a 1-credit hold), sized to a real 3-min 64 kbps recording (≈1.44 MB) + headroom; enforced on both the transcribe and main-generate paths before any Whisper call. The others are generous fuses; lower against measured cost. |
 | `GENERATE_MAX_OCR_TEXT_CHARS` / `_MAX_CLICKS` / `_MAX_CLICK_LABEL_CHARS` | optional | Phase 3 input fuse for the context channels: per-frame `ocr_text` cap (default `8192` chars) and click-event caps (defaults `200` clicks / `200` chars per label). Same posture as the other fuses — generous, reject only forged/bloated payloads. |
 | `GENERATE_IDEMPOTENCY_TTL_SECONDS` | optional | How long a completed generation's response (incl. `credits_charged`) is replayable from `idempotency_cache` for the same idempotency key (default `900`). Covers app-side retries of an already-charged recording without double-charging. |
 | `GENERATE_CIRCUIT_BREAKER_MULTIPLIER` | optional | Anti-abuse circuit breaker (default `3`): when a single generation's real estimated cost exceeds `multiplier × model price` (in dollars), the metered amount is charged instead of the fixed price. Normal users never trigger it. |
+| `GENERATE_HOLD_TTL_SECONDS` | optional | **X-02** lifetime of the Dev-Mode call-1 credit hold (default `600` = 10 min). Sized to outlive the call-1 → call-2 gap (client anchor resolution + the 180s request timeout + one user-driven retry). An abandoned hold stops reducing the spendable balance the instant it expires; the `credit-holds-prune` cron deletes the rows. |
+| `GENERATE_DEV_HOLD_CREDITS` | optional | **X-02** credits reserved by a Dev-Mode call 1 (default `1` — the same floor the paired generation is gated on). The hold is a reservation, never a charge; call 2 settles the real metered cost. |
 | `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case provider round-trip). |
 | `GENERATE_RATE_LIMIT_PER_SUB` / `_WINDOW_SECONDS` | optional | Per-subscriber `generate` rate limit (defaults `20` per `60`s). |
 | `GENERATE_PROVIDER_TIMEOUT_MS` | optional | Provider request timeout (default `120000`). Falls back to the legacy `GENERATE_OPENAI_TIMEOUT_MS` if the new var is unset, so a tuned deployment keeps its value. |
@@ -569,6 +572,35 @@ emits provider-neutral `TimelineBlock`s; each adapter (`providers/openai.ts`,
 `providers/gemini.ts`, `providers/anthropic.ts`) renders its own wire format.
 The Swift BYOK path routes across the same three providers since Phase 6,
 key-gated per provider in the app.
+
+**Dev Mode deposit-and-settle (X-02).** Dev Mode is two calls sharing one
+recording: call 1 (`mode:"dev_transcribe"`) returns the word-level transcript
+the client resolves deixis anchors against; call 2 (the normal generate with
+`mode:"dev"` + the pre-supplied transcript) meters the real combined STT+chat
+cost. Call 1 used to be entirely free/unmetered past the rate limit + audio
+byte cap; X-02 closes that gap with an **authorization hold**:
+
+- Call 1 **requires the recording's `Idempotency-Key`** (a shipped client's
+  legacy `<key>:dev-transcribe` suffix is normalized server-side) and places a
+  temporary **1-credit hold** (`hold_credit`, table `credit_holds`) *before*
+  the Whisper call. Insufficient **spendable** balance → `402 out_of_credits`
+  with no provider spend; any hold error fails **closed** (`503
+  credit_check_failed`). A transcription failure releases the hold immediately.
+- **Spendable balance = real credits − active unexpired holds**, excluding the
+  request's own key. Every affordability gate (call 1's hold, `generate`'s
+  floor gate, `convert`'s trial floor gate) checks this figure, so a held
+  credit can never be double-spent by a concurrent generation — while call 2
+  can still spend the credit its own call 1 reserved.
+- Call 2 **settles**: `settle_credit_hold` consumes the real metered cost via
+  the same `consume_*_overspend` spender the plain path uses AND deletes the
+  hold, in ONE transaction — never a double charge (a hold never charges),
+  never a free ride. The `idempotency_cache` replay still short-circuits before
+  the settle, so a retried call 2 charges nothing. Keyless (older-app, non-dev)
+  requests keep the plain consume.
+- An abandoned hold (call 1 with no call 2) expires after
+  `GENERATE_HOLD_TTL_SECONDS` — the active-holds sum ignores expired rows
+  immediately, and the `credit-holds-prune` pg_cron job (every 10 min) deletes
+  them. The user is never durably out a credit for a generation that never ran.
 
 ---
 

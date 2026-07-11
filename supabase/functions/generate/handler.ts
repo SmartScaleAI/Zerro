@@ -46,6 +46,15 @@
 // of 1 (acquire slot): a single identity can't have two generations in flight.
 // consume_credit / consume_trial_credit remain the hard double-spend guards.
 //   // DEFERRED Phase G: reserve-then-commit if the cap ever rises above 1.
+//
+// X-02 DEPOSIT-AND-SETTLE (Dev Mode): call 1 (`dev_transcribe`) places a
+// temporary 1-credit HOLD keyed by the recording's Idempotency-Key; call 2
+// SETTLES — consumes the real metered cost AND releases the hold in one
+// transaction (settle_credit_hold). Every affordability gate checks the
+// SPENDABLE balance (real − active holds, excluding the request's own key), so
+// a held credit can't be double-spent by a concurrent generation while call 2
+// can still spend what its own call 1 reserved. A hold is a reservation, never
+// a charge; an abandoned one TTL-expires (GENERATE_HOLD_TTL_SECONDS).
 // =============================================================================
 
 import { json } from "../_shared/http.ts";
@@ -59,6 +68,8 @@ import { validateBody, validateTranscribeBody } from "./limits.ts";
 import { type ChatClient, ProviderError, type SpeechSegment, type SttClient } from "./providers/types.ts";
 import type { BillingStore } from "./store.ts";
 import {
+  DEV_TRANSCRIBE_HOLD_CREDITS,
+  GENERATE_HOLD_TTL_SECONDS,
   GENERATE_RATE_LIMIT_PER_SUB,
   GENERATE_RATE_LIMIT_WINDOW_SECONDS,
   GENERATE_SLOT_STALE_SECONDS,
@@ -98,6 +109,24 @@ interface ResolvedAccount {
   consume(credits: number): Promise<number | null>;
   acquireSlot(): Promise<boolean>;
   releaseSlot(): Promise<void>;
+
+  // ---- X-02 deposit-and-settle holds. A hold is a RESERVATION, never a
+  // charge — money still moves only through consume/settle.
+  /** Place (or idempotently refresh) the call-1 hold for `key`. "insufficient"
+   *  → the spendable balance can't cover it (nothing reserved). THROWS on any
+   *  hold error — the caller fails CLOSED. */
+  holdCredit(key: string, credits: number, ttlSeconds: number, measuredSeconds: number | null): Promise<"held" | "insufficient">;
+  /** Spend `credits` (exactly like `consume`) AND release the `key` hold in
+   *  ONE transaction. No hold under `key` → spends normally. Same return
+   *  contract as `consume`. */
+  settle(key: string, credits: number): Promise<number | null>;
+  /** Early-release an un-settled hold (call-1 transcription failure). Best
+   *  effort — the TTL expiry is the backstop. */
+  releaseHold(key: string): Promise<void>;
+  /** The account's active held credits, excluding `excludeKey` (so THIS
+   *  request's own hold stays spendable by its settle). Spendable balance =
+   *  creditsRemaining() − this. THROWS on error — gates fail CLOSED. */
+  activeHoldCredits(excludeKey: string | null): Promise<number>;
 }
 
 function bearer(req: Request): string | null {
@@ -154,20 +183,19 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
   if ("error" in resolved) return json({ error: resolved.error }, resolved.status);
   const account = resolved.account;
 
-  // 4.5 Dev Mode call 1 (Phase 2 §7) — a FREE word-level transcription. The
-  //     client needs the word transcript to resolve deixis anchors BEFORE the
-  //     billable generation (call 2). This path deliberately does NONE of the
-  //     billing machinery: no credit, no chat model, no concurrency SLOT, no
-  //     idempotency entry — FREE for BOTH subscription and trial tokens. We "eat"
-  //     the sub-cent Whisper cost rather than meter it (the X-01 trial metering on
-  //     THIS leg was reverted; precise combined billing is a deferred post-launch
-  //     task). It is still auth-gated (above) and rate-limited (inside); the abuse
-  //     bound on a single transcription is the tightened audio byte cap
-  //     (MAX_AUDIO_BYTES, enforced pre-Whisper in validateTranscribeBody) plus the
-  //     out-of-band global provider-spend cap (B-05). The paired generation (call 2)
-  //     still meters exactly one credit; convert stays metered.
+  // 4.5 Dev Mode call 1 (Phase 2 §7, X-02) — the word-level transcription the
+  //     client needs to resolve deixis anchors BEFORE the billable generation
+  //     (call 2). Still no chat model, no concurrency SLOT, no idempotency
+  //     entry, and the transcription itself charges nothing — but X-02 closes
+  //     the "call 1 with no call 2" gap: the request must carry the recording's
+  //     Idempotency-Key and places a temporary 1-credit HOLD
+  //     (DEV_TRANSCRIBE_HOLD_CREDITS) that reduces the account's SPENDABLE
+  //     balance until the paired call 2 SETTLES it (consume real cost + release
+  //     in one transaction) or the TTL lapses. A spendable-zero identity is
+  //     refused BEFORE Whisper. Rate limit + audio byte cap + the global
+  //     provider-spend cap (B-05) remain the aggregate bounds.
   if (isDevTranscribeRequest(body)) {
-    return await handleDevTranscribe(body, account, deps);
+    return await handleDevTranscribe(body, account, deps, idemKey);
   }
 
   // 5. Server-side input fuse — BEFORE any OpenAI call or credit work. A legit
@@ -257,7 +285,22 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     //    pre-generation estimate gate — the one final generation is uncapped.
     //    402 carries `estimate: null` (the field is kept for response-shape
     //    stability; the app keys on the status, not this value).
-    const remaining = await account.creditsRemaining();
+    //
+    //    X-02: the figure checked is the SPENDABLE balance — real credits minus
+    //    the account's active holds, EXCLUDING this request's own key. That
+    //    exclusion is load-bearing both ways: a concurrent generation must see
+    //    a dev-held credit as unavailable (a hold can never be double-spent),
+    //    while the dev call 2 must still be able to spend the credit its own
+    //    call 1 reserved FOR it. FAIL CLOSED: if the holds can't be read the
+    //    spendable figure is unknowable — refuse rather than risk spending a
+    //    held credit (matching the check-then-consume posture).
+    let remaining: number;
+    try {
+      remaining = (await account.creditsRemaining()) - (await account.activeHoldCredits(idemKey));
+    } catch (e) {
+      console.error(JSON.stringify({ fn: "generate", key: account.key, error: "credit_check_failed", detail: String(e) }));
+      return json({ error: "credit_check_failed", retryable: true }, 503);
+    }
     if (remaining < 1) {
       return json(
         { error: "out_of_credits", credits_remaining: remaining, estimate: null },
@@ -371,9 +414,20 @@ export async function handleGenerate(req: Request, deps: GenerateDeps): Promise<
     // `ceil(estCost / USD_PER_CREDIT)` (floor 1), falling back to the model's
     // fallbackCredits only when estCost is unavailable. Whether the generation
     // runs was decided long ago; this only sets the AMOUNT.
+    //
+    // X-02: a keyed request SETTLES instead of plain-consuming — the same spend
+    // through the same ledger path, plus the release of this recording's call-1
+    // hold, in ONE transaction (settle_credit_hold). That single transaction is
+    // what makes the netting exact: the real combined cost is consumed once and
+    // the reservation disappears with it — never the hold AND a separate
+    // charge (a hold never charged anything), never a consumed-but-still-held
+    // credit. With no hold under the key (a normal non-dev generation, or an
+    // already-swept expired hold) the settle degenerates to exactly today's
+    // consume. Keyless requests (older apps — dedup off) keep the plain
+    // consume; no hold can exist without a key.
     const estCost = estimatedCostUsd(measured, modelEntry.provider, model, chat.inputTokens, chat.outputTokens);
     const credits = creditCostForModel(model, estCost);
-    const afterConsume = await account.consume(credits);
+    const afterConsume = idemKey ? await account.settle(idemKey, credits) : await account.consume(credits);
 
     if (afterConsume === null) {
       // DEFENSIVE ONLY. With the allow-negative consume RPCs a spendable account
@@ -507,6 +561,17 @@ async function resolveSubscription(deps: GenerateDeps, subId: string): Promise<R
         : (credits) => deps.store.consumeCredit(sub.id, credits),
       acquireSlot: () => deps.store.acquireSlot(sub.id, GENERATE_SLOT_STALE_SECONDS),
       releaseSlot: () => deps.store.releaseSlot(sub.id),
+      // X-02 holds. The hold is OWNED by the subscription identity; the linked
+      // verified grant (combined spend) rides along so its trial remainder
+      // participates in the hold's spendable math and the settle dispatches to
+      // the SAME combined spender `consume` above uses. When the grant is
+      // absent/exhausted (combinedGrantId null) every call degenerates to the
+      // pure-subscription shape — mirroring consume exactly.
+      holdCredit: (key, credits, ttlSeconds, measuredSeconds) =>
+        deps.store.holdCredit(key, sub.id, combinedGrantId, credits, ttlSeconds, measuredSeconds),
+      settle: (key, credits) => deps.store.settleCreditHold(key, sub.id, combinedGrantId, credits),
+      releaseHold: (key) => deps.store.releaseCreditHold(key, sub.id, combinedGrantId),
+      activeHoldCredits: (excludeKey) => deps.store.activeHoldCredits(sub.id, combinedGrantId, excludeKey),
     },
   };
 }
@@ -525,6 +590,12 @@ async function resolveTrial(deps: GenerateDeps, grantId: string): Promise<Resolu
       consume: (credits) => deps.store.consumeTrialCredit(grant.id, credits),
       acquireSlot: () => deps.store.acquireTrialSlot(grant.id, GENERATE_SLOT_STALE_SECONDS),
       releaseSlot: () => deps.store.releaseTrialSlot(grant.id),
+      // X-02 holds — owned by (and spendable-gated on) the trial grant.
+      holdCredit: (key, credits, ttlSeconds, measuredSeconds) =>
+        deps.store.holdCredit(key, null, grant.id, credits, ttlSeconds, measuredSeconds),
+      settle: (key, credits) => deps.store.settleCreditHold(key, null, grant.id, credits),
+      releaseHold: (key) => deps.store.releaseCreditHold(key, null, grant.id),
+      activeHoldCredits: (excludeKey) => deps.store.activeHoldCredits(null, grant.id, excludeKey),
     },
   };
 }
@@ -555,26 +626,61 @@ function isDevTranscribeRequest(body: unknown): boolean {
     (body as Record<string, unknown>).mode === "dev_transcribe";
 }
 
+/** The legacy client's call-1 key suffix. Shipped apps mint the call-1 key as
+ *  `<recording key>:dev-transcribe` (AppState.runManagedDevGeneration pre-X-02)
+ *  while call 2 carries the bare recording key. The hold must be keyed by the
+ *  RECORDING so call 2 can settle it, so the suffix is stripped server-side —
+ *  old clients then hold-and-settle correctly with no update. Recording keys
+ *  are client-minted UUIDs (never contain ':'), so the strip is unambiguous
+ *  for every real client. */
+const LEGACY_DEV_TRANSCRIBE_KEY_SUFFIX = ":dev-transcribe";
+
+/** The hold key for a dev call 1: the request's Idempotency-Key with the
+ *  legacy suffix normalized away. Null when absent/empty — the caller rejects
+ *  (call 1 REQUIRES the key under X-02; every shipped app sends one). */
+function devHoldKey(idemKey: string | null): string | null {
+  if (!idemKey) return null;
+  const key = idemKey.endsWith(LEGACY_DEV_TRANSCRIBE_KEY_SUFFIX)
+    ? idemKey.slice(0, -LEGACY_DEV_TRANSCRIBE_KEY_SUFFIX.length)
+    : idemKey;
+  return key.length > 0 ? key : null;
+}
+
 /** Handle Dev Mode call 1: transcribe audio with WORD-level timing and return it.
- *  FREE for BOTH subscription and trial tokens — we "eat" the sub-cent Whisper cost
- *  rather than meter it. This path does NONE of the billing machinery: no credit, no
- *  chat model, no concurrency SLOT, no idempotency entry. It is still rate-limited
- *  (coarse per-identity) so it can't be hammered as an unlimited free transcription
- *  service, and the abuse bound on a SINGLE call is the tightened audio byte cap
- *  (MAX_AUDIO_BYTES, enforced in validateTranscribeBody BEFORE this Whisper call) plus
- *  the out-of-band global provider-spend cap (B-05). A transcription failure charges
- *  nothing (it never did). `has_speech:false` → an empty transcript with NO provider
- *  call, so it never breaks the 2-call flow. */
+ *  The transcription itself still charges nothing and does none of the billing
+ *  machinery — no consume, no chat model, no concurrency SLOT, no idempotency
+ *  entry — but X-02 closes the abandoned-call-1 gap: the request must carry the
+ *  recording's Idempotency-Key, and a temporary HOLD (DEV_TRANSCRIBE_HOLD_CREDITS,
+ *  the same 1-credit floor the paired generation is gated on) is placed BEFORE
+ *  the Whisper call. "insufficient" spendable balance → out_of_credits with NO
+ *  Whisper spend; any hold error → FAIL CLOSED (refuse). The paired call 2
+ *  settles the hold (real cost consumed + hold released, one transaction); an
+ *  abandoned hold TTL-expires (GENERATE_HOLD_TTL_SECONDS), so the user is never
+ *  durably out a credit for a generation that never happened. A transcription
+ *  FAILURE releases the hold immediately — a failed call 1 must not tie the
+ *  credit up for the TTL. Rate-limited as before (NO slot acquired); the audio
+ *  byte cap (MAX_AUDIO_BYTES, pre-Whisper) + the global provider-spend cap
+ *  (B-05) stay the per-call/aggregate bounds. `has_speech:false` → an empty
+ *  transcript with NO provider call and NO hold (nothing to protect), so it
+ *  never breaks the 2-call flow. */
 async function handleDevTranscribe(
   body: unknown,
   account: ResolvedAccount,
   deps: GenerateDeps,
+  idemKey: string | null,
 ): Promise<Response> {
   const v = validateTranscribeBody(body);
   if (!v.ok) return json({ error: v.error }, v.status);
 
+  // X-02: call 1 must identify its recording so the hold can be settled by
+  // call 2. Every shipped client sends a key here (the legacy suffixed one is
+  // normalized by devHoldKey); a keyless call 1 is a forged/ancient body.
+  const holdKey = devHoldKey(idemKey);
+  if (!holdKey) return json({ error: "missing_idempotency_key" }, 400);
+
   // Rate-limit (same coarse per-identity limiter as generation) so this can't be
-  // abused as a free unlimited transcription service. NO slot acquired.
+  // abused as a free unlimited transcription service. NO slot acquired. Checked
+  // BEFORE the hold so a hammering client can't spam hold-table writes either.
   const withinRate = await deps.store.rateLimitOk(
     account.key,
     GENERATE_RATE_LIMIT_PER_SUB,
@@ -582,10 +688,35 @@ async function handleDevTranscribe(
   );
   if (!withinRate) return json({ error: "rate_limited" }, 429);
 
-  // No speech → no provider call → nothing to transcribe. Return an empty transcript;
-  // the client falls back to click/dwell anchoring (build requirement #3).
+  // No speech → no provider call → nothing to transcribe and nothing to hold
+  // (the hold exists to bound provider spend; an empty transcript has none).
+  // The client falls back to click/dwell anchoring (build requirement #3).
   if (!v.value.hasSpeech) {
     return json({ transcript: { segments: [], words: [], durationSeconds: 0 } }, 200);
+  }
+
+  // X-02: the authorization hold, BEFORE Whisper. Idempotent per key — a call-1
+  // retry refreshes the TTL and never double-reserves. FAIL CLOSED on any hold
+  // error: with the reservation unplaceable, transcribing would reopen the
+  // unmetered-spend gap this exists to close.
+  let holdStatus: "held" | "insufficient";
+  try {
+    holdStatus = await account.holdCredit(
+      holdKey,
+      DEV_TRANSCRIBE_HOLD_CREDITS,
+      GENERATE_HOLD_TTL_SECONDS,
+      v.value.declaredDurationSeconds,
+    );
+  } catch (e) {
+    console.error(JSON.stringify({ fn: "generate", key: account.key, error: "hold_failed", detail: String(e) }));
+    return json({ error: "credit_check_failed", retryable: true }, 503);
+  }
+  if (holdStatus === "insufficient") {
+    // The spendable balance (real − active holds) can't cover even the floor —
+    // the paired generation would be refused at its own gate anyway, so refuse
+    // NOW, before paying Whisper. Same status/error the call-2 gate uses, so
+    // the app routes to its normal credits/paywall UX.
+    return json({ error: "out_of_credits", estimate: null }, 402);
   }
 
   try {
@@ -595,8 +726,11 @@ async function handleDevTranscribe(
       200,
     );
   } catch (e) {
-    // A transcription failure charges nothing and is NOT logged — call 1 is not a
-    // billable generation.
+    // A transcription failure charges nothing and is NOT logged — call 1 is not
+    // a billable generation. Release the hold (best-effort; TTL is the backstop)
+    // so the failure doesn't tie the credit up: no transcript → no call 2 → the
+    // reservation protects nothing.
+    await account.releaseHold(holdKey);
     return providerErrorResponse(e);
   }
 }
