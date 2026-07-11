@@ -111,6 +111,15 @@ grant select, insert, update, delete on public.credit_holds to service_role;
 -- READ-ONLY and deliberately lock-free: the gates it feeds are advisory
 -- (check-then-consume); the hard guards remain hold_credit's locked insert and
 -- the consume_* row locks.
+--
+-- CONVERSION LINK: a combined account's hold is OWNED by the subscription, but
+-- its spendable math included the linked grant's trial remainder — so a
+-- grant-side query (a converted user's still-live trial token, or a sibling
+-- subscription sharing the grant) must see subscription-owned holds of every
+-- subscription LINKED to that grant, or the reservation would be bypassable
+-- from the trial side. Deliberately over-conservative in the rare
+-- multi-sub-per-grant shape (a sibling's plan-funded hold also counts against
+-- the grant): undercounting spendable is the fail-SAFE direction.
 -- =============================================================================
 create or replace function public.active_hold_credits(
   p_subscription_id uuid,
@@ -129,7 +138,12 @@ as $$
     and (
       (p_subscription_id is not null and ch.subscription_id = p_subscription_id)
       or
-      (p_trial_grant_id is not null and ch.trial_grant_id = p_trial_grant_id)
+      (p_trial_grant_id is not null and (
+        ch.trial_grant_id = p_trial_grant_id
+        or ch.subscription_id in (
+          select s.id from public.subscriptions s where s.trial_grant_id = p_trial_grant_id
+        )
+      ))
     );
 $$;
 
@@ -384,13 +398,25 @@ begin
 
   -- 2. Release the hold — same transaction as the consume above, owner-matched
   --    so a foreign hold under a colliding key is never touched. Expired-but-
-  --    unswept rows are deleted too (settling IS the cleanup).
+  --    unswept rows are deleted too (settling IS the cleanup). The third arm is
+  --    the CONVERSION edge: a hold placed by the user's pre-conversion TRIAL
+  --    identity (grant-owned) whose call 2 arrives on the subscription token
+  --    with the grant since exhausted (the handler then passes no grant id) is
+  --    still owner-matched through the subscription's conversion link, so it
+  --    settles instead of stranding until TTL. Safe: a grant-owned hold can
+  --    only have been placed by that grant's own trial identity — the same
+  --    user this subscription converted from.
   delete from public.credit_holds ch
   where ch.idempotency_key = p_key
     and (
       (p_subscription_id is not null and ch.subscription_id = p_subscription_id)
       or
       (p_trial_grant_id is not null and ch.trial_grant_id = p_trial_grant_id)
+      or
+      (p_subscription_id is not null and ch.trial_grant_id is not null
+        and ch.trial_grant_id = (
+          select s.trial_grant_id from public.subscriptions s where s.id = p_subscription_id
+        ))
     );
   get diagnostics v_released = row_count;
 

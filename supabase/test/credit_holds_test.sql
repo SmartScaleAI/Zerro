@@ -26,7 +26,11 @@
 --   * settle against a NON-spendable account returns NULL, spends NOTHING,
 --     and leaves the hold to its TTL (invariant 5);
 --   * a cross-account key collision and invalid arguments RAISE (fail closed),
---     and the one-owner CHECK rejects malformed rows.
+--     and the one-owner CHECK rejects malformed rows;
+--   * the CONVERSION LINK: a grant-side query sees subscription-owned holds of
+--     linked subscriptions (no trial-side bypass of a combined reservation),
+--     and settle releases a pre-conversion grant-owned hold through the
+--     subscription's link instead of stranding it until TTL.
 -- The two-sessions race (two concurrent holds can't both take the last
 -- spendable credit) lives in credit_holds_concurrency_test.sql (dblink).
 -- =============================================================================
@@ -279,6 +283,38 @@ begin
   end if;
   if not exists (select 1 from public.credit_holds where idempotency_key = 'x02-k11') then
     raise exception 'T11b: the foreign hold must still exist';
+  end if;
+
+  -- T15: the CONVERSION LINK arm of active_hold_credits — a grant-side query
+  -- must see subscription-owned holds of every subscription LINKED to that
+  -- grant (else a converted user's still-live trial token could spend a credit
+  -- a combined hold reserved). k11 (4 credits) is owned by sub_combined; before
+  -- linking it is invisible from the grant side, after linking it counts.
+  v_int := public.active_hold_credits(null, v_grant_comb, null);
+  if v_int <> 0 then
+    raise exception 'T15: unlinked grant-side query expected 0 held, got %', v_int;
+  end if;
+  update public.subscriptions set trial_grant_id = v_grant_comb where id = v_sub_combined;
+  v_int := public.active_hold_credits(null, v_grant_comb, null);
+  if v_int <> 4 then
+    raise exception 'T15: linked grant-side query must see the subscription-owned hold (4), got %', v_int;
+  end if;
+
+  -- T16: the CONVERSION edge of settle — a GRANT-owned hold (placed by the
+  -- user's pre-conversion trial identity) is settled by the subscription token
+  -- even when the handler passes NO grant id (grant since exhausted), via the
+  -- subscription's conversion link — it must not strand until TTL.
+  insert into public.credit_holds (idempotency_key, trial_grant_id, credits_held, expires_at)
+  values ('x02-k16', v_grant_comb, 1, now() + interval '10 minutes');
+  v_json := public.settle_credit_hold('x02-k16', v_sub_combined, null, 1);
+  if (v_json ->> 'remaining')::integer <> 0 then
+    raise exception 'T16: settle remaining expected 0 (plan avail 1 - 1), got %', v_json ->> 'remaining';
+  end if;
+  if (v_json ->> 'hold_released')::boolean is distinct from true then
+    raise exception 'T16: the pre-conversion grant-owned hold must be released via the conversion link';
+  end if;
+  if exists (select 1 from public.credit_holds where idempotency_key = 'x02-k16') then
+    raise exception 'T16: the hold row must be gone';
   end if;
 
   -- T12: the one-owner CHECK rejects malformed rows (both / neither).

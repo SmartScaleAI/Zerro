@@ -96,14 +96,15 @@ class ConvertInMemoryStore implements ConvertStore {
   }
   // X-02: active dev call-1 holds on the grant (generate places them; convert
   // only observes them in its floor gate). Seed `heldCredits` to simulate a
-  // pending dev settle; `heldKey` names the hold so the exclude-key path is
-  // testable.
+  // pending dev settle. Every excludeKey the handler passes is recorded so the
+  // no-own-key-exclusion contract is pinnable (convert must always pass null —
+  // it never settles a hold, so no hold is "its own" to spend).
   heldCredits = 0;
-  heldKey: string | null = null;
+  holdExcludeKeys: (string | null)[] = [];
   forceHoldsThrow = false;
   activeHoldCredits(_subId: string | null, _grantId: string | null, excludeKey: string | null) {
+    this.holdExcludeKeys.push(excludeKey);
     if (this.forceHoldsThrow) return Promise.reject(new Error("holds read down"));
-    if (this.heldKey !== null && excludeKey === this.heldKey) return Promise.resolve(0);
     return Promise.resolve(this.heldCredits);
   }
   consumeTrialCredit(id: string, credits: number): Promise<number | null> {
@@ -534,12 +535,18 @@ Deno.test("convert (X-02): a pending dev call-1 hold reduces the trial floor gat
   const h = makeHarness();
   h.store.seedTrial("grant_1", { limit: 30, used: 29 }); // 1 raw credit left…
   h.store.heldCredits = 1; // …but it's reserved for a pending dev settle
-  h.store.heldKey = "rec-dev-pending";
-  const res = await handleConvert(request(makeBody(), await trialToken("grant_1")), h.deps);
+  // The convert request carries the SAME per-recording key an old client would
+  // reuse from the recording. The hold must STILL gate it: convert never
+  // settles a hold, so it has no "own" hold to exclude.
+  const res = await handleConvert(
+    request(makeBody(), await trialToken("grant_1"), "POST", "rec-dev-pending"),
+    h.deps,
+  );
   assertEquals(res.status, 402);
   assertEquals((await res.json()).error, "out_of_credits");
   assertEquals(h.chat.calls.length, 0, "the held credit is not spendable by convert");
   assertEquals(h.store.consumeCalls, 0);
+  assertEquals(h.store.holdExcludeKeys, [null], "convert must never exclude a key from the hold sum");
 });
 
 Deno.test("convert (X-02): a holds-read error FAILS CLOSED → refuse, no provider call", async () => {

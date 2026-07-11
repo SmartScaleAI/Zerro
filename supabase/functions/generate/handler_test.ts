@@ -180,7 +180,17 @@ class InMemoryStore implements BillingStore {
     let sum = 0;
     for (const [k, h] of this.holds) {
       if (k === excludeKey || h.expired) continue;
-      if ((subId !== null && h.ownerSub === subId) || (grantId !== null && h.ownerGrant === grantId)) {
+      // A grant-side query also sees subscription-owned holds of every
+      // subscription LINKED to that grant (the conversion link) — a combined
+      // hold's spendable math included the grant remainder, so the trial side
+      // must not be able to bypass the reservation. Mirrors active_hold_credits.
+      const linkedToGrant = grantId !== null && h.ownerSub !== null &&
+        this.subs.get(h.ownerSub)?.trial_grant_id === grantId;
+      if (
+        (subId !== null && h.ownerSub === subId) ||
+        (grantId !== null && h.ownerGrant === grantId) ||
+        linkedToGrant
+      ) {
         sum += h.credits;
       }
     }
@@ -252,10 +262,16 @@ class InMemoryStore implements BillingStore {
     }
     if (after === null) return null; // nothing spent; the hold is left to TTL
     const h = this.holds.get(idemKey);
+    // Owner match, incl. the CONVERSION edge (mirrors settle_credit_hold): a
+    // grant-owned hold placed by the user's pre-conversion trial identity is
+    // released by their subscription token through the conversion link.
+    const viaConversionLink = h !== undefined && subscriptionId !== null && h.ownerGrant !== null &&
+      this.subs.get(subscriptionId)?.trial_grant_id === h.ownerGrant;
     if (
       h &&
       ((subscriptionId !== null && h.ownerSub === subscriptionId) ||
-        (trialGrantId !== null && h.ownerGrant === trialGrantId))
+        (trialGrantId !== null && h.ownerGrant === trialGrantId) ||
+        viaConversionLink)
     ) {
       this.holds.delete(idemKey);
     }
@@ -2382,4 +2398,40 @@ Deno.test("X-02: a keyless (older-app) normal generation keeps the plain consume
   const json = await res.json();
   assertEquals(store.settleCalls, 0, "no key → no settle (dedup off, exactly as before)");
   assertEquals(store.used.get("sub-1"), json.credits_charged, "charged exactly as before X-02");
+});
+
+Deno.test("X-02 (combined): a subscription-owned hold gates the SAME grant's trial-token generation (no trial-side bypass)", async () => {
+  // Converted user: trial remainder 1, plan 0 (limit == used). The dev call 1
+  // arrives on the SUBSCRIPTION token, so the hold is subscription-owned — but
+  // its spendable math included the grant's last credit. The user's still-live
+  // TRIAL token must not be able to spend that reserved credit.
+  const store = combinedStore({ trialUsed: 14, trialLimit: 15, planUsed: 100, planLimit: 100 });
+  const openai = new StubProvider();
+
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-linked"), deps(store, openai));
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.get("rec-linked")?.ownerSub, "sub-1");
+
+  const trialRes = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), "rec-trial-side"), deps(store, openai));
+  assertEquals(trialRes.status, 402, "the linked sub's hold must be visible from the grant side");
+  assertEquals((await trialRes.json()).credits_remaining, 0, "1 raw trial credit − 1 linked hold");
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 14, "nothing consumed");
+});
+
+Deno.test("X-02 (conversion edge): a grant-owned hold is settled by the subscription token via the conversion link", async () => {
+  // The user placed the hold as a TRIAL identity, then converted; by call 2 the
+  // grant is exhausted, so the handler resolves NO combined grant id — the
+  // settle still finds and releases the grant-owned hold through the
+  // subscription's conversion link instead of stranding it until TTL.
+  const store = combinedStore({ trialUsed: 15, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const KEY = "rec-converted-mid-pair";
+  store.holds.set(KEY, { ownerSub: null, ownerGrant: "grant-1", credits: 1, measuredSeconds: null });
+  const openai = new StubProvider();
+
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  assertEquals(store.holds.size, 0, "the pre-conversion hold settles instead of stranding");
+  assertEquals(store.used.get("sub-1"), json.credits_charged, "charged exactly the metered cost, once");
 });

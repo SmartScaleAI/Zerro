@@ -69,11 +69,13 @@ export interface ConvertStore {
   // ---- Trial metering (X-01) — the exact per-grant primitives generate spends.
   loadTrialGrant(grantId: string): Promise<TrialGrantRow | null>;
   trialCreditsRemaining(grantId: string): Promise<number>;
-  /** X-02: the grant's active held credits (generate's dev call-1 holds),
-   *  excluding `excludeKey`. The floor gate below subtracts this so a credit
-   *  reserved for a pending dev settle can't also fund a convert (invariant:
-   *  every affordability check uses the SPENDABLE figure). THROWS on error —
-   *  the gate fails CLOSED. */
+  /** X-02: the grant's active held credits (generate's dev call-1 holds). The
+   *  floor gate below subtracts this so a credit reserved for a pending dev
+   *  settle can't also fund a convert (invariant: every affordability check
+   *  uses the SPENDABLE figure). Convert always passes `excludeKey: null` —
+   *  it can never settle a hold, so even a hold under this request's own key
+   *  belongs to a different, pending dev flow and must stay reserved. THROWS
+   *  on error — the gate fails CLOSED. */
   activeHoldCredits(
     subscriptionId: string | null,
     trialGrantId: string | null,
@@ -231,15 +233,16 @@ async function meteredTrialConvert(
 
     // Floor gate — refuse a grant that can't afford even the 1-credit floor of a
     // successful conversion. FAIL CLOSED on a lookup error. X-02: the figure is
-    // the SPENDABLE balance — the raw remainder minus any active dev call-1
-    // holds on this grant (excluding this request's own key), so a credit
-    // reserved for a pending dev settle can't also fund a conversion. (A dev
-    // recording never finishes THROUGH convert — see the Phase C note below —
-    // so convert only ever observes holds, never settles them.)
+    // the SPENDABLE balance — the raw remainder minus EVERY active dev call-1
+    // hold on this grant, so a credit reserved for a pending dev settle can't
+    // also fund a conversion. Unlike generate, NO own-key exclusion: convert
+    // never settles a hold (a dev recording never finishes THROUGH convert —
+    // see the Phase C note above), so a hold under this request's key is
+    // necessarily another flow's pending reservation, not ours to spend.
     let remaining: number;
     try {
       remaining = (await deps.store.trialCreditsRemaining(grantId)) -
-        (await deps.store.activeHoldCredits(null, grantId, idemKey));
+        (await deps.store.activeHoldCredits(null, grantId, null));
     } catch (e) {
       console.error(JSON.stringify({ fn: "convert", key, error: "credit_lookup_failed", detail: String(e) }));
       return json({ error: "credit_check_failed", retryable: true }, 503);
