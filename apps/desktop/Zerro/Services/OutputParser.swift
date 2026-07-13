@@ -1,34 +1,34 @@
 //
-//  ArtifactParser.swift
+//  OutputParser.swift
 //  Zerro
 //
 //  Created by Colin Breeding on 6/11/26.
 //
-//  Phase 2 of the modes → typed-artifact refactor: the client-side parser
+//  Phase 2 of the modes → typed-output refactor: the client-side parser
 //  for the §2 output contract (docs/refactor-artifact-response-plan.md),
 //  INCLUDING the three-rule recovery tier (§2 amendment, 2026-06-11).
 //  ADDITIVE in this phase — nothing calls it yet; Phase 4 runs it on every
 //  generation result (Managed and BYOK alike).
 //
-//  KEEP IN SYNC: the JS reference implementation is `parseArtifactResponse`
+//  KEEP IN SYNC: the JS reference implementation is `parseOutputResponse`
 //  in `apps/desktop/Scripts/eval-models.mjs`. Both implementations must pass
 //  every case in `apps/desktop/Scripts/artifact-eval/parser-tests.json` —
-//  that file is the contract's executable spec (ArtifactParserTests loads it
+//  that file is the contract's executable spec (OutputParserTests loads it
 //  directly). A behavior change here requires changing the JSON, the JS
 //  reference, and plan §2 together, or not at all.
 //
 //  Fail-safe philosophy (§2): a malformed response must always degrade to
 //  plain chat text. This parser never throws, never returns an unrenderable
-//  result, and never invents an artifact — the recovery tier is a CLOSED
+//  result, and never invents an output — the recovery tier is a CLOSED
 //  list of three rules, each still requiring the literal ZERRO tokens and
 //  parseable attributes.
 //
 
 import Foundation
 
-/// Pure, stateless parser for the §2 typed-artifact response contract.
+/// Pure, stateless parser for the §2 typed-output response contract.
 /// `nonisolated` string work only — safe to call from any context.
-enum ArtifactParser {
+enum OutputParser {
 
     // MARK: Contract tokens
 
@@ -41,7 +41,7 @@ enum ArtifactParser {
 
     /// Empty-case sentinel the generation step emits (on its own line) when
     /// the recording held no request of any kind. It is NOT a fence: it never
-    /// produces or invalidates an artifact — it only flips `requestPresent`
+    /// produces or invalidates an output — it only flips `requestPresent`
     /// off (the chat line is still shown). Stripped from chat text so it never
     /// reaches the UI.
     private nonisolated static let noRequestSentinel = "<<<ZERRO_NO_REQUEST>>>"
@@ -81,7 +81,7 @@ enum ArtifactParser {
 
     /// Parses a raw model response per §2. Never throws; on any malformation
     /// outside the recovery tier the ENTIRE raw output becomes `chatText`
-    /// with no artifact and `isValid == false`.
+    /// with no output and `isValid == false`.
     nonisolated static func parse(_ raw: String) -> ParsedResponse {
         var warnings: [String] = []
         // CRLF-normalize then split — equivalent to the JS reference's
@@ -142,7 +142,7 @@ enum ArtifactParser {
             ParsedResponse(
                 chatText: Self.scrubFenceTokens(from: lines.joined(separator: "\n"))
                     .trimmingCharacters(in: .whitespacesAndNewlines),
-                artifact: nil,
+                output: nil,
                 isValid: valid,
                 wasRecovered: false,
                 warnings: warnings,
@@ -194,8 +194,8 @@ enum ArtifactParser {
         }
         let recovered = !openStrict || !close.strict
 
-        let type: ArtifactType
-        if let known = ArtifactType(rawValue: rawType) {
+        let type: OutputType
+        if let known = OutputType(rawValue: rawType) {
             type = known
         } else {
             warnings.append("unknown type \"\(rawType)\" coerced to generic")
@@ -225,7 +225,7 @@ enum ArtifactParser {
 
         return ParsedResponse(
             chatText: chatText,
-            artifact: Artifact(type: type, rawType: rawType, title: title, body: body),
+            output: GeneratedOutput(type: type, rawType: rawType, title: title, body: body),
             isValid: true,
             wasRecovered: recovered,
             warnings: warnings,
@@ -235,7 +235,7 @@ enum ArtifactParser {
 
     // MARK: Fence-token scrub (defense in depth)
 
-    /// Removes any raw artifact wire delimiter from chat-only fallback text so
+    /// Removes any raw output wire delimiter from chat-only fallback text so
     /// a malformed or truncated response never surfaces `<<<ZERRO_ARTIFACT …>>>`
     /// / `<<<END_ZERRO_ARTIFACT>>>` verbatim in the pill. Operates per line: a
     /// line that is purely a fence token is dropped; a line where a fence token

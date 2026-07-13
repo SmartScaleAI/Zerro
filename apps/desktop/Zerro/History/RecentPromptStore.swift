@@ -18,13 +18,16 @@
 //  • JSON-on-disk was picked over SwiftData (schema-migration overhead
 //    we don't need yet) and UserDefaults (not sized for prompt bodies,
 //    plus it's a plist on disk anyway).
-//  • v2 (typed-artifact refactor Phase 2): entries gain optional
-//    chatText / artifactType / artifactBody / artifactTitle alongside the
-//    raw `prompt` (kept as the verbatim-fallback payload). Versioning is
+//  • v2 (typed-output refactor Phase 2): entries gain optional
+//    chatText / outputType / outputBody / outputTitle alongside the
+//    raw `prompt` (kept as the verbatim-fallback payload). The on-disk
+//    JSON keys for the output fields remain the original `artifactType` /
+//    `artifactBody` / `artifactTitle` (see `CodingKeys`) so existing
+//    history files keep decoding. Versioning is
 //    the FILE NAME — v2 reads/writes `recent_prompts_v2.json` and never
 //    opens the v1 file, so an old install simply starts with empty history
 //    (pre-launch, no migration by design; plan Phase 2 step 5). Title now
-//    prefers the model's artifact title, falling back to `deriveTitle`.
+//    prefers the model's output title, falling back to `deriveTitle`.
 //  • Writes are debounce-free — `add`/`delete`/`clear` write synchronously
 //    so a crash a millisecond after a successful recording doesn't lose
 //    the result. The on-disk file is small (≤50 entries) so the cost is
@@ -44,20 +47,31 @@ import os
 /// RAW generated body — kept verbatim as the fallback copy payload even in
 /// v2, where the parsed pieces ride alongside it.
 ///
-/// v2 fields (typed-artifact refactor, all optional so a chat-only response
+/// v2 fields (typed-output refactor, all optional so a chat-only response
 /// simply carries nil): `chatText` is the parsed conversational text,
-/// `artifactType` the §2 wire string (`agent_prompt`, `message`, …, stored
-/// as a String so history survives enum changes), `artifactBody` the
-/// artifact's body, and `artifactTitle` the model-written card title.
+/// `outputType` the §2 wire string (`agent_prompt`, `message`, …, stored
+/// as a String so history survives enum changes), `outputBody` the
+/// output's body, and `outputTitle` the model-written card title.
 struct RecentPrompt: Identifiable, Codable, Equatable {
     var id: UUID
     var title: String
     var prompt: String
     var timestamp: Date
     var chatText: String?
-    var artifactType: String?
-    var artifactBody: String?
-    var artifactTitle: String?
+    var outputType: String?
+    var outputBody: String?
+    var outputTitle: String?
+
+    /// The v2 file was shipped with `artifact*`-named JSON keys (pre-rename).
+    /// The Swift properties are renamed; the ON-DISK keys are a compatibility
+    /// contract and must never change without a file-name version bump —
+    /// existing users' history would silently decode these fields as nil.
+    enum CodingKeys: String, CodingKey {
+        case id, title, prompt, timestamp, chatText
+        case outputType = "artifactType"
+        case outputBody = "artifactBody"
+        case outputTitle = "artifactTitle"
+    }
 
     init(
         id: UUID = UUID(),
@@ -65,18 +79,18 @@ struct RecentPrompt: Identifiable, Codable, Equatable {
         prompt: String,
         timestamp: Date = Date(),
         chatText: String? = nil,
-        artifactType: String? = nil,
-        artifactBody: String? = nil,
-        artifactTitle: String? = nil
+        outputType: String? = nil,
+        outputBody: String? = nil,
+        outputTitle: String? = nil
     ) {
         self.id = id
         self.title = title
         self.prompt = prompt
         self.timestamp = timestamp
         self.chatText = chatText
-        self.artifactType = artifactType
-        self.artifactBody = artifactBody
-        self.artifactTitle = artifactTitle
+        self.outputType = outputType
+        self.outputBody = outputBody
+        self.outputTitle = outputTitle
     }
 }
 
@@ -87,27 +101,27 @@ extension RecentPrompt {
     /// The §2 type this entry carries, when its stored wire string still
     /// maps to a known case. nil for chat-only entries AND for a stored
     /// string the current enum no longer knows (history outlives enum
-    /// changes by design — `artifactType` is persisted as a String).
-    var resolvedArtifactType: ArtifactType? {
-        artifactType.flatMap(ArtifactType.init(rawValue:))
+    /// changes by design — `outputType` is persisted as a String).
+    var resolvedOutputType: OutputType? {
+        outputType.flatMap(OutputType.init(rawValue:))
     }
 
-    /// Row glyph for the history surfaces: the artifact type's icon, the
+    /// Row glyph for the history surfaces: the output type's icon, the
     /// generic doc for an unrecognized stored type, and a chat bubble for
     /// chat-only entries.
     var displayIconName: String {
-        guard artifactType != nil else { return "text.bubble" }
-        return (resolvedArtifactType ?? .generic).iconName
+        guard outputType != nil else { return "text.bubble" }
+        return (resolvedOutputType ?? .generic).iconName
     }
 
     /// What copying this entry puts on the clipboard — the same per-type
-    /// semantics as the live pill (§2 table): artifact body when one was
+    /// semantics as the live pill (§2 table): output body when one was
     /// attached, chat text for chat-only, the raw `prompt` for pre-v2 /
     /// fail-safe entries. History persists no frames/clicks, so an
     /// `agent_prompt` copy here carries NO Attached Context block — a
     /// known, accepted gap (plan Phase 5 step 4).
     var copyPayload: String {
-        if let artifactBody, !artifactBody.isEmpty { return artifactBody }
+        if let outputBody, !outputBody.isEmpty { return outputBody }
         if let chatText, !chatText.isEmpty { return chatText }
         return prompt
     }
@@ -164,7 +178,7 @@ final class RecentPromptStore {
     // MARK: API
 
     /// Inserts a new prompt at the top of the list. Title prefers the
-    /// model's artifact title (v2) and falls back to deriving one from the
+    /// model's output title (v2) and falls back to deriving one from the
     /// first non-empty line of `prompt`. Older entries beyond `maxEntries`
     /// fall off the end. Idempotent on duplicate `prompt` bodies —
     /// re-recording the same exact prompt bumps the existing entry's
@@ -175,13 +189,13 @@ final class RecentPromptStore {
     func add(
         prompt: String,
         chatText: String? = nil,
-        artifactType: String? = nil,
-        artifactBody: String? = nil,
-        artifactTitle: String? = nil
+        outputType: String? = nil,
+        outputBody: String? = nil,
+        outputTitle: String? = nil
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let modelTitle = artifactTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelTitle = outputTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title: String
         if let modelTitle, !modelTitle.isEmpty {
             // The contract caps titles at 80 chars; deriveTitle's capping
@@ -196,9 +210,9 @@ final class RecentPromptStore {
             title: title,
             prompt: trimmed,
             chatText: chatText,
-            artifactType: artifactType,
-            artifactBody: artifactBody,
-            artifactTitle: modelTitle.flatMap { $0.isEmpty ? nil : $0 }
+            outputType: outputType,
+            outputBody: outputBody,
+            outputTitle: modelTitle.flatMap { $0.isEmpty ? nil : $0 }
         )
 
         // Dedup against the most recent entry only — re-runs of the same

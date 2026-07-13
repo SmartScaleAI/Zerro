@@ -282,15 +282,15 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// it is gated out of error-tracker capture (a known, explainable condition,
     /// not a bug to triage).
     case responseTooLong
-    /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
+    /// A locally-stored output (frame JPEG, audio.m4a) could not be read
     /// off disk when building the provider request — the BYOK services
     /// wrap this in their `.network` case, and the managed client surfaces
-    /// it as `ManagedGenerationError.artifactUnreadable`. Local I/O on
+    /// it as `ManagedGenerationError.outputUnreadable`. Local I/O on
     /// files Zerro itself wrote, so it IS reported to the error tracker, under its
     /// own errorCode rather than polluting the provider or processing
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
-    case artifactUnreadable
+    case outputUnreadable
     /// F-07 — the managed client's pre-upload size fuse tripped: the
     /// recording's audio or encoded payload exceeds the server's `/generate`
     /// input limit, so NOTHING was uploaded and nothing was charged
@@ -372,7 +372,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .artifactUnreadable, .recordingTooLarge,
+             .outputUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
              .providerQuotaExhausted,
@@ -445,7 +445,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Generation failed \u{2014} try again."
         case .responseTooLong:
             return "The response was too long to finish \u{2014} try a shorter recording."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Couldn\u{2019}t process the recording."
         case .recordingTooLarge:
             return "This recording is too large to send \u{2014} try a shorter recording."
@@ -491,7 +491,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .providerError:             return "Generation failed"
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
-        case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .outputUnreadable:        return "Couldn\u{2019}t read result"
         case .recordingTooLarge:         return "Recording too large"
         case .outOfCredits:              return "Out of credits"
         case .outOfCreditsAtStart:       return "Out of credits"
@@ -556,7 +556,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
         case .responseTooLong:
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
         case .recordingTooLarge:
             return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
@@ -598,7 +598,7 @@ final class AppState {
             } else if oldValue.keepsElapsedTimer && !state.keepsElapsedTimer {
                 stopProcessingTimer()
             }
-            // The artifact-mode phrase rotation lives ONLY during `.processing`
+            // The output-mode phrase rotation lives ONLY during `.processing`
             // (the dev tail renders its own substatus); end it the moment
             // processing exits, even when the elapsed clock continues into the
             // dev tail.
@@ -778,7 +778,7 @@ final class AppState {
     /// teardown can't double-dispatch.
     @ObservationIgnored private var pendingReviewContinuation: CheckedContinuation<Bool, Never>?
     /// Phase 4 — the exact prompt body shown on the `.reviewingPrompt` card. Set
-    /// when the gate opens (captured from `artifact.body` before the gate runs);
+    /// when the gate opens (captured from `output.body` before the gate runs);
     /// cleared on teardown. The card reads this so it shows precisely what will be
     /// dispatched.
     @ObservationIgnored var devReviewPromptText: String = ""
@@ -838,8 +838,8 @@ final class AppState {
     /// the clipboard on the Copy button click.
     var generatedPrompt: String?
 
-    /// Typed-artifact refactor (Phase 4): the §2 parse of `generatedPrompt` —
-    /// chat text plus at most one typed artifact. Set alongside
+    /// Typed-output refactor (Phase 4): the §2 parse of `generatedPrompt` —
+    /// chat text plus at most one typed output. Set alongside
     /// `generatedPrompt` on BOTH generation paths (Managed and BYOK) and
     /// reset wherever it is. The pill's rendering shim and the Copy button's
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
@@ -1256,7 +1256,7 @@ final class AppState {
 
     /// Whole elapsed seconds since `processingElapsedStart`, advanced once per
     /// second by the processing ticker (via `setProcessingLabel`). Observed so
-    /// BOTH the artifact-mode `processingStageLabel` and the Dev Mode progress
+    /// BOTH the output-mode `processingStageLabel` and the Dev Mode progress
     /// label (composed in PillStateBridge off `processingElapsedSuffix`)
     /// re-render on every tick. 0 while no clock is running.
     private(set) var processingElapsedSeconds: Int = 0
@@ -1792,7 +1792,7 @@ final class AppState {
     /// mid-session revocation, and the three `handleSessionFinish` outcomes)
     /// can't drift in WHICH properties they clear: the next transient property
     /// added is reset everywhere by construction. Deliberately does NOT set
-    /// `state` or perform path-specific work (on-disk artifact removal, task
+    /// `state` or perform path-specific work (on-disk output removal, task
     /// cancellation, the failure reason) — those stay at each call site because
     /// they legitimately differ between paths.
     private func resetTransientRecordingState() {
@@ -1966,7 +1966,7 @@ final class AppState {
     ///   no-op — same double-fire convergence as sleep.
     /// • `.processing`: cancel the in-flight pipeline / proxy work (its awaits
     ///   are cancellation-aware) and DELETE the source `.mov` synchronously. A
-    ///   .processing-stage recording is a post-recording artifact the user is
+    ///   .processing-stage recording is a post-recording output the user is
     ///   abandoning, NOT a recoverable recording, and only a surviving `.mov`
     ///   could be wrongly picked up by the next launch's recovery scan
     ///   (`orphanedRecordings()` matches `.mov` only — the `zerro-work-*`
@@ -2714,7 +2714,7 @@ final class AppState {
 
     /// Phase E/F — the proxy generation path (Managed subscription OR trial).
     /// Uploads audio + frames (NEVER a transcript or system prompt — the
-    /// server owns those, §6.1; since the typed-artifact refactor there is no
+    /// server owns those, §6.1; since the typed-output refactor there is no
     /// mode either) to the proxy and lands the returned result on the same
     /// `.done` tail the local path uses (pill + history unchanged). Does NOT
     /// run local Whisper — the server transcribes on this path.
@@ -2762,7 +2762,7 @@ final class AppState {
         processingBaseLabel = phrase
         let elapsed = processingElapsedStart
             .map { Int((ContinuousClock.now - $0).components.seconds) } ?? 0
-        // Single source for the elapsed seconds: the artifact pill reads it
+        // Single source for the elapsed seconds: the output pill reads it
         // baked into `processingStageLabel`, the Dev Mode pill reads it live via
         // `processingElapsedSuffix`. The ticker recomposes through here, so both
         // advance together.
@@ -2771,7 +2771,7 @@ final class AppState {
     }
 
     /// The live "· Xs" elapsed suffix for the current request, or nil when no
-    /// elapsed clock is running. The artifact path bakes this same value into
+    /// elapsed clock is running. The output path bakes this same value into
     /// `processingStageLabel`; the Dev Mode dispatch tail has its own substatus
     /// labels, so PillStateBridge appends this suffix to them — keeping the
     /// counter visible and continuous from generation start through the agent
@@ -2926,7 +2926,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "managed",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.parsedResponse?.output?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
@@ -2973,7 +2973,7 @@ final class AppState {
                     // `error 0`. Those get a reason+status fingerprint so an
                     // outage collapses into a single issue. The reasons that were
                     // ALREADY captured here before this change (.providerError,
-                    // .artifactUnreadable) have no provider HTTP detail, so they
+                    // .outputUnreadable) have no provider HTTP detail, so they
                     // get NO explicit fingerprint — PostHog keeps their existing
                     // automatic grouping untouched (we only regroup the new
                     // provider cases, not the pre-existing signal).
@@ -3162,8 +3162,8 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
         case .payloadTooLarge:
             // F-07: the client-side pre-upload fuse — nothing left the machine.
             return .recordingTooLarge
@@ -3218,8 +3218,8 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
         case .payloadTooLarge:
             // F-07: the client-side pre-upload fuse — nothing left the machine.
             return .recordingTooLarge
@@ -3246,7 +3246,7 @@ final class AppState {
                 // entirely (saves the round-trip + its cost) and proceed on an
                 // empty transcript. The timeline is then frames + OCR + clicks
                 // only; the prompt's empty-narration rule covers the output
-                // (one brief chat line, no artifact).
+                // (one brief chat line, no output).
                 var transcript: Transcript
                 // Phase 3 (Local Whisper): which engine transcribed — local
                 // on-device whisper.cpp vs cloud Whisper. Drives the $0 STT cost
@@ -3399,7 +3399,7 @@ final class AppState {
     }
 
     /// The generation half of the BYOK API flow. One unified v2 prompt since
-    /// the typed-artifact refactor — no mode parameter. The
+    /// the typed-output refactor — no mode parameter. The
     /// `.processing → .done` transition fires here on success.
     private func runGeneration(
         timeline: InterleavedTimeline,
@@ -3463,7 +3463,7 @@ final class AppState {
                 guard self.state == .processing else { return }
                 self.acceptGenerationResult(rawPrompt: result.prompt)
                 // Phase 2 (M5): the model returns its structured anchors in a
-                // `zerro_anchors` block alongside the agent_prompt artifact — parse
+                // `zerro_anchors` block alongside the agent_prompt output — parse
                 // them DEFENSIVELY (unknown shapes → []). They sharpen the confirm
                 // gate's labels + confidence; absent → the gate uses the client
                 // signal alone.
@@ -3475,7 +3475,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "byok",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.parsedResponse?.output?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 // Phase 13A: terminal-success breadcrumb. If a crash
@@ -3518,89 +3518,89 @@ final class AppState {
         }
     }
 
-    // MARK: - Typed-artifact result handling (Phase 4)
+    // MARK: - Typed-output result handling (Phase 4)
 
     /// The shared `.done` tail for BOTH generation paths (Managed and BYOK):
     /// parse the raw model output against the §2 contract, surface
     /// recovery/coercion telemetry, and persist the v2 history entry (model
-    /// artifact title preferred). `generatedPrompt` keeps the raw text as
+    /// output title preferred). `generatedPrompt` keeps the raw text as
     /// the verbatim fallback; `parsedResponse` is what the pill renders.
     private func acceptGenerationResult(rawPrompt: String) {
-        let parsed = ArtifactParser.parse(rawPrompt)
+        let parsed = OutputParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
         parsedResponse = parsed
         // Tier 4 analytics: the activation signal — a usable result was produced.
         // Fired here, in the shared generation `.done` tail, so it counts once
         // per generation. Metadata only.
         Analytics.capture("artifact_produced", [
-            "artifact_type": parsed.artifact?.type.rawValue ?? "chat",
-            "was_chat_only": parsed.artifact == nil,
+            "artifact_type": parsed.output?.type.rawValue ?? "chat",
+            "was_chat_only": parsed.output == nil,
         ])
         attachedContextBlock = processedRecording.flatMap {
             AttachedContextBuilder.build(frames: $0.frames, clicks: $0.clicks)
         }
-        // Phase 5 (approved design): the result opens with the artifact card's
+        // Phase 5 (approved design): the result opens with the output card's
         // body visible — land in the expanded pill, not compact-with-"View".
         // The card's Hide chevron collapses back to the compact capsule.
         isResultExpanded = true
 
         // Production visibility for the §2 fail-safe tiers (.public — these
         // carry rule names / a type token, never response content). The
-        // recovery rate was baselined at ~4% of flash artifacts in Phase 1;
+        // recovery rate was baselined at ~4% of flash outputs in Phase 1;
         // these are the signals that tell us if it climbs in the wild.
         if !parsed.isValid {
-            Log.artifacts.warning("malformed response degraded to chat text (fail-safe fallback)")
+            Log.outputs.warning("malformed response degraded to chat text (fail-safe fallback)")
         }
         if parsed.wasRecovered {
             let rules = parsed.warnings
                 .filter { $0.hasPrefix("recovered") }
                 .joined(separator: "; ")
-            Log.artifacts.warning("recovery tier fired: \(rules, privacy: .public)")
+            Log.outputs.warning("recovery tier fired: \(rules, privacy: .public)")
         }
-        if let artifact = parsed.artifact, artifact.rawType != artifact.type.rawValue {
-            Log.artifacts.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
+        if let output = parsed.output, output.rawType != output.type.rawValue {
+            Log.outputs.warning("unknown output type \"\(output.rawType, privacy: .public)\" coerced to generic")
         }
 
         recentPromptStore?.add(
             prompt: rawPrompt,
             chatText: parsed.chatText,
-            artifactType: parsed.artifact?.type.rawValue,
-            artifactBody: parsed.artifact?.body,
-            artifactTitle: parsed.artifact?.title
+            outputType: parsed.output?.type.rawValue,
+            outputBody: parsed.output?.body,
+            outputTitle: parsed.output?.title
         )
     }
 
     /// Everything the result pill renders, in display form (Phase 5): chat
-    /// text above the optional artifact card. Falls back to the raw output
+    /// text above the optional output card. Falls back to the raw output
     /// as chat text when parsing produced no structure, so the pill always
     /// has something to show.
     var resultPresentation: ResultPresentation? {
         guard let parsed = parsedResponse else {
             return generatedPrompt.map {
-                ResultPresentation(chatText: $0, artifact: nil)
+                ResultPresentation(chatText: $0, output: nil)
             }
         }
-        guard let artifact = parsed.artifact else {
+        guard let output = parsed.output else {
             let chat = parsed.chatText.isEmpty ? (generatedPrompt ?? "") : parsed.chatText
-            return ResultPresentation(chatText: chat, artifact: nil)
+            return ResultPresentation(chatText: chat, output: nil)
         }
         return ResultPresentation(
             chatText: parsed.chatText,
-            artifact: artifact
+            output: output
         )
     }
 
     /// The Copy button's payload per the §2 per-type table (revised
-    /// 2026-06-12): the artifact body alone for EVERY type — the Attached
+    /// 2026-06-12): the output body alone for EVERY type — the Attached
     /// Context is internal-only and is never copied. A chat-only
     /// response copies the chat text. Falls back to the raw output when
     /// parsing produced no structure.
     var resultCopyPayload: String? {
         guard let parsed = parsedResponse else { return generatedPrompt }
-        guard let artifact = parsed.artifact else {
+        guard let output = parsed.output else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
-        return artifact.body
+        return output.body
     }
 
     /// The system-prompt mode for the CURRENT recording's generation: `.dev` for
@@ -3635,9 +3635,9 @@ final class AppState {
         // The dispatch payload is the agent_prompt body the dev system prompt
         // produced. No agent_prompt (e.g. the recording held no concrete change
         // → ZERRO_NO_REQUEST) → nothing to dispatch.
-        guard let artifact = parsedResponse?.artifact,
-              artifact.type == .agentPrompt,
-              !artifact.body.isEmpty else {
+        guard let output = parsedResponse?.output,
+              output.type == .agentPrompt,
+              !output.body.isEmpty else {
             devFailure = .noChangeRequested
             state = .devFailed
             return
@@ -3683,7 +3683,7 @@ final class AppState {
         let gen = devDispatchGeneration
         state = .devCheckpointing
 
-        let body = artifact.body
+        let body = output.body
         devDispatchTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await self.devDispatchCoordinator.dispatch(
@@ -4629,7 +4629,7 @@ final class AppState {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
-             .processingFailed, .artifactUnreadable,
+             .processingFailed, .outputUnreadable,
              // F-07: a real recording can't exceed the pre-upload fuse, so
              // tripping it means the pipeline mis-sized something — triage it.
              .recordingTooLarge,
@@ -4666,7 +4666,7 @@ final class AppState {
     /// response — transport (`network`), billing/entitlement
     /// (`outOfCredits`/`notEntitled`), contract
     /// (`malformedResponse`/`inputRejected`/`authFailed`), local I/O
-    /// (`artifactUnreadable`), and any non-managed error — so only genuine
+    /// (`outputUnreadable`), and any non-managed error — so only genuine
     /// provider responses carry a `providerStatus`/fingerprint. `body` is
     /// already bounded (≤80, single line) at the throw site; it's a
     /// transport/server message, NEVER content.
@@ -4681,7 +4681,7 @@ final class AppState {
             // Always HTTP 422 (the value-less case predates carrying a status).
             return (422, nil)
         case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .artifactUnreadable,
+             .network, .malformedResponse, .outputUnreadable,
              // Client-side pre-upload fuse (F-07) — no HTTP response exists.
              .payloadTooLarge:
             return nil
@@ -4739,7 +4739,7 @@ final class AppState {
                 return "The response was too long and got cut off before it finished."
             case .malformedResponse:
                 return "The generation service returned an unexpected response."
-            case .artifactUnreadable:
+            case .outputUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
             case .payloadTooLarge:
                 return "The recording exceeds the upload size limit \u{2014} nothing was sent."
@@ -4905,14 +4905,14 @@ final class AppState {
     ///   • URLError, anything else  → `.providerUnavailable` (transport
     ///     weather between us and the provider; now captured for triage,
     ///     un-fingerprinted on this BYOK path)
-    ///   • not a URLError           → `.artifactUnreadable` (local I/O on
+    ///   • not a URLError           → `.outputUnreadable` (local I/O on
     ///     files Zerro wrote — `Data(contentsOf:)` throws CocoaErrors,
     ///     never URLErrors; captured under its own errorCode)
     ///
     /// Out-of-space never reaches this: `failureReason` checks
     /// `isOutOfSpace` before any typed-error branch.
     private static func networkClassReason(_ underlying: Error) -> RecordingFailureReason {
-        guard underlying is URLError else { return .artifactUnreadable }
+        guard underlying is URLError else { return .outputUnreadable }
         return isOfflineClass(underlying) ? .networkOffline : .providerUnavailable
     }
 

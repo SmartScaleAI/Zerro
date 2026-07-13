@@ -2,7 +2,7 @@
 //  AttachedContextBuilderTests.swift
 //  ZerroTests
 //
-//  Phase 2 of the modes → typed-artifact refactor: the §2 Attached Context
+//  Phase 2 of the modes → typed-output refactor: the §2 Attached Context
 //  rules — dedupe repeated OCR lines across frames, ~4,000-char cap,
 //  omit empty sections, nil when both inputs are empty.
 //

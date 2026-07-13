@@ -35,7 +35,7 @@ final class DevPromptSelectionTests: XCTestCase {
         XCTAssertTrue(dev.contains("Goal:"), "dev prompt produces a Goal/Changes/Scope spec")
         XCTAssertTrue(dev.contains("Changes:"))
         XCTAssertTrue(dev.contains("Scope:"))
-        XCTAssertTrue(dev.contains("agent_prompt"), "dev mode always attaches an agent_prompt artifact")
+        XCTAssertTrue(dev.contains("agent_prompt"), "dev mode always attaches an agent_prompt output")
         // The normal prompt is NOT the repo-scoped dev spec.
         XCTAssertFalse(normal.contains("repo-scoped coding instruction"))
     }

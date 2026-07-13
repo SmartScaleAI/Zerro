@@ -1,5 +1,5 @@
 //
-//  ArtifactCardView.swift
+//  OutputCardView.swift
 //  Zerro
 //
 //  Created by Colin Breeding on 6/12/26.
@@ -10,16 +10,16 @@
 //  surface; this view adds no background of its own). One container, top to
 //  bottom:
 //
-//    1. header — green check badge + dynamic title (artifact) or
+//    1. header — green check badge + dynamic title (output) or
 //       "Response ready" (chat-only) left; "Hide ⌃" + hairline divider +
 //       close X right (the pre-refactor header's divider + gray-circle
 //       hover treatment).
 //    2. chat text — the conversational summary as prose (ChatProseText),
 //       sitting visually on top of the prompt box below it.
-//    3. body well — the dark inner prompt container (artifact only):
+//    3. body well — the dark inner prompt container (output only):
 //       monospace for `snippet`, markdown otherwise.
 //    4. footer — credits charge line bottom-left (when managed); the copy
-//       capsule bottom-right. An artifact shows its per-type label
+//       capsule bottom-right. An output shows its per-type label
 //       ("Copy Prompt", "Copy snippet", …); a chat-only result shows the
 //       plain "Copy" action for its explanation text.
 //
@@ -30,12 +30,12 @@
 
 import SwiftUI
 
-struct ArtifactCardView: View {
+struct OutputCardView: View {
     /// nil → the chat-only layout: no body well, and the footer's Copy uses
     /// the plain "Copy" label (it copies the explanation `chatText`).
-    let artifact: Artifact?
+    let output: GeneratedOutput?
     /// Conversational summary above the prompt box. May be empty when the
-    /// model led straight into the artifact.
+    /// model led straight into the output.
     let chatText: String
     /// "−N credits · M left" (Managed results); nil leaves the footer's
     /// left side empty (BYOK/local).
@@ -73,7 +73,7 @@ struct ArtifactCardView: View {
     /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
     /// kept; the success-only chat text and copy are
     /// suppressed — exactly as `failure` suppresses them. The charge line is NOT
-    /// suppressed (managed Dev Mode meters its prompt generation like artifact
+    /// suppressed (managed Dev Mode meters its prompt generation like output
     /// mode), so it still renders bottom-left from the shared `chargeLine`. nil → the normal card.
     /// Mutually exclusive with `failure`. Defaulted so existing call sites are
     /// unchanged.
@@ -151,8 +151,8 @@ struct ArtifactCardView: View {
                 if !chatText.isEmpty {
                     chatSection
                 }
-                if let artifact {
-                    bodyWell(for: artifact)
+                if let output {
+                    bodyWell(for: output)
                 }
             }
             footer
@@ -219,8 +219,8 @@ struct ArtifactCardView: View {
     private var title: String {
         if let failure { return failure.headline }
         if let devResult { return devResult.title }
-        guard let artifact else { return "Response ready" }
-        return artifact.title.isEmpty ? "Untitled" : artifact.title
+        guard let output else { return "Response ready" }
+        return output.title.isEmpty ? "Untitled" : output.title
     }
 
     private var collapseToggle: some View {
@@ -257,7 +257,7 @@ struct ArtifactCardView: View {
     /// cap is tight (the chat is the intro, the prompt is the payload);
     /// chat-only gets the room the old body had.
     private var chatSection: some View {
-        HeightCappedScroll(maxHeight: artifact == nil ? 420 : 160, fadesScrollEdges: true) {
+        HeightCappedScroll(maxHeight: output == nil ? 420 : 160, fadesScrollEdges: true) {
             ChatProseText(text: chatText)
         }
     }
@@ -266,19 +266,19 @@ struct ArtifactCardView: View {
 
     /// The darker inner well the prompt text sits in — the card's deepest
     /// layer, near-black over the chrome.
-    private func bodyWell(for artifact: Artifact) -> some View {
+    private func bodyWell(for output: GeneratedOutput) -> some View {
         HeightCappedScroll(maxHeight: 320) {
             Group {
-                if artifact.type.rendersMonospace {
+                if output.type.rendersMonospace {
                     // snippet — exact text, code voice. (agent_prompt is
                     // "mono-leaning" via HighlightedMarkdownView's own
                     // monospaced base font, not this branch.)
-                    Text(artifact.body)
+                    Text(output.body)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.vfTextPrimary)
                         .textSelection(.enabled)
                 } else {
-                    HighlightedMarkdownView(markdown: artifact.body)
+                    HighlightedMarkdownView(markdown: output.body)
                 }
             }
             .padding(VFSpacing.lg)
@@ -297,7 +297,7 @@ struct ArtifactCardView: View {
         HStack(spacing: VFSpacing.md) {
             // The charge line is a success-only readout — suppressed in the
             // failure configuration, but shown for the dev-result card too
-            // (managed Dev Mode meters its prompt generation just like artifact
+            // (managed Dev Mode meters its prompt generation just like output
             // mode). `.devFailed` routes through `failure`, so it's still hidden
             // there.
             if let chargeLine, failure == nil {
@@ -321,12 +321,12 @@ struct ArtifactCardView: View {
     }
 
     /// Whether the footer offers the Copy action. Copy is offered for any
-    /// artifact result, and for a chat-only result that has copyable
+    /// output result, and for a chat-only result that has copyable
     /// `chatText` (the explanation). Failure and dev-result footers own their
     /// own actions, so Copy yields to them. `internal` so the unit tests can
     /// assert visibility without rendering.
     var showsCopyAction: Bool {
-        failure == nil && devResult == nil && (artifact != nil || !chatText.isEmpty)
+        failure == nil && devResult == nil && (output != nil || !chatText.isEmpty)
     }
 
     // MARK: Failure configuration
@@ -362,7 +362,7 @@ struct ArtifactCardView: View {
 
     /// The human-readable summary above the readable git diff. The summary reuses
     /// the chat-prose voice (markdown-rendered, capped + scrollable); the diff
-    /// sits in the same dark well the artifact body uses, monospace.
+    /// sits in the same dark well the output body uses, monospace.
     @ViewBuilder
     private func devResultBody(_ dev: DevResultConfig) -> some View {
         if !dev.summary.isEmpty {
@@ -374,7 +374,7 @@ struct ArtifactCardView: View {
         devDiffWell(dev.diffText)
     }
 
-    /// The diff body well — the same near-black inner container the artifact body
+    /// The diff body well — the same near-black inner container the output body
     /// uses, holding the unified diff in a monospace, lightly colorized voice
     /// (added/removed/hunk lines tinted). Selectable; empty diffs read as a
     /// neutral placeholder.
@@ -464,7 +464,7 @@ struct ArtifactCardView: View {
             .animation(.easeInOut(duration: 0.15), value: didCopy)
         } else {
             PillPrimaryButton(
-                title: artifact?.type.buttonLabel ?? "Copy",
+                title: output?.type.buttonLabel ?? "Copy",
                 systemImage: "doc.on.doc",
                 role: .positive,
                 action: handleCopy
@@ -476,7 +476,7 @@ struct ArtifactCardView: View {
     private func handleCopy() {
         onCopy()
         Analytics.capture("artifact_copied", [
-            "artifact_type": artifact?.type.rawValue ?? "chat"
+            "artifact_type": output?.type.rawValue ?? "chat"
         ])
         didCopy = true
         copyResetTask?.cancel()
@@ -618,7 +618,7 @@ private struct ScrollEdges: Equatable {
 // markdown renders here via ProseMarkdownView — headings, bullet/numbered
 // lists, and tables lay out as structure instead of leaking through as
 // literal `###` / `|---|` / `- ` syntax — and inline markdown (`code`,
-// *emphasis*, **bold**) resolves within each block. The artifact body well
+// *emphasis*, **bold**) resolves within each block. The output body well
 // is intentionally NOT routed through this; it stays raw/monospace.
 
 struct ChatProseText: View {
@@ -634,9 +634,9 @@ struct ChatProseText: View {
 /// Focused dev-result footer: destructive "Undo" (left) + green "Accept" (right).
 /// Hover the Undo to see the faint red capsule; the full-pill variants live in
 /// PillView's "Dev result" previews.
-#Preview("Artifact card · Dev result") {
-    ArtifactCardView(
-        artifact: nil,
+#Preview("GeneratedOutput card · Dev result") {
+    OutputCardView(
+        output: nil,
         chatText: "",
         chargeLine: nil,
         noNarration: false,
@@ -644,7 +644,7 @@ struct ChatProseText: View {
         onCopy: {},
         onCollapse: {},
         onDismiss: {},
-        devResult: ArtifactCardView.DevResultConfig(
+        devResult: OutputCardView.DevResultConfig(
             title: "Changes applied",
             summary: "Recolored the primary button and tightened the header spacing.",
             diffText: """

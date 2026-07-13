@@ -10,10 +10,10 @@
 //  Providers pass it through as the system role; they MUST NOT re-author,
 //  summarize, or interpolate.
 //
-//  Typed-artifact refactor (Phase 4): output modes are GONE. v2 is one
+//  Typed-output refactor (Phase 4): output modes are GONE. v2 is one
 //  unified prompt — the model decides per-response whether to attach a typed
-//  artifact (plan §2) and the client parses the fenced contract
-//  (ArtifactParser). `composed()` takes no arguments; PromptModes.swift was
+//  output (plan §2) and the client parses the fenced contract
+//  (OutputParser). `composed()` takes no arguments; PromptModes.swift was
 //  deleted with the mode layers.
 //
 //  SINGLE SOURCE OF TRUTH / byte-mirror set (every edit updates all or none):
@@ -39,7 +39,7 @@
 //  implementation one. Re-run the artifact eval (eval-models.mjs --artifact)
 //  and update the canonical doc's changelog with any edit.
 //
-//  2026-06-11 (typed-artifact Phase 4): replaced the v1 base + mode layers
+//  2026-06-11 (typed-output Phase 4): replaced the v1 base + mode layers
 //  with the locked v2 unified prompt (Phase 1 eval: all six registry models
 //  pass attach/type/validity bars; see Scripts/artifact-eval/
 //  EVAL-REPORT-phase1.md).
@@ -197,7 +197,7 @@ enum PromptGenerationSystemPrompt {
     /// `supabase/functions/generate/prompt.ts` (enforced against the same
     /// mirror by its prompt_test.ts) — every edit updates all three or none.
     /// The output still uses the ZERRO_ARTIFACT fence with
-    /// `type="agent_prompt"`, so the existing ArtifactParser extracts the body;
+    /// `type="agent_prompt"`, so the existing OutputParser extracts the body;
     /// the BODY follows the Goal/Changes/Scope spec the local agent acts on.
     static let devText: String = """
     You convert a screen recording of a running app into a precise, repo-scoped coding instruction. The recording was made by the developer of THIS exact codebase, and your output is handed to a coding agent (e.g. Claude Code) that already has the project open as its working directory and will edit the real files on disk — a live dev server hot-reloads the result as it goes. You are the EYES: turn what was seen and said into an exact change spec. The agent is the HANDS: it finds the files and writes the edit. The agent did NOT see the recording, so everything it needs must be in your output.

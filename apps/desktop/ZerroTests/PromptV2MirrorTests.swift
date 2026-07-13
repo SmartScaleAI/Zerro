@@ -2,7 +2,7 @@
 //  PromptV2MirrorTests.swift
 //  ZerroTests
 //
-//  Phase 4 of the typed-artifact refactor: byte-identity enforcement for the
+//  Phase 4 of the typed-output refactor: byte-identity enforcement for the
 //  BYOK copy of the locked prompt v2 — the Swift twin of the server's
 //  prompt_test.ts. The in-repo source of truth is the first fenced block of
 //  Scripts/artifact-eval/prompt-v2.md; this test reads it via #filePath and
@@ -17,7 +17,7 @@ final class PromptV2MirrorTests: XCTestCase {
 
     /// `ZerroTests/PromptV2MirrorTests.swift` → `apps/desktop/` →
     /// `Scripts/artifact-eval/prompt-v2.md` (same repo-relative pattern as
-    /// ArtifactParserTests).
+    /// OutputParserTests).
     private static let mirrorURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -48,7 +48,7 @@ final class PromptV2MirrorTests: XCTestCase {
         XCTAssertEqual(composed.count, 14_228, "locked v2 length — update alongside an intentional prompt change")
     }
 
-    func testComposedCarriesTheArtifactContractNotModes() {
+    func testComposedCarriesTheOutputContractNotModes() {
         let p = PromptGenerationSystemPrompt.composed()
         XCTAssertTrue(p.contains("<<<ZERRO_ARTIFACT"))
         XCTAssertTrue(p.contains("<<<END_ZERRO_ARTIFACT>>>"))

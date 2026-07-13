@@ -1,8 +1,8 @@
 //
-//  ArtifactParserTests.swift
+//  OutputParserTests.swift
 //  ZerroTests
 //
-//  Phase 2 of the modes → typed-artifact refactor. Two layers:
+//  Phase 2 of the modes → typed-output refactor. Two layers:
 //
 //  1. The shared contract suite: `Scripts/artifact-eval/parser-tests.json`
 //     is the §2 contract's executable spec — 41 cases (strict + recovery
@@ -19,7 +19,7 @@
 import XCTest
 @testable import Zerro
 
-final class ArtifactParserTests: XCTestCase {
+final class OutputParserTests: XCTestCase {
 
     // MARK: - Shared contract suite (parser-tests.json)
 
@@ -34,7 +34,7 @@ final class ArtifactParserTests: XCTestCase {
         struct Expect: Decodable {
             let valid: Bool?
             let recovered: Bool?
-            let hasArtifact: Bool?
+            let hasOutput: Bool?
             let type: String?
             let rawType: String?
             let title: String?
@@ -45,10 +45,21 @@ final class ArtifactParserTests: XCTestCase {
             let chatTextNotContains: String?
             let warningsContain: String?
             let requestPresent: Bool?
+
+            /// The shared JSON spec (Phase 4 territory) still names the
+            /// field `hasArtifact`; only the Swift side is renamed. Pinned
+            /// so the assertion can't silently decode to nil and skip.
+            enum CodingKeys: String, CodingKey {
+                case valid, recovered, type, rawType, title
+                case bodyStartsWith, bodyEndsWith, bodyContains
+                case chatTextContains, chatTextNotContains
+                case warningsContain, requestPresent
+                case hasOutput = "hasArtifact"
+            }
         }
     }
 
-    /// `ZerroTests/ArtifactParserTests.swift` → `apps/desktop/` →
+    /// `ZerroTests/OutputParserTests.swift` → `apps/desktop/` →
     /// `Scripts/artifact-eval/parser-tests.json`. Loading the repo file via
     /// `#filePath` (the project's pattern for repo-relative test inputs)
     /// keeps the JSON the single executable spec for both implementations.
@@ -64,7 +75,7 @@ final class ArtifactParserTests: XCTestCase {
 
         for c in cases {
             let label = "[\(c.tier)] \(c.name)"
-            let got = ArtifactParser.parse(c.input)
+            let got = OutputParser.parse(c.input)
             let e = c.expect
 
             if let valid = e.valid {
@@ -73,26 +84,26 @@ final class ArtifactParserTests: XCTestCase {
             if let recovered = e.recovered {
                 XCTAssertEqual(got.wasRecovered, recovered, "\(label): recovered")
             }
-            if let hasArtifact = e.hasArtifact {
-                XCTAssertEqual(got.artifact != nil, hasArtifact, "\(label): hasArtifact")
+            if let hasOutput = e.hasOutput {
+                XCTAssertEqual(got.output != nil, hasOutput, "\(label): hasOutput")
             }
             if let type = e.type {
-                XCTAssertEqual(got.artifact?.type.rawValue, type, "\(label): type")
+                XCTAssertEqual(got.output?.type.rawValue, type, "\(label): type")
             }
             if let rawType = e.rawType {
-                XCTAssertEqual(got.artifact?.rawType, rawType, "\(label): rawType")
+                XCTAssertEqual(got.output?.rawType, rawType, "\(label): rawType")
             }
             if let title = e.title {
-                XCTAssertEqual(got.artifact?.title, title, "\(label): title")
+                XCTAssertEqual(got.output?.title, title, "\(label): title")
             }
             if let prefix = e.bodyStartsWith {
-                XCTAssertTrue(got.artifact?.body.hasPrefix(prefix) ?? false, "\(label): body should start with \(prefix)")
+                XCTAssertTrue(got.output?.body.hasPrefix(prefix) ?? false, "\(label): body should start with \(prefix)")
             }
             if let suffix = e.bodyEndsWith {
-                XCTAssertTrue(got.artifact?.body.hasSuffix(suffix) ?? false, "\(label): body should end with \(suffix)")
+                XCTAssertTrue(got.output?.body.hasSuffix(suffix) ?? false, "\(label): body should end with \(suffix)")
             }
             if let contains = e.bodyContains {
-                XCTAssertTrue(got.artifact?.body.contains(contains) ?? false, "\(label): body should contain \(contains)")
+                XCTAssertTrue(got.output?.body.contains(contains) ?? false, "\(label): body should contain \(contains)")
             }
             if let chat = e.chatTextContains {
                 XCTAssertTrue(got.chatText.contains(chat), "\(label): chatText should contain \(chat)")
@@ -121,9 +132,9 @@ final class ArtifactParserTests: XCTestCase {
         I didn't catch a request in this recording — record again and say what you need.
         <<<ZERRO_NO_REQUEST>>>
         """
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.isValid)
-        XCTAssertNil(got.artifact)
+        XCTAssertNil(got.output)
         XCTAssertFalse(got.requestPresent)
         XCTAssertFalse(got.chatText.contains("ZERRO_NO_REQUEST"), "sentinel must be stripped from chat text")
         XCTAssertTrue(got.chatText.contains("didn't catch a request"))
@@ -135,20 +146,20 @@ final class ArtifactParserTests: XCTestCase {
     /// the surrounding sentence survives intact.
     func testNoRequestSentinelInlineIsStrippedAndGates() {
         let raw = "I didn't catch a request in this recording — record again and say what you need. <<<ZERRO_NO_REQUEST>>>"
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.isValid)
-        XCTAssertNil(got.artifact)
+        XCTAssertNil(got.output)
         XCTAssertFalse(got.requestPresent)
         XCTAssertFalse(got.chatText.contains("ZERRO_NO_REQUEST"), "inline sentinel must be stripped from chat text")
         XCTAssertTrue(got.chatText.contains("record again and say what you need."))
     }
 
-    /// requestPresent stays true for an ordinary artifact-less reply (the
+    /// requestPresent stays true for an ordinary output-less reply (the
     /// category-2 explain/advice case).
     func testRequestPresentDefaultsTrueWithoutSentinel() {
-        let got = ArtifactParser.parse("Here's why that build fails — the cache key is stale.")
+        let got = OutputParser.parse("Here's why that build fails — the cache key is stale.")
         XCTAssertTrue(got.isValid)
-        XCTAssertNil(got.artifact)
+        XCTAssertNil(got.output)
         XCTAssertTrue(got.requestPresent)
     }
 
@@ -162,13 +173,13 @@ final class ArtifactParserTests: XCTestCase {
         Salut l'équipe — le café ☕️ est prêt. 出荷します。
         <<<END_ZERRO_ARTIFACT>>>
         """
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.isValid)
         XCTAssertFalse(got.wasRecovered)
-        XCTAssertEqual(got.artifact?.type, .message)
-        XCTAssertEqual(got.artifact?.title, "Déploiement — 出荷 ✅")
+        XCTAssertEqual(got.output?.type, .message)
+        XCTAssertEqual(got.output?.title, "Déploiement — 出荷 ✅")
         XCTAssertTrue(got.chatText.contains("🚀"))
-        XCTAssertEqual(got.artifact?.body, "Salut l'équipe — le café ☕️ est prêt. 出荷します。")
+        XCTAssertEqual(got.output?.body, "Salut l'équipe — le café ☕️ est prêt. 出荷します。")
     }
 
     /// Title length is counted in Characters (grapheme clusters): 80 emoji
@@ -181,13 +192,13 @@ final class ArtifactParserTests: XCTestCase {
     /// warning is advisory — it never affects validity or parsing.
     func testTitleCapCountsGraphemes() {
         let exactly80 = String(repeating: "🦊", count: 80)
-        let atCap = ArtifactParser.parse(
+        let atCap = OutputParser.parse(
             "chat\n<<<ZERRO_ARTIFACT type=\"generic\" title=\"\(exactly80)\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>"
         )
         XCTAssertTrue(atCap.isValid)
         XCTAssertFalse(atCap.warnings.contains { $0.contains("80") }, "80 graphemes is AT the cap, not over")
 
-        let over = ArtifactParser.parse(
+        let over = OutputParser.parse(
             "chat\n<<<ZERRO_ARTIFACT type=\"generic\" title=\"\(exactly80)🦊\">>>\nbody\n<<<END_ZERRO_ARTIFACT>>>"
         )
         XCTAssertTrue(over.isValid, "over-long title warns but stays valid")
@@ -200,11 +211,11 @@ final class ArtifactParserTests: XCTestCase {
     /// once must still recover (the JSON spec covers each separately).
     func testCRLFWithRecoveryTier() {
         let raw = "chat line\r\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">\r\nls -la\r\n<<<END_ZERRO_ARTIFACT>>>\r\n"
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.isValid)
         XCTAssertTrue(got.wasRecovered)
-        XCTAssertEqual(got.artifact?.type, .snippet)
-        XCTAssertEqual(got.artifact?.body, "ls -la")
+        XCTAssertEqual(got.output?.type, .snippet)
+        XCTAssertEqual(got.output?.body, "ls -la")
         XCTAssertEqual(got.chatText, "chat line")
     }
 
@@ -226,18 +237,18 @@ final class ArtifactParserTests: XCTestCase {
         let x = foo(bar)
         <<<END_ZERRO_ARTIFACT>>>
         """
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.isValid)
-        XCTAssertEqual(got.artifact?.type, .snippet)
+        XCTAssertEqual(got.output?.type, .snippet)
         XCTAssertTrue(got.chatText.contains("```swift"))
     }
 
     /// Whitespace-only input is valid chat-only with empty chat text — the
     /// degenerate floor of the fail-safe guarantee (never crash).
     func testWhitespaceOnlyInput() {
-        let got = ArtifactParser.parse("  \n\t\n  ")
+        let got = OutputParser.parse("  \n\t\n  ")
         XCTAssertTrue(got.isValid)
-        XCTAssertNil(got.artifact)
+        XCTAssertNil(got.output)
         XCTAssertEqual(got.chatText, "")
     }
 
@@ -247,8 +258,8 @@ final class ArtifactParserTests: XCTestCase {
     /// body, not per-line).
     func testR3PreservesInteriorIndentation() {
         let raw = "chat\n<<<ZERRO_ARTIFACT type=\"snippet\" title=\"T\">>>\nfunc f() {\n    return 1\n}<<<END_ZERRO_ARTIFACT>>>"
-        let got = ArtifactParser.parse(raw)
+        let got = OutputParser.parse(raw)
         XCTAssertTrue(got.wasRecovered)
-        XCTAssertEqual(got.artifact?.body, "func f() {\n    return 1\n}")
+        XCTAssertEqual(got.output?.body, "func f() {\n    return 1\n}")
     }
 }

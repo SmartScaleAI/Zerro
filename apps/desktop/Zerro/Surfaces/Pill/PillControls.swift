@@ -10,7 +10,7 @@
 //
 //  These four components are the canonical replacements, applied with a
 //  semantic-by-intent color rule (see the per-view call sites in PillView.swift
-//  and ArtifactCardView.swift):
+//  and OutputCardView.swift):
 //
 //    - PillPrimaryButton    — the one filled button; .role picks the fill.
 //    - PillSecondaryButton  — the quiet text button (Cancel / Discard / Revert).
@@ -186,7 +186,7 @@ struct DevUndoButton: View {
     }
 }
 
-/// Green "Accept" CTA — a filled `vfSuccessGreen` capsule mirroring the artifact
+/// Green "Accept" CTA — a filled `vfSuccessGreen` capsule mirroring the output
 /// card's hero copy footprint, but a one-shot action (no copy-feedback flip):
 /// keeps the agent's changes and closes the card.
 struct DevAcceptButton: View {

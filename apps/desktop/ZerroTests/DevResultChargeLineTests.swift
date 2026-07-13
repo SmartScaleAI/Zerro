@@ -8,7 +8,7 @@
 //  the `.devDone` card — carried through the bridge's `DevResultCard` and
 //  rendered bottom-left in the footer. BYOK (no managed call →
 //  `lastGenerationCharge == nil`) carries no charge line, exactly like an
-//  artifact result with no `credits_charged`.
+//  output result with no `credits_charged`.
 //
 
 import AppKit
@@ -49,14 +49,14 @@ final class DevResultChargeLineTests: XCTestCase {
         guard case .devDone(let card, _) = appState.pillState else {
             return XCTFail("`.devDone` must map to the `.devDone` card, got \(String(describing: appState.pillState))")
         }
-        // Identical to what the artifact path produces from the same charge.
+        // Identical to what the output path produces from the same charge.
         let expected = CreditDisplay.chargeLine(charged: 4, remaining: 96)
         XCTAssertEqual(card.chargeLine, expected)
         XCTAssertEqual(card.chargeLine, "\u{2212}4 credits \u{00B7} 96 left")
     }
 
     /// A BYOK dev result (no managed call → nil charge) carries no charge line,
-    /// exactly like an artifact result with no `credits_charged`.
+    /// exactly like an output result with no `credits_charged`.
     func testByokDevResultCarriesNoChargeLine() {
         let appState = makeDevDoneState(charge: nil)
 
@@ -69,7 +69,7 @@ final class DevResultChargeLineTests: XCTestCase {
     // MARK: Render smoke
 
     /// The expanded `.devDone` card with a charge line lays out (and, by reusing
-    /// the artifact footer's left slot, shows it bottom-left alongside Undo/Accept).
+    /// the output footer's left slot, shows it bottom-left alongside Undo/Accept).
     func testDevDoneWithChargeLineRendersExpandedCard() throws {
         let view = PillView(state: .devDone(
             card: DevResultCard(

@@ -3,7 +3,7 @@
 //  ZerroTests
 //
 //  Pins `.devFailed` to the SHARED expanded failure card (the same
-//  `ArtifactCardView` + `FailureConfig` layout `.error` / `.failureExpanded`
+//  `OutputCardView` + `FailureConfig` layout `.error` / `.failureExpanded`
 //  use): the bridge must carry a short `headline` plus the FULL agent
 //  error / reason as `detail` — never the old single-line, lineLimit(3)
 //  capsule that clipped a long message (the `ActionRequiredError: Named
