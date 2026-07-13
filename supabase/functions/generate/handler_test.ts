@@ -56,6 +56,24 @@ class InMemoryStore implements BillingStore {
   // the TTL (clock control isn't needed to exercise the dedup logic).
   idempotent = new Map<string, IdempotentResult>();
 
+  // X-02 deposit-and-settle holds. Mirrors the SQL one-owner rule: a hold is
+  // owned by the subscription when present, else the trial grant. `expired`
+  // stands in for a lapsed TTL (no clock needed — active_hold_credits simply
+  // ignores expired rows, which is exactly the SQL contract).
+  holds = new Map<string, {
+    ownerSub: string | null;
+    ownerGrant: string | null;
+    credits: number;
+    measuredSeconds: number | null;
+    expired?: boolean;
+  }>();
+  /** Force the hold RPC to fail (infra error) — the call-1 path must FAIL CLOSED. */
+  forceHoldError = false;
+  /** Force the active-holds read to fail — the credit gates must FAIL CLOSED. */
+  forceActiveHoldsError = false;
+  /** Count settles so a replay test can prove no second settle happened. */
+  settleCalls = 0;
+
   seed(sub: Omit<SubRow, "trial_grant_id"> & { trial_grant_id?: string | null }, usedCredits = 0) {
     this.subs.set(sub.id, { trial_grant_id: null, ...sub });
     this.used.set(sub.id, usedCredits);
@@ -152,6 +170,129 @@ class InMemoryStore implements BillingStore {
   logGeneration(row: GenerationLogRow) {
     this.log.push(row);
     return Promise.resolve();
+  }
+
+  // ---- X-02 deposit-and-settle holds ----------------------------------------
+  // Each mirrors its SQL primitive's contract (credit_holds_deposit_settle
+  // migration) — the handler tests below lean on these semantics being faithful.
+
+  private sumHolds(subId: string | null, grantId: string | null, excludeKey: string | null): number {
+    let sum = 0;
+    for (const [k, h] of this.holds) {
+      if (k === excludeKey || h.expired) continue;
+      // A grant-side query also sees subscription-owned holds of every
+      // subscription LINKED to that grant (the conversion link) — a combined
+      // hold's spendable math included the grant remainder, so the trial side
+      // must not be able to bypass the reservation. Mirrors active_hold_credits.
+      const linkedToGrant = grantId !== null && h.ownerSub !== null &&
+        this.subs.get(h.ownerSub)?.trial_grant_id === grantId;
+      if (
+        (subId !== null && h.ownerSub === subId) ||
+        (grantId !== null && h.ownerGrant === grantId) ||
+        linkedToGrant
+      ) {
+        sum += h.credits;
+      }
+    }
+    return sum;
+  }
+
+  async holdCredit(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+    _ttlSeconds: number,
+    measuredSeconds: number | null,
+  ): Promise<"held" | "insufficient"> {
+    if (this.forceHoldError) throw new Error("hold_rpc_down");
+    const ownerSub = subscriptionId;
+    const ownerGrant = subscriptionId !== null ? null : trialGrantId;
+    const existing = this.holds.get(idemKey);
+    if (existing) {
+      if (existing.ownerSub === ownerSub && existing.ownerGrant === ownerGrant) {
+        existing.expired = false; // idempotent replay refreshes the TTL
+        return "held";
+      }
+      throw new Error("hold_credit: key is held by another account");
+    }
+    // Real availability, mirroring hold_credit's locked computation: the
+    // subscription's plan+topup (non-spendable → insufficient), plus a linked
+    // verified grant's remainder for a combined account; a pure-trial hold
+    // requires a verified grant.
+    let real = 0;
+    if (subscriptionId !== null) {
+      const sub = this.subs.get(subscriptionId);
+      if (!sub || (sub.status !== "active" && sub.status !== "past_due")) return "insufficient";
+      const used = this.used.get(subscriptionId) ?? sub.credits_limit;
+      real += Math.max(0, sub.credits_limit - used) + (this.topup.get(subscriptionId) ?? 0);
+      if (trialGrantId !== null) {
+        const g = this.trialGrants.get(trialGrantId);
+        if (g && g.verified) real += Math.max(0, g.limit - g.used);
+      }
+    } else {
+      const g = this.trialGrants.get(trialGrantId!);
+      if (!g || !g.verified) return "insufficient";
+      real += Math.max(0, g.limit - g.used);
+    }
+    if (real - this.sumHolds(subscriptionId, trialGrantId, idemKey) < credits) return "insufficient";
+    this.holds.set(idemKey, { ownerSub, ownerGrant, credits, measuredSeconds });
+    return "held";
+  }
+
+  async settleCreditHold(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+  ): Promise<number | null> {
+    this.settleCalls++;
+    // Consume via the SAME fake spenders the plain consume path uses (the SQL
+    // settle dispatches to the identical consume_* functions).
+    let after: number | null;
+    if (subscriptionId !== null && trialGrantId !== null) {
+      const r = await this.consumeCombinedCredit(trialGrantId, subscriptionId, credits);
+      after = r === null ? null : r.remaining;
+    } else if (subscriptionId !== null) {
+      after = await this.consumeCredit(subscriptionId, credits);
+    } else if (trialGrantId !== null) {
+      after = await this.consumeTrialCredit(trialGrantId, credits);
+    } else {
+      after = null;
+    }
+    if (after === null) return null; // nothing spent; the hold is left to TTL
+    const h = this.holds.get(idemKey);
+    // Owner match, incl. the CONVERSION edge (mirrors settle_credit_hold): a
+    // grant-owned hold placed by the user's pre-conversion trial identity is
+    // released by their subscription token through the conversion link.
+    const viaConversionLink = h !== undefined && subscriptionId !== null && h.ownerGrant !== null &&
+      this.subs.get(subscriptionId)?.trial_grant_id === h.ownerGrant;
+    if (
+      h &&
+      ((subscriptionId !== null && h.ownerSub === subscriptionId) ||
+        (trialGrantId !== null && h.ownerGrant === trialGrantId) ||
+        viaConversionLink)
+    ) {
+      this.holds.delete(idemKey);
+    }
+    return after;
+  }
+
+  releaseCreditHold(idemKey: string, subscriptionId: string | null, trialGrantId: string | null) {
+    const h = this.holds.get(idemKey);
+    if (
+      h &&
+      ((subscriptionId !== null && h.ownerSub === subscriptionId) ||
+        (trialGrantId !== null && h.ownerGrant === trialGrantId))
+    ) {
+      this.holds.delete(idemKey);
+    }
+    return Promise.resolve();
+  }
+
+  activeHoldCredits(subscriptionId: string | null, trialGrantId: string | null, excludeKey: string | null) {
+    if (this.forceActiveHoldsError) return Promise.reject(new Error("holds_read_down"));
+    return Promise.resolve(this.sumHolds(subscriptionId, trialGrantId, excludeKey));
   }
 
   // ---- Idempotency cache (M1) -----------------------------------------------
@@ -1464,10 +1605,9 @@ function devTranscribeBody(over: Record<string, unknown> = {}) {
   };
 }
 
-Deno.test("dev_transcribe: returns word timing, and charges/runs/holds NOTHING (no credit, chat, slot, idempotency)", async () => {
+Deno.test("dev_transcribe: returns word timing, HOLDS 1 credit (X-02) and consumes/runs NOTHING (no charge, chat, slot, idempotency)", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
-  // Pass an Idempotency-Key to prove the free path ignores it (writes no entry).
   const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "idem-dev-1"), deps(store, openai));
 
   assertEquals(res.status, 200);
@@ -1482,19 +1622,34 @@ Deno.test("dev_transcribe: returns word timing, and charges/runs/holds NOTHING (
   assertEquals(openai.chatCalls, 0, "no chat model on call 1");
   assertEquals(openai.makeChatCalls.length, 0, "no chat client built on call 1");
 
-  // No billing machinery: no slot, no credit, no idempotency, not logged.
+  // X-02: the authorization hold was placed under the recording's key — a
+  // RESERVATION, not a charge (nothing consumed, nothing logged).
+  assertEquals(store.holds.get("idem-dev-1")?.credits, 1, "call 1 holds exactly the 1-credit floor");
+  assertEquals(store.holds.get("idem-dev-1")?.ownerSub, "sub-1", "the hold is owned by the subscription identity");
+
+  // No other billing machinery: no slot, no consume, no idempotency, not logged.
   assertEquals(store.acquireSlotCalls, 0, "call 1 acquires NO concurrency slot");
   assertEquals(store.slots.size, 0);
-  assertEquals(store.used.get("sub-1") ?? 0, 0, "no credit consumed on call 1");
+  assertEquals(store.used.get("sub-1") ?? 0, 0, "no credit consumed on call 1 — a hold is not a charge");
   assertEquals(store.idempotent.size, 0, "no idempotency entry written on call 1");
   assertEquals(store.log.length, 0, "call 1 is not a billable generation — not logged");
 });
 
-Deno.test("dev_transcribe with has_speech:false → empty transcript, no STT (graceful fallback to click/dwell)", async () => {
+Deno.test("dev_transcribe without an Idempotency-Key → 400, no Whisper, no hold (X-02: call 1 must identify its recording)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody()), deps(store, openai));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "missing_idempotency_key");
+  assertEquals(openai.transcribeCalls, 0, "no STT for an unidentifiable call 1");
+  assertEquals(store.holds.size, 0);
+});
+
+Deno.test("dev_transcribe with has_speech:false → empty transcript, no STT, and NO hold (nothing to protect)", async () => {
   const store = activeStore(0);
   const openai = new StubProvider();
   const res = await handleGenerate(
-    makeReq(await mintToken(), devTranscribeBody({ has_speech: false }), undefined),
+    makeReq(await mintToken(), devTranscribeBody({ has_speech: false }), "idem-dev-nospeech"),
     deps(store, openai),
   );
 
@@ -1504,17 +1659,19 @@ Deno.test("dev_transcribe with has_speech:false → empty transcript, no STT (gr
   assertEquals(json.transcript.segments, []);
   assertEquals(openai.transcribeCalls, 0, "no-speech → no STT round-trip");
   assertEquals(store.acquireSlotCalls, 0);
+  assertEquals(store.holds.size, 0, "no provider cost → no reservation");
 });
 
-Deno.test("dev_transcribe is rate-limited (bounds free-STT abuse) without taking a slot", async () => {
+Deno.test("dev_transcribe is rate-limited (bounds free-STT abuse) without taking a slot or placing a hold", async () => {
   const store = activeStore(0);
   store.rateOk = false;
   const openai = new StubProvider();
-  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody()), deps(store, openai));
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "idem-dev-rate"), deps(store, openai));
 
   assertEquals(res.status, 429);
   assertEquals(openai.transcribeCalls, 0, "rate-limited before any STT");
   assertEquals(store.acquireSlotCalls, 0);
+  assertEquals(store.holds.size, 0, "rate-limited before the hold — no hold-table spam");
 });
 
 Deno.test("dev_transcribe requires a valid identity (unauth → 401, no STT)", async () => {
@@ -1536,15 +1693,15 @@ Deno.test("dev_transcribe applies the audio fuse (missing audio → 400, no STT)
   assertEquals(openai.transcribeCalls, 0);
 });
 
-// ---- dev_transcribe is FREE for everyone (X-01 trial metering on THIS leg
-// reverted — we "eat" the sub-cent Whisper cost; the audio byte cap + rate limit +
-// the out-of-band global cap are the bound, not a credit). The subscription free
-// path is also covered by the "charges/runs/holds NOTHING" test above. -----------
+// ---- dev_transcribe under X-02: the transcription itself stays un-CHARGED for
+// both identities (the sub-cent Whisper cost is still eaten — nothing is ever
+// consumed on call 1), but the un-METERED gap is closed: call 1 now reserves the
+// 1-credit floor as a hold, refused BEFORE Whisper when the spendable balance
+// (real − active holds) can't cover it. --------------------------------------
 
-Deno.test("dev_transcribe (trial): FREE — transcribes, consumes NO credit, takes NO slot, writes NO idempotency", async () => {
+Deno.test("dev_transcribe (trial): transcribes with a HOLD, consumes NO credit, takes NO slot, writes NO idempotency", async () => {
   const store = trialStore(0, 15);
   const openai = new StubProvider();
-  // Pass an Idempotency-Key to prove the free path ignores it (writes no entry).
   const res = await handleGenerate(
     makeReq(await mintTrialToken(), devTranscribeBody(), "rec-free-1"),
     deps(store, openai),
@@ -1554,33 +1711,40 @@ Deno.test("dev_transcribe (trial): FREE — transcribes, consumes NO credit, tak
   assertEquals(json.transcript.words, [{ word: "hello", start: 0, end: 1 }, { word: "world", start: 1, end: 2 }]);
   assertEquals(openai.transcribeCalls, 1);
   assertEquals(openai.chatCalls, 0, "no chat model on call 1");
-  // Free for a TRIAL token: nothing charged, no slot, no idempotency entry.
-  assertEquals(store.trialGrants.get("grant-1")?.used, 0, "trial transcription is free");
+  // Un-CHARGED for a TRIAL token: nothing consumed, no slot, no idempotency
+  // entry — just the reservation, owned by the grant.
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0, "trial transcription consumes nothing");
+  assertEquals(store.holds.get("rec-free-1")?.ownerGrant, "grant-1", "the hold is owned by the trial grant");
   assertEquals(store.trialSlots.size, 0, "no trial slot taken");
-  assertEquals(store.idempotent.size, 0, "no idempotency entry written on the free path");
+  assertEquals(store.idempotent.size, 0, "no idempotency entry written on call 1");
 });
 
-Deno.test("dev_transcribe (trial): free EVEN on an exhausted grant (no floor gate on the eaten leg)", async () => {
+Deno.test("dev_transcribe (trial): an exhausted grant → 402 out_of_credits BEFORE any Whisper (X-02 closes the free leg)", async () => {
   const store = trialStore(15, 15); // 0 credits remaining
   const openai = new StubProvider();
-  const res = await handleGenerate(makeReq(await mintTrialToken(), devTranscribeBody()), deps(store, openai));
-  assertEquals(res.status, 200, "transcription is free regardless of balance");
-  assertEquals(openai.transcribeCalls, 1);
+  const res = await handleGenerate(
+    makeReq(await mintTrialToken(), devTranscribeBody(), "rec-broke-1"),
+    deps(store, openai),
+  );
+  assertEquals(res.status, 402, "a spendable-zero identity can no longer transcribe for free");
+  assertEquals((await res.json()).error, "out_of_credits");
+  assertEquals(openai.transcribeCalls, 0, "refused before paying Whisper");
   assertEquals(store.trialGrants.get("grant-1")?.used, 15, "unchanged — nothing charged");
-  // The PAIRED generation (call 2) still enforces the credit floor — that leg is unchanged.
+  assertEquals(store.holds.size, 0, "insufficient → nothing reserved");
 });
 
-Deno.test("dev_transcribe (trial): has_speech:false stays free with NO provider call", async () => {
+Deno.test("dev_transcribe (trial): has_speech:false stays un-held with NO provider call", async () => {
   const store = trialStore(0, 15);
   const openai = new StubProvider();
   const res = await handleGenerate(
-    makeReq(await mintTrialToken(), devTranscribeBody({ has_speech: false })),
+    makeReq(await mintTrialToken(), devTranscribeBody({ has_speech: false }), "rec-nospeech-1"),
     deps(store, openai),
   );
   assertEquals(res.status, 200);
   assertEquals((await res.json()).transcript.segments, []);
   assertEquals(openai.transcribeCalls, 0, "no-speech → no Whisper");
   assertEquals(store.trialGrants.get("grant-1")?.used, 0);
+  assertEquals(store.holds.size, 0, "no provider cost → no reservation");
 });
 
 // ---- Audio byte cap (B-03) — the load-bearing pre-Whisper bound on a single STT
@@ -1627,7 +1791,7 @@ Deno.test("a normal-size recording (under the cap) is still accepted on BOTH pat
   const tStore = trialStore(0, 15);
   const tAI = new StubProvider();
   const tRes = await handleGenerate(
-    makeReq(await mintTrialToken(), devTranscribeBody({ audio: normalAudio() })),
+    makeReq(await mintTrialToken(), devTranscribeBody({ audio: normalAudio() }), "rec-normal-size"),
     deps(tStore, tAI),
   );
   assertEquals(tRes.status, 200, "normal recording accepted on the transcribe path");
@@ -2019,4 +2183,255 @@ Deno.test("combined: consume returns null (non-spendable, defensive race) → 40
   assertEquals(store.log[0].creditsUsed, null);
   assertEquals(store.idempotent.size, 0); // nothing cached on the refuse path
   assertEquals(store.slots.size, 0);
+});
+
+// =============================================================================
+// X-02 deposit-and-settle — the Dev Mode call-1 HOLD and call-2 SETTLE. A hold
+// is a reservation, never a charge; every affordability gate checks SPENDABLE
+// (real − active holds, excluding the request's own key); call 2 consumes the
+// real cost and releases the hold in one settle. These tests walk the six
+// money-safety invariants end-to-end against the fake store, whose hold
+// semantics mirror the SQL primitives (credit_holds_test.sql pins those).
+// =============================================================================
+
+Deno.test("X-02: the 2-call pair — call 1 holds, call 2 settles the real cost and the hold is gone", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const KEY = "rec-pair-1";
+
+  // Call 1: hold placed, nothing consumed.
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.get(KEY)?.credits, 1);
+  assertEquals(store.used.get("sub-1") ?? 0, 0, "the hold charged nothing");
+
+  // Call 2 (same key): settles — the REAL metered cost is consumed exactly
+  // once and the reservation disappears with it, atomically (invariant 4).
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  assertEquals(store.holds.size, 0, "settle released the hold");
+  assertEquals(store.used.get("sub-1"), json.credits_charged, "exactly the metered charge — never charge + hold");
+  assertEquals(store.settleCalls, 1);
+  assertEquals(store.log.length, 1, "one billable generation across the pair");
+});
+
+Deno.test("X-02: a call-1 retry with the same key does NOT double-hold (idempotent reservation)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const KEY = "rec-retry-1";
+
+  const first = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(first.status, 200);
+  const retry = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200, "the retry is served (re-transcribed), not refused");
+
+  assertEquals(store.holds.size, 1, "one reservation across both attempts");
+  assertEquals(store.holds.get(KEY)?.credits, 1, "still exactly the 1-credit floor");
+  assertEquals(openai.transcribeCalls, 2, "call 1 has no result cache — the retry re-transcribes");
+});
+
+Deno.test("X-02: a call-2 retry replays the cache with NO second settle and NO second charge", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const KEY = "rec-replay-settle";
+
+  await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const charged = (await c2.json()).credits_charged;
+  assertEquals(store.settleCalls, 1);
+
+  // The charged-but-dropped retry: the idempotency cache short-circuits BEFORE
+  // the settle (exactly as it short-circuited before the consume pre-X-02).
+  const retry = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(retry.status, 200);
+  assertEquals((await retry.json()).credits_charged, charged, "replay reports the original charge");
+  assertEquals(store.settleCalls, 1, "no second settle on the replay");
+  assertEquals(store.used.get("sub-1"), charged, "no second charge on the replay");
+  assertEquals(openai.chatCalls, 1);
+});
+
+Deno.test("X-02 invariant 2: a concurrent generation can NOT spend a held credit (spendable gate)", async () => {
+  const store = activeStore(99); // exactly 1 credit remaining
+  const openai = new StubProvider();
+
+  // A dev call 1 reserves the last credit…
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-held"), deps(store, openai));
+  assertEquals(c1.status, 200);
+
+  // …so a DIFFERENT recording's generation sees spendable 0 and is refused —
+  // before STT, before chat, with nothing consumed.
+  const other = await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-other"), deps(store, openai));
+  assertEquals(other.status, 402);
+  const json = await other.json();
+  assertEquals(json.error, "out_of_credits");
+  assertEquals(json.credits_remaining, 0, "the 402 reports the SPENDABLE figure (1 real − 1 held)");
+  assertEquals(openai.chatCalls, 0, "refused before any chat spend");
+  assertEquals(store.used.get("sub-1"), 99, "nothing consumed");
+  assertEquals(store.holds.size, 1, "the reservation is untouched");
+});
+
+Deno.test("X-02: call 2 CAN spend the credit its own call 1 reserved (own-key exclusion)", async () => {
+  const store = activeStore(99); // exactly 1 credit remaining
+  const openai = new StubProvider();
+  const KEY = "rec-last-credit";
+
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(c1.status, 200);
+
+  // The gate excludes the request's own key, so the held credit is spendable
+  // by exactly the settle it was reserved for — the last-credit dev recording
+  // completes instead of deadlocking on its own reservation.
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  assertEquals(json.credits_remaining, 1 - json.credits_charged, "the one uncapped generation may go negative");
+  assertEquals(store.holds.size, 0, "settled");
+});
+
+Deno.test("X-02: call 1 on a spendable-zero account → 402 out_of_credits with NO Whisper (invariant 5/gap closed)", async () => {
+  const store = activeStore(100); // 0 remaining
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-broke"), deps(store, openai));
+  assertEquals(res.status, 402);
+  assertEquals((await res.json()).error, "out_of_credits");
+  assertEquals(openai.transcribeCalls, 0, "no provider spend for an unfundable call 1");
+  assertEquals(store.holds.size, 0);
+});
+
+Deno.test("X-02: a legacy-suffixed call-1 key (\"<key>:dev-transcribe\") holds under the RECORDING key, so call 2 still settles it", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const KEY = "rec-legacy-1";
+
+  // A shipped pre-X-02 client sends the suffixed key on call 1…
+  const c1 = await handleGenerate(
+    makeReq(await mintToken(), devTranscribeBody(), `${KEY}:dev-transcribe`),
+    deps(store, openai),
+  );
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.has(KEY), true, "the hold is normalized to the recording key");
+  assertEquals(store.holds.has(`${KEY}:dev-transcribe`), false);
+
+  // …and its call 2 (the bare recording key) finds and settles that hold.
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  assertEquals(store.holds.size, 0, "no orphaned reservation for old clients");
+});
+
+Deno.test("X-02: a call-1 transcription FAILURE releases the hold (a failed transcribe doesn't tie up a credit)", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  openai.failTranscribe = new ProviderError("whisper down", true, 503);
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-sttfail"), deps(store, openai));
+  assertEquals(res.status, 503);
+  assertEquals(store.holds.size, 0, "the failed call released its reservation");
+  assertEquals(store.used.get("sub-1") ?? 0, 0, "nothing charged (it never is on call 1)");
+});
+
+Deno.test("X-02 invariant 5: a hold ERROR fails closed — refuse, no Whisper", async () => {
+  const store = activeStore(0);
+  store.forceHoldError = true;
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-holderr"), deps(store, openai));
+  assertEquals(res.status, 503);
+  assertEquals((await res.json()).error, "credit_check_failed");
+  assertEquals(openai.transcribeCalls, 0, "never transcribe unheld");
+});
+
+Deno.test("X-02 invariant 5: an unreadable holds table fails the credit gate closed (no free generation)", async () => {
+  const store = activeStore(0);
+  store.forceActiveHoldsError = true;
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody(), "rec-gateerr"), deps(store, openai));
+  assertEquals(res.status, 503);
+  assertEquals((await res.json()).error, "credit_check_failed");
+  assertEquals(openai.chatCalls, 0, "an unknowable spendable figure refuses before any spend");
+  assertEquals(store.used.get("sub-1") ?? 0, 0);
+  assertEquals(store.slots.size, 0, "the slot was released on the refusal path");
+});
+
+Deno.test("X-02 (trial): the pair settles against the grant — hold owned by the grant, real cost consumed once", async () => {
+  const store = trialStore(0, 15);
+  const openai = new StubProvider();
+  const KEY = "rec-trial-pair";
+
+  const c1 = await handleGenerate(makeReq(await mintTrialToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.get(KEY)?.ownerGrant, "grant-1");
+  assertEquals(store.trialGrants.get("grant-1")?.used, 0, "hold ≠ charge");
+
+  const c2 = await handleGenerate(makeReq(await mintTrialToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  assertEquals(store.trialGrants.get("grant-1")?.used, json.credits_charged, "exactly the metered charge");
+  assertEquals(store.holds.size, 0, "settled");
+});
+
+Deno.test("X-02 (combined): a converted user's pair — hold owned by the subscription, settle drains trial first", async () => {
+  // 3 trial credits left + full plan; the settle must ride the SAME combined
+  // spender the plain consume path uses (trial → plan), releasing the hold.
+  const store = combinedStore({ trialUsed: 12, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const openai = new StubProvider();
+  const KEY = "rec-combined-pair";
+
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), KEY), deps(store, openai));
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.get(KEY)?.ownerSub, "sub-1", "the converted user's hold is subscription-owned");
+
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  const charge = json.credits_charged as number;
+  const trialSpent = Math.min(3, charge);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 12 + trialSpent, "trial remainder drained first");
+  assertEquals(store.used.get("sub-1"), charge - trialSpent, "plan billed only the difference");
+  assertEquals(store.holds.size, 0, "settled");
+});
+
+Deno.test("X-02: a keyless (older-app) normal generation keeps the plain consume path — no settle involved", async () => {
+  const store = activeStore(0);
+  const openai = new StubProvider();
+  const res = await handleGenerate(makeReq(await mintToken(), makeBody()), deps(store, openai));
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(store.settleCalls, 0, "no key → no settle (dedup off, exactly as before)");
+  assertEquals(store.used.get("sub-1"), json.credits_charged, "charged exactly as before X-02");
+});
+
+Deno.test("X-02 (combined): a subscription-owned hold gates the SAME grant's trial-token generation (no trial-side bypass)", async () => {
+  // Converted user: trial remainder 1, plan 0 (limit == used). The dev call 1
+  // arrives on the SUBSCRIPTION token, so the hold is subscription-owned — but
+  // its spendable math included the grant's last credit. The user's still-live
+  // TRIAL token must not be able to spend that reserved credit.
+  const store = combinedStore({ trialUsed: 14, trialLimit: 15, planUsed: 100, planLimit: 100 });
+  const openai = new StubProvider();
+
+  const c1 = await handleGenerate(makeReq(await mintToken(), devTranscribeBody(), "rec-linked"), deps(store, openai));
+  assertEquals(c1.status, 200);
+  assertEquals(store.holds.get("rec-linked")?.ownerSub, "sub-1");
+
+  const trialRes = await handleGenerate(makeReq(await mintTrialToken(), makeBody(), "rec-trial-side"), deps(store, openai));
+  assertEquals(trialRes.status, 402, "the linked sub's hold must be visible from the grant side");
+  assertEquals((await trialRes.json()).credits_remaining, 0, "1 raw trial credit − 1 linked hold");
+  assertEquals(openai.chatCalls, 0);
+  assertEquals(store.trialGrants.get("grant-1")?.used, 14, "nothing consumed");
+});
+
+Deno.test("X-02 (conversion edge): a grant-owned hold is settled by the subscription token via the conversion link", async () => {
+  // The user placed the hold as a TRIAL identity, then converted; by call 2 the
+  // grant is exhausted, so the handler resolves NO combined grant id — the
+  // settle still finds and releases the grant-owned hold through the
+  // subscription's conversion link instead of stranding it until TTL.
+  const store = combinedStore({ trialUsed: 15, trialLimit: 15, planUsed: 0, planLimit: 100 });
+  const KEY = "rec-converted-mid-pair";
+  store.holds.set(KEY, { ownerSub: null, ownerGrant: "grant-1", credits: 1, measuredSeconds: null });
+  const openai = new StubProvider();
+
+  const c2 = await handleGenerate(makeReq(await mintToken(), devGenerateBody(), KEY), deps(store, openai));
+  assertEquals(c2.status, 200);
+  const json = await c2.json();
+  assertEquals(store.holds.size, 0, "the pre-conversion hold settles instead of stranding");
+  assertEquals(store.used.get("sub-1"), json.credits_charged, "charged exactly the metered cost, once");
 });

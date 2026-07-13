@@ -241,13 +241,19 @@ final class ManagedProxyClient {
         let durationSeconds: Double?
     }
 
-    /// Dev Mode CALL 1 (Phase 2 §7) — the FREE word-level transcription. POSTs
-    /// `{mode:"dev-transcribe", audio, has_speech}` and parses the returned
-    /// word-level transcript. The server charges nothing, takes no concurrency
-    /// slot, and writes no idempotency entry for this call (it is auth-gated +
-    /// rate-limited only). The client resolves deixis anchors against this exact
-    /// transcript before the billable call 2. Token handling mirrors `generate`:
-    /// one transparent refresh on 401, then `authFailed`.
+    /// Dev Mode CALL 1 (Phase 2 §7, X-02) — the word-level transcription. POSTs
+    /// `{mode:"dev_transcribe", audio, has_speech}` and parses the returned
+    /// word-level transcript. The server CONSUMES nothing, takes no concurrency
+    /// slot, and writes no idempotency entry for this call — but (X-02) it
+    /// places a temporary 1-credit HOLD keyed on `idempotencyKey`, which the
+    /// paired call 2 settles (real cost consumed + hold released atomically).
+    /// The caller must therefore pass the recording's STABLE key — the SAME one
+    /// call 2 sends — or the hold orphans until its server-side TTL. A 402 here
+    /// means the spendable balance (real credits − active holds) can't cover
+    /// the floor: mapped to `.outOfCredits`, the same UX as a call-2 402. The
+    /// client resolves deixis anchors against this exact transcript before the
+    /// billable call 2. Token handling mirrors `generate`: one transparent
+    /// refresh on 401, then `authFailed`.
     func devTranscribe(
         audioURL: URL,
         durationSeconds: Double?,
@@ -650,8 +656,10 @@ final class ManagedProxyClient {
 
     /// Maps a `(data, status)` from the Dev Mode CALL 1 (`dev_transcribe`) to a
     /// `Transcript` or a typed error. Same status taxonomy as `parse` minus the
-    /// usage/credit fields — call 1 charges nothing. The 402 case is purely
-    /// defensive (the server never charges this path).
+    /// usage/credit fields — call 1 consumes nothing. The 402 is a REAL path
+    /// since X-02: the server refuses the pre-Whisper credit HOLD when the
+    /// spendable balance can't cover the floor, and `.outOfCredits` routes to
+    /// the same credits/paywall UX a call-2 402 does.
     static func parseTranscribe(data: Data, status: Int) throws -> Transcript {
         switch status {
         case 200...299:
@@ -663,7 +671,7 @@ final class ManagedProxyClient {
             }
             return decoded.transcript.toTranscript()
         case 402:
-            throw ManagedGenerationError.outOfCredits // defensive — call 1 never charges
+            throw ManagedGenerationError.outOfCredits // X-02: the call-1 hold was refused (insufficient spendable)
         case 403, 404:
             throw ManagedGenerationError.notEntitled
         case 401:

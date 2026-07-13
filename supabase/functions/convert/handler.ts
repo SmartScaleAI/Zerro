@@ -24,6 +24,16 @@
 // FAIL CLOSED: any credit-lookup error on the trial path REFUSES rather than
 // serving a free provider call.
 //
+// X-02 (Phase C note): convert NEVER settles a Dev Mode credit hold, by
+// design. A dev recording's flow is always call 1 (dev_transcribe, places the
+// hold) → call 2 (/generate with mode:"dev", settles it) — convert is a
+// POST-generation fallback that operates on an already-returned response's
+// text, so it can only ever run AFTER call 2 settled the hold (and the current
+// desktop client no longer calls /convert at all; only older shipped apps do).
+// The only hold interaction convert needs is OBSERVING them in its floor gate
+// (spendable = remainder − active holds, below) so a reserved credit can't be
+// double-committed.
+//
 // PRIVACY: source text and context are processed in memory and never persisted,
 // EXCEPT the documented §14.5 idempotency carve-out (the trial retry cache, the
 // same time-bounded mechanism /generate uses). The console log carries token
@@ -59,6 +69,18 @@ export interface ConvertStore {
   // ---- Trial metering (X-01) — the exact per-grant primitives generate spends.
   loadTrialGrant(grantId: string): Promise<TrialGrantRow | null>;
   trialCreditsRemaining(grantId: string): Promise<number>;
+  /** X-02: the grant's active held credits (generate's dev call-1 holds). The
+   *  floor gate below subtracts this so a credit reserved for a pending dev
+   *  settle can't also fund a convert (invariant: every affordability check
+   *  uses the SPENDABLE figure). Convert always passes `excludeKey: null` —
+   *  it can never settle a hold, so even a hold under this request's own key
+   *  belongs to a different, pending dev flow and must stay reserved. THROWS
+   *  on error — the gate fails CLOSED. */
+  activeHoldCredits(
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    excludeKey: string | null,
+  ): Promise<number>;
   consumeTrialCredit(grantId: string, credits: number): Promise<number | null>;
   acquireTrialSlot(grantId: string, staleSeconds: number): Promise<boolean>;
   releaseTrialSlot(grantId: string): Promise<void>;
@@ -210,10 +232,17 @@ async function meteredTrialConvert(
     }
 
     // Floor gate — refuse a grant that can't afford even the 1-credit floor of a
-    // successful conversion. FAIL CLOSED on a lookup error.
+    // successful conversion. FAIL CLOSED on a lookup error. X-02: the figure is
+    // the SPENDABLE balance — the raw remainder minus EVERY active dev call-1
+    // hold on this grant, so a credit reserved for a pending dev settle can't
+    // also fund a conversion. Unlike generate, NO own-key exclusion: convert
+    // never settles a hold (a dev recording never finishes THROUGH convert —
+    // see the Phase C note above), so a hold under this request's key is
+    // necessarily another flow's pending reservation, not ours to spend.
     let remaining: number;
     try {
-      remaining = await deps.store.trialCreditsRemaining(grantId);
+      remaining = (await deps.store.trialCreditsRemaining(grantId)) -
+        (await deps.store.activeHoldCredits(null, grantId, null));
     } catch (e) {
       console.error(JSON.stringify({ fn: "convert", key, error: "credit_lookup_failed", detail: String(e) }));
       return json({ error: "credit_check_failed", retryable: true }, 503);

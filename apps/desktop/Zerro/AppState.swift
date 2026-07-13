@@ -3020,10 +3020,13 @@ final class AppState {
     /// are all SHARED. Returns the call-2 result; the caller lands it on the same
     /// `.done`/dispatch tail the single-call managed path uses.
     ///
-    /// 1. CALL 1 `devTranscribe` → word transcript (free; no slot/credit). Skipped
-    ///    when the recording has no speech (empty transcript → the resolver yields
-    ///    no anchors and the run degrades to click/dwell), mirroring BYOK's local
-    ///    Whisper skip.
+    /// 1. CALL 1 `devTranscribe` → word transcript (no slot; consumes nothing,
+    ///    but X-02 places a 1-credit HOLD under the recording's idempotency key
+    ///    that call 2's settle releases — see below). Skipped when the recording
+    ///    has no speech (empty transcript → the resolver yields no anchors and
+    ///    the run degrades to click/dwell), mirroring BYOK's local Whisper skip.
+    ///    A 402 here means the spendable balance can't cover even the floor —
+    ///    it maps to the same out-of-credits UX as a call-2 402.
     /// 2. Domain-dictionary snap (Versel→Vercel) + the SHARED `resolveDevAnchors`
     ///    → client anchors + marked `DEIXIS REFERENCE` frames. Sets
     ///    `devResolvedAnchors` (the client half of the M6 gate).
@@ -3057,9 +3060,14 @@ final class AppState {
                 durationSeconds: durationSeconds,
                 hasSpeech: true,
                 tokenProvider: tokenProvider,
-                // A distinct key from call 2: call 1 writes no idempotency entry
-                // server-side, but a separate key keeps the two calls unambiguous.
-                idempotencyKey: processed.idempotencyKey + ":dev-transcribe"
+                // X-02: the SAME per-recording key call 2 sends. The server keys
+                // the call-1 credit HOLD on it, and call 2's settle finds and
+                // releases that hold by the shared key — a distinct/suffixed key
+                // would orphan the hold until its TTL. (The server still
+                // normalizes the legacy ":dev-transcribe" suffix older shipped
+                // clients send, so this is convention alignment, not a protocol
+                // break.)
+                idempotencyKey: processed.idempotencyKey
             )
         } else {
             Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe skipped (no speech)")
