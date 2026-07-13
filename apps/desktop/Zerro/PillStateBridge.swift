@@ -173,7 +173,7 @@ extension AppState {
     /// Appends the live "· Xs" elapsed suffix to a Dev Mode progress phrase so
     /// the timer renders on every dev step — continuous from generation start,
     /// through the agent handoff, to the "Changes applied" card — matching
-    /// artifact mode. `ProcessingPillContent` (which `.devProgress` renders
+    /// ask mode. `ProcessingPillContent` (which `.devProgress` renders
     /// through) splits on the " · " separator, so the seconds stay pinned while
     /// the phrase truncates. `processingElapsedSuffix` is nil only outside the
     /// elapsed-clock window, where the bare phrase shows.
@@ -206,7 +206,7 @@ extension AppState {
     /// text, the diff stat counts (the collapsed pill renders "Changes applied
     /// (+a −r)" from these; the expanded card uses summary/diffText), and — for a
     /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
-    /// its prompt-generation step just like artifact mode, so the same readout
+    /// its prompt-generation step just like ask mode, so the same readout
     /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
     /// artifact path uses (see PillWindowController) so the two read identically.
     /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.

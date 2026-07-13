@@ -551,7 +551,7 @@ struct PillView: View {
                     artifact: nil,
                     chatText: "",
                     // Managed Dev Mode bills its prompt generation just like
-                    // artifact mode — surface the same "−N credits · M left"
+                    // ask mode — surface the same "−N credits · M left"
                     // readout bottom-left. `nil` (BYOK/local) shows nothing.
                     chargeLine: card.chargeLine,
                     noNarration: false,
@@ -1505,7 +1505,7 @@ private struct ResultPillContent: View {
 #Preview("Dev result \u{00B7} Expanded \u{00B7} charged") {
     // The MANAGED variant: the same card as above, now showing the "−N credits ·
     // M left" charge line bottom-left in the footer (left of Undo/Accept), exactly
-    // where artifact mode shows it. BYOK leaves it nil → nothing renders.
+    // where ask mode shows it. BYOK leaves it nil → nothing renders.
     PillView(state: .devDone(
         card: DevResultCard(
             title: "Changes applied",

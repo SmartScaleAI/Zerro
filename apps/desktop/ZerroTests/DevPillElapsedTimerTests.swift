@@ -3,7 +3,7 @@
 //  ZerroTests
 //
 //  The processing pill's live "· Xs" elapsed counter must stay alive across the
-//  Dev Mode handoff. Artifact mode keeps it for the whole request (it's baked
+//  Dev Mode handoff. Ask mode keeps it for the whole request (it's baked
 //  into `processingStageLabel`); Dev Mode hands `.processing` off to the
 //  dispatch tail (`.devCheckpointing` → `.reviewingPrompt` →
 //  `.devAgentDispatching` → `.devAgentRunning`), and the counter must follow —
@@ -119,15 +119,15 @@ final class DevPillElapsedTimerTests: XCTestCase {
         }
     }
 
-    // MARK: - Artifact mode is unchanged
+    // MARK: - Ask mode is unchanged
 
-    func testArtifactModeStopsCounterAtResult() {
+    func testAskModeStopsCounterAtResult() {
         let app = AppState()
         app.state = .processing
         XCTAssertNotNil(app.processingElapsedSuffix)
         // A normal recording lands in `.done` (the clipboard result pill) — the
         // clock stops exactly as before.
         app.state = .done
-        XCTAssertNil(app.processingElapsedSuffix, "artifact mode must stop the clock at .done")
+        XCTAssertNil(app.processingElapsedSuffix, "ask mode must stop the clock at .done")
     }
 }
