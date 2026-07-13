@@ -134,7 +134,7 @@ struct AreaSelectorView: View {
 
     private func selectionBorder(at rect: CGRect) -> some View {
         // Error wins over BOTH mode accents: a settled undersized selection
-        // strokes red whether in Artifact or Dev mode (the flag stays quiet
+        // strokes red whether in Ask or Dev mode (the flag stays quiet
         // mid-drag — see `isSelectionTooSmall`).
         let strokeColor: Color = state.isSelectionTooSmall
             ? .vfRecordingRed
@@ -447,7 +447,7 @@ struct AreaSelectorView: View {
     // MARK: Compact icon-toolbar metrics
     //
     // The whole toolbar is now ONE rounded container (replacing the old
-    // two-container chip layout): a two-segment mode switch (Artifact | Dev), a
+    // two-container chip layout): a two-segment mode switch (Ask | Dev), a
     // vertical hairline divider, the model/mic/(dev-settings) icon buttons, then
     // the Record pill. Icons are far narrower than the old labeled chips, which
     // also resolves the narrow-selection overflow we'd deferred.
@@ -517,7 +517,7 @@ struct AreaSelectorView: View {
     /// X-offsets (relative to the container's leading edge) of every control in
     /// the compact toolbar, computed once so the frame helpers and the renderer
     /// share one source of truth. Dev-settings exists only in Dev Mode; in
-    /// Artifact mode `devSettingsX` is unused and Record slides left into its
+    /// Ask mode `devSettingsX` is unused and Record slides left into its
     /// place.
     struct CompactLayout {
         let modeSwitchX: CGFloat
@@ -622,8 +622,8 @@ struct AreaSelectorView: View {
         return CGRect(x: t.minX + L.modeSwitchX, y: t.minY, width: modeSwitchWidth, height: t.height)
     }
 
-    /// Artifact segment (left half of the mode switch). Clicking sets Dev OFF.
-    static func modeArtifactSegmentFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
+    /// Ask segment (left half of the mode switch). Clicking sets Dev OFF.
+    static func modeAskSegmentFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
         let s = devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         return CGRect(x: s.minX, y: s.minY, width: modeSegmentWidth, height: s.height)
     }
@@ -1924,7 +1924,7 @@ struct AreaSelectorView: View {
                 .frame(width: container.width, height: container.height)
                 .position(x: container.midX, y: container.midY)
 
-            // Mode switch (Artifact | Dev) — the leading control.
+            // Mode switch (Ask | Dev) — the leading control.
             modeSwitchControl
                 .frame(width: switchFrame.width, height: switchFrame.height)
                 .position(x: switchFrame.midX, y: switchFrame.midY)
@@ -2099,8 +2099,8 @@ struct AreaSelectorView: View {
         // (they'd collide with the open surface).
         if state.isModelMenuOpen || state.isMicMenuOpen || state.isUpgradePopupOpen { return nil }
 
-        if state.isModeArtifactHovered {
-            return ("Artifact", Self.modeArtifactSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
+        if state.isModeAskHovered {
+            return ("Ask", Self.modeAskSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
         }
         if state.isModeDevHovered {
             return ("Dev Mode", Self.modeDevSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
@@ -2142,8 +2142,8 @@ struct AreaSelectorView: View {
 
     // MARK: Mode switch
 
-    /// The two-segment mode switch: Artifact (wand) | Dev (`</>`), inside a
-    /// recessed well. The active segment is highlighted — Artifact → neutral
+    /// The two-segment mode switch: Ask (wand) | Dev (`</>`), inside a
+    /// recessed well. The active segment is highlighted — Ask → neutral
     /// white fill, Dev → green `vfDevAccent` tint + green icon — and the inactive
     /// segment's icon is dimmed. Clicking maps to the mode (Part 5 hit-tests the
     /// two halves separately).
@@ -2152,7 +2152,7 @@ struct AreaSelectorView: View {
             modeSegment(
                 system: "wand.and.stars",
                 active: !state.isDevMode, isDev: false,
-                hovered: state.isModeArtifactHovered
+                hovered: state.isModeAskHovered
             )
             modeSegment(
                 system: "chevron.left.forwardslash.chevron.right",

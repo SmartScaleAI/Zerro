@@ -728,12 +728,12 @@ final class AreaSelectorState {
     /// Hover state for the compact mode switch's two segments + the dev-settings
     /// icon. Mirror the chip-hover pattern: the controller hit-tests the frames
     /// on mouse-move and the view reflects these (fill highlight + tooltip).
-    private(set) var isModeArtifactHovered: Bool = false
+    private(set) var isModeAskHovered: Bool = false
     private(set) var isModeDevHovered: Bool = false
     private(set) var isDevSettingsHovered: Bool = false
 
-    func setModeArtifactHovered(_ hovered: Bool) {
-        if isModeArtifactHovered != hovered { isModeArtifactHovered = hovered }
+    func setModeAskHovered(_ hovered: Bool) {
+        if isModeAskHovered != hovered { isModeAskHovered = hovered }
     }
 
     func setModeDevHovered(_ hovered: Bool) {
@@ -748,7 +748,7 @@ final class AreaSelectorState {
     /// toolbar (the mode switch resizes the container) and no mouse-move fires to
     /// refresh them — the next move re-establishes hover.
     func resetToolbarHovers() {
-        isModeArtifactHovered = false
+        isModeAskHovered = false
         isModeDevHovered = false
         isDevSettingsHovered = false
         isModelChipHovered = false
@@ -774,7 +774,7 @@ final class AreaSelectorState {
     }
 
     /// Set the mode explicitly — the compact mode switch maps each segment to a
-    /// mode (Artifact = off, Dev = on) rather than flipping, so clicking the
+    /// mode (Ask = off, Dev = on) rather than flipping, so clicking the
     /// already-active segment is a no-op. Turning Dev off clears any inline
     /// validation message and closes the dev-settings menu (both Dev-only);
     /// either change closes the model/mic dropdowns.
@@ -991,7 +991,7 @@ final class AreaSelectorState {
     }
 
     /// Render the toolbar in the mode the current step teaches (Dev for the
-    /// agent/record steps, Artifact otherwise) — display-only, never persisted.
+    /// agent/record steps, Ask otherwise) — display-only, never persisted.
     private func applyWalkthroughStepMode() {
         guard let step = toolbarWalkthroughStep else { return }
         setDevModeForDisplay(step.showsDevControls)
@@ -1186,7 +1186,7 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
     var body: String {
         switch self {
         case .mode:
-            return "Artifact turns your recording into a ready-to-use output, like a prompt or snippet. Dev Mode sends it straight to a coding agent to make the change for you."
+            return "Ask turns your recording into a ready-to-use output, like a prompt or snippet. Dev Mode sends it straight to a coding agent to make the change for you."
         case .model:
             return "This model reads your screen and voice. Tap to switch. The current model's name shows here."
         case .mic:

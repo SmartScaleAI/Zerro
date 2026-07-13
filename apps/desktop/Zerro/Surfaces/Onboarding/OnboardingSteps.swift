@@ -804,7 +804,7 @@ private struct DevModeToolbarIllustration: View {
         )
     }
 
-    /// Two-segment mode switch in a recessed well: Artifact (dimmed, inactive) |
+    /// Two-segment mode switch in a recessed well: Ask (dimmed, inactive) |
     /// Dev (active, green). A soft green ring rings the well to pull the eye.
     private var modeSwitch: some View {
         HStack(spacing: 0) {

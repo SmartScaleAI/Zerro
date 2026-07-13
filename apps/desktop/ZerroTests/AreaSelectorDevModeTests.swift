@@ -13,7 +13,7 @@
 //    • the cluster grows by exactly ONE icon button (dev-settings) in Dev Mode;
 //    • cluster order model → mic → dev-settings → record, all disjoint;
 //    • the dev-settings menu's agent rows + project row hit-test back;
-//    • normal-mode geometry is byte-identical to Artifact mode;
+//    • normal-mode geometry is byte-identical to Ask mode;
 //    • the state-level set-mode / menu / auto-open / validation semantics.
 //
 
@@ -79,15 +79,15 @@ final class AreaSelectorDevModeTests: XCTestCase {
 
     // MARK: - Normal-mode geometry is unchanged by the devMode param
 
-    func testArtifactModeHasNoDevSettingsBetweenMicAndRecord() {
+    func testAskModeHasNoDevSettingsBetweenMicAndRecord() {
         let mic = AreaSelectorView.micChipFrame(forSelection: selection, in: bounds, devMode: false)
         let record = AreaSelectorView.recordButtonFrame(forSelection: selection, in: bounds, devMode: false)
-        // In Artifact mode Record butts up right after mic (one gap), with no
+        // In Ask mode Record butts up right after mic (one gap), with no
         // dev-settings icon between them.
         let gap = record.minX - mic.maxX
         XCTAssertGreaterThan(gap, 0)
         XCTAssertLessThan(gap, AreaSelectorView.iconButtonWidth,
-                          "no icon-button-sized control sits between mic and Record in Artifact mode")
+                          "no icon-button-sized control sits between mic and Record in Ask mode")
     }
 
     // MARK: - Dev-settings accordion geometry (compact summary rows)
