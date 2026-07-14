@@ -399,7 +399,7 @@ final class AreaSelectorWindowController {
             // frame from the same static helpers the view renders with. Handled
             // before the per-mode drag/settle logic so a toolbar click acts on the
             // toolbar rather than re-dragging underneath it. The mode switch is two
-            // separate hit regions (Artifact | Dev), present in both modes; the
+            // separate hit regions (Ask | Dev), present in both modes; the
             // dev-settings icon exists only in Dev Mode.
             let size = contentView.bounds.size
             let fullScreen = state.mode == .fullScreen
@@ -414,8 +414,8 @@ final class AreaSelectorWindowController {
             let modelFrame = selectionRect.map {
                 AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
-            let artifactFrame = selectionRect.map {
-                AreaSelectorView.modeArtifactSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
+            let askFrame = selectionRect.map {
+                AreaSelectorView.modeAskSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
             let devSegmentFrame = selectionRect.map {
                 AreaSelectorView.modeDevSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
@@ -448,7 +448,7 @@ final class AreaSelectorWindowController {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
                 state.setMicChipHovered(micFrame?.contains(point) ?? false)
                 state.setModelChipHovered(modelFrame?.contains(point) ?? false)
-                state.setModeArtifactHovered(artifactFrame?.contains(point) ?? false)
+                state.setModeAskHovered(askFrame?.contains(point) ?? false)
                 state.setModeDevHovered(devSegmentFrame?.contains(point) ?? false)
                 state.setDevSettingsHovered(devSettingsFrame?.contains(point) ?? false)
                 if state.isMicMenuOpen, let rect = selectionRect {
@@ -578,11 +578,11 @@ final class AreaSelectorWindowController {
                 let anyMenuOpen = state.isModelMenuOpen || state.isMicMenuOpen
                     || state.isUpgradePopupOpen || state.isDevSettingsMenuOpen
 
-                // Mode switch — two segments, each maps to a mode (Artifact = off,
+                // Mode switch — two segments, each maps to a mode (Ask = off,
                 // Dev = on). Clicking the already-active segment is a no-op (the
                 // state guards it). Handled first since the switch leads the
                 // cluster. Present in BOTH modes (it's how you enter/leave Dev).
-                if !anyMenuOpen, let artifactFrame, artifactFrame.contains(point) {
+                if !anyMenuOpen, let askFrame, askFrame.contains(point) {
                     self?.setDevMode(false, state: state)
                     return nil
                 }
