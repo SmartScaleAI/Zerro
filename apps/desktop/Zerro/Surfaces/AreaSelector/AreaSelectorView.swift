@@ -16,11 +16,13 @@
 //
 //  Visual-state branches:
 //    • No selection (`state.selectionRect == nil`)
-//        Dim overlay + instruction pill. The user hasn't pressed
-//        mouseDown yet, or just opened the overlay.
+//        Dim overlay + the large screen-centered resting instruction
+//        pill. The user hasn't pressed mouseDown yet, or just opened
+//        the overlay.
 //    • Active drag (`state.isDragging == true`)
 //        Dim overlay with cutout + selection border + 4 corner
-//        handles + live dimensions readout + instruction pill.
+//        handles + live dimensions readout. The resting pill is gone —
+//        it hides the instant a drag begins (`selectionRect` non-nil).
 //    • Settled (Checkpoint 3 — not yet wired)
 //        Same as active drag but with 8 handles (4 corners + 4 edge
 //        midpoints) and a confirm affordance.
@@ -57,8 +59,13 @@ struct AreaSelectorView: View {
                 }
                 // Hidden while the walkthrough runs — the tour's scrim +
                 // callout own the overlay's attention; the pill would just be
-                // dimmed clutter behind them.
-                if state.toolbarWalkthroughStep == nil {
+                // dimmed clutter behind them. In area mode the resting pill
+                // also hides the instant a drag begins (no transition — an
+                // instant cut, CleanShot-style); full-screen keeps its small
+                // top prompt throughout.
+                if state.showsRestingInstructionPill {
+                    restingInstructionPill(in: bounds)
+                } else if state.mode == .fullScreen, state.toolbarWalkthroughStep == nil {
                     instructionPill(in: bounds)
                 }
                 floatingToolbar(in: bounds)
@@ -345,49 +352,33 @@ struct AreaSelectorView: View {
             .position(x: rect.maxX - 36, y: rect.maxY - 16)
     }
 
-    // MARK: - Top instruction pill
+    // MARK: - Instruction pill (two placements, one content)
     //
-    // Sized and positioned to match the recording pill (PillView.capsuleWidth/
-    // capsuleHeight = 440 × 50, top edge 24pt below the menu bar) so that
-    // the area selector and the recording session feel like a continuous
-    // surface across the two phases. `topInset` is the menu-bar height in
-    // points, supplied by AreaSelectorWindowController — without it we'd
-    // be measuring 24pt down from the physical screen top, behind the
-    // menu bar.
+    // Area mode's resting state gets the LARGE pill dead-center of the
+    // overlay (CleanShot's start-screen treatment); full-screen mode keeps
+    // the original small pill top-center. Both render the same dot + text +
+    // keycap row via `instructionPillContent`, parameterized only by sizing.
+    //
+    // The small variant is sized and positioned to match the recording pill
+    // (PillView.capsuleWidth/capsuleHeight = 440 × 50, top edge 24pt below
+    // the menu bar) so that the area selector and the recording session feel
+    // like a continuous surface across the two phases. `topInset` is the
+    // menu-bar height in points, supplied by AreaSelectorWindowController —
+    // without it we'd be measuring 24pt down from the physical screen top,
+    // behind the menu bar. The centered variant doesn't need `topInset`.
 
     private static let pillHeight: CGFloat = 50
     private static let pillTopGap: CGFloat = 24
+    // Resting-pill metrics: CleanShot's proportions relative to the small
+    // pill (roughly a 4/3 zoom, with roomier padding).
+    private static let restingPillHeight: CGFloat = 68
+    private static let restingPillTextSize: CGFloat = 16
+    private static let restingPillKeyCapScale: CGFloat = 16 / 12
 
+    /// Full-screen mode's prompt: small, top-center (the original pill).
     private func instructionPill(in bounds: CGSize) -> some View {
         HStack(spacing: VFSpacing.sm) {
-            Circle()
-                .stroke(Color.vfTextSecondary, lineWidth: 1.2)
-                .frame(width: 8, height: 8)
-            Text(instructionText)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextPrimary)
-                .fixedSize()
-            // Space is a one-way hint shown only in area mode: press it to
-            // jump to full screen. Once in full-screen mode there's no
-            // toggle back, so the hint is hidden (only esc/cancel remains).
-            if state.mode == .area {
-                Text("\u{00B7}")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.vfTextTertiary)
-                KeyCapView(label: "space")
-                Text("full screen")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .fixedSize()
-            }
-            Text("\u{00B7}")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextTertiary)
-            KeyCapView(label: "esc")
-            Text("cancel")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .fixedSize()
+            instructionPillContent(textSize: 12, dotSize: 8, dotLineWidth: 1.2, keyCapScale: 1)
         }
         .frame(height: Self.pillHeight)
         .padding(.horizontal, VFSpacing.lg)
@@ -398,6 +389,64 @@ struct AreaSelectorView: View {
             x: bounds.width / 2,
             y: topInset + Self.pillTopGap + Self.pillHeight / 2
         )
+    }
+
+    /// Area mode's initial resting prompt: the same pill enlarged and placed
+    /// dead-center of the overlay. Rendered only while
+    /// `state.showsRestingInstructionPill` — it vanishes (no transition) the
+    /// moment a drag begins.
+    private func restingInstructionPill(in bounds: CGSize) -> some View {
+        HStack(spacing: VFSpacing.md) {
+            instructionPillContent(
+                textSize: Self.restingPillTextSize,
+                dotSize: 11,
+                dotLineWidth: 1.5,
+                keyCapScale: Self.restingPillKeyCapScale
+            )
+        }
+        .frame(height: Self.restingPillHeight)
+        .padding(.horizontal, VFSpacing.xxl)
+        .background(Color.vfPillBackground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
+        .fixedSize()
+        .position(x: bounds.width / 2, y: bounds.height / 2)
+    }
+
+    /// The pill's row content — leading dot, instruction text, and the keycap
+    /// hints — shared by both variants so the copy can never drift between
+    /// them; only the metrics differ.
+    @ViewBuilder
+    private func instructionPillContent(
+        textSize: CGFloat, dotSize: CGFloat, dotLineWidth: CGFloat, keyCapScale: CGFloat
+    ) -> some View {
+        Circle()
+            .stroke(Color.vfTextSecondary, lineWidth: dotLineWidth)
+            .frame(width: dotSize, height: dotSize)
+        Text(instructionText)
+            .font(.system(size: textSize))
+            .foregroundStyle(Color.vfTextPrimary)
+            .fixedSize()
+        // Space is a one-way hint shown only in area mode: press it to
+        // jump to full screen. Once in full-screen mode there's no
+        // toggle back, so the hint is hidden (only esc/cancel remains).
+        if state.mode == .area {
+            Text("\u{00B7}")
+                .font(.system(size: textSize))
+                .foregroundStyle(Color.vfTextTertiary)
+            KeyCapView(label: "space", scale: keyCapScale)
+            Text("full screen")
+                .font(.system(size: textSize))
+                .foregroundStyle(Color.vfTextSecondary)
+                .fixedSize()
+        }
+        Text("\u{00B7}")
+            .font(.system(size: textSize))
+            .foregroundStyle(Color.vfTextTertiary)
+        KeyCapView(label: "esc", scale: keyCapScale)
+        Text("cancel")
+            .font(.system(size: textSize))
+            .foregroundStyle(Color.vfTextSecondary)
+            .fixedSize()
     }
 
     private var instructionText: String {

@@ -119,6 +119,15 @@ final class AreaSelectorState {
         )
     }
 
+    /// True in the area mode's initial resting state — before any drag has
+    /// begun and with no walkthrough running. Drives the large centered
+    /// instruction pill: it disappears the instant `beginDrag` sets a
+    /// selection rect, and never shows in `.fullScreen` (that mode keeps
+    /// its own small top prompt).
+    var showsRestingInstructionPill: Bool {
+        mode == .area && selectionRect == nil && toolbarWalkthroughStep == nil
+    }
+
     // MARK: - Confirmable selection
 
     /// Minimum confirmable selection, in view-local points (per axis).
