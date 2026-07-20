@@ -81,7 +81,7 @@ enum PillState: Equatable {
     /// in-flight dispatch states (a cancel triggers the safe terminate→revert)
     /// and hides it while reverting (interrupting a revert is unsafe).
     case devProgress(label: String, cancellable: Bool)
-    /// Terminal success — the expandable result card (reusing `ArtifactCardView`
+    /// Terminal success — the expandable result card (reusing `OutputCardView`
     /// in its dev-result configuration). `card` carries the title, the
     /// human-readable summary, and the readable git diff; `expanded` drives the
     /// compact summary pill ↔ full card morph (shares the result expand flag).
@@ -89,7 +89,7 @@ enum PillState: Equatable {
     /// changes. No Retry, no Done.
     case devDone(card: DevResultCard, expanded: Bool)
     /// Terminal failure, rendered as the shared expanded failure card (same
-    /// 760-wide `ArtifactCardView` + `FailureConfig` chrome as `.error` /
+    /// 760-wide `OutputCardView` + `FailureConfig` chrome as `.error` /
     /// `.failureExpanded`): a short `headline` in bold on top and the FULL agent
     /// error / reason as wrapped, scrollable `detail` prose below — never
     /// truncated. `canRevert` gates the footer's Revert button (a failure before
@@ -124,10 +124,10 @@ struct DevResultCard: Equatable {
     var linesRemoved: Int = 0
     var filesChanged: Int = 0
     /// The "−N credits · M left" charge readout for the EXPANDED card's footer —
-    /// managed Dev Mode meters its prompt-generation step exactly like artifact
+    /// managed Dev Mode meters its prompt-generation step exactly like output
     /// mode, so the same line belongs on both result cards. `nil` for BYOK/local
     /// (no managed call, no charge). Formatted in the bridge via the SAME
-    /// `CreditDisplay.chargeLine` the artifact path uses, so the two read
+    /// `CreditDisplay.chargeLine` the output path uses, so the two read
     /// identically. Defaulted so literal `#Preview` constructions stay terse.
     var chargeLine: String? = nil
 }
@@ -229,7 +229,7 @@ struct PillView: View {
     var onCancelReview: () -> Void = {}
 
     /// The parsed result the pill renders (Phase 5): chat text and the
-    /// optional artifact card. Threaded from
+    /// optional output card. Threaded from
     /// AppState.resultPresentation via PillWindowController so the
     /// pure-renderer PillView doesn't need to know about AppState.
     /// `nil` falls back to `ResultPresentation.empty` (a neutral, content-free
@@ -401,8 +401,8 @@ struct PillView: View {
             // when the failure is retryable ("Retry"), else reopens the
             // screen-region selector to record again ("Record again" — H-11:
             // the label must promise the action that actually runs).
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -410,7 +410,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                failure: ArtifactCardView.FailureConfig(
+                failure: OutputCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
                     secondaryTitle: "Cancel",
@@ -430,8 +430,8 @@ struct PillView: View {
             // label flips with `entitled`. Once entitled the card switches from
             // the amber paid-block warning to a blue "you're all set" success
             // confirmation (blue checkmark badge + blue Generate); Discard stays.
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -439,7 +439,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                failure: ArtifactCardView.FailureConfig(
+                failure: OutputCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
                     secondaryTitle: "Discard",
@@ -460,8 +460,8 @@ struct PillView: View {
             // Dismiss + an "Add Credits" primary that opens the top-up paywall.
             // No Retry and no Resume — nothing was captured, so the primary's only
             // job is to route to the paywall (wired to `onAddCredits`).
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -469,7 +469,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                failure: ArtifactCardView.FailureConfig(
+                failure: OutputCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
                     secondaryTitle: "Dismiss",
@@ -488,8 +488,8 @@ struct PillView: View {
             // "Open Settings" primary that opens Settings preselected to `pane`.
             // No Retry — the fix lives in Settings (add a key / download the
             // model), not a re-run (wired to `onOpenSettings(pane)`).
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -497,7 +497,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                failure: ArtifactCardView.FailureConfig(
+                failure: OutputCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
                     secondaryTitle: "Dismiss",
@@ -515,8 +515,8 @@ struct PillView: View {
             // Reuse the success card in its failure configuration, wrapped with
             // the same 760-wide / clipped chrome `.resultExpanded` uses so the
             // success ↔ failure layouts stay visually consistent.
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -524,7 +524,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissError,
-                failure: ArtifactCardView.FailureConfig(headline: headline, detail: detail),
+                failure: OutputCardView.FailureConfig(headline: headline, detail: detail),
                 onRetry: onRetryError
             )
             .frame(width: 760)
@@ -547,8 +547,8 @@ struct PillView: View {
             // 760-wide / clipped chrome as .resultExpanded; compact is the summary
             // pill (View changes / Undo / Accept) that expands to it.
             if expanded {
-                ArtifactCardView(
-                    artifact: nil,
+                OutputCardView(
+                    output: nil,
                     chatText: "",
                     // Managed Dev Mode bills its prompt generation just like
                     // ask mode — surface the same "−N credits · M left"
@@ -559,7 +559,7 @@ struct PillView: View {
                     onCopy: {},
                     onCollapse: onToggleExpand,
                     onDismiss: onDismissResult,
-                    devResult: ArtifactCardView.DevResultConfig(
+                    devResult: OutputCardView.DevResultConfig(
                         title: card.title, summary: card.summary, diffText: card.diffText
                     ),
                     onUndo: onDevRevert
@@ -590,8 +590,8 @@ struct PillView: View {
             // The header `×` keeps the partial edits and closes (no auto-revert,
             // §8) — `keepsDismiss` keeps it visible even with the Revert secondary,
             // since Revert (restore files) ≠ dismiss (keep edits & close).
-            ArtifactCardView(
-                artifact: nil,
+            OutputCardView(
+                output: nil,
                 chatText: "",
                 chargeLine: nil,
                 noNarration: false,
@@ -599,7 +599,7 @@ struct PillView: View {
                 onCopy: {},
                 onCollapse: {},
                 onDismiss: onDismissResult,
-                failure: ArtifactCardView.FailureConfig(
+                failure: OutputCardView.FailureConfig(
                     headline: headline,
                     detail: detail,
                     secondaryTitle: canRevert ? "Revert" : nil,
@@ -651,7 +651,7 @@ struct PillView: View {
 // toggle followed by the SAME destructive Undo + green Accept buttons the
 // expanded footer shows (shared `DevUndoButton` / `DevAcceptButton`,
 // compact-sized). No close X: Accept is the keep-and-close, Undo the revert.
-// Expanding swaps in the full `ArtifactCardView` dev-result card.
+// Expanding swaps in the full `OutputCardView` dev-result card.
 
 private struct DevResultSummaryPill: View {
     let linesAdded: Int
@@ -721,7 +721,7 @@ private struct DevResultSummaryPill: View {
 // The review card — the SOLE pre-edit checkpoint, shown after generation under
 // the Ask Permission mode, so the user sees the exact prompt the agent will
 // receive before any file change. A header naming the target agent, the prompt in
-// the same dark monospace well the artifact card uses (scrolls/caps a long
+// the same dark monospace well the output card uses (scrolls/caps a long
 // prompt), and two terminal actions: Approve (green — apply) and Cancel (quiet —
 // abort, nothing touched). v1 is show-and-approve only: no in-pill editing (the
 // dispatched body is captured before the gate runs).
@@ -742,7 +742,7 @@ private struct ReviewPromptPillContent: View {
             }
 
             // The exact prompt body in the dark monospace well — the same deepest
-            // layer the artifact card's body uses. Scrolls/caps a long prompt.
+            // layer the output card's body uses. Scrolls/caps a long prompt.
             promptWell
 
             HStack(spacing: VFSpacing.sm) {
@@ -1105,15 +1105,15 @@ private struct ConfirmRecoveryPillContent: View {
 // (expanded == true).
 //
 // Compact keeps the Phase 2.75 capsule shape, titled by the result itself:
-// green check + the artifact's dynamic title ("Response ready" for
+// green check + the output's dynamic title ("Response ready" for
 // chat-only) + View chevron + close X. Copy lives only in the expanded
 // card, not the compact capsule.
 //
 // Expanded (UI revision 2): the card IS the expanded pill — no outer
-// strip, no gutters. `ArtifactCardView` owns the whole layout: the header
+// strip, no gutters. `OutputCardView` owns the whole layout: the header
 // (check + title, Hide chevron, close X), the chat text as prose, the
-// artifact body well (artifact only), and the footer (charge line left when
-// managed; Copy right). A chat-only response (artifact == nil) renders the
+// output body well (output only), and the footer (charge line left when
+// managed; Copy right). A chat-only response (output == nil) renders the
 // SAME card — header + chat text + a plain "Copy" action for the
 // explanation text; only the body well is dropped.
 
@@ -1154,8 +1154,8 @@ private struct ResultPillContent: View {
                 // strip, no gutters. The chrome's rounded rect (drawn by
                 // PillView) is the card surface, so the compact ↔ expanded
                 // morph targets the card's own rounded rect directly.
-                ArtifactCardView(
-                    artifact: result.artifact,
+                OutputCardView(
+                    output: result.output,
                     chatText: result.chatText,
                     chargeLine: chargeLine,
                     noNarration: noNarration,
@@ -1188,20 +1188,20 @@ private struct ResultPillContent: View {
         .clipShape(RoundedRectangle(cornerRadius: expanded ? 18 : 28, style: .continuous))
     }
 
-    /// What the compact capsule calls this result: the artifact's dynamic
+    /// What the compact capsule calls this result: the output's dynamic
     /// title when one is attached (truncating inside the locked capsule width),
     /// a neutral "Response ready" for chat-only. The expanded layout never
     /// shows a status label — the card's own check + title is the success
     /// signal there.
     private var compactLabel: String {
-        if let artifact = result.artifact {
-            return artifact.title.isEmpty ? "Untitled" : artifact.title
+        if let output = result.output {
+            return output.title.isEmpty ? "Untitled" : output.title
         }
         return "Response ready"
     }
 
     /// The COMPACT capsule's content (the expanded layout is
-    /// ArtifactCardView): check + result title, then View ⌄ + divider +
+    /// OutputCardView): check + result title, then View ⌄ + divider +
     /// close X. Copying and the credits readout live ONLY in the expanded
     /// card now, so the title gets the freed width and the capsule hugs
     /// its content (fixed spacing, no Spacer — the maxWidth cap on the
@@ -1273,7 +1273,7 @@ private struct ResultPillContent: View {
     static let placeholderResult = ResultPresentation(
         chatText: "I watched you walk through the Pulse login screen \u{2014} "
             + "here\u{2019}s an agent prompt covering the three layout changes you asked for.",
-        artifact: Artifact(
+        output: GeneratedOutput(
             type: .agentPrompt,
             rawType: "agent_prompt",
             title: "Rework the Pulse login screen layout",
@@ -1281,7 +1281,7 @@ private struct ResultPillContent: View {
         )
     )
 
-    /// Body text for `placeholderResult`'s sample artifact.
+    /// Body text for `placeholderResult`'s sample output.
     static let placeholderMarkdown = """
     ## Context
     A 1:18 narrated walkthrough of the Pulse analytics login screen,
@@ -1350,7 +1350,7 @@ private struct ResultPillContent: View {
         state: .resultExpanded,
         result: ResultPresentation(
             chatText: "That layout shift comes from the unsized avatar image \u{2014} here\u{2019}s the CSS that reserves its box.",
-            artifact: Artifact(
+            output: GeneratedOutput(
                 type: .snippet,
                 rawType: "snippet",
                 title: "Reserve space for the avatar image",
@@ -1369,7 +1369,7 @@ private struct ResultPillContent: View {
             chatText: "The error in your terminal is a stale lockfile \u{2014} "
                 + "running `npm install` again after deleting `package-lock.json` clears it. "
                 + "Nothing on screen needs a code change, so there\u{2019}s nothing to hand to an agent here.",
-            artifact: nil
+            output: nil
         )
     )
     .padding(40)

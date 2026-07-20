@@ -120,12 +120,12 @@ enum Log {
     /// GPT-4o prompt-generation stage of the API pipeline.
     nonisolated static let promptGen = Logger(subsystem: subsystem, category: "promptGen")
 
-    /// Typed-artifact contract telemetry (Phase 4): §2 parse outcomes on
+    /// Typed-output contract telemetry (Phase 4): §2 parse outcomes on
     /// generation results — recovery-tier fires (rule names only),
     /// unknown-type coercions (the type token only), and fail-safe
     /// fallbacks. Never response content. Production visibility for the
-    /// recovery rate baselined in the Phase 1 eval (~4% of flash artifacts).
-    nonisolated static let artifacts = Logger(subsystem: subsystem, category: "artifacts")
+    /// recovery rate baselined in the Phase 1 eval (~4% of flash outputs).
+    nonisolated static let outputs = Logger(subsystem: subsystem, category: "outputs")
 
     /// Per-request cost accounting (Whisper minutes + GPT tokens).
     /// Separate category so a user inspecting costs can filter to just

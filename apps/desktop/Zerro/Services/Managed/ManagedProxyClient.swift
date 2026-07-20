@@ -12,7 +12,7 @@
 //  result back. The server owns transcription and the system prompt (§6.1) —
 //  so this client sends NEITHER a transcript NOR a prompt; that is the
 //  control that stops a paying user repurposing the Zerro provider keys as a
-//  general LLM (§14.1). Typed-artifact refactor: the v1 `mode` enum is gone —
+//  general LLM (§14.1). Typed-output refactor: the v1 `mode` enum is gone —
 //  the client supplies NOTHING that steers the (server-owned) prompt.
 //
 //  Wire shape (matches `supabase/functions/generate/limits.ts`):
@@ -91,8 +91,8 @@ enum ManagedGenerationError: Error, Equatable {
     case network(String)
     /// The success body wasn't the JSON shape we expected.
     case malformedResponse
-    /// A frame/audio artifact couldn't be read off disk to upload.
-    case artifactUnreadable
+    /// A frame/audio file couldn't be read off disk to upload.
+    case outputUnreadable
 }
 
 // MARK: - ManagedGenerationResult
@@ -402,7 +402,7 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
         }
         // F-07: mirror the server's audio-byte fuse BEFORE base64/upload — an
         // over-cap file would ride the wire in full only to get the same 413
@@ -427,7 +427,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,
@@ -448,7 +448,7 @@ final class ManagedProxyClient {
             ["timestamp": $0.seconds, "label": $0.label]
         }
 
-        // Typed-artifact refactor: NO field steers the server-owned prompt —
+        // Typed-output refactor: NO field steers the server-owned prompt —
         // no mode, no transcript, no system prompt (§6.1). Phase 6:
         // `has_speech` is a cost hint, not prompt input — `false` tells the
         // server to skip the Whisper call (empty segments). `model`
@@ -494,7 +494,7 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
         }
         // F-07: same pre-upload audio fuse as `encodeBody` — dev call 1 is
         // audio-only, so this is the whole payload in practice.
@@ -550,7 +550,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,

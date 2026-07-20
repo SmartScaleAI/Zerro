@@ -166,7 +166,7 @@ struct RecentPromptsView: View {
 
     private func copy(_ entry: RecentPrompt) {
         // Phase 5: same per-type payload semantics as the live pill —
-        // artifact body / chat text / raw fallback (RecentPrompt.copyPayload).
+        // output body / chat text / raw fallback (RecentPrompt.copyPayload).
         Pasteboard.copy(entry.copyPayload)
         didCopyTickID = entry.id
         let tickID = entry.id
@@ -208,7 +208,7 @@ private struct SidebarRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            // Phase 5: the artifact-type glyph (chat bubble for chat-only)
+            // Phase 5: the output-type glyph (chat bubble for chat-only)
             // leads the row so the list scans by result kind at a glance.
             HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
                 Image(systemName: entry.displayIconName)
@@ -279,17 +279,17 @@ private struct DetailPane: View {
             toolbar
             ScrollView {
                 // Phase 7: render from the v2 fields — chat text above the
-                // artifact body, the same visual pattern as the pill (no raw
+                // output body, the same visual pattern as the pill (no raw
                 // fence text). Raw `prompt` remains ONLY as the fallback for
                 // a legacy/unparseable row that carries no parsed pieces.
                 VStack(alignment: .leading, spacing: VFSpacing.md) {
                     if let chat = entry.chatText, !chat.isEmpty {
                         HighlightedMarkdownView(markdown: chat)
                     }
-                    if let body = entry.artifactBody, !body.isEmpty {
-                        artifactBodyCard(body)
+                    if let body = entry.outputBody, !body.isEmpty {
+                        outputBodyCard(body)
                     }
-                    if (entry.chatText ?? "").isEmpty, (entry.artifactBody ?? "").isEmpty {
+                    if (entry.chatText ?? "").isEmpty, (entry.outputBody ?? "").isEmpty {
                         Text(entry.prompt)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Color.vfTextPrimary)
@@ -303,12 +303,12 @@ private struct DetailPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// The artifact body in the pill card's visual voice: dark inset
-    /// container, monospace for snippet (ArtifactType.rendersMonospace),
+    /// The output body in the pill card's visual voice: dark inset
+    /// container, monospace for snippet (OutputType.rendersMonospace),
     /// markdown otherwise.
-    private func artifactBodyCard(_ body: String) -> some View {
+    private func outputBodyCard(_ body: String) -> some View {
         Group {
-            if entry.resolvedArtifactType?.rendersMonospace == true {
+            if entry.resolvedOutputType?.rendersMonospace == true {
                 Text(body)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -352,7 +352,7 @@ private struct DetailPane: View {
                     Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                     // §2 per-type button label ("Copy Prompt", "Copy
                     // draft", …); plain "Copy" for chat-only/pre-v2 rows.
-                    Text(didCopy ? "Copied" : (entry.resolvedArtifactType?.buttonLabel ?? "Copy"))
+                    Text(didCopy ? "Copied" : (entry.resolvedOutputType?.buttonLabel ?? "Copy"))
                 }
             }
             .buttonStyle(SettingsSecondaryButtonStyle())

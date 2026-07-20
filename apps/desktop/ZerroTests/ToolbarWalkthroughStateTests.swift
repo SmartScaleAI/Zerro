@@ -66,16 +66,16 @@ final class ToolbarWalkthroughStateTests: XCTestCase {
         XCTAssertNil(state.toolbarWalkthroughStep, "inactive before start")
         state.startToolbarWalkthrough()
         XCTAssertEqual(state.toolbarWalkthroughStep, .mode)
-        XCTAssertFalse(state.isDevMode, "the first step teaches the Artifact layout")
+        XCTAssertFalse(state.isDevMode, "the first step teaches the Ask layout")
     }
 
-    /// The snapshot is taken at start: a dev-on user sees the Artifact layout
+    /// The snapshot is taken at start: a dev-on user sees the Ask layout
     /// on step 1 (display borrow), and end hands the real value back.
     func testStartSnapshotsPreWalkthroughDevValue() {
         let state = AreaSelectorState()
         state.setDevMode(true)
         state.startToolbarWalkthrough()
-        XCTAssertFalse(state.isDevMode, "step 1 displays Artifact even for a dev-on user")
+        XCTAssertFalse(state.isDevMode, "step 1 displays Ask even for a dev-on user")
         state.endToolbarWalkthrough(completed: false)
         XCTAssertTrue(state.isDevMode, "end restores the value captured at start")
     }
@@ -133,13 +133,13 @@ final class ToolbarWalkthroughStateTests: XCTestCase {
         }
     }
 
-    /// End from an Artifact-displayed step restores a dev-ON user — again for
+    /// End from an Ask-displayed step restores a dev-ON user — again for
     /// both completion and Esc dismiss.
     func testEndRestoresDevOnUser() {
         for completed in [true, false] {
             let state = AreaSelectorState()
             state.setDevMode(true)
-            state.startToolbarWalkthrough() // .mode displays Artifact
+            state.startToolbarWalkthrough() // .mode displays Ask
             XCTAssertFalse(state.isDevMode)
             state.endToolbarWalkthrough(completed: completed)
             XCTAssertNil(state.toolbarWalkthroughStep)

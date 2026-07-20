@@ -2,9 +2,9 @@
 //  RecentPromptStoreTests.swift
 //  ZerroTests
 //
-//  Phase 2 of the modes → typed-artifact refactor: RecentPromptStore v2 —
-//  optional chatText/artifactType/artifactBody/artifactTitle fields, the
-//  artifact-title-first titling rule, and the persistence behaviors that
+//  Phase 2 of the modes → typed-output refactor: RecentPromptStore v2 —
+//  optional chatText/outputType/outputBody/outputTitle fields, the
+//  output-title-first titling rule, and the persistence behaviors that
 //  predate v2 but were previously untested (dedup bump, cap, round-trip).
 //  Storage versioning is the file NAME (recent_prompts_v2.json); tests pass
 //  explicit URLs so they exercise the store, not the default path.
@@ -37,32 +37,32 @@ final class RecentPromptStoreTests: XCTestCase {
         XCTAssertEqual(store.prompts.first?.title, "Context")
     }
 
-    func testAddPrefersModelArtifactTitle() {
+    func testAddPrefersModelOutputTitle() {
         let store = RecentPromptStore(fileURL: fileURL)
         store.add(
             prompt: "Long raw model output…",
             chatText: "The promo code fails silently — prompt below.",
-            artifactType: "agent_prompt",
-            artifactBody: "Fix the silent failure of Apply.",
-            artifactTitle: "Fix silent promo code failure"
+            outputType: "agent_prompt",
+            outputBody: "Fix the silent failure of Apply.",
+            outputTitle: "Fix silent promo code failure"
         )
         let entry = store.prompts.first
         XCTAssertEqual(entry?.title, "Fix silent promo code failure")
-        XCTAssertEqual(entry?.artifactTitle, "Fix silent promo code failure")
+        XCTAssertEqual(entry?.outputTitle, "Fix silent promo code failure")
     }
 
-    func testBlankArtifactTitleFallsBackToDerivation() {
+    func testBlankOutputTitleFallsBackToDerivation() {
         let store = RecentPromptStore(fileURL: fileURL)
-        store.add(prompt: "Align the submit button.", artifactTitle: "   ")
+        store.add(prompt: "Align the submit button.", outputTitle: "   ")
         let entry = store.prompts.first
         XCTAssertEqual(entry?.title, "Align the submit button.")
-        XCTAssertNil(entry?.artifactTitle, "whitespace-only title is not persisted")
+        XCTAssertNil(entry?.outputTitle, "whitespace-only title is not persisted")
     }
 
-    func testOverlongArtifactTitleIsCapped() {
+    func testOverlongOutputTitleIsCapped() {
         let store = RecentPromptStore(fileURL: fileURL)
         let long = String(repeating: "word ", count: 40) // 200 chars
-        store.add(prompt: "body", artifactTitle: long)
+        store.add(prompt: "body", outputTitle: long)
         let title = store.prompts.first?.title ?? ""
         XCTAssertLessThanOrEqual(title.count, 81, "80 + ellipsis")
         XCTAssertTrue(title.hasSuffix("\u{2026}"))
@@ -75,28 +75,62 @@ final class RecentPromptStoreTests: XCTestCase {
         store.add(
             prompt: "raw output",
             chatText: "chat",
-            artifactType: "snippet",
-            artifactBody: "SELECT 1;",
-            artifactTitle: "Top customers query"
+            outputType: "snippet",
+            outputBody: "SELECT 1;",
+            outputTitle: "Top customers query"
         )
         let reloaded = RecentPromptStore(fileURL: fileURL)
         let entry = reloaded.prompts.first
         XCTAssertEqual(entry?.prompt, "raw output")
         XCTAssertEqual(entry?.chatText, "chat")
-        XCTAssertEqual(entry?.artifactType, "snippet")
-        XCTAssertEqual(entry?.artifactBody, "SELECT 1;")
-        XCTAssertEqual(entry?.artifactTitle, "Top customers query")
+        XCTAssertEqual(entry?.outputType, "snippet")
+        XCTAssertEqual(entry?.outputBody, "SELECT 1;")
+        XCTAssertEqual(entry?.outputTitle, "Top customers query")
     }
 
-    func testChatOnlyEntryCarriesNilArtifactFields() {
+    func testChatOnlyEntryCarriesNilOutputFields() {
         let store = RecentPromptStore(fileURL: fileURL)
-        store.add(prompt: "Just an explanation, no artifact.")
+        store.add(prompt: "Just an explanation, no output.")
         let reloaded = RecentPromptStore(fileURL: fileURL)
         let entry = reloaded.prompts.first
         XCTAssertNil(entry?.chatText)
-        XCTAssertNil(entry?.artifactType)
-        XCTAssertNil(entry?.artifactBody)
-        XCTAssertNil(entry?.artifactTitle)
+        XCTAssertNil(entry?.outputType)
+        XCTAssertNil(entry?.outputBody)
+        XCTAssertNil(entry?.outputTitle)
+    }
+
+    /// The v2 file shipped with `artifact*` JSON keys before the output
+    /// rename. Pins the on-disk contract in BOTH directions: a legacy file
+    /// still decodes into the renamed properties, and a fresh save still
+    /// writes the legacy keys (never `outputType` etc.).
+    func testOnDiskKeysStayArtifactNamedAfterRename() throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacyJSON = """
+        [{"id":"6F1E9C1A-2B3C-4D5E-8F90-1A2B3C4D5E6F",
+          "title":"Fix silent promo code failure",
+          "prompt":"raw body",
+          "timestamp":"2026-06-12T10:00:00Z",
+          "chatText":"chat",
+          "artifactType":"agent_prompt",
+          "artifactBody":"Fix the silent failure of Apply.",
+          "artifactTitle":"Fix silent promo code failure"}]
+        """
+        try Data(legacyJSON.utf8).write(to: fileURL)
+
+        let store = RecentPromptStore(fileURL: fileURL)
+        let entry = store.prompts.first
+        XCTAssertEqual(entry?.outputType, "agent_prompt")
+        XCTAssertEqual(entry?.outputBody, "Fix the silent failure of Apply.")
+        XCTAssertEqual(entry?.outputTitle, "Fix silent promo code failure")
+
+        store.add(prompt: "new body", outputType: "snippet", outputBody: "SELECT 1;")
+        let written = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertTrue(written.contains("\"artifactType\""), "disk keys are a compat contract")
+        XCTAssertTrue(written.contains("\"artifactBody\""))
+        XCTAssertFalse(written.contains("\"outputType\""), "renamed properties must not leak to disk")
     }
 
     // MARK: Pre-v2 behaviors (previously untested)
@@ -202,20 +236,20 @@ final class RecentPromptStoreTests: XCTestCase {
     private func entry(
         prompt: String = "raw",
         chatText: String? = nil,
-        artifactType: String? = nil,
-        artifactBody: String? = nil
+        outputType: String? = nil,
+        outputBody: String? = nil
     ) -> RecentPrompt {
         RecentPrompt(
             title: "t",
             prompt: prompt,
             chatText: chatText,
-            artifactType: artifactType,
-            artifactBody: artifactBody
+            outputType: outputType,
+            outputBody: outputBody
         )
     }
 
-    func testCopyPayloadPrefersArtifactBody() {
-        let e = entry(prompt: "raw with fences", chatText: "intro", artifactType: "snippet", artifactBody: "SELECT 1;")
+    func testCopyPayloadPrefersOutputBody() {
+        let e = entry(prompt: "raw with fences", chatText: "intro", outputType: "snippet", outputBody: "SELECT 1;")
         XCTAssertEqual(e.copyPayload, "SELECT 1;")
     }
 
@@ -230,19 +264,19 @@ final class RecentPromptStoreTests: XCTestCase {
     }
 
     func testDisplayIconPerType() {
-        XCTAssertEqual(entry(artifactType: "agent_prompt").displayIconName, "curlybraces")
-        XCTAssertEqual(entry(artifactType: "message").displayIconName, "envelope")
-        XCTAssertEqual(entry(artifactType: "snippet").displayIconName, "chevron.left.forwardslash.chevron.right")
-        XCTAssertEqual(entry(artifactType: "document").displayIconName, "doc.text")
+        XCTAssertEqual(entry(outputType: "agent_prompt").displayIconName, "curlybraces")
+        XCTAssertEqual(entry(outputType: "message").displayIconName, "envelope")
+        XCTAssertEqual(entry(outputType: "snippet").displayIconName, "chevron.left.forwardslash.chevron.right")
+        XCTAssertEqual(entry(outputType: "document").displayIconName, "doc.text")
     }
 
     func testDisplayIconChatOnlyAndUnknownType() {
         XCTAssertEqual(entry().displayIconName, "text.bubble", "chat-only rows get the chat bubble")
         XCTAssertEqual(
-            entry(artifactType: "future_type").displayIconName,
-            ArtifactType.generic.iconName,
+            entry(outputType: "future_type").displayIconName,
+            OutputType.generic.iconName,
             "a stored type the enum no longer knows degrades to the generic glyph"
         )
-        XCTAssertNil(entry(artifactType: "future_type").resolvedArtifactType)
+        XCTAssertNil(entry(outputType: "future_type").resolvedOutputType)
     }
 }

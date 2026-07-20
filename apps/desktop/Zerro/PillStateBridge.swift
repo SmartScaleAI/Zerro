@@ -16,19 +16,19 @@ import SwiftUI
 
 // MARK: - ResultPresentation
 
-/// The result pill's render model (Phase 5 of the typed-artifact refactor):
-/// chat text and the optional typed artifact it introduces. Assembled by
+/// The result pill's render model (Phase 5 of the typed-output refactor):
+/// chat text and the optional typed output it introduces. Assembled by
 /// `AppState.resultPresentation` from the parsed response so `PillView`
 /// stays a pure renderer — it never sees `ParsedResponse`'s parse
 /// bookkeeping (validity, recovery, warnings), only what gets drawn.
 struct ResultPresentation: Equatable {
     /// Conversational text rendered above the card. Never nil — a parse
     /// fail-safe degrades the whole raw output into this. May be empty when
-    /// the model led straight into an artifact.
+    /// the model led straight into an output.
     let chatText: String
-    /// The typed artifact, when one was attached. nil → chat-only layout
+    /// The typed output, when one was attached. nil → chat-only layout
     /// (no card).
-    let artifact: Artifact?
+    let output: GeneratedOutput?
 
     /// Neutral, content-free presentation. Used by `PillView` as the
     /// production fallback when `result` is briefly nil during teardown
@@ -36,7 +36,7 @@ struct ResultPresentation: Equatable {
     /// pill renders an EMPTY card rather than substituting heavyweight
     /// sample content. The rich sample lives in
     /// `ResultPillContent.placeholderResult`, which is preview-only.
-    static let empty = ResultPresentation(chatText: "", artifact: nil)
+    static let empty = ResultPresentation(chatText: "", output: nil)
 }
 
 extension AppState {
@@ -208,7 +208,7 @@ extension AppState {
     /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
     /// its prompt-generation step just like ask mode, so the same readout
     /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
-    /// artifact path uses (see PillWindowController) so the two read identically.
+    /// output path uses (see PillWindowController) so the two read identically.
     /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.
     var devResultCard: DevResultCard {
         DevResultCard(

@@ -45,7 +45,7 @@ final class ToolbarWalkthroughLayoutTests: XCTestCase {
     }
 
     /// The layout the tour shows for a step: Phase 1 forces Dev Mode ON
-    /// (display-only) for the agent/record steps, Artifact otherwise.
+    /// (display-only) for the agent/record steps, Ask otherwise.
     private func devMode(for step: ToolbarWalkthroughStep) -> Bool {
         step.showsDevControls
     }

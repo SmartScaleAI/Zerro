@@ -10,7 +10,7 @@
 //  while inline markdown (**bold**, *italic*, `code`) still resolves within
 //  each block.
 //
-//  Scope: SUMMARY ONLY. The artifact body well stays raw/monospace; this
+//  Scope: SUMMARY ONLY. The output body well stays raw/monospace; this
 //  renderer is not used there.
 //
 

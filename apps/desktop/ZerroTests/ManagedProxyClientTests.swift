@@ -207,7 +207,7 @@ final class ManagedProxyClientTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
         // Exactly model + audio + frames + clicks + has_speech — nothing else.
-        // Typed-artifact refactor: `mode` is gone from the wire; the client
+        // Typed-output refactor: `mode` is gone from the wire; the client
         // sends NOTHING that steers the server-owned prompt.
         XCTAssertEqual(Set(json.keys), ["model", "audio", "frames", "clicks", "has_speech"])
         XCTAssertFalse(json.keys.contains("mode"), "v1 mode field must not ride the wire")
@@ -547,7 +547,7 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.malformedResponse))
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.inputRejected("nope")))
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.network("offline")))
-        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.artifactUnreadable))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.outputUnreadable))
         // Non-managed error → nil.
         XCTAssertNil(AppState.providerHTTPDetail(from: URLError(.timedOut)))
     }

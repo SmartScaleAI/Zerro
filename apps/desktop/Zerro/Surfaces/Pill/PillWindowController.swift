@@ -358,7 +358,7 @@ private struct PillHostView: View {
                 appState.cancelRecording()
             },
             onCopy: {
-                // Typed-artifact refactor: copy per the §2 per-type payload
+                // Typed-output refactor: copy per the §2 per-type payload
                 // table — agent_prompt copies body + Attached Context, other
                 // types the body alone, chat-only the chat text; raw output
                 // as the fallback when parsing produced no structure. (See
@@ -399,7 +399,7 @@ private struct PillHostView: View {
             // shown prompt; Cancel aborts before the agent runs (safe teardown).
             onApproveReview: { appState.approveReviewAndProceed() },
             onCancelReview: { appState.cancelReview() },
-            // Phase 5: the parsed result — chat text + optional artifact
+            // Phase 5: the parsed result — chat text + optional output
             // card.
             result: appState.resultPresentation,
             resultHadNoNarration: appState.resultHadNoNarration,

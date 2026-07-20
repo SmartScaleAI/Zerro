@@ -2,19 +2,19 @@
 //  ChatOnlyResultCardTests.swift
 //  ZerroTests
 //
-//  Guards the chat-only (artifact == nil) result card after the "Write agent
+//  Guards the chat-only (output == nil) result card after the "Write agent
 //  prompt" convert affordance was removed. The card no longer carries any
-//  conversion state — `ArtifactCardView`/`PillView` have no `conversion`/
+//  conversion state — `OutputCardView`/`PillView` have no `conversion`/
 //  `onConvert` parameters, so the compiler is the primary guarantee there is
 //  no convert footer to render. These render-smoke tests pin the remaining
 //  behavior: a chat-only response still lays out cleanly with its text, the
 //  charge line (when managed), and the dismiss chrome — no layout break.
 //
 //  The chat-only card now also offers a plain "Copy" action (matching the
-//  artifact behavior). Two seams cover it deterministically without UI
+//  output behavior). Two seams cover it deterministically without UI
 //  automation: `AppState.resultCopyPayload` supplies the chat text the button
 //  copies (falling back to the raw `generatedPrompt`), and
-//  `ArtifactCardView.showsCopyAction` decides whether the footer renders the
+//  `OutputCardView.showsCopyAction` decides whether the footer renders the
 //  Copy button at all.
 //
 
@@ -43,7 +43,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
                     + "value during SSR \u{2014} the server and client markup disagree. "
                     + "Nothing on screen needs a code change, so there\u{2019}s nothing to "
                     + "hand to an agent here.",
-                artifact: nil
+                output: nil
             ),
             chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
         )
@@ -60,7 +60,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
             state: .resultExpanded,
             result: ResultPresentation(
                 chatText: "The lockfile is stale \u{2014} re-run install to clear it.",
-                artifact: nil
+                output: nil
             )
         )
 
@@ -75,7 +75,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
             state: .resultCompact,
             result: ResultPresentation(
                 chatText: "The lockfile is stale \u{2014} re-run install to clear it.",
-                artifact: nil
+                output: nil
             )
         )
 
@@ -94,7 +94,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
             result: ResultPresentation(
                 chatText: "That hydration error comes from rendering a non-deterministic "
                     + "value during SSR \u{2014} the server and client markup disagree.",
-                artifact: nil
+                output: nil
             ),
             chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
         )
@@ -106,14 +106,14 @@ final class ChatOnlyResultCardTests: XCTestCase {
 
     // MARK: Copy payload seam (AppState)
 
-    /// A chat-only response (`parsedResponse.artifact == nil`) copies the chat
+    /// A chat-only response (`parsedResponse.output == nil`) copies the chat
     /// text — the data the Copy button writes to the pasteboard.
     func testResultCopyPayloadReturnsChatTextForChatOnly() {
         let appState = AppState()
         appState.generatedPrompt = "<<<raw model output>>>"
         appState.parsedResponse = ParsedResponse(
             chatText: "Nothing on screen needs a code change.",
-            artifact: nil,
+            output: nil,
             isValid: true,
             wasRecovered: false,
             warnings: []
@@ -131,7 +131,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
         appState.generatedPrompt = "the raw fallback text"
         appState.parsedResponse = ParsedResponse(
             chatText: "",
-            artifact: nil,
+            output: nil,
             isValid: false,
             wasRecovered: false,
             warnings: []
@@ -140,16 +140,16 @@ final class ChatOnlyResultCardTests: XCTestCase {
         XCTAssertEqual(appState.resultCopyPayload, "the raw fallback text")
     }
 
-    // MARK: Copy visibility seam (ArtifactCardView.showsCopyAction)
+    // MARK: Copy visibility seam (OutputCardView.showsCopyAction)
 
     private func makeCard(
-        artifact: Artifact?,
+        output: GeneratedOutput?,
         chatText: String,
-        failure: ArtifactCardView.FailureConfig? = nil,
-        devResult: ArtifactCardView.DevResultConfig? = nil
-    ) -> ArtifactCardView {
-        ArtifactCardView(
-            artifact: artifact,
+        failure: OutputCardView.FailureConfig? = nil,
+        devResult: OutputCardView.DevResultConfig? = nil
+    ) -> OutputCardView {
+        OutputCardView(
+            output: output,
             chatText: chatText,
             chargeLine: nil,
             noNarration: false,
@@ -162,41 +162,41 @@ final class ChatOnlyResultCardTests: XCTestCase {
         )
     }
 
-    private var sampleArtifact: Artifact {
-        Artifact(type: .agentPrompt, rawType: "agent_prompt", title: "Fix the bug", body: "Do the thing.")
+    private var sampleOutput: GeneratedOutput {
+        GeneratedOutput(type: .agentPrompt, rawType: "agent_prompt", title: "Fix the bug", body: "Do the thing.")
     }
 
-    /// An artifact result always offers Copy (its per-type label).
-    func testShowsCopyActionForArtifact() {
-        XCTAssertTrue(makeCard(artifact: sampleArtifact, chatText: "").showsCopyAction)
+    /// An output result always offers Copy (its per-type label).
+    func testShowsCopyActionForOutput() {
+        XCTAssertTrue(makeCard(output: sampleOutput, chatText: "").showsCopyAction)
     }
 
     /// A chat-only result with explanation text offers the plain Copy action.
     func testShowsCopyActionForChatOnlyWithText() {
-        XCTAssertTrue(makeCard(artifact: nil, chatText: "Here is why.").showsCopyAction)
+        XCTAssertTrue(makeCard(output: nil, chatText: "Here is why.").showsCopyAction)
     }
 
     /// A chat-only result with NO text has nothing to copy — no dead button.
     func testHidesCopyActionForChatOnlyWithoutText() {
-        XCTAssertFalse(makeCard(artifact: nil, chatText: "").showsCopyAction)
+        XCTAssertFalse(makeCard(output: nil, chatText: "").showsCopyAction)
     }
 
     /// The failure footer owns its own actions (Retry / Cancel) — Copy yields.
     func testHidesCopyActionForFailure() {
-        let failure = ArtifactCardView.FailureConfig(
+        let failure = OutputCardView.FailureConfig(
             headline: "Generation failed",
             detail: "The model returned an error."
         )
-        XCTAssertFalse(makeCard(artifact: nil, chatText: "Here is why.", failure: failure).showsCopyAction)
+        XCTAssertFalse(makeCard(output: nil, chatText: "Here is why.", failure: failure).showsCopyAction)
     }
 
     /// The dev-result footer owns Undo/Accept — Copy yields.
     func testHidesCopyActionForDevResult() {
-        let dev = ArtifactCardView.DevResultConfig(
+        let dev = OutputCardView.DevResultConfig(
             title: "Changes applied",
             summary: "Recolored the button.",
             diffText: "diff --git a/App.css b/App.css"
         )
-        XCTAssertFalse(makeCard(artifact: nil, chatText: "", devResult: dev).showsCopyAction)
+        XCTAssertFalse(makeCard(output: nil, chatText: "", devResult: dev).showsCopyAction)
     }
 }

@@ -988,7 +988,7 @@ private struct CopyLastPromptRow: View {
     private func copyToClipboard() {
         guard let entry else { return }
         // Phase 5: per-type payload, same semantics as the live pill —
-        // artifact body / chat text / raw fallback.
+        // output body / chat text / raw fallback.
         Pasteboard.copy(entry.copyPayload)
         // Close the dropdown once the prompt is on the clipboard.
         MenuBarExtraDismiss.dismiss()
@@ -1056,7 +1056,7 @@ private struct RecentPromptSubmenuRow: View {
     var body: some View {
         Button(action: copy) {
             HStack(spacing: 0) {
-                // Phase 5: artifact-type glyph (chat bubble for chat-only)
+                // Phase 5: output-type glyph (chat bubble for chat-only)
                 // so the submenu scans by result kind.
                 Image(systemName: entry.displayIconName)
                     .font(.system(size: 11))

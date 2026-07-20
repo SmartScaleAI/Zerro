@@ -4,14 +4,14 @@
 //
 //  Created by Colin Breeding on 6/11/26.
 //
-//  Phase 2 of the modes → typed-artifact refactor: assembles the §2
+//  Phase 2 of the modes → typed-output refactor: assembles the §2
 //  "Attached Context" block CLIENT-side from what the recording already
 //  produced — per-frame OCR text and resolved clicks. No transcript, no
 //  server involvement (locked decision).
 //
 //  The §2 markdown template below survives ONLY as model input — the
 //  convert endpoint receives the block verbatim. Revision 2026-06-12: the
-//  artifact card's context drawer was removed, so the block is never
+//  output card's context drawer was removed, so the block is never
 //  rendered, and no copy payload includes it for any type — it is
 //  internal-only.
 //
