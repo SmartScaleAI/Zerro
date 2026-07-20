@@ -1207,4 +1207,16 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
         case .agent, .record:     return true
         }
     }
+
+    /// Whether the control this step points at exists ONLY in the Dev-Mode
+    /// toolbar layout — drives the "Dev Mode only" callout badge. Distinct
+    /// from `showsDevControls`: the record step is *displayed* in the Dev
+    /// layout for continuity, but the Record button works in Ask mode too,
+    /// so only `.agent` is genuinely Dev-only.
+    var isDevModeOnly: Bool {
+        switch self {
+        case .agent:                        return true
+        case .mode, .model, .mic, .record:  return false
+        }
+    }
 }

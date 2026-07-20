@@ -59,6 +59,16 @@ final class ToolbarWalkthroughStateTests: XCTestCase {
         XCTAssertTrue(ToolbarWalkthroughStep.record.showsDevControls)
     }
 
+    /// Only the agent step's control is genuinely Dev-only — record borrows
+    /// the Dev layout for continuity but works in Ask mode too.
+    func testIsDevModeOnly() {
+        XCTAssertFalse(ToolbarWalkthroughStep.mode.isDevModeOnly)
+        XCTAssertFalse(ToolbarWalkthroughStep.model.isDevModeOnly)
+        XCTAssertFalse(ToolbarWalkthroughStep.mic.isDevModeOnly)
+        XCTAssertTrue(ToolbarWalkthroughStep.agent.isDevModeOnly)
+        XCTAssertFalse(ToolbarWalkthroughStep.record.isDevModeOnly)
+    }
+
     // MARK: - State machine
 
     func testStartEntersFirstStep() {

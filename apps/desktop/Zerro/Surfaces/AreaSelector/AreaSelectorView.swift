@@ -685,8 +685,8 @@ struct AreaSelectorView: View {
     static let walkthroughCalloutWidth: CGFloat = 300
     /// Inner inset of the callout's content (all four sides).
     static let walkthroughCalloutPad: CGFloat = 14
-    /// Fixed height of the "1 of 5" step-indicator line.
-    static let walkthroughIndicatorHeight: CGFloat = 15
+    /// Fixed height of the "1 of 5" step-indicator / badge row.
+    static let walkthroughIndicatorHeight: CGFloat = 18
     /// Vertical gaps: indicator → title, title → body, body → footer.
     static let walkthroughTitleGap: CGFloat = 4
     static let walkthroughBodyGap: CGFloat = 6
@@ -2478,10 +2478,22 @@ struct AreaSelectorView: View {
 
             menuPanel(frame: panel) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("\(step.rawValue + 1) of \(ToolbarWalkthroughStep.allCases.count)")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.vfTextTertiary)
-                        .frame(height: Self.walkthroughIndicatorHeight, alignment: .topLeading)
+                    HStack(alignment: .center, spacing: 0) {
+                        Text("\(step.rawValue + 1) of \(ToolbarWalkthroughStep.allCases.count)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.vfTextTertiary)
+                        Spacer(minLength: 8)
+                        if step.isDevModeOnly {
+                            Text("Dev Mode only")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color.vfDevAccent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule(style: .continuous).fill(Color.vfDevAccent.opacity(0.14)))
+                                .fixedSize()
+                        }
+                    }
+                    .frame(width: textW, height: Self.walkthroughIndicatorHeight, alignment: .leading)
                     Text(step.title)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.vfTextPrimary)
