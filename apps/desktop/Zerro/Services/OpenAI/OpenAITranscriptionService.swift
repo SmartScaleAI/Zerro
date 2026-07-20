@@ -35,6 +35,28 @@ struct OpenAITranscriptionService: TranscriptionService {
     /// before/after cost log diff to back the decision.
     static let model = "whisper-1"
 
+    /// Typed mapping from the Whisper response status to the error thrown
+    /// for it — nil for 2xx success. Factored out of `transcribe` so the
+    /// mapping is unit-testable without a live request. 401 AND 403 both
+    /// map to `.auth` (J-02): OpenAI returns 403 for rejected keys and
+    /// permission/region denials, which previously fell through to
+    /// `.server` and surfaced as a misleading transient-outage message.
+    /// A 429 reaching here is either quota exhaustion (`insufficient_quota`
+    /// body, J-03 — performWithRetry deliberately didn't retry it) or a
+    /// rate limit that outlived performWithRetry's single retry; `body`
+    /// tells them apart.
+    static func error(forStatus status: Int, body: Data = Data()) -> TranscriptionError? {
+        switch status {
+        case 200...299: return nil
+        case 401, 403: return .auth
+        case 429:
+            return OpenAIClient.isQuotaExhausted429(status: status, body: body)
+                ? .quotaExhausted
+                : .rateLimited
+        default: return .server(status: status)
+        }
+    }
+
     func transcribe(audioFileURL: URL, wordTimestamps: Bool) async throws -> Transcript {
         guard let apiKey = OpenAIClient.resolveAPIKey() else {
             throw TranscriptionError.missingAPIKey
@@ -88,23 +110,16 @@ struct OpenAITranscriptionService: TranscriptionService {
             throw TranscriptionError.network(underlying: error)
         }
 
-        switch response.statusCode {
-        case 200...299:
-            break
-        case 401:
-            throw TranscriptionError.auth
-        case 429:
-            // performWithRetry already retried once; reaching here means
-            // the retry also got 429.
-            throw TranscriptionError.rateLimited
-        default:
-            // Log the provider's error body `.private` for local debugging
-            // only — it must NOT ride into the typed error, which can reach
-            // the error tracker, where the exception value is scrubbed by length, not by
-            // content. The error keeps just the status code.
-            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-            Log.transcription.error("Whisper non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
-            throw TranscriptionError.server(status: response.statusCode)
+        if let statusError = Self.error(forStatus: response.statusCode, body: data) {
+            if case .server = statusError {
+                // Log the provider's error body `.private` for local debugging
+                // only — it must NOT ride into the typed error, which can reach
+                // the error tracker, where the exception value is scrubbed by length, not by
+                // content. The error keeps just the status code.
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                Log.transcription.error("Whisper non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
+            }
+            throw statusError
         }
 
         do {

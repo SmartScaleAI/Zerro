@@ -39,6 +39,14 @@ enum CreditDisplay {
 
     // MARK: - Headline + helper strings
 
+    /// B-07: the ONE user-facing statement of the server's metering floor —
+    /// charging is metered on real cost but never below 1 credit per
+    /// generation (`Math.max(1, …)` in `generate/cost.ts`), so even a
+    /// 2-second recording spends a credit. Price-agnostic on purpose: states
+    /// the floor only, never a per-model estimate. Shown near the Settings
+    /// usage meter and in the paywall top-up copy.
+    static let minimumChargeNote = "Every generation uses at least 1 credit."
+
     /// "248 credits" / "1 credit" — the §1.5 primary number.
     static func creditsHeadline(_ balance: Int) -> String {
         balance == 1 ? "1 credit" : "\(balance) credits"

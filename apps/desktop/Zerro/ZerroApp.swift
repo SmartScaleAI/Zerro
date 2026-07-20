@@ -63,8 +63,10 @@ struct ZerroApp: App {
     /// session — owning it inside the MenuBarExtra content closure
     /// would tear down `SPUStandardUpdaterController` every time the
     /// dropdown closes, killing automatic update checks and any
-    /// in-flight download UI (Phase 4 lifetime learning).
-    @StateObject private var updater = UpdaterViewModel()
+    /// in-flight download UI (Phase 4 lifetime learning). Assigned in
+    /// `init` (not a property default) so the I-02 relaunch gate can
+    /// capture the AppState built there.
+    @StateObject private var updater: UpdaterViewModel
 
     /// Guard so the hotkey handler is appended to the library's handler
     /// list exactly once across the app's lifetime. SwiftUI re-invokes
@@ -181,6 +183,18 @@ struct ZerroApp: App {
         // manager's sole `stateDidChange` owner (never clobbered here).
         state.modelManager = modelManager
         _appState = State(initialValue: state)
+        // I-02: gate Sparkle's install-and-relaunch on the state machine
+        // being fully idle, so an automatic update can't kill an active
+        // recording or Dev-Mode dispatch. `StateObject(wrappedValue:)` is an
+        // @autoclosure evaluated only when SwiftUI first installs the
+        // storage box — on that FIRST init, `state` here is the same
+        // instance persisted into `_appState` above, so the gate reads the
+        // live state machine; throwaway re-init instances are never
+        // evaluated (same lifetime dance as the hotkey guard above).
+        _updater = StateObject(wrappedValue: UpdaterViewModel(
+            isBusy: { state.state != .idle },
+            onNextIdle: { state.onNextIdle($0) }
+        ))
         _preferences = State(initialValue: prefs)
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
@@ -219,20 +233,38 @@ struct ZerroApp: App {
             // already ensures the file-system sweep below runs only
             // once across SwiftUI's re-invocations of App.init, so we
             // get the right one-shot semantics for free.
-            CrashReporting.start()
+            //
+            // I-03: telemetry startup is CONSENT-GATED. One closure both starts
+            // PostHog (CrashReporting.start → Analytics.start) and seeds the
+            // Tier 1 entitlement super-properties, reading LIVE state at
+            // invocation time — the EntitlementStore.state didSet keeps them
+            // live thereafter; the explicit seed is needed because that didSet
+            // doesn't fire for the value computed in EntitlementStore.init.
+            // A user with current consent on record starts at launch exactly
+            // as before. A first-run (or owed-re-consent) launch transmits
+            // NOTHING — no anonymous lifecycle events, no pre-consent
+            // onboarding markers (those captureOnce calls no-op and are
+            // intentionally dropped) — until OnboardingState.recordConsent()
+            // fires the one-shot hook after "Agree & Continue".
+            let startTelemetry = {
+                CrashReporting.start()
+                Analytics.updateEntitlementProperties(ent.state)
+            }
+            if OnboardingState.hasCurrentConsent() {
+                startTelemetry()
+            } else {
+                AppDelegate.startTelemetryOnConsent = startTelemetry
+            }
             // Subscribe to MetricKit so genuine crash/hang/CPU/disk-write
             // diagnostics (the detail PostHog's bare-SIGTRAP autocapture misses)
             // are forwarded into PostHog. `metricObserver` is retained for the
             // app's lifetime by the @State above — MXMetricManager keeps only a
             // weak reference. Inside this one-shot, preview-gated block so it
             // registers exactly once and never during a #Preview launch.
+            // Deliberately UNCONDITIONAL under the I-03 gate: the observer only
+            // forwards via Analytics.capture(), which no-ops until start(), so
+            // subscribing early transmits nothing.
             MXMetricManager.shared.add(metricObserver)
-            // Tier 1 analytics: seed the entitlement super-properties from the
-            // resolved launch state so EVERY event this session carries
-            // monetization context. The EntitlementStore.state didSet keeps them
-            // live thereafter; this initial push is needed because that didSet
-            // doesn't fire for the value computed in EntitlementStore.init.
-            Analytics.updateEntitlementProperties(ent.state)
             // Phase 13A: anchor breadcrumb. Every subsequent breadcrumb
             // (state transitions, pipeline stages, permission changes)
             // accumulates AFTER this one in the local breadcrumb trail, so
@@ -771,31 +803,44 @@ struct ZerroApp: App {
             return
         }
 
-        if !onboarding.hasCompletedOnboarding {
-            Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
-            AppDelegate.openOnboarding()
-            return
-        }
-
         // Re-read live OS state in case a permission was revoked while
         // the app was running. We only treat Screen Recording + Mic as
         // gating; Accessibility is informational per Checkpoint 3.
+        // (Prompt-free preflight reads — safe on every attempt, including
+        // ones the earlier gate outcomes below will short-circuit.)
         permissions.refreshStatuses()
         Log.hotkey.info(
             "permission statuses — screen=\(String(describing: permissions.screenRecordingStatus), privacy: .public) mic=\(String(describing: permissions.microphoneStatus), privacy: .public) accessibility=\(String(describing: permissions.accessibilityStatus), privacy: .public)"
         )
 
-        if permissions.screenRecordingStatus != .granted {
-            Log.hotkey.notice("gating: screen recording not granted — opening onboarding @ permissions")
+        // H-06: onboarding / consent / permission gating, in the priority
+        // order pinned by `recordGateAction` (and its unit tests). Consent
+        // MUST outrank the permission jump: routing a consent-owing user to
+        // .permissions lets the flow's tail run completeOnboarding() without
+        // ever running recordConsent(), leaving needsConsent latched true —
+        // every subsequent record attempt re-hijacked onboarding (loop).
+        switch OnboardingState.recordGateAction(
+            hasCompletedOnboarding: onboarding.hasCompletedOnboarding,
+            needsConsent: onboarding.needsConsent,
+            screenGranted: permissions.screenRecordingStatus == .granted,
+            micGranted: permissions.microphoneStatus == .granted
+        ) {
+        case .openOnboarding:
+            Log.hotkey.notice("gating: onboarding incomplete — opening onboarding")
+            AppDelegate.openOnboarding()
+            return
+        case .reconsent:
+            Log.hotkey.notice("gating: consent stale — opening onboarding @ consent (reconsent)")
+            onboarding.beginReconsent()
+            AppDelegate.openOnboarding()
+            return
+        case .requestPermissions:
+            Log.hotkey.notice("gating: screen recording or microphone not granted — opening onboarding @ permissions")
             onboarding.jump(to: .permissions)
             AppDelegate.openOnboarding()
             return
-        }
-        if permissions.microphoneStatus != .granted {
-            Log.hotkey.notice("gating: microphone not granted — opening onboarding @ permissions")
-            onboarding.jump(to: .permissions)
-            AppDelegate.openOnboarding()
-            return
+        case .proceed:
+            break
         }
 
         // Phase B freshness point: re-evaluate the trial clock at the
@@ -935,6 +980,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// checkout-return deep link to dismiss the paywall for an already-activated
     /// buyer (a Managed top-up that updated credits silently).
     nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
+
+    /// Set by `ZerroApp`'s one-shot bootstrap when the launch lacked current
+    /// consent (I-03): the DEFERRED telemetry startup (CrashReporting.start →
+    /// Analytics.start + the entitlement super-property seed).
+    /// `OnboardingState.recordConsent()` fires and clears it (one-shot) right
+    /// after the consent record is written — first-run accept and re-consent
+    /// accept alike. Mirrors the request* hooks above.
+    nonisolated(unsafe) static var startTelemetryOnConsent: (() -> Void)?
 
     /// Set by `SettingsWindowRegistrar`. Used by the checkout-return deep link's
     /// key-prefill branch to dismiss the Settings window if AppKit happened to
@@ -1116,7 +1169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     static func handleCheckoutReturn(_ url: URL) {
         guard let parsed = CheckoutReturn.parse(url) else {
-            Log.billing.notice("deep link: ignoring \(url.absoluteString, privacy: .public)")
+            // E-08: scheme + host ONLY (the host is the deep-link action) — the
+            // query/fragment can carry a license_key, and .public os_log lands
+            // in Console, sysdiagnose, and the diagnostics blob.
+            Log.billing.notice("deep link: ignoring \(url.scheme ?? "?", privacy: .public)://\(url.host ?? "?", privacy: .public)")
             return
         }
         guard let entitlements else {

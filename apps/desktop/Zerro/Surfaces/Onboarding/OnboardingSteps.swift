@@ -417,6 +417,7 @@ struct EmailStepView: View {
 struct PermissionsStepView: View {
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
+    @Environment(\.dismissWindow) private var dismissWindow
 
     /// Per-row display state honors the DEBUG dev-panel pin so each
     /// sub-state can be previewed without toggling system permissions.
@@ -475,8 +476,25 @@ struct PermissionsStepView: View {
                 }
             }
         } actions: {
-            OnboardingPrimaryButton("Continue Setup", isEnabled: bothGranted) {
-                onboarding.advance()
+            // H-06 adjacent: a COMPLETED user lands here only via the record
+            // gate's permission jump (revoked permission). Granting should
+            // return them to the app — advancing would re-run the
+            // devMode → allSet tail and re-fire completeOnboarding(). If they
+            // somehow still owe consent too (e.g. a stale persisted step from
+            // before the consent-first gate), settle it now: reconsent's
+            // accept dismisses.
+            if onboarding.hasCompletedOnboarding {
+                OnboardingPrimaryButton("Done", isEnabled: bothGranted) {
+                    if onboarding.needsConsent {
+                        onboarding.beginReconsent()
+                    } else {
+                        dismissWindow(id: OnboardingScene.windowID)
+                    }
+                }
+            } else {
+                OnboardingPrimaryButton("Continue Setup", isEnabled: bothGranted) {
+                    onboarding.advance()
+                }
             }
         }
         // Single combined poller: poll iff either row is denied, so two
@@ -786,7 +804,7 @@ private struct DevModeToolbarIllustration: View {
         )
     }
 
-    /// Two-segment mode switch in a recessed well: Artifact (dimmed, inactive) |
+    /// Two-segment mode switch in a recessed well: Ask (dimmed, inactive) |
     /// Dev (active, green). A soft green ring rings the well to pull the eye.
     private var modeSwitch: some View {
         HStack(spacing: 0) {

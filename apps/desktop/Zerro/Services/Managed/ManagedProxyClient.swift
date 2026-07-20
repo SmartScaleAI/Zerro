@@ -79,12 +79,20 @@ enum ManagedGenerationError: Error, Equatable {
     /// a clear "too long" state instead of a generic provider error
     /// (handoff-artifact-fence-leak).
     case responseTruncated
+    /// F-07 — the CLIENT-side pre-upload fuse tripped: the recording's audio
+    /// or the encoded request body exceeds the server's `/generate` input fuse
+    /// (`ManagedBackend.maxAudioUploadBytes` / `.maxPayloadUploadBytes`), so
+    /// the upload was never attempted — no bytes left the machine and nothing
+    /// was charged. Thrown from the encode step, BEFORE any network call. A
+    /// real recording (3-min cap, bounded frames) can't produce this; NOT
+    /// retryable — the same payload fails identically.
+    case payloadTooLarge
     /// Transport failure (offline/DNS/timeout). Retryable / offline-class.
     case network(String)
     /// The success body wasn't the JSON shape we expected.
     case malformedResponse
     /// A frame/audio artifact couldn't be read off disk to upload.
-    case artifactUnreadable
+    case outputUnreadable
 }
 
 // MARK: - ManagedGenerationResult
@@ -233,13 +241,19 @@ final class ManagedProxyClient {
         let durationSeconds: Double?
     }
 
-    /// Dev Mode CALL 1 (Phase 2 §7) — the FREE word-level transcription. POSTs
-    /// `{mode:"dev-transcribe", audio, has_speech}` and parses the returned
-    /// word-level transcript. The server charges nothing, takes no concurrency
-    /// slot, and writes no idempotency entry for this call (it is auth-gated +
-    /// rate-limited only). The client resolves deixis anchors against this exact
-    /// transcript before the billable call 2. Token handling mirrors `generate`:
-    /// one transparent refresh on 401, then `authFailed`.
+    /// Dev Mode CALL 1 (Phase 2 §7, X-02) — the word-level transcription. POSTs
+    /// `{mode:"dev_transcribe", audio, has_speech}` and parses the returned
+    /// word-level transcript. The server CONSUMES nothing, takes no concurrency
+    /// slot, and writes no idempotency entry for this call — but (X-02) it
+    /// places a temporary 1-credit HOLD keyed on `idempotencyKey`, which the
+    /// paired call 2 settles (real cost consumed + hold released atomically).
+    /// The caller must therefore pass the recording's STABLE key — the SAME one
+    /// call 2 sends — or the hold orphans until its server-side TTL. A 402 here
+    /// means the spendable balance (real credits − active holds) can't cover
+    /// the floor: mapped to `.outOfCredits`, the same UX as a call-2 402. The
+    /// client resolves deixis anchors against this exact transcript before the
+    /// billable call 2. Token handling mirrors `generate`: one transparent
+    /// refresh on 401, then `authFailed`.
     func devTranscribe(
         audioURL: URL,
         durationSeconds: Double?,
@@ -388,7 +402,13 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
+        }
+        // F-07: mirror the server's audio-byte fuse BEFORE base64/upload — an
+        // over-cap file would ride the wire in full only to get the same 413
+        // back. Same strictly-greater-than boundary as the server.
+        guard audioData.count <= ManagedBackend.maxAudioUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
         }
 
         var audio: [String: Any] = [
@@ -407,7 +427,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,
@@ -445,13 +465,20 @@ final class ManagedProxyClient {
         // normal recording's body is byte-identical to before.
         if let mode { payload["mode"] = mode }
 
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             // Encoding our own body shouldn't fail; treat as a provider-class
             // input problem rather than crashing.
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        // F-07: mirror the server's raw-body fuse (its cheapest pre-parse
+        // gate) on the exact bytes that would ride the wire.
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     /// Builds the Dev Mode CALL 1 body: `{mode:"dev_transcribe", audio, has_speech}`.
@@ -467,7 +494,12 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
+        }
+        // F-07: same pre-upload audio fuse as `encodeBody` — dev call 1 is
+        // audio-only, so this is the whole payload in practice.
+        guard audioData.count <= ManagedBackend.maxAudioUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
         }
 
         var audio: [String: Any] = [
@@ -486,11 +518,16 @@ final class ManagedProxyClient {
             "audio": audio,
             "has_speech": hasSpeech,
         ]
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     /// Builds the Dev Mode CALL 2 body: `{mode:"dev", model, frames, clicks,
@@ -513,7 +550,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,
@@ -543,11 +580,18 @@ final class ManagedProxyClient {
             "has_speech": hasSpeech,
             "transcript": transcriptPayload,
         ]
+        let body: Data
         do {
-            return try JSONSerialization.data(withJSONObject: payload)
+            body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             throw ManagedGenerationError.inputRejected("encode_failed")
         }
+        // F-07: dev call 2 carries no audio, so the raw-body fuse is the
+        // relevant pre-upload bound (frames + anchor crops + transcript).
+        guard body.count <= ManagedBackend.maxPayloadUploadBytes else {
+            throw ManagedGenerationError.payloadTooLarge
+        }
+        return body
     }
 
     // MARK: - Parse
@@ -612,8 +656,10 @@ final class ManagedProxyClient {
 
     /// Maps a `(data, status)` from the Dev Mode CALL 1 (`dev_transcribe`) to a
     /// `Transcript` or a typed error. Same status taxonomy as `parse` minus the
-    /// usage/credit fields — call 1 charges nothing. The 402 case is purely
-    /// defensive (the server never charges this path).
+    /// usage/credit fields — call 1 consumes nothing. The 402 is a REAL path
+    /// since X-02: the server refuses the pre-Whisper credit HOLD when the
+    /// spendable balance can't cover the floor, and `.outOfCredits` routes to
+    /// the same credits/paywall UX a call-2 402 does.
     static func parseTranscribe(data: Data, status: Int) throws -> Transcript {
         switch status {
         case 200...299:
@@ -625,7 +671,7 @@ final class ManagedProxyClient {
             }
             return decoded.transcript.toTranscript()
         case 402:
-            throw ManagedGenerationError.outOfCredits // defensive — call 1 never charges
+            throw ManagedGenerationError.outOfCredits // X-02: the call-1 hold was refused (insufficient spendable)
         case 403, 404:
             throw ManagedGenerationError.notEntitled
         case 401:

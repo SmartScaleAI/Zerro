@@ -112,6 +112,46 @@ final class PendingPaidGenerationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL(dir).path))
     }
 
+    // MARK: - Dev-Mode context (E-04)
+
+    func testSaveLoadRoundTripsDevModeContext() throws {
+        let dir = try makeWorkingDir()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        store.save(PendingPaidGeneration(
+            workingDirectoryName: dir.lastPathComponent,
+            idempotencyKey: "dev-idem",
+            modelID: ModelRegistry.defaultModelID,
+            reason: .outOfCredits,
+            createdAt: Date(),
+            devProjectPath: "/tmp/my-project",
+            devAgentID: "claude",
+            devAgentModelID: "claude-opus-4-8"
+        ))
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.devProjectPath, "/tmp/my-project")
+        XCTAssertEqual(loaded.devAgentID, "claude")
+        XCTAssertEqual(loaded.devAgentModelID, "claude-opus-4-8")
+        XCTAssertEqual(loaded.devProjectURL?.path, "/tmp/my-project")
+    }
+
+    /// Backward compatibility: a marker written BEFORE the dev fields existed
+    /// (no dev keys in the JSON) must decode with all of them nil — the resume
+    /// then runs the non-dev path, exactly as it did pre-E-04.
+    func testOldMarkerWithoutDevFieldsDecodesAsNonDev() throws {
+        let json = """
+        {"workingDirectoryName":"zerro-work-OLD","idempotencyKey":"k",\
+        "modelID":"m","reason":"outOfCredits","createdAt":1751000000}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(PendingPaidGeneration.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.devProjectPath)
+        XCTAssertNil(decoded.devAgentID)
+        XCTAssertNil(decoded.devAgentModelID)
+        XCTAssertNil(decoded.devProjectURL)
+    }
+
     // MARK: - Sweep
 
     func testSweepPreservesMarkedDirAndDeletesUnmarked() throws {
@@ -126,6 +166,50 @@ final class PendingPaidGenerationTests: XCTestCase {
                       "a working dir holding the pending-paid marker must survive the sweep")
         XCTAssertFalse(FileManager.default.fileExists(atPath: unmarked.path),
                        "an unmarked orphan working dir must still be reclaimed")
+    }
+
+    /// F-16: a marker whose record has outlived any plausible checkout no
+    /// longer shields its directory — the sweep reclaims it instead of sparing
+    /// it on every launch forever (the orphaned-marker leak: a pointer lost
+    /// without the marker's delete).
+    func testSweepReclaimsStaleMarkedDir() throws {
+        let dir = try makeWorkingDir()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        let old = Date().addingTimeInterval(-(PendingPaidGenerationStore.maxAge + 60))
+        store.save(makePending(dir: dir, createdAt: old))
+        XCTAssertTrue(WorkingDirectory.containsPendingPaidMarker(dir))
+        XCTAssertFalse(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path),
+                       "a stale paid-block working dir must be reclaimed, not spared forever")
+    }
+
+    /// F-16: an unreadable/garbage marker (which no restore path can use —
+    /// restore reads the UserDefaults pointer, never the marker) reads as
+    /// stale, so the sweep errs toward reclaiming.
+    func testSweepReclaimsDirWithGarbageMarker() throws {
+        let dir = try makeWorkingDir()
+        try Data("not json".utf8).write(to: markerURL(dir))
+        XCTAssertFalse(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
+
+    /// F-16 guard-rail: a freshly-saved marker still spares its dir — the
+    /// staleness gate must not weaken the quit-during-checkout protection.
+    func testFreshMarkerStillSparesDir() throws {
+        let dir = try makeWorkingDir()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        store.save(makePending(dir: dir))
+        XCTAssertTrue(WorkingDirectory.hasFreshPendingPaidMarker(dir))
+
+        WorkingDirectory.sweep()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path))
     }
 
     // MARK: - Manifest round-trip + reconstruction
@@ -250,6 +334,55 @@ final class PendingPaidGenerationTests: XCTestCase {
         XCTAssertEqual(appState.processedRecording?.idempotencyKey, "restore-key",
                        "the restored recording must carry the original key for replay")
         XCTAssertTrue(appState.canResumePaidGeneration)
+    }
+
+    /// E-04: a restored Dev-Mode recording must re-enter the dev path — the
+    /// persisted dev context is reapplied so the resumed generation uses the
+    /// dev prompt and dispatches to the agent instead of the clipboard flow.
+    func testRestoreReappliesDevModeContext() throws {
+        let dir = try makeWorkingDir()
+        try writeMinimalManifest(into: dir)
+        let appState = AppState()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        appState.pendingPaidStore = store
+        store.save(PendingPaidGeneration(
+            workingDirectoryName: dir.lastPathComponent,
+            idempotencyKey: "dev-key",
+            modelID: ModelRegistry.defaultModelID,
+            reason: .outOfCredits,
+            createdAt: Date(),
+            devProjectPath: "/tmp/my-project",
+            devAgentID: "claude",
+            devAgentModelID: "claude-opus-4-8"
+        ))
+
+        XCTAssertTrue(appState.restorePendingPaidGenerationIfAny())
+
+        XCTAssertTrue(appState.recordingIsDevMode)
+        XCTAssertEqual(appState.recordingProjectURL?.path, "/tmp/my-project")
+        XCTAssertEqual(appState.recordingAgentID, "claude")
+        XCTAssertEqual(appState.recordingAgentModelID, "claude-opus-4-8")
+        XCTAssertEqual(appState.generationPromptMode, .dev,
+                       "a restored dev recording must generate with the dev prompt")
+    }
+
+    /// E-04 guard-rail: a marker with NO dev fields restores exactly as
+    /// before — dev-mode state stays at its non-dev defaults.
+    func testRestoreWithoutDevFieldsStaysNonDev() throws {
+        let dir = try makeWorkingDir()
+        try writeMinimalManifest(into: dir)
+        let appState = AppState()
+        let store = PendingPaidGenerationStore(defaults: .ephemeralPreview())
+        appState.pendingPaidStore = store
+        store.save(makePending(dir: dir))
+
+        XCTAssertTrue(appState.restorePendingPaidGenerationIfAny())
+
+        XCTAssertFalse(appState.recordingIsDevMode)
+        XCTAssertNil(appState.recordingProjectURL)
+        XCTAssertNil(appState.recordingAgentID)
+        XCTAssertNil(appState.recordingAgentModelID)
+        XCTAssertEqual(appState.generationPromptMode, .normal)
     }
 
     func testRestoreClearsStaleRecord() throws {

@@ -1,0 +1,36 @@
+{
+  "comment": "J-07 — shared golden fixture for the triplicated interleave wire-rendering. The SAME input + expected output is asserted by InterleaveGoldenFixtureTests.swift (Interleaver.merge/debugDescription + all three BYOK encodeBody renderers) and supabase/functions/generate/interleave_test.ts (buildInterleavedContent). The third copy, Scripts/eval-models.mjs buildTimeline(), is not import-safe (top-level main) — it stays anchored by the KEEP IN SYNC comments and by matching this file by eye. Covers: frame<click<speech tie-break at an equal second, the on-screen-text block riding right after its frame, empty-label click drop, M:SS truncation (not rounding), and the em-dash (U+2013) speech range tag.",
+  "frames": [
+    { "timestamp": 0.0, "mime": "image/jpeg", "base64": "/9j/4A==", "ocrText": "Login" },
+    { "timestamp": 65.4, "mime": "image/jpeg", "base64": "/9j/4A==", "ocrText": null }
+  ],
+  "segments": [
+    { "start": 0.0, "end": 2.5, "text": "click the login button" },
+    { "start": 65.9, "end": 71.2, "text": "then save it" }
+  ],
+  "clicks": [
+    { "timestamp": 0.0, "label": "Login Button" },
+    { "timestamp": 30.0, "label": "" },
+    { "timestamp": 65.0, "label": "Save" }
+  ],
+  "expectedBlocks": [
+    { "text": "\n[0:00] " },
+    { "image": true },
+    { "text": "\n[0:00] on-screen text: Login" },
+    { "text": "\n[0:00] clicked \"Login Button\"" },
+    { "text": "\n[0:00–0:02] \"click the login button\"" },
+    { "text": "\n[1:05] clicked \"Save\"" },
+    { "text": "\n[1:05] " },
+    { "image": true },
+    { "text": "\n[1:05–1:11] \"then save it\"" }
+  ],
+  "expectedDebugLines": [
+    "[0:00] {frame_0}",
+    "[0:00] on-screen text: Login",
+    "[0:00] clicked \"Login Button\"",
+    "[0:00–0:02] \"click the login button\"",
+    "[1:05] clicked \"Save\"",
+    "[1:05] {frame_1}",
+    "[1:05–1:11] \"then save it\""
+  ]
+}

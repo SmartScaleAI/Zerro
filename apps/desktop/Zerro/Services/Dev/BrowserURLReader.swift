@@ -64,7 +64,10 @@ enum BrowserURLReader {
     ]
 
     /// The loopback hosts the privacy boundary admits (design §localhost-only).
-    static let localhostHosts: Set<String> = ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
+    /// `0.0.0.0` is deliberately ABSENT (G-06): it's the unspecified/wildcard
+    /// BIND address, not a loopback host — a URL claiming it isn't provably
+    /// local, so admitting it would weaken the localhost-only boundary.
+    static let localhostHosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
 
     /// Detect the active browser tab's localhost URL, or nil. Runs OFF-MAIN and is
     /// bounded by `timeout` (default short, so it never slows recording); never

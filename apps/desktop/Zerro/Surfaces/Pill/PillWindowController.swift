@@ -50,6 +50,14 @@ final class PillWindowController {
     private var window: NSWindow?
     private var observationTask: Task<Void, Never>?
 
+    /// H-07 observer for `NSApplication.didChangeScreenParametersNotification`.
+    /// Displays can be unplugged or rearranged while the pill is visible; the
+    /// handler re-resolves the target screen (the recorded display when it's
+    /// still present, else main) and repositions. Installed once at init for
+    /// the controller's lifetime — the controller itself lives for the whole
+    /// app run — and removed in deinit.
+    private var screenChangeObserver: NSObjectProtocol?
+
     /// The size `positionAtTopCenter` last fit the window to. Lets
     /// `contentSizeDidChange` distinguish a REAL content-size change (a
     /// HeightCappedScroll measurement landing)
@@ -73,10 +81,26 @@ final class PillWindowController {
             DispatchQueue.main.async { self?.contentSizeDidChange() }
         }
         startObservingAppState()
+        // H-07: reposition when the display configuration changes (screen
+        // unplugged / rearranged / resolution change) so a visible pill
+        // re-resolves its target screen instead of staying at coordinates
+        // that may no longer be on any display.
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.screenParametersDidChange()
+            }
+        }
     }
 
     deinit {
         observationTask?.cancel()
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
+        }
     }
 
     /// Drives `update(pillState:)` from `AppState` changes for the full
@@ -162,7 +186,7 @@ final class PillWindowController {
         // Don't re-fit a pill that's logically on its way out. This handler runs
         // deferred (DispatchQueue.main.async), so by the time it executes the
         // `.idle → nil` transition is already reflected in `appState.pillState`.
-        // Without this guard, the teardown frame (where `parsedResponse` is nil
+        // Without this guard, the teardown frame (where `output` is nil
         // and the result view briefly renders an empty/placeholder card) would
         // re-measure and animate the window to that card's height before the
         // observation Task orders the window out — the dismiss "height flash".
@@ -225,8 +249,45 @@ final class PillWindowController {
         size.width >= 1 && size.height >= 1
     }
 
+    /// H-07: which screen the pill belongs on — the recorded display when
+    /// its ID is known and it's still connected, else `main` (the historical
+    /// behavior, and the only sane answer once the recorded display is
+    /// unplugged). Generic over the screen type (matched by an extracted
+    /// display ID) so the resolution rule is unit-testable without
+    /// constructing NSScreens.
+    nonisolated static func resolveTargetScreen<Screen>(
+        recordedDisplayID: CGDirectDisplayID?,
+        screens: [Screen],
+        displayID: (Screen) -> CGDirectDisplayID?,
+        main: Screen?
+    ) -> Screen? {
+        if let recordedDisplayID,
+           let match = screens.first(where: { displayID($0) == recordedDisplayID }) {
+            return match
+        }
+        return main
+    }
+
+    /// H-07: re-resolve the target screen and re-fit a visible pill after a
+    /// display-configuration change. Not animated — the pill should snap to
+    /// its correct home, not glide across desktops.
+    private func screenParametersDidChange() {
+        guard let window, window.isVisible else { return }
+        positionAtTopCenter(animated: false)
+    }
+
     private func positionAtTopCenter(animated: Bool) {
-        guard let window, let screen = NSScreen.main else { return }
+        // H-07: place the pill on the display being recorded (falling back
+        // to main when unknown/gone) instead of unconditionally on main —
+        // in a multi-display setup the pill must appear where the user is
+        // actually recording.
+        guard let window,
+              let screen = Self.resolveTargetScreen(
+                recordedDisplayID: appState.recordingDisplayID,
+                screens: NSScreen.screens,
+                displayID: { $0.displayID },
+                main: NSScreen.main
+              ) else { return }
         guard let hosting = window.contentView as? NSHostingView<PillHostView> else { return }
 
                // Force a layout pass so `fittingSize` reflects the SwiftUI tree's

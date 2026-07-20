@@ -423,7 +423,7 @@ function arg(name, fallback) {
 // [M:SS] speech segments), so the model sees familiar input structure.
 //
 // parseArtifactResponse below is the JS reference for the §2 parser that
-// Phase 2 implements as ArtifactParser.swift — keep the two in sync once that
+// Phase 2 implements as OutputParser.swift — keep the two in sync once that
 // file exists (same KEEP IN SYNC discipline as the prompt mirrors).
 
 const ARTIFACT_TYPES = ["agent_prompt", "message", "snippet", "document", "generic"];
@@ -432,7 +432,7 @@ const ARTIFACT_CLOSE = "<<<END_ZERRO_ARTIFACT>>>";
 // Empty-case sentinel — emitted by generation on its own line when there was
 // no request. Not a fence: it only flips requestPresent off (so the convert
 // affordance is suppressed) and is stripped from chat text. KEEP IN SYNC with
-// ArtifactParser.swift's noRequestSentinel.
+// OutputParser.swift's noRequestSentinel.
 const NO_REQUEST_SENTINEL = "<<<ZERRO_NO_REQUEST>>>";
 const DIRECT_ADDRESS_RE = /\byou(?:r|'re|'ll|'ve|'d)?\b/i;
 const THE_USER_RE = /\bthe user\b/i;
@@ -471,12 +471,15 @@ const ARTIFACT_OPEN_STRICT = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]
 const ARTIFACT_OPEN_RECOVERY = /^<<<ZERRO_ARTIFACT\s+type="([^"]*)"\s+title="([^"]*)"\s*(>+)(.*)$/;
 
 // Defense-in-depth scrubber (handoff-artifact-fence-leak). KEEP IN SYNC with
-// ArtifactParser.swift's openFenceToken/openFenceStraggler/closeFenceToken +
+// OutputParser.swift's openFenceToken/openFenceStraggler/closeFenceToken +
 // scrubFenceTokens. A response that degrades to chat-only (e.g. a truncated
 // generation leaving one open fence and no close) must never show the raw wire
 // delimiter; this strips it from the fallback text while keeping real spillover.
 const OPEN_FENCE_TOKEN_RE = /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/g;
-const OPEN_FENCE_STRAGGLER_RE = /<<<ZERRO_ARTIFACT[^\n]*/g;
+// J-05: [^>\n]* stops at the first chevron, (?:>+|$) consumes the closing
+// chevron run — malformed-but-chevron'd tokens drop without eating the real
+// content after `>>>`; chevron-less truncated tokens still scrub to EOL via $.
+const OPEN_FENCE_STRAGGLER_RE = /<<<ZERRO_ARTIFACT[^>\n]*(?:>+|$)/g;
 const CLOSE_FENCE_TOKEN_RE = /<<<END_ZERRO_ARTIFACT>*/g;
 function scrubFenceTokens(text) {
   return text
@@ -500,7 +503,7 @@ function parseArtifactResponse(raw) {
   // classification/assembly so it never leaks into chat text. Substring-based
   // (not own-line equality): an inline marker still gates and is removed; a
   // sentinel-only line vanishes, an inline one keeps its surrounding text.
-  // (Mirror of ArtifactParser.swift.)
+  // (Mirror of OutputParser.swift.)
   const requestPresent = !rawLines.some((l) => l.includes(NO_REQUEST_SENTINEL));
   const lines = rawLines.flatMap((l) => {
     if (!l.includes(NO_REQUEST_SENTINEL)) return [l];
@@ -872,7 +875,7 @@ async function runArtifactEval() {
 // --parser-tests [file] — run the §2 parser edge-case suite (no API calls).
 // The suite (artifact-eval/parser-tests.json) is the contract's executable
 // spec: strict cases + the recovery-tier cases (including the real model
-// outputs that motivated the tier). Phase 2's ArtifactParserTests.swift must
+// outputs that motivated the tier). Phase 2's OutputParserTests.swift must
 // port/pass this same list. Exits non-zero on any failure.
 function runParserTests() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));

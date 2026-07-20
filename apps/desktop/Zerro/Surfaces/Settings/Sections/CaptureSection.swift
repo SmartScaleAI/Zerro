@@ -37,11 +37,102 @@ struct CaptureSection: View {
 
 // MARK: - Microphone
 
+/// H-13: the mic picker's device list, refreshed on hot-plug. The Picker
+/// previously loaded devices once in `.onAppear`, so plugging/unplugging a
+/// mic while Settings sat open left a stale list. This model re-runs the
+/// discovery whenever AVFoundation posts a device
+/// connected/disconnected notification, scoped to the row's appearance
+/// (observers installed on appear, removed on disappear — no long-lived
+/// observers from a Settings row).
+///
+/// Selection re-validation is inherited from the Phase 3 contract the row
+/// already implements: the picker binding falls back VISUALLY to "System
+/// Default" whenever the stored ID isn't in the refreshed list, without
+/// overwriting the stored value — so a vanished device degrades gracefully
+/// here (the display name disappears, System Default shows) while a live
+/// recording's disconnect is RecordingSession's pinned-device observer's
+/// job (it fails the session with `.microphoneDisconnected`).
+///
+/// The device source is injected so unit tests can drive refreshes without
+/// constructing `AVCaptureDevice`s (which can't be faked in a test).
+@MainActor
+@Observable
+final class MicDeviceList {
+
+    /// The two fields the picker renders — decoupled from AVCaptureDevice
+    /// so tests can inject a fake source.
+    struct Device: Equatable {
+        let id: String
+        let name: String
+    }
+
+    private(set) var devices: [Device] = []
+
+    @ObservationIgnored private let provider: () -> [Device]
+    @ObservationIgnored private var hotPlugObservers: [NSObjectProtocol] = []
+
+    init(provider: @escaping () -> [Device] = MicDeviceList.liveDevices) {
+        self.provider = provider
+    }
+
+    deinit {
+        for observer in hotPlugObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// The production device source — the same discovery session the row
+    /// has always used.
+    static func liveDevices() -> [Device] {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        return session.devices.map { Device(id: $0.uniqueID, name: $0.localizedName) }
+    }
+
+    func refresh() {
+        devices = provider()
+    }
+
+    /// Installs the hot-plug observers (idempotent). Deliberately NOT
+    /// scoped to a specific device (unlike RecordingSession's pinned-mic
+    /// observer): the picker cares about ANY audio device coming or going.
+    func startObserving() {
+        guard hotPlugObservers.isEmpty else { return }
+        let names: [Notification.Name] = [
+            AVCaptureDevice.wasConnectedNotification,
+            AVCaptureDevice.wasDisconnectedNotification,
+        ]
+        for name in names {
+            hotPlugObservers.append(NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                // Hop to MainActor — the closure stored in NotificationCenter
+                // isn't isolated; MicDeviceList is @MainActor.
+                Task { @MainActor [weak self] in
+                    self?.refresh()
+                }
+            })
+        }
+    }
+
+    func stopObserving() {
+        for observer in hotPlugObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        hotPlugObservers.removeAll()
+    }
+}
+
 private struct MicrophoneRow: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(PermissionsManager.self) private var permissions
 
-    @State private var devices: [AVCaptureDevice] = []
+    @State private var deviceList = MicDeviceList()
 
     var body: some View {
         @Bindable var preferences = preferences
@@ -52,10 +143,10 @@ private struct MicrophoneRow: View {
         ) {
             Picker("Microphone", selection: pickerBinding) {
                 Text("System Default").tag("")
-                if !devices.isEmpty {
+                if !deviceList.devices.isEmpty {
                     Divider()
-                    ForEach(devices, id: \.uniqueID) { device in
-                        Text(device.localizedName).tag(device.uniqueID)
+                    ForEach(deviceList.devices, id: \.id) { device in
+                        Text(device.name).tag(device.id)
                     }
                 }
             }
@@ -68,7 +159,14 @@ private struct MicrophoneRow: View {
             // mode picker, model menu) instead of floating centered.
             .frame(width: 200, alignment: .trailing)
         }
-        .onAppear(perform: refreshDevices)
+        .onAppear {
+            deviceList.refresh()
+            // H-13: keep the list live while the row is on screen.
+            deviceList.startObserving()
+        }
+        .onDisappear {
+            deviceList.stopObserving()
+        }
     }
 
     /// "Input device used to record your narration." normally; switches
@@ -86,19 +184,10 @@ private struct MicrophoneRow: View {
             get: {
                 let stored = preferences.microphoneDeviceID
                 if stored.isEmpty { return "" }
-                return devices.contains(where: { $0.uniqueID == stored }) ? stored : ""
+                return deviceList.devices.contains(where: { $0.id == stored }) ? stored : ""
             },
             set: { preferences.microphoneDeviceID = $0 }
         )
-    }
-
-    private func refreshDevices() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
-        devices = session.devices
     }
 }
 
@@ -138,13 +227,27 @@ private struct HotkeyRow: View {
 
 private struct RedactSecretsRow: View {
     @Environment(PreferencesStore.self) private var preferences
+    @Environment(EntitlementStore.self) private var entitlements
+
+    private static let baseDescription = "Tries to detect and black out common on-screen secrets \u{2014} API keys, tokens, passwords, and card numbers \u{2014} in both the captured image and the extracted text before upload. Best-effort, so it can miss some, and it never redacts your spoken audio."
+
+    /// F-04: when generation routes through Zerro's servers (Managed/trial)
+    /// redaction is ENFORCED regardless of this switch (the floor in
+    /// `AppState.effectiveRedactSecrets`) — say so, so the switch's remaining
+    /// scope (recordings generated with the user's own keys) is honest. The
+    /// switch stays interactive: it still governs any generation that runs
+    /// with the user's own API keys.
+    private var description: String {
+        guard entitlements.routesThroughManagedProxy else { return Self.baseDescription }
+        return Self.baseDescription + " On your current plan, recordings upload to Zerro\u{2019}s servers, so redaction is always enforced for them \u{2014} this switch only affects recordings generated with your own API keys."
+    }
 
     var body: some View {
         @Bindable var preferences = preferences
 
         SettingsRow(
             label: "Redact Detected Secrets",
-            description: "Tries to detect and black out common on-screen secrets \u{2014} API keys, tokens, passwords, and card numbers \u{2014} in both the captured image and the extracted text before upload. Best-effort, so it can miss some, and it never redacts your spoken audio."
+            description: description
         ) {
             Toggle("Redact Detected Secrets", isOn: $preferences.redactSecrets)
                 .labelsHidden()
@@ -157,6 +260,7 @@ private struct RedactSecretsRow: View {
     CaptureSection()
         .environment(PreferencesStore())
         .environment(PermissionsManager())
+        .environment(EntitlementStore(licenseService: .inMemory()))
         .padding()
         .frame(width: 720)
         .background(Color.vfPanelBackground)

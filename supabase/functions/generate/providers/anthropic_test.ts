@@ -232,3 +232,19 @@ Deno.test("AnthropicChatClient.chat: other 4xx (400) → non-retryable, no retry
     f.restore();
   }
 });
+
+Deno.test("AnthropicChatClient.chat: absent usage block → null tokens, not 0 (B-06)", async () => {
+  // `usage: undefined` in the spread makes JSON.stringify DROP the key — the
+  // response carries no usage block at all. The adapter must report unknown
+  // (null) so the cost math charges fallbackCredits, never a $0 chat.
+  const f = stubFetch(() => okResponse({ usage: undefined }));
+  try {
+    const res = await new AnthropicChatClient("k", "claude-sonnet-4-6")
+      .chat("SYS", [{ type: "text", text: "hi" }]);
+    assertEquals(res.inputTokens, null);
+    assertEquals(res.outputTokens, null);
+    assertEquals(res.content, "RESULT"); // the result itself is still usable
+  } finally {
+    f.restore();
+  }
+});

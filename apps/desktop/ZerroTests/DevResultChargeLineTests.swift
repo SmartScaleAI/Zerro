@@ -4,7 +4,7 @@
 //
 //  Pins the "−N credits · M left" charge readout onto the Dev Mode result
 //  card. Managed Dev Mode meters its prompt-generation step exactly like
-//  artifact mode, so the SAME `CreditDisplay.chargeLine` string belongs on
+//  ask mode, so the SAME `CreditDisplay.chargeLine` string belongs on
 //  the `.devDone` card — carried through the bridge's `DevResultCard` and
 //  rendered bottom-left in the footer. BYOK (no managed call →
 //  `lastGenerationCharge == nil`) carries no charge line, exactly like an
@@ -39,7 +39,7 @@ final class DevResultChargeLineTests: XCTestCase {
 
     // MARK: Bridge mapping
 
-    /// A MANAGED dev result carries the same charge string artifact mode would —
+    /// A MANAGED dev result carries the same charge string ask mode would —
     /// formatted via the shared `CreditDisplay.chargeLine`, so the two read
     /// identically.
     func testManagedDevResultCarriesChargeLine() {

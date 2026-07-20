@@ -70,7 +70,8 @@ export interface GenerationLogRow {
  *  carve-out — see idempotency_cache migration). */
 export interface IdempotentResult {
   prompt: string;
-  usage: { input_tokens: number; output_tokens: number; model: string };
+  /** Tokens are null when the provider omitted its usage block (B-06). */
+  usage: { input_tokens: number | null; output_tokens: number | null; model: string };
   creditsRemaining: number;
   /** Credits charged for the ORIGINAL generation (D2) — replayed verbatim so a
    *  retry reports the same charge (the metered amount; every successful
@@ -106,6 +107,54 @@ export interface BillingStore {
   /** TRUE if within the limit for the current window (fail-open on infra error). */
   rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
   logGeneration(row: GenerationLogRow): Promise<void>;
+
+  // ---- X-02 deposit-and-settle holds — the Dev Mode call-1 authorization hold.
+  // A hold is a RESERVATION, never a charge: money moves only through the
+  // consume_* family. All four wrap the credit_holds SQL primitives
+  // (20260710120000_credit_holds_deposit_settle).
+  /** Place (or idempotently refresh) the hold for `idemKey` iff the account's
+   *  SPENDABLE balance (real − other active holds) covers `credits`, atomically
+   *  under the account row lock(s). "insufficient" → nothing reserved. THROWS on
+   *  infra error / cross-account key collision — the caller must FAIL CLOSED
+   *  (refuse), never transcribe unheld. Pass both ids for a converted user
+   *  (combined balance); the hold is owned by the subscription then. */
+  holdCredit(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+    ttlSeconds: number,
+    measuredSeconds: number | null,
+  ): Promise<"held" | "insufficient">;
+  /** Consume the REAL metered `credits` via the account's existing consume path
+   *  AND release the `idemKey` hold, in ONE transaction (settle_credit_hold).
+   *  No hold row → consumes normally. Returns the combined remaining after the
+   *  spend (possibly NEGATIVE), or null ONLY for a non-spendable account
+   *  (nothing spent, hold left to its TTL). THROWS on infra error — the caller
+   *  must refuse rather than return an uncharged result. */
+  settleCreditHold(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+  ): Promise<number | null>;
+  /** Early-release an un-settled hold (call-1 transcription failure). BEST
+   *  EFFORT: a failed release is logged, not thrown — the TTL expiry is the
+   *  backstop, and the transcription failure is already the user-facing error. */
+  releaseCreditHold(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+  ): Promise<void>;
+  /** SUM of the account's active (unexpired) held credits, excluding
+   *  `excludeKey` (so a request can settle its own hold). Feeds every
+   *  affordability gate: spendable = creditsRemaining − this. THROWS on infra
+   *  error — the gates fail CLOSED on an unknowable spendable figure. */
+  activeHoldCredits(
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    excludeKey: string | null,
+  ): Promise<number>;
 
   // ---- Idempotency cache (M1) — dedupes a charged-but-dropped /generate so a
   // retry carrying the same key replays the result instead of charging again.
@@ -253,6 +302,87 @@ export class SupabaseBillingStore implements BillingStore {
     }
   }
 
+  // ---- X-02 deposit-and-settle holds ----------------------------------------
+
+  async holdCredit(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+    ttlSeconds: number,
+    measuredSeconds: number | null,
+  ): Promise<"held" | "insufficient"> {
+    const { data, error } = await this.db.rpc("hold_credit", {
+      p_key: idemKey,
+      p_subscription_id: subscriptionId,
+      p_trial_grant_id: trialGrantId,
+      p_credits: credits,
+      p_ttl_seconds: ttlSeconds,
+      p_measured_seconds: measuredSeconds,
+    });
+    if (error) {
+      // FAIL CLOSED at the caller: an unplaceable hold refuses the transcription.
+      console.error(JSON.stringify({ fn: "generate", op: "holdCredit", error: error.message }));
+      throw error;
+    }
+    return data === "held" ? "held" : "insufficient";
+  }
+
+  async settleCreditHold(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    credits: number,
+  ): Promise<number | null> {
+    const { data, error } = await this.db.rpc("settle_credit_hold", {
+      p_key: idemKey,
+      p_subscription_id: subscriptionId,
+      p_trial_grant_id: trialGrantId,
+      p_credits: credits,
+    });
+    if (error) {
+      console.error(JSON.stringify({ fn: "generate", op: "settleCreditHold", error: error.message }));
+      throw error;
+    }
+    if (data === null || data === undefined) return null;
+    const row = data as { remaining: number; hold_released: boolean };
+    return Number(row.remaining);
+  }
+
+  async releaseCreditHold(
+    idemKey: string,
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+  ): Promise<void> {
+    const { error } = await this.db.rpc("release_credit_hold", {
+      p_key: idemKey,
+      p_subscription_id: subscriptionId,
+      p_trial_grant_id: trialGrantId,
+    });
+    if (error) {
+      // Best-effort: the TTL expiry is the backstop for a stuck reservation.
+      console.error(JSON.stringify({ fn: "generate", op: "releaseCreditHold", error: error.message }));
+    }
+  }
+
+  async activeHoldCredits(
+    subscriptionId: string | null,
+    trialGrantId: string | null,
+    excludeKey: string | null,
+  ): Promise<number> {
+    const { data, error } = await this.db.rpc("active_hold_credits", {
+      p_subscription_id: subscriptionId,
+      p_trial_grant_id: trialGrantId,
+      p_exclude_key: excludeKey,
+    });
+    if (error) {
+      // FAIL CLOSED at the gates: an unknowable spendable figure refuses.
+      console.error(JSON.stringify({ fn: "generate", op: "activeHoldCredits", error: error.message }));
+      throw error;
+    }
+    return Number(data ?? 0);
+  }
+
   async rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean> {
     const { data, error } = await this.db.rpc("check_rate_limit", {
       p_key: key,
@@ -262,7 +392,13 @@ export class SupabaseBillingStore implements BillingStore {
     if (error) {
       // Fail OPEN: a broken limiter must not lock out a paying user. Spend is
       // still gated by the credit check + consume_credit.
-      console.error(JSON.stringify({ fn: "generate", op: "rateLimit", error: error.message }));
+      // event:"rate_limiter_error" is the shared ops alert hook (A-15).
+      console.error(JSON.stringify({
+        fn: "generate",
+        event: "rate_limiter_error",
+        failed_closed: false,
+        error: error.message,
+      }));
       return true;
     }
     return data === true;

@@ -22,7 +22,8 @@
 //         "mediaResolution": {"level": "media_resolution_high"}},   // per-part (Gemini 3)
 //        {"text": "\n[0:00–0:08] \"okay so this is...\""}, ...
 //      ]}],
-//      "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"}}
+//      "generationConfig": {"maxOutputTokens": 16384,
+//                           "thinkingConfig": {"thinkingLevel": "low"}}
 //    }
 //  Response: candidates[0].content.parts (skip `thought` parts),
 //    usageMetadata {promptTokenCount, candidatesTokenCount, thoughtsTokenCount
@@ -46,15 +47,33 @@ struct GeminiPromptGenerationService: PromptGenerationService {
     /// rarely benefits from deep thinking, and "high" bills thinking tokens.
     private nonisolated static let thinkingLevel = "low"
 
+    /// B-04 — output-token cap so a BYOK generation on the user's own key is
+    /// bounded instead of running to the model's default max. Mirrors the
+    /// server adapter's GEMINI_MAX_OUTPUT_TOKENS
+    /// (supabase/functions/generate/providers/gemini.ts) — the value can't be
+    /// shared across Swift/TS, so KEEP IN SYNC. Typical output is ~1k tokens;
+    /// 16384 is ample headroom (a normal response never truncates — only a
+    /// runaway is cut, surfaced as `.truncated` via finishReason MAX_TOKENS).
+    private nonisolated static let maxOutputTokens = 16384
+
     /// The registry model id to run (e.g. "gemini-3.5-flash"). Selected per
     /// generation by BYOKRouting.
     let model: String
+
+    /// J-06 test seams — behavior-identical defaults at every production call
+    /// site (`nil ??` falls through to the live Keychain read; the shared
+    /// session is what `performWithRetry` used unconditionally before). The
+    /// adapter tests inject a fixed key + a URLProtocol-stubbed session so the
+    /// full `generatePrompt` flow — status mapping, parsing, truncation — runs
+    /// without Keychain or network.
+    var apiKeyOverride: String?
+    var session: URLSession = OpenAIClient.session
 
     func generatePrompt(
         timeline: InterleavedTimeline,
         systemPrompt: String
     ) async throws -> PromptGenerationResult {
-        guard let apiKey = ProviderKeys.resolveKey(for: .gemini) else {
+        guard let apiKey = apiKeyOverride ?? ProviderKeys.resolveKey(for: .gemini) else {
             throw PromptGenerationError.missingAPIKey
         }
 
@@ -78,7 +97,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
         do {
             // Generic URLSession + single-retry-on-429 plumbing (despite the
             // OpenAIClient namespace, nothing in it is OpenAI-specific).
-            (data, response) = try await OpenAIClient.performWithRetry(request)
+            (data, response) = try await OpenAIClient.performWithRetry(request, session: session)
         } catch {
             throw PromptGenerationError.network(underlying: error)
         }
@@ -89,6 +108,11 @@ struct GeminiPromptGenerationService: PromptGenerationService {
         case 401, 403:
             throw PromptGenerationError.auth
         case 429:
+            // J-03: Gemini folds daily-quota exhaustion AND per-minute rate
+            // limits into the same 429 RESOURCE_EXHAUSTED shape, separable
+            // only by undocumented quotaId strings in the details array —
+            // not a stable signal, so no quota detection here; every 429
+            // stays on the rate-limit path.
             throw PromptGenerationError.rateLimited
         default:
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
@@ -185,6 +209,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
             systemInstruction: SystemInstruction(parts: [TextPart(text: systemPrompt)]),
             contents: [Content(role: "user", parts: parts)],
             generationConfig: GenerationConfig(
+                maxOutputTokens: maxOutputTokens,
                 thinkingConfig: ThinkingConfig(thinkingLevel: thinkingLevel)
             )
         )
@@ -259,6 +284,9 @@ struct GeminiPromptGenerationService: PromptGenerationService {
     }
 
     private nonisolated struct GenerationConfig: Encodable {
+        /// B-04 output cap — see `maxOutputTokens`. Encodes camelCase per the
+        /// Gemini API.
+        let maxOutputTokens: Int
         let thinkingConfig: ThinkingConfig
     }
 

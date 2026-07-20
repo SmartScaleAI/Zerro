@@ -17,8 +17,12 @@ import { FUNCTIONS_BASE_URL } from "@/lib/site-config";
 // attribution, never a broken page.
 export function AffiliateCapture() {
   useEffect(() => {
-    const aff = new URLSearchParams(window.location.search).get("aff");
-    if (!aff) return;
+    // Client-side clamp mirroring the server's normalizeAffCode
+    // (supabase/functions/affiliate/handler.ts): trim, then only beacon a
+    // URL-safe code of 1–64 chars. The server already rejects anything else;
+    // this just stops malformed/oversized beacons at the source (K-05).
+    const aff = new URLSearchParams(window.location.search).get("aff")?.trim();
+    if (!aff || !/^[A-Za-z0-9_-]{1,64}$/.test(aff)) return;
 
     fetch(`${FUNCTIONS_BASE_URL}/affiliate`, {
       method: "POST",

@@ -49,7 +49,7 @@ enum DevAnchorParser {
 
     /// Extract + parse the `zerro_anchors` block from a model response. Returns
     /// `[]` for any absence/malformation (never throws). The agent_prompt artifact
-    /// is parsed separately by `ArtifactParser`; this only reads the anchors block.
+    /// is parsed separately by `OutputParser`; this only reads the anchors block.
     static func parse(_ raw: String) -> [DevAnchor] {
         guard let jsonText = extractBlock(raw) else { return [] }
         guard let data = jsonText.data(using: .utf8),

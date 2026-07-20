@@ -15,6 +15,7 @@
 //              Content-Type:  application/json
 //    Body:     {
 //      "model": "gpt-4o",
+//      "max_completion_tokens": 16384,
 //      "messages": [
 //        {"role": "system", "content": "<locked PromptGenerationSystemPrompt>"},
 //        {"role": "user", "content": [
@@ -56,15 +57,56 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// BYOKRouting.
     let model: String
 
+    /// J-06 test seams — behavior-identical defaults at every production call
+    /// site (`nil ??` falls through to the live Keychain read; the shared
+    /// session is what `performWithRetry` used unconditionally before). The
+    /// adapter tests inject a fixed key + a URLProtocol-stubbed session so the
+    /// full `generatePrompt` flow — status mapping, parsing, truncation — runs
+    /// without Keychain or network.
+    var apiKeyOverride: String?
+    var session: URLSession = OpenAIClient.session
+
+    /// B-04 — output-token cap so a BYOK generation on the user's own key is
+    /// bounded instead of running to the model's default max. Mirrors the
+    /// server adapter's OPENAI_MAX_OUTPUT_TOKENS
+    /// (supabase/functions/generate/providers/openai.ts) — the value can't be
+    /// shared across Swift/TS, so KEEP IN SYNC. Typical output is ~1k tokens;
+    /// 16384 is ample headroom (a normal response never truncates — only a
+    /// runaway is cut, surfaced as `.truncated` via finish_reason "length").
+    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` —
+    /// matching the server and required by the GPT-5.x family.
+    private nonisolated static let maxCompletionTokens = 16384
+
     init(model: String = OpenAIPromptGenerationService.defaultModel) {
         self.model = model
+    }
+
+    /// Typed mapping from the Chat Completions response status to the error
+    /// thrown for it — nil for 2xx success. Factored out of `generatePrompt`
+    /// so the mapping is unit-testable without a live request. 401 AND 403
+    /// both map to `.auth` (J-02): OpenAI returns 403 for rejected keys and
+    /// permission/region denials, which previously fell through to `.server`
+    /// and surfaced as a misleading transient-outage message. A 429 reaching
+    /// here is either quota exhaustion (`insufficient_quota` body, J-03 —
+    /// performWithRetry deliberately didn't retry it) or a rate limit that
+    /// outlived performWithRetry's single retry; `body` tells them apart.
+    static func error(forStatus status: Int, body: Data = Data()) -> PromptGenerationError? {
+        switch status {
+        case 200...299: return nil
+        case 401, 403: return .auth
+        case 429:
+            return OpenAIClient.isQuotaExhausted429(status: status, body: body)
+                ? .quotaExhausted
+                : .rateLimited
+        default: return .server(status: status)
+        }
     }
 
     func generatePrompt(
         timeline: InterleavedTimeline,
         systemPrompt: String
     ) async throws -> PromptGenerationResult {
-        guard let apiKey = OpenAIClient.resolveAPIKey() else {
+        guard let apiKey = apiKeyOverride ?? OpenAIClient.resolveAPIKey() else {
             throw PromptGenerationError.missingAPIKey
         }
 
@@ -91,26 +133,21 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
         let data: Data
         let response: HTTPURLResponse
         do {
-            (data, response) = try await OpenAIClient.performWithRetry(request)
+            (data, response) = try await OpenAIClient.performWithRetry(request, session: session)
         } catch {
             throw PromptGenerationError.network(underlying: error)
         }
 
-        switch response.statusCode {
-        case 200...299:
-            break
-        case 401:
-            throw PromptGenerationError.auth
-        case 429:
-            throw PromptGenerationError.rateLimited
-        default:
-            // Log the provider's error body `.private` for local debugging
-            // only — it must NOT ride into the typed error, which can reach
-            // the error tracker, where the exception value is scrubbed by length, not by
-            // content. The error keeps just the status code.
-            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-            Log.promptGen.error("Chat Completions non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
-            throw PromptGenerationError.server(status: response.statusCode)
+        if let statusError = Self.error(forStatus: response.statusCode, body: data) {
+            if case .server = statusError {
+                // Log the provider's error body `.private` for local debugging
+                // only — it must NOT ride into the typed error, which can reach
+                // the error tracker, where the exception value is scrubbed by length, not by
+                // content. The error keeps just the status code.
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                Log.promptGen.error("Chat Completions non-2xx \(response.statusCode, privacy: .public): \(body, privacy: .private)")
+            }
+            throw statusError
         }
 
         let decoded: ChatResponse
@@ -208,7 +245,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
             messages: [
                 .systemMessage(content: systemPrompt),
                 .userMessage(content: userContent)
-            ]
+            ],
+            maxCompletionTokens: maxCompletionTokens
         )
 
         do {
@@ -240,6 +278,13 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     private nonisolated struct ChatRequest: Encodable {
         let model: String
         let messages: [Message]
+        /// B-04 output cap — see `maxCompletionTokens`.
+        let maxCompletionTokens: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case model, messages
+            case maxCompletionTokens = "max_completion_tokens"
+        }
     }
 
     private nonisolated enum Message: Encodable {

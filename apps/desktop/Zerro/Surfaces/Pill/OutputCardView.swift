@@ -1,5 +1,5 @@
 //
-//  ArtifactCardView.swift
+//  OutputCardView.swift
 //  Zerro
 //
 //  Created by Colin Breeding on 6/12/26.
@@ -30,7 +30,7 @@
 
 import SwiftUI
 
-struct ArtifactCardView: View {
+struct OutputCardView: View {
     /// nil → the chat-only layout: no body well, and the footer's Copy uses
     /// the plain "Copy" label (it copies the explanation `chatText`).
     let artifact: Artifact?
@@ -73,7 +73,7 @@ struct ArtifactCardView: View {
     /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
     /// kept; the success-only chat text and copy are
     /// suppressed — exactly as `failure` suppresses them. The charge line is NOT
-    /// suppressed (managed Dev Mode meters its prompt generation like artifact
+    /// suppressed (managed Dev Mode meters its prompt generation like ask
     /// mode), so it still renders bottom-left from the shared `chargeLine`. nil → the normal card.
     /// Mutually exclusive with `failure`. Defaulted so existing call sites are
     /// unchanged.
@@ -635,7 +635,7 @@ struct ChatProseText: View {
 /// Hover the Undo to see the faint red capsule; the full-pill variants live in
 /// PillView's "Dev result" previews.
 #Preview("Artifact card · Dev result") {
-    ArtifactCardView(
+    OutputCardView(
         artifact: nil,
         chatText: "",
         chargeLine: nil,
@@ -644,7 +644,7 @@ struct ChatProseText: View {
         onCopy: {},
         onCollapse: {},
         onDismiss: {},
-        devResult: ArtifactCardView.DevResultConfig(
+        devResult: OutputCardView.DevResultConfig(
             title: "Changes applied",
             summary: "Recolored the primary button and tightened the header spacing.",
             diffText: """

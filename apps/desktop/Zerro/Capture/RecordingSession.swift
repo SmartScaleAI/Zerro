@@ -728,6 +728,15 @@ final class RecordingSession: NSObject {
         }
     }
 
+    /// True while capture is live — from `start()` flipping `.running` until a
+    /// terminal path (stop / cancel / fail / sleep-abandon) begins finalize.
+    /// False before start and for the entire finalize window, INCLUDING a
+    /// manual stop's (where AppState's `state` still reads `.recording` /
+    /// `.wrappingUp` while the writer finishes). AppState's mid-session
+    /// revocation guard reads this to tell a live capture (destructive
+    /// teardown valid) from a completed one that must be preserved (F-11).
+    var isCapturing: Bool { lifecycleState == .running }
+
     func stop() {
         guard lifecycleState == .running else { return }
         lifecycleState = .finishing
@@ -835,6 +844,7 @@ final class RecordingSession: NSObject {
         lifecycleState = .finishing
         removeCaptureMonitors()
 
+        let stream = self.stream
         let outputURL = self.outputURL
         // Mark THIS fragment as deliberately abandoned so launch/wake recovery
         // offers it — and nothing else. Written synchronously, before the async
@@ -853,6 +863,12 @@ final class RecordingSession: NSObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.lifecycleState = .finished
+                // F-09: stop the SCStream so the screen-recording indicator clears
+                // deterministically — releasing the stream alone doesn't,
+                // especially across sleep→wake. Mirrors finalize(); does NOT touch
+                // the .mov (recovery marker + writer release already happened
+                // above).
+                if let stream { try? await stream.stopCapture() }
                 // teardownCaptureStack removes the stream outputs + releases the
                 // SCStream (stopping delivery); it never touches the .mov.
                 self.teardownCaptureStack()

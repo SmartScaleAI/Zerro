@@ -99,6 +99,18 @@ nonisolated enum ProcessingConfig {
     /// below can lower the EFFECTIVE ceiling for short clips.
     static let maxKeyframes: Int = 28
 
+    /// Hard ceiling on Dev-Mode ANCHOR frames — the cropped native-res
+    /// `DEIXIS REFERENCE` frames `DevAnchorPipeline` appends, one per referring
+    /// expression in the narration. Keyframes are bounded by `maxKeyframes`
+    /// above, but the anchor count used to scale with how often the user said
+    /// "this / here", so a pointy narration could push TOTAL frames
+    /// (keyframes + anchors) well past the 28-frame budget (cost +
+    /// vision-token blowup). 8 bounds the worst case at maxKeyframes + 8 = 36
+    /// frames; when more references resolve than the cap, the
+    /// highest-confidence anchors are kept (see
+    /// `DevAnchorPipeline.cappedCandidates`).
+    static let maxAnchorFrames: Int = 8
+
     /// Skip this much session pre-roll before considering keyframes — the
     /// opening moment is usually a cursor mid-click or a half-rendered surface.
     static let startOffsetSeconds: Double = 1.0

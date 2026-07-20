@@ -163,6 +163,19 @@ final class DevDispatchCoordinator {
         runner.cancel()
     }
 
+    /// Quit-path abort (G-02): synchronously SIGKILL the agent's whole process
+    /// group before returning. `prepareForTermination` calls this instead of
+    /// `cancel()` — cancel's terminate hops onto the runner's queue
+    /// asynchronously, and `applicationShouldTerminate` answers `.terminateNow`
+    /// immediately after, so the app could exit before that hop ran, orphaning
+    /// the agent and everything it spawned. Also flags `cancelled` so a dispatch
+    /// suspended before the spawn aborts if the app somehow lives on. A no-op
+    /// when nothing is dispatching, and never blocks quit.
+    func terminateNow() {
+        cancelled = true
+        runner.terminateNow()
+    }
+
     struct Success: Sendable {
         let checkpoint: GitCheckpoint
         let service: GitCheckpointService

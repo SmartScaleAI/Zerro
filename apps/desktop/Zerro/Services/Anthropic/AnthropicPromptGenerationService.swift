@@ -56,11 +56,20 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
     /// generation by BYOKRouting.
     let model: String
 
+    /// J-06 test seams — behavior-identical defaults at every production call
+    /// site (`nil ??` falls through to the live Keychain read; the shared
+    /// session is what `performWithRetry` used unconditionally before). The
+    /// adapter tests inject a fixed key + a URLProtocol-stubbed session so the
+    /// full `generatePrompt` flow — status mapping, parsing, truncation — runs
+    /// without Keychain or network.
+    var apiKeyOverride: String?
+    var session: URLSession = OpenAIClient.session
+
     func generatePrompt(
         timeline: InterleavedTimeline,
         systemPrompt: String
     ) async throws -> PromptGenerationResult {
-        guard let apiKey = ProviderKeys.resolveKey(for: .anthropic) else {
+        guard let apiKey = apiKeyOverride ?? ProviderKeys.resolveKey(for: .anthropic) else {
             throw PromptGenerationError.missingAPIKey
         }
 
@@ -81,7 +90,7 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
         do {
             // Generic URLSession + single-retry-on-429 plumbing (despite the
             // OpenAIClient namespace, nothing in it is OpenAI-specific).
-            (data, response) = try await OpenAIClient.performWithRetry(request)
+            (data, response) = try await OpenAIClient.performWithRetry(request, session: session)
         } catch {
             throw PromptGenerationError.network(underlying: error)
         }
@@ -92,6 +101,11 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
         case 401, 403:
             throw PromptGenerationError.auth
         case 429:
+            // J-03: Anthropic's 429 is always rate-limiting (`rate_limit_error`).
+            // Credit/quota exhaustion arrives as a 400 `invalid_request_error`
+            // distinguished only by message TEXT ("credit balance is too low"),
+            // which is too brittle to match — so quota stays undetected here
+            // and falls into the generic 400 → `.server` branch below.
             throw PromptGenerationError.rateLimited
         default:
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"

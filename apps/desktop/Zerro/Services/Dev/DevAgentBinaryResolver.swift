@@ -121,7 +121,11 @@ enum DevAgentBinaryResolver {
         do {
             try process.run()
         } catch {
-            Log.dev.error("DevAgent version probe failed to spawn at \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            // I-04: the binary NAME stays .public (the agent — "claude"/
+            // "codex"/… — is the triage signal and carries no PII); the full
+            // path can embed /Users/<name>, so it logs at .private (readable
+            // on-device with a debugger, redacted in collected/transmitted logs).
+            Log.dev.error("DevAgent version probe failed to spawn (\(url.lastPathComponent, privacy: .public) at \(url.path, privacy: .private)): \(String(describing: error), privacy: .public)")
             return nil
         }
         let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }

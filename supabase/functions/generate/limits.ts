@@ -106,6 +106,10 @@ function decodeBase64(b64: string): Uint8Array {
 export interface TranscribeRequest {
   audio: { bytes: Uint8Array; mime: string; filename: string };
   hasSpeech: boolean;
+  /** The client-DECLARED duration, or null when absent. X-02: recorded on the
+   *  call-1 credit hold as observability metadata only — the hold amount is a
+   *  flat floor; the TRUE measured duration isn't known until Whisper returns. */
+  declaredDurationSeconds: number | null;
 }
 
 export type TranscribeValidationResult =
@@ -133,16 +137,21 @@ export function validateTranscribeBody(body: unknown): TranscribeValidationResul
   if (audioBytes.byteLength === 0) return { ok: false, status: 400, error: "empty_audio" };
   if (audioBytes.byteLength > MAX_AUDIO_BYTES) return { ok: false, status: 413, error: "audio_too_large" };
 
+  let declaredDurationSeconds: number | null = null;
   if (audio.duration_seconds !== undefined && audio.duration_seconds !== null) {
     const d = Number(audio.duration_seconds);
     if (!Number.isFinite(d) || d < 0) return { ok: false, status: 400, error: "invalid_audio_duration" };
     if (d > MAX_AUDIO_SECONDS) return { ok: false, status: 413, error: "audio_too_long" };
+    declaredDurationSeconds = d;
   }
 
   const filename = typeof audio.filename === "string" && audio.filename ? audio.filename : "recording.m4a";
   const hasSpeech = b.has_speech !== false;
 
-  return { ok: true, value: { audio: { bytes: audioBytes, mime: audioMime, filename }, hasSpeech } };
+  return {
+    ok: true,
+    value: { audio: { bytes: audioBytes, mime: audioMime, filename }, hasSpeech, declaredDurationSeconds },
+  };
 }
 
 /**

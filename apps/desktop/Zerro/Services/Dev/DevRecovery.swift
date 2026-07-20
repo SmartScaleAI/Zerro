@@ -111,17 +111,22 @@ final class DevRecoveryStore {
         self.fileURL = fileURL
     }
 
-    /// Atomically persist `marker`. Best-effort: a failed write only means a quit
-    /// in the next instant won't be recoverable (the safe failure — the edits are
-    /// simply kept), never a crash or a corrupt half-write (`.atomic` writes to a
-    /// temp file then renames).
-    func save(_ marker: DevRecoveryMarker) {
+    /// Atomically persist `marker`, REPORTING whether the write landed (G-07):
+    /// a failed write only means a quit in the next instant won't be recoverable
+    /// (the safe failure — the edits are simply kept), never a crash or a corrupt
+    /// half-write (`.atomic` writes to a temp file then renames) — but the caller
+    /// must be able to SEE it, not proceed as if the run were crash-recoverable.
+    /// The `.private` detail log stays here; the persist site owns the telemetry.
+    @discardableResult
+    func save(_ marker: DevRecoveryMarker) -> Bool {
         do {
             try ensureParentDirectoryExists()
             let data = try Self.encoder.encode(marker)
             try data.write(to: fileURL, options: [.atomic])
+            return true
         } catch {
             Log.dev.error("DevRecoveryStore save failed: \(error.localizedDescription, privacy: .private)")
+            return false
         }
     }
 

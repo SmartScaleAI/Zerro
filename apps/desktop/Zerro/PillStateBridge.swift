@@ -19,7 +19,7 @@ import SwiftUI
 /// The result pill's render model (Phase 5 of the typed-artifact refactor):
 /// chat text and the optional typed artifact it introduces. Assembled by
 /// `AppState.resultPresentation` from the parsed response so `PillView`
-/// stays a pure renderer — it never sees `ParsedResponse`'s parse
+/// stays a pure renderer — it never sees `Output`'s parse
 /// bookkeeping (validity, recovery, warnings), only what gets drawn.
 struct ResultPresentation: Equatable {
     /// Conversational text rendered above the card. Never nil — a parse
@@ -134,6 +134,13 @@ extension AppState {
         case .devAgentDispatching:
             return .devProgress(label: devProgressLabel("Dispatching to the agent\u{2026}"), cancellable: true)
         case .devAgentRunning:
+            // G-08: the runner reported a stall (no output for its stall
+            // window) — swap the substatus for a non-alarming nudge toward the
+            // pill's EXISTING Cancel (the same SIGTERM→SIGKILL safe-cancel).
+            // Advisory only: nothing is auto-killed, the next output clears it.
+            if devAgentStalled {
+                return .devProgress(label: devProgressLabel("Agent seems stuck \u{2014} Cancel?"), cancellable: true)
+            }
             return .devProgress(label: devProgressLabel(devRunSubstatus?.label ?? "Working\u{2026}"), cancellable: true)
         case .devReverting:
             // Restoring the tree — not cancellable (interrupting a revert is the
@@ -166,7 +173,7 @@ extension AppState {
     /// Appends the live "· Xs" elapsed suffix to a Dev Mode progress phrase so
     /// the timer renders on every dev step — continuous from generation start,
     /// through the agent handoff, to the "Changes applied" card — matching
-    /// artifact mode. `ProcessingPillContent` (which `.devProgress` renders
+    /// ask mode. `ProcessingPillContent` (which `.devProgress` renders
     /// through) splits on the " · " separator, so the seconds stay pinned while
     /// the phrase truncates. `processingElapsedSuffix` is nil only outside the
     /// elapsed-clock window, where the bare phrase shows.
@@ -199,7 +206,7 @@ extension AppState {
     /// text, the diff stat counts (the collapsed pill renders "Changes applied
     /// (+a −r)" from these; the expanded card uses summary/diffText), and — for a
     /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
-    /// its prompt-generation step just like artifact mode, so the same readout
+    /// its prompt-generation step just like ask mode, so the same readout
     /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
     /// artifact path uses (see PillWindowController) so the two read identically.
     /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.

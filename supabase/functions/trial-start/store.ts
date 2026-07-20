@@ -9,6 +9,11 @@
 // =============================================================================
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  type RateLimitKeyKind,
+  type RateLimitOnError,
+  rateLimiterErrorVerdict,
+} from "./ratelimit.ts";
 
 /** The subset of a trial_grants row trial-start reads. */
 export interface TrialGrantRow {
@@ -60,8 +65,20 @@ export interface TrialStore {
    * reinstall/resume, not a block.)
    */
   deviceAlreadyGranted(deviceIdHash: string, email: string): Promise<boolean>;
-  /** TRUE if within the limit for the current window (fail-open on infra error). */
-  rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean>;
+  /**
+   * TRUE if within the limit for the current window. `onError` is the fail
+   * posture when the limiter ITSELF errors (C-07): "allow" = fail open,
+   * "deny" = fail closed — the caller decides per key (see handler.ts).
+   * `keyKind` labels the rate_limiter_error alert log; it is passed by the
+   * call site, never parsed out of the key.
+   */
+  rateLimitOk(
+    key: string,
+    max: number,
+    windowSeconds: number,
+    onError: RateLimitOnError,
+    keyKind: RateLimitKeyKind,
+  ): Promise<boolean>;
 }
 
 export class SupabaseTrialStore implements TrialStore {
@@ -113,21 +130,9 @@ export class SupabaseTrialStore implements TrialStore {
   }
 
   async incrementCodeAttempts(email: string): Promise<void> {
-    // Atomic increment via the rpc-free path: a small SQL via .rpc would need a
-    // function; instead read-modify-write is acceptable here because the row is
-    // single-writer per email under the per-email rate limit, and a lost
-    // increment only ever makes brute force HARDER to mount, never easier (the
-    // TTL + 6-digit space are the real bound).
-    const { data } = await this.db
-      .from("trial_codes")
-      .select("attempts")
-      .eq("email_normalized", email)
-      .maybeSingle();
-    const next = (data?.attempts ?? 0) + 1;
-    const { error } = await this.db
-      .from("trial_codes")
-      .update({ attempts: next })
-      .eq("email_normalized", email);
+    // C-09: one atomic UPDATE (attempts = attempts + 1) via RPC — no
+    // read-modify-write window. Missing row = no-op.
+    const { error } = await this.db.rpc("increment_trial_code_attempts", { p_email: email });
     if (error) {
       console.error(JSON.stringify({ fn: "trial-start", op: "incrAttempts", error: error.message }));
     }
@@ -179,17 +184,23 @@ export class SupabaseTrialStore implements TrialStore {
     return data !== null;
   }
 
-  async rateLimitOk(key: string, max: number, windowSeconds: number): Promise<boolean> {
+  async rateLimitOk(
+    key: string,
+    max: number,
+    windowSeconds: number,
+    onError: RateLimitOnError,
+    keyKind: RateLimitKeyKind,
+  ): Promise<boolean> {
     const { data, error } = await this.db.rpc("check_rate_limit", {
       p_key: key,
       p_max: max,
       p_window_seconds: windowSeconds,
     });
     if (error) {
-      // Fail OPEN: a broken limiter must not block a legitimate trial signup.
-      // The grant cap + code TTL + attempt limit still bound abuse.
-      console.error(JSON.stringify({ fn: "trial-start", op: "rateLimit", error: error.message }));
-      return true;
+      // C-07: the verdict is the caller's per-key posture, and EVERY error —
+      // regardless of posture — emits the rate_limiter_error alert line
+      // (see ratelimit.ts).
+      return rateLimiterErrorVerdict(keyKind, onError, error.message);
     }
     return data === true;
   }

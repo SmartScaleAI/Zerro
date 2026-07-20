@@ -7,9 +7,12 @@
 //  Phase 11 — persistence layer for the result history surfaced by the
 //  menu-bar "Recent Prompts" submenu, the Paste-last row, and the
 //  Settings "History" tab. Storage is a flat JSON file under
-//  `Application Support/Zerro/recent_prompts.json` (sandboxed, so inside
-//  the app container). Capped at `RecentPromptStore.maxEntries` so the
-//  file can't grow without bound.
+//  `~/Library/Application Support/Zerro/recent_prompts_v2.json`. The app
+//  is NOT sandboxed, so that is the real user-library path — the file
+//  holds the user's prompts and AI results in plaintext, which is why
+//  every save clamps it to owner-only permissions (file 0600, Zerro dir
+//  0700) and excludes it from Time Machine / backups. Capped at
+//  `RecentPromptStore.maxEntries` so the file can't grow without bound.
 //
 //  Design notes:
 //  • JSON-on-disk was picked over SwiftData (schema-migration overhead
@@ -285,6 +288,31 @@ final class RecentPromptStore {
             try data.write(to: fileURL, options: [.atomic])
         } catch {
             Log.history.error("save failed: \(error.localizedDescription, privacy: .private)")
+            return
+        }
+        hardenOnDisk()
+    }
+
+    /// Post-write hardening for the plaintext history file (I-01). Must
+    /// run after EVERY save: the `.atomic` write replaces the file with a
+    /// freshly created one, which resets permissions to the umask default
+    /// (world-readable) and can drop the backup-exclusion flag.
+    /// FileProtectionType is unreliable on macOS, so owner-only POSIX
+    /// permissions are the actual access-control mechanism here. Failure
+    /// is logged but doesn't roll back the save — the data is already
+    /// safely on disk at that point.
+    private func hardenOnDisk() {
+        do {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: fileURL.path
+            )
+            var url = fileURL
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try url.setResourceValues(values)
+        } catch {
+            Log.history.error("hardening failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -292,7 +320,14 @@ final class RecentPromptStore {
         let parent = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: parent,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        // createDirectory's attributes only apply when it actually creates
+        // the directory — tighten a pre-existing one too.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: parent.path
         )
     }
 

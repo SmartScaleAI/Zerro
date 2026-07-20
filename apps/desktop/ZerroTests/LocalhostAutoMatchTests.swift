@@ -22,7 +22,9 @@ final class LocalhostAutoMatchTests: XCTestCase {
         XCTAssertEqual(BrowserURLReader.portForLocalhostURL("http://localhost:3000/x"), 3000)
         XCTAssertEqual(BrowserURLReader.portForLocalhostURL("http://127.0.0.1:5173/"), 5173)
         XCTAssertEqual(BrowserURLReader.portForLocalhostURL("http://[::1]:8080"), 8080)
-        XCTAssertEqual(BrowserURLReader.portForLocalhostURL("http://0.0.0.0:4321/path?q=1#f"), 4321)
+        // G-06: 0.0.0.0 is the wildcard BIND address, not a loopback host — a
+        // URL claiming it isn't provably local, so it's outside the boundary.
+        XCTAssertNil(BrowserURLReader.portForLocalhostURL("http://0.0.0.0:4321/path?q=1#f"))
         // Non-local hosts → nil (the privacy boundary — incl. LAN IPs, which are
         // NOT localhost).
         XCTAssertNil(BrowserURLReader.portForLocalhostURL("https://example.com"))
@@ -42,8 +44,11 @@ final class LocalhostAutoMatchTests: XCTestCase {
         XCTAssertTrue(BrowserURLReader.isLocalhost("http://localhost:3000/"))
         XCTAssertTrue(BrowserURLReader.isLocalhost("http://127.0.0.1/"))
         XCTAssertTrue(BrowserURLReader.isLocalhost("http://[::1]:9/"))
-        XCTAssertTrue(BrowserURLReader.isLocalhost("http://0.0.0.0:8080/"))
+        // G-06: the wildcard bind address is NOT loopback.
+        XCTAssertFalse(BrowserURLReader.isLocalhost("http://0.0.0.0:8080/"))
         XCTAssertFalse(BrowserURLReader.isLocalhost("https://example.com"))
+        XCTAssertFalse(BrowserURLReader.localhostHosts.contains("0.0.0.0"),
+                       "0.0.0.0 must be out of the loopback set (G-06)")
         // A look-alike host must NOT pass (exact match, not substring).
         XCTAssertFalse(BrowserURLReader.isLocalhost("http://localhost.evil.com:3000"))
         XCTAssertFalse(BrowserURLReader.isLocalhost(""))
@@ -168,7 +173,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
         let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "http://localhost:3000/",
             liveFolderForPort: { $0 == 3000 ? live : nil },
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
 
         XCTAssertEqual(outcome, .autoFilled(folder: live))
         XCTAssertEqual(state.projectURL?.path, "/proj/live", "the live folder wins over the stale cache")
@@ -185,7 +190,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
         let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "http://localhost:3000/",
             liveFolderForPort: { _ in nil },   // live can't answer
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
 
         XCTAssertEqual(outcome, .autoFilled(folder: URL(fileURLWithPath: "/proj/cached", isDirectory: true)))
         XCTAssertEqual(state.projectURL?.path, "/proj/cached", "falls back to the cached folder (today's behavior)")
@@ -199,7 +204,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
         let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "http://localhost:5173/",
             liveFolderForPort: { _ in nil },
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
 
         XCTAssertEqual(outcome, .notedPort)
         XCTAssertEqual(state.projectURL?.path, "/last/used", "a total miss must NOT clear the last-used folder")
@@ -213,7 +218,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
         let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "https://example.com:3000",
             liveFolderForPort: { _ in URL(fileURLWithPath: "/should/not/matter") },
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
         XCTAssertEqual(outcome, .noMatch)
         XCTAssertEqual(state.projectURL?.path, "/last/used")
         XCTAssertNil(state.detectedLocalhostPort)
@@ -225,9 +230,75 @@ final class LocalhostAutoMatchTests: XCTestCase {
         AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "http://localhost:3000/",
             liveFolderForPort: { _ in live },
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
         // Bug fix #1: an auto-matched folder is remembered as the global last-used.
         XCTAssertEqual(prefs.devProjectURL?.path, "/proj/live", "an auto-match updates the last-used folder")
+    }
+
+    // MARK: - G-06: candidate validation before adoption
+
+    func testIsValidProjectFolderMatrix() {
+        let folder = URL(fileURLWithPath: "/proj/acme", isDirectory: true)
+        // A directory carrying `.git` → adoptable.
+        XCTAssertTrue(LocalhostPortResolver.isValidProjectFolder(
+            folder,
+            directoryExists: { $0 == "/proj/acme" },
+            fileExists: { $0 == "/proj/acme/.git" }))
+        // Non-existent path (neither dir nor marker) → rejected.
+        XCTAssertFalse(LocalhostPortResolver.isValidProjectFolder(
+            folder,
+            directoryExists: { _ in false },
+            fileExists: { _ in false }))
+        // A real directory WITHOUT `.git` (not a repo) → rejected.
+        XCTAssertFalse(LocalhostPortResolver.isValidProjectFolder(
+            folder,
+            directoryExists: { $0 == "/proj/acme" },
+            fileExists: { _ in false }))
+        // A `.git` marker under a path that is no longer a DIRECTORY → rejected.
+        XCTAssertFalse(LocalhostPortResolver.isValidProjectFolder(
+            folder,
+            directoryExists: { _ in false },
+            fileExists: { $0 == "/proj/acme/.git" }))
+        // A trailing slash is normalized before the marker probe.
+        XCTAssertTrue(LocalhostPortResolver.isValidProjectFolder(
+            URL(fileURLWithPath: "/proj/acme/", isDirectory: true),
+            directoryExists: { $0 == "/proj/acme" },
+            fileExists: { $0 == "/proj/acme/.git" }))
+    }
+
+    func testStaleCacheFolderIsRejectedNotAdopted() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        // The learned map points at a folder that was deleted since it was
+        // taught; live can't answer. The stale path must NOT be adopted — the
+        // port is noted and the folder is left to manual selection.
+        prefs.setProjectURL(URL(fileURLWithPath: "/proj/deleted", isDirectory: true), forPort: 3000)
+
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { _ in nil },
+            state: state, preferences: prefs, validateFolder: { _ in false })
+
+        XCTAssertEqual(outcome, .notedPort, "a stale cache entry must not auto-fill")
+        XCTAssertEqual(state.projectURL?.path, "/last/used", "the last-used folder is untouched")
+        XCTAssertFalse(state.projectAutoMatchedFromPort)
+        XCTAssertEqual(state.detectedLocalhostPort, 3000, "the port is still noted so a manual pick re-learns it")
+    }
+
+    func testInvalidLiveFolderFallsBackToValidCache() {
+        let (state, prefs) = makeDevStateAndPrefs()
+        // Live resolved a folder that vanished between resolution and adoption;
+        // the cached folder is still real → the cache candidate wins.
+        let cached = URL(fileURLWithPath: "/proj/cached", isDirectory: true)
+        prefs.setProjectURL(cached, forPort: 3000)
+        let gone = URL(fileURLWithPath: "/proj/gone", isDirectory: true)
+
+        let outcome = AreaSelectorWindowController.applyLocalhostAutoMatch(
+            url: "http://localhost:3000/",
+            liveFolderForPort: { _ in gone },
+            state: state, preferences: prefs, validateFolder: { $0 == cached })
+
+        XCTAssertEqual(outcome, .autoFilled(folder: cached))
+        XCTAssertEqual(state.projectURL?.path, "/proj/cached")
     }
 
     func testCacheHitDoesNotRewriteMap() {
@@ -238,7 +309,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
         AreaSelectorWindowController.applyLocalhostAutoMatch(
             url: "http://localhost:3000/",
             liveFolderForPort: { _ in folder },
-            state: state, preferences: prefs)
+            state: state, preferences: prefs, validateFolder: { _ in true })
         XCTAssertEqual(prefs.projectURL(forPort: 3000)?.path, "/proj/same")
         XCTAssertEqual(prefs.devProjectURL?.path, "/proj/same")
     }

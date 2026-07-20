@@ -4,7 +4,7 @@
 //
 //  Guards the onboarding step ORDERING + stable identifiers — the flow has
 //  no other tests asserting count/order, yet several things depend on it:
-//    • `advance()`/`goBack()` are `rawValue ± 1`, so an out-of-order insert
+//    • `advance()` is `rawValue + 1`, so an out-of-order insert
 //      silently skips or repeats a screen.
 //    • `analyticsName` is the funnel event id and the per-step dedupe key, so
 //      it must stay constant across releases (it's deliberately decoupled from

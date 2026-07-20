@@ -138,11 +138,12 @@ final class OnboardingState {
         }
     }
 
-    func goBack() {
-        if let prev = OnboardingStep(rawValue: currentStep.rawValue - 1) {
-            currentStep = prev
-        }
-    }
+    // Back-navigation is intentionally omitted (H-10): the flow is short and
+    // gate-driven — consent and email verification are one-way gates (the
+    // email step's verified state is view-local, so returning would force a
+    // re-verification), and the only gate-free hops (devMode → permissions,
+    // allSet → devMode) aren't worth the affordance. DEBUG builds navigate
+    // freely via the dev panel's `jump(to:)` buttons.
 
     func jump(to step: OnboardingStep) {
         currentStep = step
@@ -177,11 +178,65 @@ final class OnboardingState {
         defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
     }
 
+    /// Static consent read for the LAUNCH BOOTSTRAP (I-03): the inverse of
+    /// `needsConsent`, callable before any OnboardingState instance exists.
+    /// Same Keys/currentTermsVersion source of truth. Telemetry startup
+    /// (CrashReporting.start → Analytics.start) is gated on this in ZerroApp's
+    /// one-shot block, so nothing transmits before the user has accepted the
+    /// consent step.
+    static func hasCurrentConsent(defaults: UserDefaults = .standard) -> Bool {
+        defaults.string(forKey: Keys.termsAcceptedVersion) == currentTermsVersion
+    }
+
     /// Whether the onboarding window should auto-present at launch: either
     /// onboarding isn't finished, or finished users owe fresh consent. Read
     /// by `ZerroApp` to drive the window's launch behavior.
     var shouldPresentOnboardingOnLaunch: Bool {
         !hasCompletedOnboarding || needsConsent
+    }
+
+    /// Enter re-consent mode: pin the window to the consent step and mark the
+    /// session as reconsenting, so the consent accept DISMISSES (see
+    /// `OnboardingConsentStep.agree`) instead of advancing a completed user
+    /// into the rest of the flow. `init` only catches the stale-terms case at
+    /// launch; the record-attempt gate calls this (H-06) because a prior
+    /// permission jump may have moved `currentStep` off `.consent`, and
+    /// `isReconsenting` is private(set).
+    func beginReconsent() {
+        isReconsenting = true
+        currentStep = .consent
+    }
+
+    // MARK: - Record-attempt gate (H-06)
+
+    /// What a record attempt owes before capture can start, in priority
+    /// order. Pure and static so unit tests pin the ORDER itself: an
+    /// outstanding re-consent must be satisfied BEFORE the permission gate
+    /// can engage. If permissions won while consent was owed, the permission
+    /// flow's tail ran `completeOnboarding()` but never `recordConsent()`,
+    /// so `needsConsent` stayed true and every record attempt re-hijacked
+    /// the window — a re-onboarding loop (H-06).
+    enum RecordGateAction: Equatable {
+        /// First run — onboarding never finished; open the window as-is.
+        case openOnboarding
+        /// Completed user owes fresh consent — pin consent in reconsent mode.
+        case reconsent
+        /// Completed and consented, but a gating permission was revoked.
+        case requestPermissions
+        /// Nothing owed — fall through to the entitlement gate.
+        case proceed
+    }
+
+    nonisolated static func recordGateAction(
+        hasCompletedOnboarding: Bool,
+        needsConsent: Bool,
+        screenGranted: Bool,
+        micGranted: Bool
+    ) -> RecordGateAction {
+        if !hasCompletedOnboarding { return .openOnboarding }
+        if needsConsent { return .reconsent }
+        if !screenGranted || !micGranted { return .requestPermissions }
+        return .proceed
     }
 
     /// Persist the clickwrap consent record. The affirmative button press is
@@ -193,6 +248,20 @@ final class OnboardingState {
         defaults.set(Self.currentTermsVersion, forKey: Keys.privacyAcceptedVersion)
         isReconsenting = false
         Log.billing.notice("terms consent recorded locally — version \(Self.currentTermsVersion, privacy: .public)")
+
+        // I-03: telemetry startup was DEFERRED at bootstrap when this launch
+        // lacked current consent (first run, or a finished user owing
+        // re-consent). Fire the one-shot hook now, AFTER the consent record is
+        // written — this single call site covers BOTH accept paths. The
+        // analytics toggle has already persisted the user's opt-in/out choice
+        // (CrashReporting.isEnabledDefaultsKey via @AppStorage), so
+        // Analytics.start() reads the correct optOut on its first event.
+        // Nil-out before invoking → strictly one-shot (Analytics.start is
+        // additionally didStart-guarded).
+        if let startTelemetry = AppDelegate.startTelemetryOnConsent {
+            AppDelegate.startTelemetryOnConsent = nil
+            startTelemetry()
+        }
 
         // DEFERRED Phase 22.1 — server-side acceptance record.
         // Consent is collected BEFORE the email-verification step, so there is

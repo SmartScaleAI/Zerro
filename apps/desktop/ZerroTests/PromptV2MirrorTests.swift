@@ -17,7 +17,7 @@ final class PromptV2MirrorTests: XCTestCase {
 
     /// `ZerroTests/PromptV2MirrorTests.swift` → `apps/desktop/` →
     /// `Scripts/artifact-eval/prompt-v2.md` (same repo-relative pattern as
-    /// ArtifactParserTests).
+    /// OutputParserTests).
     private static let mirrorURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()

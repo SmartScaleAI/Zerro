@@ -27,6 +27,7 @@
 //  it scales the published elapsed without affecting the file duration.
 //
 
+import AppKit
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -242,6 +243,18 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// Provider returned 429 even after our single in-flight retry.
     /// Suggests sustained rate-limiting, not a transient burst.
     case rateLimited
+    /// J-03 — the BYOK provider rejected the request because the USER'S OWN
+    /// account is out of quota/credits (OpenAI's `insufficient_quota` 429).
+    /// Distinct from `.rateLimited`: this doesn't clear in a minute — the fix
+    /// is billing on the provider's side — so the transient copy plus a Retry
+    /// button would be a trap that always fails the same way. Non-retryable;
+    /// the pill's action is "Record again". A user-fixable account condition,
+    /// NOT a Zerro bug — gated out of error-tracker capture like
+    /// `.apiKeyMissing`. Detected cleanly only for OpenAI today: Anthropic
+    /// signals quota via message text on a 400 and Gemini can't separate
+    /// quota from rate limits, so both stay on their existing paths (see the
+    /// adapters' 429 branches).
+    case providerQuotaExhausted
     /// The provider answered but the CONTENT was wrong: decode failures,
     /// schema drift, empty content, the proxy's `malformedResponse` /
     /// `inputRejected`. These mean our contract with the provider broke —
@@ -272,12 +285,21 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
     /// off disk when building the provider request — the BYOK services
     /// wrap this in their `.network` case, and the managed client surfaces
-    /// it as `ManagedGenerationError.artifactUnreadable`. Local I/O on
+    /// it as `ManagedGenerationError.outputUnreadable`. Local I/O on
     /// files Zerro itself wrote, so it IS reported to the error tracker, under its
     /// own errorCode rather than polluting the provider or processing
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
-    case artifactUnreadable
+    case outputUnreadable
+    /// F-07 — the managed client's pre-upload size fuse tripped: the
+    /// recording's audio or encoded payload exceeds the server's `/generate`
+    /// input limit, so NOTHING was uploaded and nothing was charged
+    /// (`ManagedGenerationError.payloadTooLarge`). A real recording (3-minute
+    /// cap, bounded frames) can't produce this, so tripping it means the
+    /// pipeline mis-sized something — reported to the error tracker. NOT
+    /// retryable: the same payload fails identically; the copy points at a
+    /// shorter recording.
+    case recordingTooLarge
 
     // Phase E — Managed proxy failures
     /// Managed: the month's credits are spent and a recording WAS captured — the
@@ -350,9 +372,10 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .artifactUnreadable,
+             .outputUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
+             .providerQuotaExhausted,
              .responseTooLong,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
@@ -416,12 +439,16 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Couldn\u{2019}t connect \u{2014} check your connection."
         case .rateLimited:
             return "Hit a rate limit \u{2014} try again in a minute."
+        case .providerQuotaExhausted:
+            return "Your AI provider account is out of quota or credits \u{2014} top up billing with your provider, then start a new recording."
         case .providerError, .providerUnavailable:
             return "Generation failed \u{2014} try again."
         case .responseTooLong:
             return "The response was too long to finish \u{2014} try a shorter recording."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Couldn\u{2019}t process the recording."
+        case .recordingTooLarge:
+            return "This recording is too large to send \u{2014} try a shorter recording."
         case .outOfCredits:
             return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
         case .outOfCreditsAtStart:
@@ -460,10 +487,12 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .localModelUnavailable:     return "Model needed"
         case .networkOffline:            return "Connection problem"
         case .rateLimited:               return "Rate limited"
+        case .providerQuotaExhausted:    return "Provider quota used up"
         case .providerError:             return "Generation failed"
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
-        case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .outputUnreadable:        return "Couldn\u{2019}t read result"
+        case .recordingTooLarge:         return "Recording too large"
         case .outOfCredits:              return "Out of credits"
         case .outOfCreditsAtStart:       return "Out of credits"
         case .subscriptionInactive:      return "Subscription inactive"
@@ -519,14 +548,18 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
         case .rateLimited:
             return "The service is temporarily limiting requests. Wait a minute, then press Retry \u{2014} your recording is saved and ready to run."
+        case .providerQuotaExhausted:
+            return "Your AI provider reported this account is out of quota or credits \u{2014} not a temporary rate limit, so retrying won\u{2019}t help. Add or top up billing on your provider\u{2019}s site, then start a new recording."
         case .providerError:
             return "The generation service ran into an error while creating your prompt. Your recording is saved \u{2014} press Retry to run it again."
         case .providerUnavailable:
             return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
         case .responseTooLong:
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
+        case .recordingTooLarge:
+            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
         case .outOfCredits:
             return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
         case .outOfCreditsAtStart:
@@ -580,6 +613,33 @@ final class AppState {
             if case .done = state {
                 pendingPaidStore.clear()
             }
+            // I-02: release anything parked on the next return to idle — e.g.
+            // a Sparkle install-and-relaunch postponed mid-recording or
+            // mid-Dev-dispatch. Take the array first so a callback that
+            // re-registers isn't fired again in the same sweep.
+            if state == .idle, !onNextIdleCallbacks.isEmpty {
+                let callbacks = onNextIdleCallbacks
+                onNextIdleCallbacks = []
+                for callback in callbacks { callback() }
+            }
+        }
+    }
+
+    /// Callbacks parked by `onNextIdle(_:)`, fired in registration order and
+    /// cleared by `state`'s `didSet` on the next transition to `.idle`.
+    @ObservationIgnored private var onNextIdleCallbacks: [@MainActor () -> Void] = []
+
+    /// Runs `callback` when the app next returns to `.idle` — immediately if
+    /// it already is. One-shot: the callback fires exactly once and is not
+    /// re-armed for later idle transitions. I-02: lets the Sparkle updater
+    /// delegate postpone an install-and-relaunch that would otherwise kill an
+    /// active recording or Dev-Mode dispatch, without the delegate reaching
+    /// into the state machine itself.
+    func onNextIdle(_ callback: @escaping @MainActor () -> Void) {
+        if state == .idle {
+            callback()
+        } else {
+            onNextIdleCallbacks.append(callback)
         }
     }
     var elapsedSeconds: Double = 0
@@ -604,13 +664,29 @@ final class AppState {
     /// capture; `nil` started without a selection (e.g. tests).
     var activeSelection: SelectionRect?
 
+    /// H-07: the display the current (or most recent) recording targets —
+    /// the selection's display when one was made, else whatever
+    /// `NSScreen.main` resolved to at start (matching RecordingSession's
+    /// no-selection primary path). `PillWindowController` places the pill on
+    /// this display so it appears where the user is actually recording in a
+    /// multi-display setup. Deliberately NOT cleared on session teardown:
+    /// the pill outlives the capture session (processing / result / failure
+    /// cards, and the wake-recovery offer for a sleep-interrupted recording),
+    /// and all of those belong on the recorded display. Overwritten by the
+    /// next `startRecording`; the controller falls back to `NSScreen.main`
+    /// when it's nil or the display is gone.
+    private(set) var recordingDisplayID: CGDirectDisplayID?
+
     /// Phase 3: whether to redact detected secrets (pixels + OCR text) for THIS
     /// recording. Captured at `startRecording` time from
     /// `PreferencesStore.redactSecrets` (same fresh-read pattern as the mic
     /// device / output mode) and handed to the processing pipeline in
     /// `runProcessing`, so a Settings change applies to the next recording.
     /// Defaults to the privacy-on config default for call sites that don't pass
-    /// one (tests, menu-bar paths).
+    /// one (tests, menu-bar paths). F-04: this is the EFFECTIVE flag — the
+    /// user's toggle FLOORED to ON whenever generation routes through Zerro's
+    /// servers (see `effectiveRedactSecrets`), so the toggle can only loosen
+    /// the BYOK path, never a third-party upload.
     var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
 
     /// Multi-model: the generation model for THIS recording — the capture
@@ -644,6 +720,12 @@ final class AppState {
 
     /// Live agent substatus for the `.devAgentRunning` pill ("editing App.css").
     var devRunSubstatus: DevRunSubstatus?
+    /// G-08: true while the runner reports the agent stalled (no output for
+    /// `timeouts.stall` seconds). ADVISORY only — the runner never kills on a
+    /// stall; this just swaps the running pill's substatus for a non-alarming
+    /// "seems stuck — Cancel?" nudge toward the pill's existing Cancel. Cleared
+    /// by the runner's next-output notification, at run end, and on teardown.
+    var devAgentStalled = false
     /// The diff stat captured on `.devDone`, used for the generated fallback
     /// summary line ("Updated N files (+x −y)") when the agent gave no summary.
     var devDiffStat: GitDiffStat?
@@ -708,7 +790,14 @@ final class AppState {
 
     /// Combined confidence below this is "low" → flagged amber on the review
     /// card's target row (the one the user most needs to check before approving).
-    static let devLowConfidenceThreshold = 0.45
+    /// Also the F-10 hint gate: an anchor whose CLIENT confidence is below this
+    /// ships a SOFTENED "may have been referring to" prompt hint instead of the
+    /// definitive "pointed here" (see `anchorHint`), so a shaky dwell can't
+    /// assert a false certainty to the model. One threshold on purpose — the
+    /// card's amber flag and the prompt's hedged hint always agree on what
+    /// "low confidence" means. `nonisolated`: read by the nonisolated
+    /// `writeAnchorFrames` path (a plain immutable Double).
+    nonisolated static let devLowConfidenceThreshold = 0.45
 
     /// One shared coordinator (and its single runner) so the cap-1 dispatch
     /// guard spans the app, not one call.
@@ -754,7 +843,7 @@ final class AppState {
     /// `generatedPrompt` on BOTH generation paths (Managed and BYOK) and
     /// reset wherever it is. The pill's rendering shim and the Copy button's
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
-    var parsedResponse: ParsedResponse?
+    var output: Output?
 
     /// The assembled §2 Attached Context block for the result currently
     /// shown, built ONCE from the processed recording when the result is
@@ -763,7 +852,7 @@ final class AppState {
     /// removed): never rendered and never part of any copy payload. It fed the
     /// app-side "Write agent prompt" convert request, which has since been
     /// removed — the field is still assembled but currently has no reader.
-    /// Reset wherever `parsedResponse` is.
+    /// Reset wherever `output` is.
     var attachedContextBlock: String?
 
     /// True when the result was generated from the screen alone because
@@ -1102,8 +1191,29 @@ final class AppState {
 
     /// The live capture session. Held strongly while recording so its
     /// callbacks (onElapsed, onFinish) stay valid; cleared on session
-    /// completion / cancel so memory is reclaimed.
-    private var recordingSession: RecordingSession?
+    /// completion / cancel so memory is reclaimed. Internal (not private)
+    /// so the F-11 revocation-guard tests can install an unstarted session
+    /// and observe whether the handler tore it down.
+    var recordingSession: RecordingSession?
+
+    /// F-11 test seam for the revocation guard's capture-liveness read —
+    /// mirrors `localModelStateProvider`. `nil` (production) reads the live
+    /// session's `isCapturing`; tests inject a value so both guard branches
+    /// can be driven without a started ScreenCaptureKit capture (a real
+    /// `.running` session needs TCC grants a unit test doesn't have).
+    @ObservationIgnored var captureLivenessProvider: (() -> Bool)?
+
+    /// G-07 test seam for the recovery-marker write-failure telemetry —
+    /// mirrors `captureLivenessProvider`. `nil` (production) routes to
+    /// `Analytics.capture` (inert in tests, so a spy is the only way to pin
+    /// fires-on-failure / silent-on-success).
+    @ObservationIgnored var devRecoveryTelemetry: ((String, [String: Any]) -> Void)?
+
+    /// Dedupes the G-07 write-failure event to at most one per dispatch — the
+    /// marker is persisted twice per run (the approve gate, then the
+    /// `.dispatching` phase), and a disk that failed the first write fails the
+    /// second identically. Reset at every dispatch start and teardown.
+    @ObservationIgnored private var devRecoveryMarkerFailureReported = false
 
     #if STAGING
     /// Staging-only amber "you're recording against Staging" frame around the
@@ -1211,7 +1321,37 @@ final class AppState {
     /// have safely recorded a shorter session. The reactive disk-full
     /// chain walk in `isOutOfSpace` still backstops cases where another
     /// process eats the disk between this check and finalize.
-    static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+    nonisolated static let minimumFreeBytesToRecord: Int64 = 1_500_000_000
+
+    /// The record-gate free-space decision, factored pure so the F-15 nil
+    /// contract is unit-testable: a readable capacity refuses below
+    /// `minimumFreeBytesToRecord`, and an UNREADABLE capacity (`nil`) also
+    /// refuses — never "nil == OK". The reactive `isOutOfSpace` chain-walk
+    /// remains the backstop for space vanishing mid-recording.
+    nonisolated static func shouldRefuseRecordingForFreeSpace(_ freeBytes: Int64?) -> Bool {
+        (freeBytes ?? 0) < minimumFreeBytesToRecord
+    }
+
+    /// F-04 — the EFFECTIVE per-recording redaction flag: the user's Settings
+    /// toggle, FLOORED to ON whenever generation routes through Zerro's
+    /// servers (Managed subscription, or a trial holding a live token — the
+    /// same `EntitlementStore.routesThroughManagedProxy` signal the generation
+    /// routing reads). Frames that egress to a third party are always
+    /// redacted; the toggle can only loosen the BYOK path, where the user's
+    /// own key talks straight to their own provider. Evaluated at
+    /// `startRecording` time because the frames are baked during processing,
+    /// before the routing branch runs. Fail-safe: an unavailable routing
+    /// signal (`nil` — no entitlement store wired) errs toward redaction.
+    /// (`routesThroughManagedProxy` is deliberately a SUPERSET of the actual
+    /// dispatch decision — a self-funding trial user whose generation ends up
+    /// running locally still gets the floor. Over-redaction is the safe
+    /// direction.) Pure, so the truth table is unit-testable.
+    nonisolated static func effectiveRedactSecrets(
+        toggle: Bool,
+        routesThroughManagedProxy: Bool?
+    ) -> Bool {
+        toggle || (routesThroughManagedProxy ?? true)
+    }
 
     /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
     /// uses it to start/stop the mid-session TCC monitor around an active
@@ -1317,15 +1457,19 @@ final class AppState {
         // Phase 10: pre-flight free-space check. Refuse upfront with the
         // existing .diskFull copy ("Your Mac is out of storage — free up
         // space and try again.") so the user isn't asked to narrate for
-        // 3 minutes only to lose the recording at finalize. A nil
-        // capacity read is treated as "assume OK" — the reactive
-        // chain-walk in isOutOfSpace still catches a genuine ENOSPC at
-        // write time, so a false-positive refuse here is worse than a
-        // false-positive proceed.
-        if let free = WorkingDirectory.freeBytes(), free < Self.minimumFreeBytesToRecord {
+        // 3 minutes only to lose the recording at finalize. F-15: a nil
+        // capacity read (the OS wouldn't give us a number) is treated as
+        // NOT-OK — refuse with the same disk warning — rather than the old
+        // "assume OK" that silently started a 3-minute narration on a
+        // volume we couldn't size. An unreadable capacity is extremely
+        // rare and correlates with the volume being in trouble; the cost
+        // of a false refuse (record again after checking storage) is far
+        // below the cost of losing a finished narration at finalize.
+        let free = WorkingDirectory.freeBytes()
+        if Self.shouldRefuseRecordingForFreeSpace(free) {
             // Byte counts are .public — capacity metrics, not user content.
             Log.state.notice(
-                "startRecording refused — only \(free, privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
+                "startRecording refused — only \(free.map(String.init(describing:)) ?? "unreadable", privacy: .public) bytes free (need \(Self.minimumFreeBytesToRecord, privacy: .public))"
             )
             state = .failed(reason: .diskFull)
             return
@@ -1347,7 +1491,19 @@ final class AppState {
         pendingPaidStore.clear()
         isResultExpanded = false
         activeSelection = selection
-        recordingRedactSecrets = redactSecrets
+        // H-07: pin the pill's target display for this recording's whole
+        // lifecycle. The selection carries the display it was drawn on; a
+        // no-selection record captures the primary display, which is what
+        // RecordingSession's resolveDisplay pairs with NSScreen.main.
+        recordingDisplayID = selection?.screenDisplayID ?? NSScreen.main?.displayID
+        // F-04: floor the toggle to ON when this recording's frames will
+        // egress to Zerro's servers (Managed/trial) — the toggle only governs
+        // the BYOK path. Evaluated here because the frames are redacted at
+        // processing time, before the generation routing branch runs.
+        recordingRedactSecrets = Self.effectiveRedactSecrets(
+            toggle: redactSecrets,
+            routesThroughManagedProxy: entitlements?.routesThroughManagedProxy
+        )
         recordingModelID = modelID
         // Dev Mode: carry the toolbar's agent + folder into the recording. nil
         // for a normal recording, which leaves the dev path entirely inert.
@@ -1358,7 +1514,7 @@ final class AppState {
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
-        parsedResponse = nil
+        output = nil
         attachedContextBlock = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
@@ -1477,16 +1633,62 @@ final class AppState {
         }
     }
 
+    /// F-11 — PURE predicate: may a mid-session TCC revocation destructively
+    /// tear down the recording (cancel the session, discard the file, show
+    /// `.failed`)? True ONLY while capture is genuinely live:
+    ///   • `state` is a live-capture state — `.recording` or `.wrappingUp`
+    ///     (the 150–180s countdown is still appending samples, so a genuine
+    ///     revocation there breaks the capture mid-stream and must fail).
+    ///     `.autoStopped` is the auto-stop finalize window: capture already
+    ///     completed and the writer is finishing the FULL recording, so it
+    ///     is protected unconditionally.
+    ///   • AND the session is still appending (`captureIsLive`) — false
+    ///     during a MANUAL stop's finalize, where `state` deliberately stays
+    ///     `.recording`/`.wrappingUp` while the writer finishes (see
+    ///     `stopRecording`), so state alone can't tell that window apart
+    ///     from live capture.
+    /// Today `.autoStopped` always implies `captureIsLive == false` (the
+    /// transition calls `session.stop()` synchronously), so the state check
+    /// is redundancy — kept so the protection survives if that coupling ever
+    /// loosens, and to document which states are the finalize window. The
+    /// invariant both checks serve: a revocation must NEVER discard a
+    /// recording whose capture has already completed.
+    static func shouldFailOnMidSessionRevocation(
+        state: RecordingState, captureIsLive: Bool
+    ) -> Bool {
+        (state == .recording || state == .wrappingUp) && captureIsLive
+    }
+
     /// Fired by PermissionsManager.startMonitoring when Screen Recording
     /// or Microphone TCC flips away from .granted during an active
-    /// recording. Tears down the writer (which writes whatever it can
-    /// finalize, then no-ops the partial file) and sets the dedicated
-    /// failure state directly so the user sees the right copy
-    /// immediately. We don't wait for handleSessionFinish(.cancelled) to
-    /// drive the state — that branch is guarded so it won't overwrite
-    /// the failure we set here.
-    private func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
+    /// recording. While capture is LIVE this tears down the writer (which
+    /// writes whatever it can finalize, then no-ops the partial file) and
+    /// sets the dedicated failure state directly so the user sees the
+    /// right copy immediately. We don't wait for
+    /// handleSessionFinish(.cancelled) to drive the state — that branch is
+    /// guarded so it won't overwrite the failure we set here.
+    ///
+    /// F-11: the destructive path is gated on capture actually being live
+    /// (`shouldFailOnMidSessionRevocation`). If the flip lands once capture
+    /// has completed — the `.autoStopped` finalize window, or a manual
+    /// stop's finalize — the recording is already fully captured and the
+    /// old unconditional teardown threw it away: `session.cancel()` no-ops
+    /// on a finishing session, but `state = .failed` made
+    /// `handleSessionFinish`'s failed-state short-circuit orphan the
+    /// finished file. Instead we only stop the monitor and return, letting
+    /// the normal finalize path (`handleSessionFinish` → `.processing`)
+    /// produce the recording. Finalizing needs no TCC — no more samples
+    /// are appended — so the revocation can't corrupt the completed
+    /// capture. Internal (not private) so the F-11 tests can drive it.
+    func handleMidSessionRevocation(_ kind: RecordingFailureReason) {
         guard isRecordingActive, let session = recordingSession else { return }
+        let captureIsLive = captureLivenessProvider?() ?? session.isCapturing
+        guard Self.shouldFailOnMidSessionRevocation(state: state, captureIsLive: captureIsLive) else {
+            // Failure-reason case name is .public — no user content.
+            Log.state.notice("permission revoked during finalize — preserving completed recording: \(String(describing: kind), privacy: .public)")
+            permissions?.stopMonitoring()
+            return
+        }
         // Failure-reason case name is .public — no user content.
         Log.state.notice("permission revoked mid-session: \(String(describing: kind), privacy: .public)")
         // Phase 13A: breadcrumb at .warning level. The trail will read
@@ -1610,7 +1812,7 @@ final class AppState {
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
-        parsedResponse = nil
+        output = nil
         attachedContextBlock = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
@@ -1651,6 +1853,7 @@ final class AppState {
         devRecoveryStore.clear()
         pendingDevRecovery = nil
         devRecoveryRevertFailed = false
+        devRecoveryMarkerFailureReported = false
         devCancelInFlight = false
         devAgentStarted = false
         devDispatchStartTime = nil
@@ -1659,6 +1862,7 @@ final class AppState {
         recordingAgentID = nil
         recordingAgentModelID = nil
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
@@ -1796,7 +2000,12 @@ final class AppState {
             // bounds the edits rather than leaving an orphaned process writing.
             // KEEP the snapshot on disk for a future quit-recovery (tracked
             // follow-up) — the agent may have edited, so it's the only undo.
-            devDispatchCoordinator.cancel()
+            // G-02: `terminateNow()`, NOT `cancel()` — cancel's terminate is an
+            // async queue hop, and `applicationShouldTerminate` returns
+            // `.terminateNow` right after this, so the app could exit before
+            // the hop ran, orphaning the agent's whole process tree. This one
+            // SIGKILLs the process group inline before returning.
+            devDispatchCoordinator.terminateNow()
         case .reviewingPrompt:
             // Ask Permission: suspended at the pre-agent review gate — the agent
             // NEVER ran, so the tree is untouched and the checkpoint protects
@@ -2336,6 +2545,18 @@ final class AppState {
                 // pill in place.
                 self.runPromptGeneration(processed: result)
             } catch {
+                // F-12: reclaim the source .mov now, on EVERY failure exit,
+                // instead of leaving the raw screen recording in temp until
+                // the next launch sweep — mirroring the success branch above.
+                // Placed BEFORE the state guard so the raced-cancel sub-path
+                // reclaims it too. Safe: processing failures are
+                // non-retryable-in-place (Retry re-records; it never
+                // reprocesses this source), and the pipeline already removed
+                // its own partial working dir before rethrowing. Best-effort;
+                // a no-op if the dev-retain path already moved the source
+                // into the working dir.
+                Task.detached(priority: .utility) { WorkingDirectory.remove(at: sourceURL) }
+                self.lastRecordingURL = nil
                 Log.processing.error("failed: \(error.localizedDescription, privacy: .private)")
                 guard self.state == .processing else { return }
                 // Disk-full and too-short/empty recordings get actionable
@@ -2705,7 +2926,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "managed",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.output?.artifact?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
@@ -2752,7 +2973,7 @@ final class AppState {
                     // `error 0`. Those get a reason+status fingerprint so an
                     // outage collapses into a single issue. The reasons that were
                     // ALREADY captured here before this change (.providerError,
-                    // .artifactUnreadable) have no provider HTTP detail, so they
+                    // .outputUnreadable) have no provider HTTP detail, so they
                     // get NO explicit fingerprint — PostHog keeps their existing
                     // automatic grouping untouched (we only regroup the new
                     // provider cases, not the pre-existing signal).
@@ -2799,10 +3020,13 @@ final class AppState {
     /// are all SHARED. Returns the call-2 result; the caller lands it on the same
     /// `.done`/dispatch tail the single-call managed path uses.
     ///
-    /// 1. CALL 1 `devTranscribe` → word transcript (free; no slot/credit). Skipped
-    ///    when the recording has no speech (empty transcript → the resolver yields
-    ///    no anchors and the run degrades to click/dwell), mirroring BYOK's local
-    ///    Whisper skip.
+    /// 1. CALL 1 `devTranscribe` → word transcript (no slot; consumes nothing,
+    ///    but X-02 places a 1-credit HOLD under the recording's idempotency key
+    ///    that call 2's settle releases — see below). Skipped when the recording
+    ///    has no speech (empty transcript → the resolver yields no anchors and
+    ///    the run degrades to click/dwell), mirroring BYOK's local Whisper skip.
+    ///    A 402 here means the spendable balance can't cover even the floor —
+    ///    it maps to the same out-of-credits UX as a call-2 402.
     /// 2. Domain-dictionary snap (Versel→Vercel) + the SHARED `resolveDevAnchors`
     ///    → client anchors + marked `DEIXIS REFERENCE` frames. Sets
     ///    `devResolvedAnchors` (the client half of the M6 gate).
@@ -2836,9 +3060,14 @@ final class AppState {
                 durationSeconds: durationSeconds,
                 hasSpeech: true,
                 tokenProvider: tokenProvider,
-                // A distinct key from call 2: call 1 writes no idempotency entry
-                // server-side, but a separate key keeps the two calls unambiguous.
-                idempotencyKey: processed.idempotencyKey + ":dev-transcribe"
+                // X-02: the SAME per-recording key call 2 sends. The server keys
+                // the call-1 credit HOLD on it, and call 2's settle finds and
+                // releases that hold by the shared key — a distinct/suffixed key
+                // would orphan the hold until its TTL. (The server still
+                // normalizes the legacy ":dev-transcribe" suffix older shipped
+                // clients send, so this is convention alignment, not a protocol
+                // break.)
+                idempotencyKey: processed.idempotencyKey
             )
         } else {
             Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe skipped (no speech)")
@@ -2933,8 +3162,11 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -2986,8 +3218,11 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
+        case .payloadTooLarge:
+            // F-07: the client-side pre-upload fuse — nothing left the machine.
+            return .recordingTooLarge
         }
     }
 
@@ -3240,7 +3475,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "byok",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.output?.artifact?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 // Phase 13A: terminal-success breadcrumb. If a crash
@@ -3289,11 +3524,11 @@ final class AppState {
     /// parse the raw model output against the §2 contract, surface
     /// recovery/coercion telemetry, and persist the v2 history entry (model
     /// artifact title preferred). `generatedPrompt` keeps the raw text as
-    /// the verbatim fallback; `parsedResponse` is what the pill renders.
+    /// the verbatim fallback; `output` is what the pill renders.
     private func acceptGenerationResult(rawPrompt: String) {
-        let parsed = ArtifactParser.parse(rawPrompt)
+        let parsed = OutputParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
-        parsedResponse = parsed
+        output = parsed
         // Tier 4 analytics: the activation signal — a usable result was produced.
         // Fired here, in the shared generation `.done` tail, so it counts once
         // per generation. Metadata only.
@@ -3314,16 +3549,16 @@ final class AppState {
         // recovery rate was baselined at ~4% of flash artifacts in Phase 1;
         // these are the signals that tell us if it climbs in the wild.
         if !parsed.isValid {
-            Log.artifacts.warning("malformed response degraded to chat text (fail-safe fallback)")
+            Log.outputs.warning("malformed response degraded to chat text (fail-safe fallback)")
         }
         if parsed.wasRecovered {
             let rules = parsed.warnings
                 .filter { $0.hasPrefix("recovered") }
                 .joined(separator: "; ")
-            Log.artifacts.warning("recovery tier fired: \(rules, privacy: .public)")
+            Log.outputs.warning("recovery tier fired: \(rules, privacy: .public)")
         }
         if let artifact = parsed.artifact, artifact.rawType != artifact.type.rawValue {
-            Log.artifacts.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
+            Log.outputs.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
         }
 
         recentPromptStore?.add(
@@ -3340,7 +3575,7 @@ final class AppState {
     /// as chat text when parsing produced no structure, so the pill always
     /// has something to show.
     var resultPresentation: ResultPresentation? {
-        guard let parsed = parsedResponse else {
+        guard let parsed = output else {
             return generatedPrompt.map {
                 ResultPresentation(chatText: $0, artifact: nil)
             }
@@ -3361,7 +3596,7 @@ final class AppState {
     /// response copies the chat text. Falls back to the raw output when
     /// parsing produced no structure.
     var resultCopyPayload: String? {
-        guard let parsed = parsedResponse else { return generatedPrompt }
+        guard let parsed = output else { return generatedPrompt }
         guard let artifact = parsed.artifact else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
@@ -3400,7 +3635,7 @@ final class AppState {
         // The dispatch payload is the agent_prompt body the dev system prompt
         // produced. No agent_prompt (e.g. the recording held no concrete change
         // → ZERRO_NO_REQUEST) → nothing to dispatch.
-        guard let artifact = parsedResponse?.artifact,
+        guard let artifact = output?.artifact,
               artifact.type == .agentPrompt,
               !artifact.body.isEmpty else {
             devFailure = .noChangeRequested
@@ -3434,12 +3669,14 @@ final class AppState {
         devDispatchStartTime = Date()
 
         devRunSubstatus = nil
+        devAgentStalled = false
         devDiffStat = nil
         devSummary = nil
         devDiffText = nil
         devFailure = nil
         devCancelInFlight = false
         devAgentStarted = false
+        devRecoveryMarkerFailureReported = false
         // New dispatch → new generation token; any prior in-flight confirm/outcome
         // is now stale and will be dropped.
         devDispatchGeneration += 1
@@ -3475,6 +3712,13 @@ final class AppState {
                 // auto-apply path is unchanged.
                 confirmGate: { [weak self] in
                     await self?.awaitReviewApproval(gen: gen, prompt: body) ?? false
+                },
+                // G-08: the runner's stall watchdog (notify, never kill). Drives
+                // the pill's "seems stuck — Cancel?" nudge; the generation guard
+                // drops a late notification from a superseded dispatch.
+                onStall: { [weak self] stalled in
+                    guard let self, self.devDispatchGeneration == gen else { return }
+                    self.applyDevAgentStall(stalled)
                 },
                 onPhase: { [weak self] phase in self?.applyDevPhase(phase) }
             )
@@ -3518,6 +3762,18 @@ final class AppState {
         }
     }
 
+    /// Apply the runner's stall notification (G-08): `true` after
+    /// `timeouts.stall` seconds of agent silence, `false` on the next output.
+    /// ADVISORY only — the agent is never auto-killed (the runner's
+    /// notify-never-kill contract); the flag just swaps the running pill's
+    /// substatus for a nudge toward its existing Cancel. Ignored mid-cancel: the
+    /// pill has already left the cancellable card, and a late `true` from the
+    /// SIGTERM grace window must not resurrect it.
+    func applyDevAgentStall(_ stalled: Bool) {
+        guard !devCancelInFlight else { return }
+        devAgentStalled = stalled
+    }
+
     /// Persist the durable quit-recovery marker for the current dispatch. Built
     /// from the just-taken checkpoint (`devCheckpoint` is set by the coordinator's
     /// `onCheckpoint` before the agent runs) + the service's project URL + the
@@ -3536,7 +3792,19 @@ final class AppState {
             createdAt: Date(),
             agentName: recordingAgentID.flatMap { DevAgentRegistry.entry(id: $0)?.displayName }
         )
-        devRecoveryStore.save(marker)
+        guard !devRecoveryStore.save(marker) else { return }
+        // G-07: the marker never landed, so THIS run is not crash-recoverable —
+        // a quit mid-edit would leave half-applied changes with no cross-launch
+        // Undo. The run itself continues (losing the marker only costs
+        // recoverability — the safe failure), but the failure must be
+        // observable beyond the store's .private device log: a bounded,
+        // metadata-only event (at most one per dispatch) carries the rate.
+        guard !devRecoveryMarkerFailureReported else { return }
+        devRecoveryMarkerFailureReported = true
+        let capture = devRecoveryTelemetry ?? { Analytics.capture($0, $1) }
+        capture("dev_recovery_marker_write_failed", [
+            "agent_id": recordingAgentID ?? "unknown",
+        ])
     }
 
     // MARK: - Dev Mode anchor resolution analytics
@@ -3717,8 +3985,12 @@ final class AppState {
             guard let b64 = a.markedJPEGBase64, let data = Data(base64Encoded: b64) else { continue }
             let url = dir.appendingPathComponent("anchor-\(a.refIndex).jpg")
             guard (try? data.write(to: url, options: .atomic)) != nil else { continue }
-            let nearby = a.ocrStrings.prefix(8).joined(separator: ", ")
-            let hint = "DEIXIS REFERENCE \(a.refIndex): the developer pointed here while saying \"\(a.candidate.phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+            let hint = anchorHint(
+                refIndex: a.refIndex,
+                phrase: a.candidate.phrase,
+                ocrStrings: a.ocrStrings,
+                clientConfidence: a.clientConfidence
+            )
             frames.append(ExtractedFrame(
                 url: url,
                 timestamp: CMTime(seconds: baseSeconds + 1 + Double(a.refIndex), preferredTimescale: 600),
@@ -3729,10 +4001,33 @@ final class AppState {
         return frames
     }
 
+    /// The `DEIXIS REFERENCE` hint attached to one anchor frame, gated on the
+    /// anchor's CLIENT confidence (F-10). At or above
+    /// `devLowConfidenceThreshold` the hint is the definitive "pointed here"
+    /// phrasing, byte-identical to before the gate. Below it — a loose dwell,
+    /// a last-known position, empty space — the phrasing is HEDGED ("may have
+    /// been referring near here", "best guess") so a shaky anchor doesn't
+    /// assert a false certainty the model would then anchor its edit on. Pure
+    /// + `nonisolated`, so the gate is unit-testable without a recording.
+    nonisolated static func anchorHint(
+        refIndex: Int,
+        phrase: String,
+        ocrStrings: [String],
+        clientConfidence: Double
+    ) -> String {
+        let nearby = ocrStrings.prefix(8).joined(separator: ", ")
+        guard clientConfidence < devLowConfidenceThreshold else {
+            return "DEIXIS REFERENCE \(refIndex): the developer pointed here while saying \"\(phrase)\". The crosshair marks the element. Nearby on-screen text: \(nearby)"
+        }
+        return "DEIXIS REFERENCE \(refIndex): the developer MAY have been referring near here while saying \"\(phrase)\" — this anchor is low-confidence, so treat it as a hint, not a certainty. The crosshair marks the best guess. Nearby on-screen text: \(nearby)"
+    }
+
     private func applyDevOutcome(_ outcome: DevDispatchCoordinator.Outcome) {
         // A safe-cancel owns its own teardown (terminate → auto-revert → idle),
         // so don't render the terminated agent's outcome as a `.devFailed` card.
         guard !devCancelInFlight else { return }
+        // The run is over either way — a stall nudge must not outlive it (G-08).
+        devAgentStalled = false
         let durationMs = devDispatchDurationMs()
         switch outcome {
         case .succeeded(let success):
@@ -3907,7 +4202,7 @@ final class AppState {
     /// Retry a failed dispatch with the same generated prompt (the `.devFailed`
     /// button). REVERT-THEN-RETRY: first restore the ORIGINAL pre-run tree so the
     /// retry runs against a clean slate (never a partially-edited one), THEN take
-    /// a fresh checkpoint and re-dispatch. `parsedResponse`/`recordingProjectURL`/
+    /// a fresh checkpoint and re-dispatch. `output`/`recordingProjectURL`/
     /// `recordingAgentID` are still set from the original run, so `beginDevDispatch`
     /// re-runs the same prompt. A revert that doesn't fully restore aborts the
     /// retry (we won't re-dispatch onto a tree we couldn't clean) and keeps the
@@ -3954,6 +4249,9 @@ final class AppState {
         let runningTask = devDispatchTask
         devCancelInFlight = true
         devDispatchTask = nil
+        // The cancel supersedes any stall nudge (and `applyDevAgentStall` is
+        // gated off while the cancel is in flight).
+        devAgentStalled = false
         state = .devReverting
         // If suspended at the Ask Permission review gate, resolve it false so the
         // dispatch unblocks and returns (the agent never ran → the revert below is
@@ -4129,7 +4427,13 @@ final class AppState {
             idempotencyKey: processed.idempotencyKey,
             modelID: model,
             reason: paidReason,
-            createdAt: Date()
+            createdAt: Date(),
+            // E-04: carry the Dev-Mode context so a crash-restored resume
+            // re-runs the dev path (dev prompt + agent dispatch) instead of
+            // degrading to the clipboard flow. All nil for a normal recording.
+            devProjectPath: recordingIsDevMode ? recordingProjectURL?.path : nil,
+            devAgentID: recordingIsDevMode ? recordingAgentID : nil,
+            devAgentModelID: recordingIsDevMode ? recordingAgentModelID : nil
         )
         pendingPaidStore.save(pending)
         Log.billing.notice("paid block held for resume (reason=\(String(describing: paidReason), privacy: .public))")
@@ -4185,6 +4489,12 @@ final class AppState {
                     workingDirectory: pending.workingDirectoryURL,
                     idempotencyKey: pending.idempotencyKey
                 )
+                // E-04: with nothing in memory, the persisted pointer is the
+                // only carrier of the Dev-Mode context — reapply it so the
+                // resumed generation keeps the dev path.
+                if processed != nil {
+                    self.restoreDevContext(from: pending)
+                }
             } else {
                 processed = nil
             }
@@ -4250,9 +4560,23 @@ final class AppState {
         }
         processedRecording = processed
         recordingModelID = pending.modelID
+        restoreDevContext(from: pending)
         state = .failed(reason: pending.reason.failureReason)
         Log.billing.notice("restore: held paid recording restored — pill back with Continue")
         return true
+    }
+
+    /// E-04: re-applies a held recording's Dev-Mode context (project folder,
+    /// agent, agent model) so a resumed generation runs the SAME dev path the
+    /// blocked one did — the dev prompt mode, the managed 2-call dev flow, and
+    /// the agent dispatch tail. A pre-E-04 record or a normal recording carries
+    /// no dev fields → no-op, so the non-dev resume stays byte-identical.
+    private func restoreDevContext(from pending: PendingPaidGeneration) {
+        guard let projectURL = pending.devProjectURL else { return }
+        recordingIsDevMode = true
+        recordingProjectURL = projectURL
+        recordingAgentID = pending.devAgentID
+        recordingAgentModelID = pending.devAgentModelID
     }
 
     /// Below this many non-whitespace characters, the transcript is
@@ -4305,7 +4629,10 @@ final class AppState {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
-             .processingFailed, .artifactUnreadable,
+             .processingFailed, .outputUnreadable,
+             // F-07: a real recording can't exceed the pre-upload fuse, so
+             // tripping it means the pipeline mis-sized something — triage it.
+             .recordingTooLarge,
              .providerError,
              .rateLimited, .providerUnavailable, .responseTooLong:
             return true
@@ -4314,6 +4641,9 @@ final class AppState {
              .displayUnavailable, .displayChanged,
              .recordingTooShort, .diskFull, .noInputCaptured,
              .apiKeyMissing, .apiAuth, .localModelUnavailable, .networkOffline,
+             // J-03: the user's own provider account is out of quota —
+             // user-fixable billing, not a Zerro bug.
+             .providerQuotaExhausted,
              .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
              .trialVerificationRequired, .trialCreditsExhausted:
             return false
@@ -4336,7 +4666,7 @@ final class AppState {
     /// response — transport (`network`), billing/entitlement
     /// (`outOfCredits`/`notEntitled`), contract
     /// (`malformedResponse`/`inputRejected`/`authFailed`), local I/O
-    /// (`artifactUnreadable`), and any non-managed error — so only genuine
+    /// (`outputUnreadable`), and any non-managed error — so only genuine
     /// provider responses carry a `providerStatus`/fingerprint. `body` is
     /// already bounded (≤80, single line) at the throw site; it's a
     /// transport/server message, NEVER content.
@@ -4351,7 +4681,9 @@ final class AppState {
             // Always HTTP 422 (the value-less case predates carrying a status).
             return (422, nil)
         case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .artifactUnreadable:
+             .network, .malformedResponse, .outputUnreadable,
+             // Client-side pre-upload fuse (F-07) — no HTTP response exists.
+             .payloadTooLarge:
             return nil
         }
     }
@@ -4407,8 +4739,10 @@ final class AppState {
                 return "The response was too long and got cut off before it finished."
             case .malformedResponse:
                 return "The generation service returned an unexpected response."
-            case .artifactUnreadable:
+            case .outputUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
+            case .payloadTooLarge:
+                return "The recording exceeds the upload size limit \u{2014} nothing was sent."
             }
         }
         return error.localizedDescription
@@ -4456,6 +4790,9 @@ final class AppState {
             case .missingAPIKey: return .apiKeyMissing
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
+            // J-03: the user's own OpenAI account is out of quota — billing,
+            // not a transient limit; surfaced with its own non-retryable copy.
+            case .quotaExhausted: return .providerQuotaExhausted
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:
@@ -4484,6 +4821,9 @@ final class AppState {
             case .missingAPIKey: return .apiKeyMissing
             case .auth:          return .apiAuth
             case .rateLimited:   return .rateLimited
+            // J-03: the user's own OpenAI account is out of quota — billing,
+            // not a transient limit; surfaced with its own non-retryable copy.
+            case .quotaExhausted: return .providerQuotaExhausted
             case .network(let underlying):
                 return Self.networkClassReason(underlying)
             case .server:
@@ -4565,14 +4905,14 @@ final class AppState {
     ///   • URLError, anything else  → `.providerUnavailable` (transport
     ///     weather between us and the provider; now captured for triage,
     ///     un-fingerprinted on this BYOK path)
-    ///   • not a URLError           → `.artifactUnreadable` (local I/O on
+    ///   • not a URLError           → `.outputUnreadable` (local I/O on
     ///     files Zerro wrote — `Data(contentsOf:)` throws CocoaErrors,
     ///     never URLErrors; captured under its own errorCode)
     ///
     /// Out-of-space never reaches this: `failureReason` checks
     /// `isOutOfSpace` before any typed-error branch.
     private static func networkClassReason(_ underlying: Error) -> RecordingFailureReason {
-        guard underlying is URLError else { return .artifactUnreadable }
+        guard underlying is URLError else { return .outputUnreadable }
         return isOfflineClass(underlying) ? .networkOffline : .providerUnavailable
     }
 

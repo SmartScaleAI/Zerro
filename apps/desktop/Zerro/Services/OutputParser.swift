@@ -1,5 +1,5 @@
 //
-//  ArtifactParser.swift
+//  OutputParser.swift
 //  Zerro
 //
 //  Created by Colin Breeding on 6/11/26.
@@ -13,7 +13,7 @@
 //  KEEP IN SYNC: the JS reference implementation is `parseArtifactResponse`
 //  in `apps/desktop/Scripts/eval-models.mjs`. Both implementations must pass
 //  every case in `apps/desktop/Scripts/artifact-eval/parser-tests.json` —
-//  that file is the contract's executable spec (ArtifactParserTests loads it
+//  that file is the contract's executable spec (OutputParserTests loads it
 //  directly). A behavior change here requires changing the JSON, the JS
 //  reference, and plan §2 together, or not at all.
 //
@@ -28,7 +28,7 @@ import Foundation
 
 /// Pure, stateless parser for the §2 typed-artifact response contract.
 /// `nonisolated` string work only — safe to call from any context.
-enum ArtifactParser {
+enum OutputParser {
 
     // MARK: Contract tokens
 
@@ -67,7 +67,11 @@ enum ArtifactParser {
     /// `scrubFenceTokens` mirror in `eval-models.mjs`.
     private nonisolated static let openFenceToken =
         /<<<ZERRO_ARTIFACT\s+type="[^"]*"\s+title="[^"]*"\s*>+/
-    private nonisolated static let openFenceStraggler = /<<<ZERRO_ARTIFACT[^\n]*/
+    /// J-05: `[^>\n]*` stops at the first chevron and `(?:>+|$)` then consumes
+    /// the closing chevron run — a malformed-but-chevron'd token is removed
+    /// WITHOUT eating the real content after its `>>>`; a chevron-less
+    /// truncated token still matches to end of line via the `$` alternative.
+    private nonisolated static let openFenceStraggler = /<<<ZERRO_ARTIFACT[^>\n]*(?:>+|$)/
     private nonisolated static let closeFenceToken = /<<<END_ZERRO_ARTIFACT>*/
 
     /// Contract cap on the model-written title; over-length warns only.
@@ -78,7 +82,7 @@ enum ArtifactParser {
     /// Parses a raw model response per §2. Never throws; on any malformation
     /// outside the recovery tier the ENTIRE raw output becomes `chatText`
     /// with no artifact and `isValid == false`.
-    nonisolated static func parse(_ raw: String) -> ParsedResponse {
+    nonisolated static func parse(_ raw: String) -> Output {
         var warnings: [String] = []
         // CRLF-normalize then split — equivalent to the JS reference's
         // split(/\r?\n/): \r\n and \n both break lines, a lone \r does not.
@@ -128,14 +132,14 @@ enum ArtifactParser {
             }
         }
 
-        func chatOnly(valid: Bool) -> ParsedResponse {
+        func chatOnly(valid: Bool) -> Output {
             // Built from the sentinel-stripped lines (not `raw`) so the empty-
             // case marker never reaches the UI. Equivalent to the old
             // `raw.trimmed` for every sentinel-free input. Fence tokens are
             // scrubbed as a safety net so a malformed/truncated response (one
             // open fence, no close) can never show the raw `<<<ZERRO_ARTIFACT`
             // wire syntax — a no-op on a genuinely fence-free chat reply.
-            ParsedResponse(
+            Output(
                 chatText: Self.scrubFenceTokens(from: lines.joined(separator: "\n"))
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                 artifact: nil,
@@ -219,7 +223,7 @@ enum ArtifactParser {
         if body.isEmpty { warnings.append("empty artifact body") }
         if !trailing.isEmpty { warnings.append("text after the close fence (contract: chat first, artifact last)") }
 
-        return ParsedResponse(
+        return Output(
             chatText: chatText,
             artifact: Artifact(type: type, rawType: rawType, title: title, body: body),
             isValid: true,

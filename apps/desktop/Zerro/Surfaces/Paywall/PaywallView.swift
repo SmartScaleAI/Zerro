@@ -101,9 +101,11 @@ struct PaywallCopy: Equatable {
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
+    /// Carries the B-07 metering-floor note (the shared CreditDisplay string)
+    /// so the credits-focused paywall states it too.
     static let topup = PaywallCopy(
         headline: "Add Credits",
-        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months.",
+        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months. \(CreditDisplay.minimumChargeNote)",
         windowTitle: "Add Credits"
     )
     /// Entitled user managing their plan — de-emphasize the sell.
@@ -353,6 +355,10 @@ struct PaywallView: View {
 private enum Price {
     // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
     // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
+    // KEEP IN SYNC with the LemonSqueezy variant prices — see the release
+    // checklist in docs/DEPLOY-RUNBOOK.md §5 (E-05). The Managed card
+    // subtitle's "$12/mo if you choose yearly billing" repeats the yearly
+    // number in prose and must move with it.
     static let byok = "$69 one-time"
     static let managedMonthly = "$15/mo"
     static let managedYearly = "$144/yr"
@@ -511,7 +517,14 @@ private struct BuyOnceCard: View {
 
             Spacer(minLength: VFSpacing.xs)
 
-            OnboardingPrimaryButton("Get a license", action: openCheckout)
+            // E-06: softens to disabled while the checkout URL is still a
+            // placeholder (mirrors the top-up card) — no enabled-looking
+            // button that dead-clicks into the placeholder log below.
+            OnboardingPrimaryButton(
+                "Get a license",
+                isEnabled: BillingLinks.byokCheckoutURL != nil,
+                action: openCheckout
+            )
         }
     }
 
@@ -571,7 +584,14 @@ private struct SubscriptionOptionCard: View {
 
             Spacer(minLength: VFSpacing.xs)
 
-            OnboardingPrimaryButton("Subscribe to \(title)", tint: .vfDevAccent, action: openCheckout)
+            // E-06: softens to disabled while the checkout URL is still a
+            // placeholder (mirrors the top-up card) — no dead clicks.
+            OnboardingPrimaryButton(
+                "Subscribe to \(title)",
+                isEnabled: BillingLinks.subscriptionCheckoutURL() != nil,
+                tint: .vfDevAccent,
+                action: openCheckout
+            )
         }
     }
 

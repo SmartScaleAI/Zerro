@@ -133,13 +133,13 @@ final class AreaSelectorToolbarLayoutTests: XCTestCase {
     // MARK: - Mode switch segments
 
     func testModeSegmentsTileTheSwitchExactly() {
-        let artifact = AreaSelectorView.modeArtifactSegmentFrame(forSelection: selection, in: bounds)
+        let ask = AreaSelectorView.modeAskSegmentFrame(forSelection: selection, in: bounds)
         let dev = AreaSelectorView.modeDevSegmentFrame(forSelection: selection, in: bounds)
-        XCTAssertEqual(artifact.minX, modeSwitch.minX, accuracy: 0.001)
-        XCTAssertEqual(artifact.maxX, dev.minX, accuracy: 0.001, "segments share a seam")
+        XCTAssertEqual(ask.minX, modeSwitch.minX, accuracy: 0.001)
+        XCTAssertEqual(ask.maxX, dev.minX, accuracy: 0.001, "segments share a seam")
         XCTAssertEqual(dev.maxX, modeSwitch.maxX, accuracy: 0.001)
-        XCTAssertEqual(artifact.width, dev.width, accuracy: 0.001, "segments are equal halves")
-        XCTAssertFalse(artifact.intersects(dev))
+        XCTAssertEqual(ask.width, dev.width, accuracy: 0.001, "segments are equal halves")
+        XCTAssertFalse(ask.intersects(dev))
     }
 
     // MARK: - Model dropdown geometry

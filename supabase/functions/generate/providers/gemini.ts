@@ -147,15 +147,21 @@ export class GeminiChatClient implements ChatClient {
       );
     }
 
-    const usage = json?.usageMetadata ?? {};
+    // A missing usageMetadata block means the token counts are UNKNOWN (B-06):
+    // report null, not 0, so the cost math falls back to fallbackCredits
+    // upstream. A real generation always carries usage; this only fires when
+    // it's absent. (thoughtsTokenCount stays per-field `?? 0` when the block IS
+    // present — it's an optional additive sub-field, absent when thinking is off.)
+    const usage = json?.usageMetadata;
     // thoughtsTokenCount is billed at the output rate — fold it into outputTokens
     // so cost logging matches the bill.
-    const outputTokens = Number(usage.candidatesTokenCount ?? 0) +
-      Number(usage.thoughtsTokenCount ?? 0);
+    const outputTokens = usage
+      ? Number(usage.candidatesTokenCount ?? 0) + Number(usage.thoughtsTokenCount ?? 0)
+      : null;
     return {
       provider: "gemini",
       content: text,
-      inputTokens: Number(usage.promptTokenCount ?? 0),
+      inputTokens: usage ? Number(usage.promptTokenCount ?? 0) : null,
       outputTokens,
       model: String(json?.modelVersion ?? this.chatModel),
     };

@@ -159,6 +159,29 @@ enum LocalhostPortResolver {
         return nil
     }
 
+    /// Whether an auto-matched project folder is still safe to ADOPT (G-06): the
+    /// path exists, is a directory, and carries the primary marker (`.git` — a
+    /// dir normally, a FILE for worktrees/submodules, so the marker check is a
+    /// plain existence test). Guards the adoption site against a learned
+    /// `devProjectByPort` entry pointing at a deleted/moved folder — a stale
+    /// path must fall back to manual selection, never be silently adopted.
+    ///
+    /// Pure: `directoryExists`/`fileExists` are injected so it's unit-tested
+    /// over fixture path sets without touching the filesystem.
+    static func isValidProjectFolder(
+        _ folder: URL,
+        directoryExists: (String) -> Bool = { path in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        },
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> Bool {
+        let path = normalize(folder.path)
+        guard path.hasPrefix("/") else { return false }
+        return directoryExists(path) && fileExists(path + "/" + primaryMarker)
+    }
+
     /// Strip trailing slashes (except the root `/`) so path comparisons against
     /// `home` and the parent-walk terminator are exact.
     static func normalize(_ path: String) -> String {

@@ -20,8 +20,12 @@
 //      the last process output; after `DevRunTimeouts.stall` seconds of silence it
 //      fires `onStall(true)` ONCE so the UI can ask the user whether to keep
 //      waiting — the process is left running underneath. The next output fires
-//      `onStall(false)`. The ONLY thing that terminates the agent is an explicit
-//      `cancel()` (the user's Kill/Cancel, or app quit).
+//      `onStall(false)`. The ONLY things that terminate the agent are an explicit
+//      `cancel()` (the user's Kill/Cancel — graceful group SIGTERM → grace →
+//      group SIGKILL) and `terminateNow()` (app quit — synchronous group SIGKILL).
+//      Both signal the agent's whole PROCESS GROUP, not just its pid, so the
+//      children it spawned (node workers, npm, git, build/test commands) die with
+//      it instead of orphaning (G-02).
 //    • Non-zero exit → `.failed(.nonZeroExit)`; clean exit → `.succeeded`.
 //    • Concurrency: at most one run at a time (§9); a second is rejected
 //      `.failed(.busy)`.
@@ -227,14 +231,30 @@ protocol DevAgentRunner: AnyObject, Sendable {
         onStall: @escaping @Sendable (Bool) -> Void
     ) async -> DevRunResult
 
-    /// Terminate the in-flight run (SIGTERM, then SIGKILL after the grace) so
-    /// the agent stops editing immediately. A no-op when nothing is running.
+    /// Terminate the in-flight run (SIGTERM to the agent's process group, then
+    /// SIGKILL to the group after the grace) so the agent — and every child it
+    /// spawned — stops editing immediately. A no-op when nothing is running.
     /// The pending `run(...)` resolves `.failed(.cancelled)`. Safe to call from
-    /// any thread. THE ONLY termination path (the stall watchdog never calls it).
+    /// any thread. The user-Cancel termination path (the stall watchdog never
+    /// calls it); app quit uses `terminateNow()`.
     func cancel()
+
+    /// Quit-path terminate (G-02): SIGKILL the in-flight run's whole process
+    /// group INLINE, before returning. `applicationShouldTerminate` answers
+    /// `.terminateNow` immediately after the teardown hook, so an async
+    /// terminate (like `cancel()`'s queue hop) may never run before the app
+    /// exits — this one must have SENT the signal by the time it returns. No
+    /// SIGTERM, no grace: quit is terminal, and the call must not hang quit.
+    /// A no-op when nothing is running. Safe to call from any thread.
+    func terminateNow()
 }
 
 extension DevAgentRunner {
+    /// Default for conformers whose `cancel()` is already synchronous and
+    /// process-free (test fakes): quit-terminate degrades to cancel. The real
+    /// runner overrides this with the inline group SIGKILL.
+    func terminateNow() { cancel() }
+
     /// Convenience: default timeouts, no model, no stall handler (the agent's own
     /// default model — used by simple test paths).
     func run(
@@ -359,6 +379,13 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
         var argv = entry.arguments(tier: tier, model: model)
         let deliverPromptViaStdin = entry.promptDelivery == .stdin
         if entry.promptDelivery == .argument {
+            // G-05: end-of-options separator — a prompt starting with '-'/'--'
+            // (or matching a subcommand like codex exec's `resume`) is the
+            // positional prompt, never parsed as a flag. Live-verified on both
+            // .argument CLIs (codex exec 0.140.0, cursor-agent 2026.06.24):
+            // `-- --version` runs as prompt TEXT, while without `--` the same
+            // string is consumed as a flag.
+            argv.append("--")
             argv.append(prompt)
         }
 
@@ -499,10 +526,21 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
 
     /// Terminate any in-flight execution. Forwarded onto the runner's serial
     /// queue so it can't race the spawn/finish bookkeeping; the active
-    /// execution (if any) runs the same SIGTERM→SIGKILL teardown the timeouts
-    /// use and resolves `.failed(.cancelled)`.
+    /// execution (if any) runs the graceful group SIGTERM→grace→SIGKILL
+    /// teardown and resolves `.failed(.cancelled)`.
     nonisolated func cancel() {
         queue.async { [weak self] in self?.activeExecution?.cancel() }
+    }
+
+    /// Quit-path terminate (G-02): SIGKILL the in-flight agent's whole process
+    /// group inline. `queue.sync` (not async) is the point — the caller is
+    /// `prepareForTermination`, and the app exits the moment it returns, so an
+    /// async hop would leave the agent tree running as orphans. The hop can't
+    /// hang quit: the queue only ever runs short, non-blocking work (line
+    /// parsing, signal sends, the post-exit pipe drain), and `kill(2)` returns
+    /// immediately.
+    nonisolated func terminateNow() {
+        queue.sync { activeExecution?.killNow() }
     }
 
     /// Testing seam for the `stream-json` event parser (the parser lives on the
@@ -598,6 +636,16 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
     /// Set when the run was terminated by the user (Cancel / Kill / quit) so
     /// `handleTermination` resolves `.cancelled` rather than an exit code.
     nonisolated(unsafe) private var cancelled = false
+    /// The agent's process-group id when it leads its own group, else -1. On
+    /// macOS, `Process` (NSTask) spawns the child as a NEW group leader
+    /// (posix_spawn + POSIX_SPAWN_SETPGROUP), the §5c sandbox-exec wrapper
+    /// exec-replaces into the agent at the same pid/pgid, and the agent's
+    /// descendants inherit the group — so signaling `-processGroupID` reaps the
+    /// whole tree (G-02). VERIFIED at spawn via `getpgid` rather than assumed:
+    /// `setpgid` from the parent is impossible post-exec (EACCES), and if the
+    /// child ever shared OUR group, a group signal would hit Zerro itself — the
+    /// -1 fallback then signals just the pid.
+    nonisolated(unsafe) private var processGroupID: pid_t = -1
     /// Whether the stall threshold has been crossed and not yet cleared by new
     /// output — gates `onStall(true)` to fire exactly once per stall window.
     nonisolated(unsafe) private var stalled = false
@@ -669,6 +717,12 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
 
     nonisolated private func startOnQueue(completion: @escaping (DevRunResult) -> Void) {
         self.completion = completion
+        // A cancel/quit that landed on the queue BEFORE the spawn: don't launch a
+        // process nobody will reap — resolve `.cancelled` without running.
+        if cancelled {
+            finish(.failed(.cancelled))
+            return
+        }
         lastActivity = Date()
 
         process.terminationHandler = { [weak self] proc in
@@ -693,6 +747,14 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         } catch {
             finish(.failed(.spawnFailed(String(describing: error))))
             return
+        }
+
+        // Confirm the child leads its own process group (see `processGroupID`).
+        // Terminate paths signal the GROUP so the agent's children die with it.
+        let pid = process.processIdentifier
+        processGroupID = (pid > 0 && getpgid(pid) == pid) ? pid : -1
+        if processGroupID <= 0 {
+            Log.dev.error("Dev agent did not lead its own process group — terminate will signal the pid only, children may orphan")
         }
 
         // Deliver the prompt on stdin and close it (the defensive hang guard —
@@ -748,10 +810,11 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         emitStall(false)
     }
 
-    /// User-initiated cancel — the SOLE termination path (the stall watchdog never
-    /// calls this). Flagged `cancelled` so termination resolves `.cancelled`. Runs
-    /// on the serial `queue` (the runner forwards it there). A no-op once finished
-    /// or already tearing down — so a cancel that races a normal exit is harmless.
+    /// User-initiated cancel — the graceful termination path (the stall watchdog
+    /// never calls this; app quit uses `killNow`). Flagged `cancelled` so
+    /// termination resolves `.cancelled`. Runs on the serial `queue` (the runner
+    /// forwards it there). A no-op once finished or already tearing down — so a
+    /// cancel that races a normal exit is harmless.
     nonisolated func cancel() {
         guard !finished, !cancelled else { return }
         cancelled = true
@@ -759,15 +822,50 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         terminateWithGrace()
     }
 
-    /// SIGTERM now, SIGKILL after the grace if it hasn't exited. The cancel path
-    /// only (no timeout path exists).
+    /// Quit-path kill (G-02): SIGKILL the whole process group NOW, inline on the
+    /// caller's thread — the app is about to exit, so the SIGTERM→grace shape (an
+    /// async hop that would never run) is skipped. Reached via the runner's
+    /// `queue.sync` hop, so the queue-guarded state is safe to touch. Marks the
+    /// run cancelled so a termination handler that still gets to fire resolves
+    /// `.cancelled`; if the app exits first, the group is dead regardless — the
+    /// point.
+    nonisolated func killNow() {
+        guard !finished else { return }
+        cancelled = true
+        Log.dev.notice("Dev agent killed for app termination")
+        signalProcessTree(SIGKILL)
+    }
+
+    /// Group SIGTERM now, group SIGKILL after the grace. The user-Cancel path
+    /// only (quit uses `killNow`; no timeout path exists).
     nonisolated private func terminateWithGrace() {
-        // `process.terminate()` throws if the process never started; guard on
-        // isRunning so a cancel during spawn is a safe no-op.
-        if process.isRunning { process.terminate() } // SIGTERM
+        signalProcessTree(SIGTERM)
+        // Capture the group id, not just self: the SIGKILL must fire even after
+        // the leader exits on the SIGTERM (which resolves the run and drops the
+        // runner's strong reference) — a SIGTERM-ignoring descendant keeps the
+        // group open and still needs reaping. Idempotent: an empty group is ESRCH.
+        let group = processGroupID
         queue.asyncAfter(deadline: .now() + timeouts.killGrace) { [weak self] in
-            guard let self, !self.finished, self.process.isRunning else { return }
-            _ = kill(self.process.processIdentifier, SIGKILL)
+            if group > 0 {
+                _ = kill(-group, SIGKILL)
+            } else if let self, !self.finished, self.process.isRunning {
+                // No confirmed group: same single-pid fallback as the SIGTERM,
+                // gated on isRunning so a reused pid can't be hit.
+                _ = kill(self.process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
+    /// Signal the agent AND every descendant in one shot: `kill(-pgid)` reaches
+    /// the whole process group — including under the §5c sandbox-exec wrapper
+    /// (same pid/pgid across its exec) and after the leader itself has exited.
+    /// Without a confirmed group (shouldn't happen — see `processGroupID`), fall
+    /// back to the single pid: signaling a group we might share would hit Zerro.
+    nonisolated private func signalProcessTree(_ signal: Int32) {
+        if processGroupID > 0 {
+            _ = kill(-processGroupID, signal)
+        } else if process.isRunning {
+            _ = kill(process.processIdentifier, signal)
         }
     }
 

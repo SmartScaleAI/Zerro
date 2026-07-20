@@ -50,7 +50,7 @@ accept as immediate post-launch.**
 | A-15 | Rate limiter: sliding window + alert on the fail-open path. |
 | A-03 | Derive webhook event name from the signed body, not the `X-Event-Name` header. |
 | A-14 | pg_cron sweep for `webhook_events` / `rate_limits` growth. |
-| D-03 | Move `pg_net` out of the `public` schema. |
+| D-03 | Move `pg_net` out of the `public` schema. **ACCEPTED / won't-fix (2026-07-08):** non-relocatable + objects already in the `net` schema (not `public`), so the `extension_in_public` lint is cosmetic; the only fix is a risky drop/recreate of managed infra. See PRE_RELEASE_REVIEW_LOG.md. |
 | E-03 | Keychain `…ThisDeviceOnly` for the trial slots specifically. |
 | E-08 | Log `url.host`/scheme (not full `absoluteString`) — also flows into the diagnostics blob. |
 | I-03 | Defer anonymous launch telemetry until after consent (or disclose default-on). |
@@ -97,7 +97,7 @@ accept as immediate post-launch.**
 | A-13 | Optional JWT `jti`/iat-sanity anti-replay. |
 | B-06 | Report missing usage as null (not `?? 0`) so `fallbackCredits` fires. |
 | C-09 | Make `incrementCodeAttempts` atomic. |
-| D-05 | Re-check the 4 unused indexes before dropping. |
+| D-05 | Re-check the 4 unused indexes before dropping. *Rechecked 2026-07 — deferred, NO drop: every public table is still near-zero scale (0–143 rows), so `idx_scan` counts aren't meaningful (Postgres seq-scans tiny tables regardless of indexes). Indexes retained for scale; re-evaluate once production tables carry real row counts.* |
 | K-05 | Clamp the affiliate beacon `aff` value (length/charset). |
 | K-07 | Fix the `/Zerro.dmg` redirect doc comment. |
 | L-06 | `cut-release.sh` should emit `app-v*` tags (not the no-op `v*`). |

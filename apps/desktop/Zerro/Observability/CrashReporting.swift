@@ -133,7 +133,10 @@ enum CrashReporting {
         "providerMessage"       // short (≤80, scrubbed) server error message
     ]
 
-    private static func scrubContext(_ ctx: [String: String]) -> [String: String] {
+    // `scrubContext` / `looksLikeSecret` are internal (not private) so the
+    // I-08 privacy-contract tests can pin the allowlist + shape gates without
+    // touching the PostHog singleton. Still no callers outside this file.
+    static func scrubContext(_ ctx: [String: String]) -> [String: String] {
         var out: [String: String] = [:]
         for (key, value) in ctx {
             guard allowedContextKeys.contains(key) else { continue }
@@ -143,7 +146,7 @@ enum CrashReporting {
         return out
     }
 
-    private static func looksLikeSecret(_ s: String) -> Bool {
+    static func looksLikeSecret(_ s: String) -> Bool {
         if s.hasPrefix("sk-") { return true }
         if s.count >= 32 && s.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
             return true

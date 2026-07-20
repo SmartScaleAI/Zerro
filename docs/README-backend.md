@@ -33,7 +33,7 @@ and `Documents/zerro-billing-implementation-plan.md` (Phase D).
 
 ```
 supabase/
-  config.toml                         # verify_jwt=false for all 3 functions (see notes)
+  config.toml                         # verify_jwt=false for all 11 functions (see notes)
   migrations/
     20260601120000_billing_schema.sql        # tables + consume_credit() + check_rate_limit()
     20260601120100_billing_rls.sql           # RLS deny-by-default on every table
@@ -76,6 +76,8 @@ supabase/
                                       #   prompt.ts (byte-mirror of Scripts/artifact-eval/
                                       #   convert-prompt-v1.md, enforced by prompt_test.ts),
                                       #   config.ts (+ handler_test.ts)
+    feedback/                         # in-app feedback/issue reports → Slack relay (public,
+                                      #   validated + length-capped in code; SLACK_WEBHOOK_URL secret)
     refresh-agent-models/             # Dev Mode manifest WRITER (daily cron + manual w/ secret):
                                       #   fetch live Anthropic model list → curate (regex) → rank
                                       #   newest-first → upsert → vanished→inactive sweep. Never
@@ -85,6 +87,11 @@ supabase/
     agent-models/                     # Dev Mode manifest READER: public GET, active rows grouped
                                       #   by provider, ordered by rank, 1h Cache-Control. No auth.
                                       #   group.ts, index.ts (+ group_test.ts)
+    affiliate/                        # affiliate click/attribution endpoint (public; website posts
+                                      #   ?aff clicks, app matches by salted-hashed IP before checkout)
+    release-upload-url/               # L-01: mints a path-scoped signed upload URL for the release
+                                      #   DMGs so CI holds no service-role key (x-release-secret gate
+                                      #   + strict Zerro(-<build>)?.dmg allow-list; validate_test.ts)
   test/run-curl-tests.sh              # post-deploy verification battery
 README-backend.md                     # this file
 ```
@@ -97,8 +104,9 @@ event), `generation_log` (D2/F writes it; carries `model`/`provider` columns —
 non-content metadata), `rate_limits` (basic limiter), `generation_slots` (D2
 concurrency cap), `trial_generation_slots` (F trial concurrency cap),
 `idempotency_cache` (M1: one charge per recording across retries, incl. the
-exact `credits_charged`). License keys **and** verification codes are stored
-only as a **SHA-256 hash** — never raw.
+exact `credits_charged`), `credit_holds` (X-02: the Dev-Mode call-1
+authorization holds — see "Dev Mode deposit-and-settle" below). License keys
+**and** verification codes are stored only as a **SHA-256 hash** — never raw.
 
 **Atomic credit primitive:** `consume_credit(subscription_id, credits)` —
 spends the model's variable credit price atomically across the TWO buckets:
@@ -127,7 +135,9 @@ the runtime — do NOT set them yourself.**
 | `SESSION_JWT_SECRET` | ✅ | HS256 signing secret for the short-lived session tokens. Generate a long random string (`openssl rand -hex 32`). |
 | `AFFILIATE_IP_SALT` | ✅ (for `affiliate`) | Secret salt mixed into the IP hash the `affiliate` function stores (`sha256(salt‖ip)`), so the raw visitor IP is never persisted. Generate a long random string (`openssl rand -hex 32`) and **never rotate it casually** — changing it orphans all unconverted clicks (their hashes stop matching). Required by the `affiliate` function; unset → the function 500s. |
 | `AFFILIATE_MATCH_WINDOW_HOURS` | optional | How long after a click a purchase can still be attributed by IP match (default `720` = 30 days). Lower = fewer false matches on shared networks; higher = catches more delayed conversions. |
+| `AFFILIATE_RATE_LIMIT_PER_IP` / `AFFILIATE_RATE_LIMIT_WINDOW_SECONDS` | optional | **C-08** per-IP `affiliate` POST throttle (defaults `20` per `3600`s, reusing `check_rate_limit`). Defense-in-depth behind the unique(`ip_hash`) upsert; over the cap the POST still answers `{ ok: true }` (record is best-effort — the throttle never surfaces to the landing page). **Fails OPEN on limiter error** — the endpoint spends no money/email and the GET already fails soft, so a broken limiter must not break landing-page recording. |
 | `LEMONSQUEEZY_WEBHOOK_SECRET` | ✅ | The signing secret you enter when creating the webhook in LemonSqueezy. The webhook verifies `X-Signature` against it. |
+| `RELEASE_UPLOAD_SECRET` | ⚠️ **L-01** | Shared secret guarding `release-upload-url` (constant-time compare of the `x-release-secret` header). Set it as an Edge secret AND the SAME value as a GitHub Actions repo secret so the release workflow can request DMG upload URLs without any Supabase key. Generate: `openssl rand -hex 32`. Required before the release-app.yml upload step is swapped (see "Release DMG upload (L-01)" below). Unset → the function 500s. |
 | `LEMONSQUEEZY_API_KEY` | ⚠️ **G** | A LemonSqueezy **API key** (Settings → API), distinct from the webhook secret. Powers the §14.6 **missed-webhook staleness re-check** in `session`: when the mirror is stale, `session` calls `GET /v1/subscriptions/{id}` to confirm the sub is still live before minting. **Unset → the guard is disabled and `session` fails OPEN** (logged); set it before launch so a dropped `cancelled` webhook can't keep minting tokens forever. |
 | `SESSION_STALENESS_SECONDS` | optional | How stale the mirror may be before `session` does the live re-check (default = `SESSION_TOKEN_TTL_SECONDS`). |
 | `LEMONSQUEEZY_API_BASE` | optional | Override of the LS API base URL (default `https://api.lemonsqueezy.com/v1`). Only for testing against a stub; never set in prod. |
@@ -151,10 +161,12 @@ the runtime — do NOT set them yourself.**
 | `CHAT_PROVIDER` | optional, legacy | Pre-multi-model default-provider knob (`openai` default / `gemini` / `anthropic`). Since the model registry (Phase 4), **the model is selected per request** and routing ignores this; its remaining effect is which chat key is hard-required at boot. Leave at the default. |
 | `CHAT_MODEL` | optional, legacy | Pre-multi-model default model (default `gpt-4o`). **No longer routes Managed generations** — a request without `model` runs the registry's recommended entry (`gemini-3.5-flash`), see "Model registry" below. |
 | `GEMINI_THINKING_LEVEL` | optional | Gemini thinking depth — `low` (default) or `high`. Applies to Gemini-model generations. `high` adds latency + billed thinking (output) tokens; the rewrite task rarely needs it. |
-| `GENERATE_MAX_AUDIO_SECONDS` / `_MAX_AUDIO_BYTES` / `_MAX_FRAMES` / `_MAX_PAYLOAD_BYTES` | optional | Input fuse (defaults `300`s / `2`MB / `200` / `60`MB). `_MAX_AUDIO_BYTES` is now LOAD-BEARING — it's the pre-Whisper bound on a single (free) Dev-Mode transcription (B-03), sized to a real 3-min 64 kbps recording (≈1.44 MB) + headroom; enforced on both the transcribe and main-generate paths before any Whisper call. The others are generous fuses; lower against measured cost. |
+| `GENERATE_MAX_AUDIO_SECONDS` / `_MAX_AUDIO_BYTES` / `_MAX_FRAMES` / `_MAX_PAYLOAD_BYTES` | optional | Input fuse (defaults `300`s / `2`MB / `200` / `60`MB). `_MAX_AUDIO_BYTES` is LOAD-BEARING — it's the pre-Whisper bound on a single Dev-Mode transcription (B-03; the call is un-charged but X-02 gates it on a 1-credit hold), sized to a real 3-min 64 kbps recording (≈1.44 MB) + headroom; enforced on both the transcribe and main-generate paths before any Whisper call. The others are generous fuses; lower against measured cost. |
 | `GENERATE_MAX_OCR_TEXT_CHARS` / `_MAX_CLICKS` / `_MAX_CLICK_LABEL_CHARS` | optional | Phase 3 input fuse for the context channels: per-frame `ocr_text` cap (default `8192` chars) and click-event caps (defaults `200` clicks / `200` chars per label). Same posture as the other fuses — generous, reject only forged/bloated payloads. |
 | `GENERATE_IDEMPOTENCY_TTL_SECONDS` | optional | How long a completed generation's response (incl. `credits_charged`) is replayable from `idempotency_cache` for the same idempotency key (default `900`). Covers app-side retries of an already-charged recording without double-charging. |
 | `GENERATE_CIRCUIT_BREAKER_MULTIPLIER` | optional | Anti-abuse circuit breaker (default `3`): when a single generation's real estimated cost exceeds `multiplier × model price` (in dollars), the metered amount is charged instead of the fixed price. Normal users never trigger it. |
+| `GENERATE_HOLD_TTL_SECONDS` | optional | **X-02** lifetime of the Dev-Mode call-1 credit hold (default `600` = 10 min). Sized to outlive the call-1 → call-2 gap (client anchor resolution + the 180s request timeout + one user-driven retry). An abandoned hold stops reducing the spendable balance the instant it expires; the `credit-holds-prune` cron deletes the rows. |
+| `GENERATE_DEV_HOLD_CREDITS` | optional | **X-02** credits reserved by a Dev-Mode call 1 (default `1` — the same floor the paired generation is gated on). The hold is a reservation, never a charge; call 2 settles the real metered cost. |
 | `GENERATE_SLOT_STALE_SECONDS` | optional | Concurrency-slot stale-reclaim window (default `180`s; must exceed worst-case provider round-trip). |
 | `GENERATE_RATE_LIMIT_PER_SUB` / `_WINDOW_SECONDS` | optional | Per-subscriber `generate` rate limit (defaults `20` per `60`s). |
 | `GENERATE_PROVIDER_TIMEOUT_MS` | optional | Provider request timeout (default `120000`). Falls back to the legacy `GENERATE_OPENAI_TIMEOUT_MS` if the new var is unset, so a tuned deployment keeps its value. |
@@ -167,7 +179,10 @@ the runtime — do NOT set them yourself.**
 | `TRIAL_CODE_MAX_ATTEMPTS` | optional | Max verify tries per issued code before it's burned (default `5`). |
 | `TRIAL_TOKEN_TTL_SECONDS` | optional | Trial session-token lifetime (default `1800` = 30 min). |
 | `TRIAL_RATE_LIMIT_PER_EMAIL` / `_PER_IP` / `_WINDOW_SECONDS` | optional | `trial-start` rate limits (defaults `8` / `30` per `3600`s). |
+| `TRIAL_SEND_LIMIT_PER_EMAIL` / `TRIAL_SEND_WINDOW_SECONDS` | optional | **C-05** per-email **send sub-limit** (defaults `5` per `86400`s = 1 day): a second, tighter counter consumed only when a verification email is actually about to be sent, so a code-request loop can't email-bomb one inbox (the request limits above are shared with verify/resume and sized looser). Past the cap the request still returns the uniform `code_sent` — revealing the throttle would re-open the enumeration oracle — but no mail goes out. |
 | `TRIAL_DEVICE_BINDING_ENABLED` | optional | Trial device binding kill switch (default `true`). The app sends a SHA-256 hash of a hardware UUID (`device_id_hash`); a second grant from a Mac that already trialed is hard-blocked regardless of email (`verify_trial_grant` + the partial unique index on `device_id_hash`). Set `false` to disable the cap (degrade to the email-only cap) without an app release if it misfires. The raw UUID never leaves the device; the DB holds only the hash. |
+| `SLACK_WEBHOOK_URL` | ✅ (for `feedback`) | Slack Incoming Webhook the `feedback` function relays in-app reports to. Server-held only — never echoed to the client or logged. Unset → `feedback` 500s. |
+| `FEEDBACK_RATE_LIMIT_PER_IP` / `_WINDOW_SECONDS` | optional | Per-IP `feedback` rate limit (defaults `5` per `3600`s, reusing `check_rate_limit`). The endpoint is unauthenticated, so this is the only quantitative bound on Slack relay spam; **limiter errors fail closed** (reject with 429, never fall open into an unbounded relay). |
 | `REFRESH_CRON_SECRET` | ✅ **Dev Mode manifest** | Shared secret guarding `refresh-agent-models`. The function rejects any POST whose `x-refresh-secret` header ≠ this value (constant-time). Set it as an Edge secret **and** seed the SAME value into Vault as `refresh_cron_secret` so the daily cron can read it (see "Dev Mode model manifest" below). Generate: `openssl rand -hex 32`. The `agent-models` read function needs no secret (public). `refresh-agent-models` reuses the existing `ANTHROPIC_API_KEY` to fetch the Anthropic model list (OpenAI is retired — Codex sources its own per-account list client-side). |
 
 ---
@@ -204,7 +219,7 @@ supabase secrets set AFFILIATE_IP_SALT="$(openssl rand -hex 32)"  # affiliate �
 # Phase 5: supabase secrets set LS_VARIANT_YEARLY="<yearly-id>" \
 #          LS_VARIANT_TOPUP_BOOST="<boost-variant-id>" LS_VARIANT_TOPUP_POWER="<power-variant-id>"
 
-# 3. Deploy the six functions. --no-verify-jwt is REQUIRED on all six
+# 3. Deploy the eleven functions. --no-verify-jwt is REQUIRED on all eleven
 #    (see "Why --no-verify-jwt" below). config.toml already encodes this, but
 #    pass the flag explicitly so a config drift can't silently re-enable the
 #    gateway JWT gate.
@@ -214,12 +229,17 @@ supabase functions deploy entitlement          --no-verify-jwt
 supabase functions deploy generate            --no-verify-jwt
 supabase functions deploy trial-start         --no-verify-jwt
 supabase functions deploy convert             --no-verify-jwt
+# In-app feedback relay (needs the SLACK_WEBHOOK_URL secret set):
+supabase functions deploy feedback            --no-verify-jwt
 # Dev Mode model manifest (see "Dev Mode model manifest" below):
 supabase functions deploy refresh-agent-models --no-verify-jwt
 supabase functions deploy agent-models         --no-verify-jwt
 # Affiliate attribution (needs AFFILIATE_IP_SALT set above + the
 # 20260622120000_affiliate_referrals.sql migration applied):
 supabase functions deploy affiliate            --no-verify-jwt
+# Release DMG signed-upload minting (L-01; needs RELEASE_UPLOAD_SECRET set —
+# see "Release DMG upload (L-01)" below for the full owner sequence):
+supabase functions deploy release-upload-url   --no-verify-jwt
 ```
 
 **Phase F also needs a verified sender domain in Resend** (`getzerro.app`, or
@@ -244,6 +264,16 @@ for different reasons:
   mid-trial with no credential yet. Security is the per-email/per-IP rate limit +
   a hashed, TTL'd, attempt-limited code + a disposable-domain block + the
   one-grant-per-email cap, all in code.
+- **feedback** — an **unauthenticated public** endpoint, exactly like
+  `trial-start`: the in-app feedback dialog must work signed-out, so there is no
+  Supabase JWT to verify. Security is in code — a kind allow-list + trimmed,
+  length-capped fields — and the only side effect is a POST to the server-held
+  `SLACK_WEBHOOK_URL` secret (never echoed or logged).
+- **affiliate** — a **public** attribution endpoint with no Supabase JWT at
+  either call site (the website posts `?aff` click codes; the app fetches the
+  code matched to its own public IP just before checkout). Protection is in
+  code: matching is keyed on the caller's OWN public IP (unforgeable for another
+  visitor) and IPs are stored only as salted hashes (`AFFILIATE_IP_SALT`).
 - **refresh-agent-models** (Dev Mode manifest) — the caller is the daily pg_cron
   job (server-side `net.http_post`), not an app with a Supabase JWT. Security is
   the shared `REFRESH_CRON_SECRET` checked in code against the `x-refresh-secret`
@@ -251,6 +281,74 @@ for different reasons:
 - **agent-models** (Dev Mode manifest) — a **public** read of public model ids
   (no credential, no user data). The app reads it at launch with no session, so
   there is nothing to verify; the write path stays service-role-only via RLS.
+- **release-upload-url** (L-01) — the caller is GitHub Actions, which holds no
+  Supabase JWT (that's the point: CI holds no Supabase key at all). Security is
+  the shared `RELEASE_UPLOAD_SECRET` checked in code (constant-time) against the
+  `x-release-secret` header, plus the strict `Zerro(-<build>)?.dmg` object-name
+  allow-list; the gateway gate is off so that header reaches our code.
+
+---
+
+## Rollback
+
+There is no one-button rollback; each layer reverts differently. **The database
+is the paid-state source of truth** (spend lives in `usage_periods` /
+`trial_grants` / `topup_credits` / `idempotency_cache`) — treat it with the
+most care.
+
+### Edge functions — redeploy the prior revision's code
+
+Rolling a function back = deploying the code from the last good git revision:
+
+```bash
+# Restore the function's source from the last good revision, then redeploy.
+git checkout <prev-good-sha> -- supabase/functions/<name>
+supabase functions deploy <name> --no-verify-jwt
+
+# If _shared/ changed in the bad deploy too, restore it alongside (every
+# function bundles _shared/ at deploy time):
+git checkout <prev-good-sha> -- supabase/functions/_shared supabase/functions/<name>
+```
+
+Afterwards land the revert in git properly (a `git revert` PR) — otherwise the
+next routine deploy silently re-ships the bad code your working-tree checkout
+just rolled back.
+
+### Migrations — forward-only (compensate, never delete)
+
+Never roll back by deleting or editing an applied migration file: prod's
+migration history (and every preview/shadow replay) already recorded it, and
+removing the file only makes the histories diverge. Undo a bad migration with
+a **new compensating migration** — drop what it added, restore the prior
+function/trigger definition — and push that forward through the normal deploy.
+
+Emergency only (data corruption, not just bad DDL): restore from PITR/backup
+(Dashboard → Database → Backups). Because the DB is the source of truth for
+paid state, a point-in-time restore **rewinds real spend and entitlement
+mirrors** — restore to the newest safe instant, expect to reconcile credits
+spent/webhooks received after that instant, and prefer a compensating
+migration whenever the damage is schema-level rather than data-level.
+
+### Secrets — re-set the prior value
+
+```bash
+supabase secrets set NAME="<previous value>"
+```
+
+Takes effect on new invocations shortly after (no redeploy needed); verify
+with a probe request. A secret shared with a third party
+(`LEMONSQUEEZY_WEBHOOK_SECRET`, `REFRESH_CRON_SECRET`'s Vault copy) must be
+reverted on **both** sides or the pair stops matching.
+
+### Partial deploys — reconcile both layers
+
+A release is not atomic across layers: `supabase db push` may have applied a
+migration even though the function deploy that followed failed (or vice
+versa). After any failed deploy, check BOTH sides — `supabase migration list`
+for what actually applied, and the dashboard's function versions for what's
+live — then reconcile with a compensating migration plus a redeploy of the
+prior function code (above). Never hand-edit prod schema to "match" the old
+function.
 
 ---
 
@@ -475,6 +573,35 @@ emits provider-neutral `TimelineBlock`s; each adapter (`providers/openai.ts`,
 The Swift BYOK path routes across the same three providers since Phase 6,
 key-gated per provider in the app.
 
+**Dev Mode deposit-and-settle (X-02).** Dev Mode is two calls sharing one
+recording: call 1 (`mode:"dev_transcribe"`) returns the word-level transcript
+the client resolves deixis anchors against; call 2 (the normal generate with
+`mode:"dev"` + the pre-supplied transcript) meters the real combined STT+chat
+cost. Call 1 used to be entirely free/unmetered past the rate limit + audio
+byte cap; X-02 closes that gap with an **authorization hold**:
+
+- Call 1 **requires the recording's `Idempotency-Key`** (a shipped client's
+  legacy `<key>:dev-transcribe` suffix is normalized server-side) and places a
+  temporary **1-credit hold** (`hold_credit`, table `credit_holds`) *before*
+  the Whisper call. Insufficient **spendable** balance → `402 out_of_credits`
+  with no provider spend; any hold error fails **closed** (`503
+  credit_check_failed`). A transcription failure releases the hold immediately.
+- **Spendable balance = real credits − active unexpired holds**, excluding the
+  request's own key. Every affordability gate (call 1's hold, `generate`'s
+  floor gate, `convert`'s trial floor gate) checks this figure, so a held
+  credit can never be double-spent by a concurrent generation — while call 2
+  can still spend the credit its own call 1 reserved.
+- Call 2 **settles**: `settle_credit_hold` consumes the real metered cost via
+  the same `consume_*_overspend` spender the plain path uses AND deletes the
+  hold, in ONE transaction — never a double charge (a hold never charges),
+  never a free ride. The `idempotency_cache` replay still short-circuits before
+  the settle, so a retried call 2 charges nothing. Keyless (older-app, non-dev)
+  requests keep the plain consume.
+- An abandoned hold (call 1 with no call 2) expires after
+  `GENERATE_HOLD_TTL_SECONDS` — the active-holds sum ignores expired rows
+  immediately, and the `credit-holds-prune` pg_cron job (every 10 min) deletes
+  them. The user is never durably out a credit for a generation that never ran.
+
 ---
 
 ## Model registry + credit pricing (multi-model)
@@ -541,12 +668,16 @@ function, two actions:
 
 **`{ action: "request", email }`** — normalize the email (lowercase + trim; Gmail
 dots/`+tags` collapsed so they can't farm the cap), reject disposable domains
-(`422`), rate-limit per email + per IP (`429`). If the email already verified and
-spent every credit → `{ status: "already_used" }` (no email sent). Otherwise mint
-a 6-digit code, store its **SHA-256 hash** with a short TTL (`trial_codes`,
-default 10 min, attempts reset to 0), and send it via **Resend** from the verified
-`getzerro.app` sender. A Resend failure → `502 { error: "send_failed" }`. Success
-→ `{ status: "code_sent" }`.
+(`422`), rate-limit per email + per IP (`429`). Otherwise mint a 6-digit code,
+store its **SHA-256 hash** with a short TTL (`trial_codes`, default 10 min,
+attempts reset to 0), and send it via **Resend** from the verified `getzerro.app`
+sender. A Resend failure → `502 { error: "send_failed" }`. Success →
+`{ status: "code_sent" }` — and **uniformly so (C-05)**: an email that already
+verified and spent every credit, or one past the per-email **send sub-limit**
+(`TRIAL_SEND_LIMIT_PER_EMAIL`), gets the SAME `code_sent` body with **no email
+sent**, so `request` can't be used by an unauthenticated prober to enumerate
+which addresses have (or exhausted) a trial. The true `already_used` surfaces
+only at `verify`/`resume`, after the caller proves control of the mailbox.
 
 **`{ action: "verify", email, code }`** — look up the pending code, check TTL +
 attempts (expired/over-attempts → burn it), **constant-time compare the hashes**
@@ -559,6 +690,20 @@ already exhausted → `{ status: "already_used" }`. Otherwise mint a short-lived
 email never travels onward) and return `{ token, expires_at,
 trial_credits_remaining, trial_credits_limit }` (the limit is the grant total,
 so the app's trial meter has a denominator — E4).
+
+**Rate-limit fail posture (C-07).** `check_rate_limit` errors no longer fail
+open across the board — the posture is per key: the **per-IP** limit fails
+**CLOSED** (429 — it's the broad anti-abuse bound on an unauthenticated
+endpoint, so a limiter outage must not silently erase it), the **per-email**
+limit fails **OPEN** (it also meters legitimate verify retries, so an outage
+must not lock a real user out of a code already in their inbox), and the
+**send sub-limit** fails **CLOSED** (it only gates outbound mail, so a broken
+limiter must not re-open the email-bomb — the request still answers the
+uniform `code_sent`, leaking nothing). Every limiter error, regardless of
+posture, emits a stable structured line: `{ fn:"trial-start",
+event:"rate_limiter_error", key_kind:"ip"|"email"|"send",
+failed_closed:<bool>, error:<message> }` — point an ops log alert at
+`event:"rate_limiter_error"`.
 
 **The `generate` trial branch.** A `kind:"trial"` token resolves the
 `trial_grants` row by grant id, then runs the IDENTICAL pipeline as a subscription
@@ -579,6 +724,25 @@ the cap is enforced on `trial_grants`, not the log).
 without a logic change.
 
 ---
+
+## The `affiliate` flow — hardening notes (C-08)
+
+`affiliate` POST's `record()` is now an **upsert deduped per `ip_hash`**
+(unique index `affiliate_referrals_ip_hash_unique`, migration
+`20260708120000_affiliate_referrals_dedup_ip.sql`): one row per visitor IP,
+latest code + timestamp win. The unauthenticated endpoint can no longer be
+used as an insert amplifier — table growth is bounded by distinct visitor IPs,
+not by request volume. `created_at` is written explicitly on the upsert so a
+refreshed click restarts the attribution window; the windowed GET
+(`latestCode`) and the 30-day prune cron are unchanged. A per-IP POST throttle
+(`AFFILIATE_RATE_LIMIT_PER_IP`, fail-open — see the secrets table) bounds
+write churn as defense-in-depth.
+
+**Self-referral** (a buyer opening their own affiliate link before purchasing)
+is deliberately NOT policed by the function — it cannot distinguish an
+affiliate's IP from a buyer's. It is handled by **LemonSqueezy's self-referral
+clawback**, an owner-side dashboard setting in the LS affiliate configuration,
+not by code.
 
 ## Verify (no app needed)
 
@@ -692,11 +856,17 @@ The service role (used inside the functions) bypasses RLS and works normally.
 
 ## Release DMG upload (L-01) — least-privilege swap (owner action)
 
-**Status:** NOT yet applied. The release workflow
+**Status:** the `release-upload-url` function is **ADDED to the repo**
+(`supabase/functions/release-upload-url/`, adapted for the versioned two-object
+upload; registered `verify_jwt=false` in config.toml; path-validator +
+constant-time-compare unit tests in `validate_test.ts`). The workflow swap and
+key rotation below are still **owner actions** — the release workflow
 (`.github/workflows/release-app.yml` → "Upload notarized dmg to Supabase
-Storage") still authenticates the DMG upsert with **`SUPABASE_SERVICE_ROLE_KEY`**
-(full backend access, bypasses RLS). That key is wildly over-privileged for what
-the step does: upsert exactly one object, `downloads/Zerro.dmg`.
+Storage") still authenticates with **`SUPABASE_SERVICE_ROLE_KEY`** (full backend
+access, bypasses RLS). That key is wildly over-privileged for what the step
+does: upsert two DMG objects — the permanent versioned
+`downloads/Zerro-<build>.dmg` (the one the appcast references) and the mutable
+"latest" `downloads/Zerro.dmg`.
 
 **Why it can't just be downgraded in CI:** the `downloads` bucket has **zero RLS
 write policies**, so `service_role` (which bypasses RLS) is currently the *only*
@@ -707,71 +877,54 @@ Supabase-side change**. Two clean options; **(A) is recommended.**
 
 ### Option A — edge-function-minted signed upload URL (recommended)
 
-The service-role key never touches CI. A tiny function mints a **one-time,
-path-scoped, ~2-hour** `createSignedUploadUrl` for `downloads/Zerro.dmg`; CI
-PUTs the DMG straight to that URL holding **no Supabase key** — only a narrow
-`RELEASE_UPLOAD_SECRET` whose entire power is "ask for an upload token for that
-one path." This matches the project's existing `verify_jwt=false` +
+The service-role key never touches CI. The **committed**
+`supabase/functions/release-upload-url/` function mints a **one-time,
+path-scoped** `createSignedUploadUrl` for a caller-named DMG object; CI PUTs
+the DMG straight to that URL holding **no Supabase key** — only a narrow
+`RELEASE_UPLOAD_SECRET` whose entire power is "ask for an upload token for a
+Zerro DMG name." The target rides in the body as `{ "path": "<object name>" }`
+and is validated against the strict allow-list `^Zerro(-[0-9]+)?\.dmg$`
+(`validate.ts` — only `Zerro.dmg` or `Zerro-<build>.dmg`; no traversal, no
+other objects; unit-pinned in `validate_test.ts`), covering BOTH release
+targets. This matches the project's existing `verify_jwt=false` +
 own-shared-secret pattern (`feedback`, `trial-start`).
 
-1. **Add the function** `supabase/functions/release-upload-url/index.ts`:
+**Owner sequence — (a) and (b) MUST be done before (d), or the next release
+breaks** (the swapped workflow step would hit a missing function / missing
+secret mid-release):
 
-```ts
-// =============================================================================
-// release-upload-url — mints a one-time, path-scoped signed upload URL for the
-// release DMG so CI never holds the service-role key (hardening L-01).
-// verify_jwt=false at the gateway; gated here by a constant-time compare of
-// the x-release-secret header against RELEASE_UPLOAD_SECRET. The service-role
-// key lives ONLY in Edge secrets (auto-injected), never in GitHub Actions.
-// =============================================================================
-import { requireEnv } from "../_shared/env.ts";
-import { serviceClient } from "../_shared/db.ts";
-import { handlePreflight, json } from "../_shared/http.ts";
-
-const OBJECT_PATH = "Zerro.dmg"; // within the `downloads` bucket
-
-// Constant-time string compare so a wrong secret can't be timed out byte-by-byte.
-function timingSafeEqual(a: string, b: string): boolean {
-  const ab = new TextEncoder().encode(a);
-  const bb = new TextEncoder().encode(b);
-  if (ab.length !== bb.length) return false;
-  let diff = 0;
-  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
-  return diff === 0;
-}
-
-Deno.serve(async (req: Request) => {
-  const preflight = handlePreflight(req);
-  if (preflight) return preflight;
-  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-
-  const expected = requireEnv("RELEASE_UPLOAD_SECRET");
-  const got = req.headers.get("x-release-secret") ?? "";
-  if (!timingSafeEqual(got, expected)) return json({ error: "unauthorized" }, 401);
-
-  const { data, error } = await serviceClient()
-    .storage.from("downloads")
-    .createSignedUploadUrl(OBJECT_PATH, { upsert: true });
-  if (error || !data) return json({ error: "mint_failed" }, 502);
-
-  // data.signedUrl is the relative path incl. ?token=… ; the token IS the auth,
-  // so the caller needs no key. Never logged.
-  return json({ path: data.path, token: data.token, signedUrl: data.signedUrl });
-});
-```
-
-2. **Register it `verify_jwt=false`** in `supabase/config.toml` alongside the
-   others, then deploy:
+1. **(a) Deploy the function** (already in the repo + config.toml):
    ```bash
    supabase functions deploy release-upload-url --no-verify-jwt
    ```
-3. **Set the CI-only secret** (Edge side) and add the SAME value as a GitHub
-   Actions repo secret named `RELEASE_UPLOAD_SECRET`:
+2. **(b) Set the CI-only secret** (Edge side) and add the SAME value as a
+   GitHub Actions repo secret named `RELEASE_UPLOAD_SECRET`:
    ```bash
    supabase secrets set RELEASE_UPLOAD_SECRET="$(openssl rand -hex 32)"
    ```
-4. **Swap the workflow step** — replace the service-role `curl` with (uses the
-   public project URL + the new secret; **no** `SUPABASE_SERVICE_ROLE_KEY`):
+3. **(c) Manually verify mint → PUT** against a throwaway VERSIONED name that
+   no real release uses (it must still match the allow-list — e.g.
+   `Zerro-999999001.dmg`), then delete the object in the dashboard:
+   ```bash
+   SIGNED_URL="$(curl --fail-with-body -sS -X POST \
+     "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1/release-upload-url" \
+     -H "x-release-secret: $RELEASE_UPLOAD_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"path":"Zerro-999999001.dmg"}' \
+     | python3 -c 'import sys,json; print(json.load(sys.stdin)["signedUrl"])')"
+   curl --fail-with-body -X PUT \
+     "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1${SIGNED_URL}" \
+     -H "Content-Type: application/x-apple-diskimage" \
+     -H "x-upsert: true" \
+     --data-binary @/path/to/any-test-file
+   ```
+   > If the PUT 4xxs, mirror what storage-js `uploadToSignedUrl` sends (it
+   > targets `…/storage/v1/object/upload/sign/downloads/<name>?token=…`).
+   > Don't swap the workflow until this manual round-trip works.
+4. **(d) Swap the workflow step** — replace the service-role `curl`s in
+   `release-app.yml` with (public project URL + the new secret; **no**
+   `SUPABASE_SERVICE_ROLE_KEY`). The release uploads TWO objects, so the mint →
+   PUT runs once per name:
    ```yaml
    - name: Upload notarized dmg to Supabase Storage
      env:
@@ -779,31 +932,37 @@ Deno.serve(async (req: Request) => {
        SUPABASE_URL: https://wjxqmurgwyxwkezncxke.supabase.co
        RELEASE_UPLOAD_SECRET: ${{ secrets.RELEASE_UPLOAD_SECRET }}
      run: |
-       set -euo pipefail   # never `set -x` — would echo the secret
-       SIGNED_URL="$(curl --fail-with-body -sS -X POST \
-         "$SUPABASE_FUNCTIONS_URL/release-upload-url" \
-         -H "x-release-secret: $RELEASE_UPLOAD_SECRET" \
-         | python3 -c 'import sys,json; print(json.load(sys.stdin)["signedUrl"])')"
-       # Token is in SIGNED_URL — no Authorization header / no Supabase key here.
-       curl --fail-with-body -X PUT \
-         "${SUPABASE_URL}/storage/v1${SIGNED_URL}" \
-         -H "Content-Type: application/x-apple-diskimage" \
-         -H "x-upsert: true" \
-         --data-binary @"dist/${APP_NAME}.dmg"
+       set -euo pipefail   # never `set -x` — would echo the secret/token
+       upload() {  # $1 = target object name (validated server-side)
+         SIGNED_URL="$(curl --fail-with-body -sS -X POST \
+           "$SUPABASE_FUNCTIONS_URL/release-upload-url" \
+           -H "x-release-secret: $RELEASE_UPLOAD_SECRET" \
+           -H "Content-Type: application/json" \
+           -d "{\"path\":\"$1\"}" \
+           | python3 -c 'import sys,json; print(json.load(sys.stdin)["signedUrl"])')"
+         # Token is in SIGNED_URL — no Authorization header / no Supabase key.
+         curl --fail-with-body -X PUT \
+           "${SUPABASE_URL}/storage/v1${SIGNED_URL}" \
+           -H "Content-Type: application/x-apple-diskimage" \
+           -H "x-upsert: true" \
+           --data-binary @"dist/${DMG_NAME}"
+       }
+       # 1) Permanent, versioned object — the only one the appcast references.
+       upload "${DMG_NAME}"
+       # 2) Stable "download latest" object — overwritten every release.
+       upload "${APP_NAME}.dmg"
    ```
-   > Confirm the signed-URL PUT shape on the first run — if it 4xxs, mirror what
-   > storage-js `uploadToSignedUrl` sends (it targets
-   > `…/storage/v1/object/upload/sign/downloads/Zerro.dmg?token=…`). The next
-   > release run is the real test of this whole swap.
-5. **Rotate `SUPABASE_SERVICE_ROLE_KEY`** (Dashboard → Project Settings → API)
-   and delete the GitHub Actions secret once the new path is proven — it has
-   been resident in CI and is no longer needed there.
+5. **(e) Rotate `SUPABASE_SERVICE_ROLE_KEY`** (Dashboard → Project Settings →
+   API) and delete the GitHub Actions secret — only once a real release has
+   gone through the new path. The key has been resident in CI and is no longer
+   needed there.
 
 ### Option B — RLS policy + a scoped JWT (fallback, no new function)
 
-If you'd rather not add a function: write a narrow RLS policy on
-`storage.objects` permitting only `INSERT`/`UPDATE` on `bucket_id='downloads' AND
-name='Zerro.dmg'` for a dedicated role/claim, mint a long-lived HS256 JWT signed
+If you'd rather not use the committed function: write a narrow RLS policy on
+`storage.objects` permitting only `INSERT`/`UPDATE` on `bucket_id='downloads'`
+with `name` matching the two release objects (`Zerro.dmg` +
+`Zerro-<build>.dmg`) for a dedicated role/claim, mint a long-lived HS256 JWT signed
 with the project JWT secret carrying that claim, and store it as the CI secret.
 A leaked token can then only upsert that one object. **Why A is preferred:** the
 token here is long-lived and can upload directly, whereas A's token is single-use

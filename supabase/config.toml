@@ -92,6 +92,15 @@ verify_jwt = false
 [functions.affiliate]
 verify_jwt = false
 
+# release-upload-url — mints a one-time, path-scoped signed upload URL for the
+# release DMG objects so CI never holds the service-role key (L-01). The caller
+# is GitHub Actions (no Supabase JWT); security is the shared
+# RELEASE_UPLOAD_SECRET checked IN CODE (constant-time compare of the
+# x-release-secret header) plus a strict object-name allow-list, and the
+# gateway gate is OFF so that header reaches our code.
+[functions.release-upload-url]
+verify_jwt = false
+
 [remotes.staging]
 project_id = "waripvlpcpwdmacpjiqc"
 

@@ -106,9 +106,9 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 ### D — Database: schema, RLS, migrations & advisors ✅ consolidated
 - **D-01** Security · ✅ fixed-in-code — anon-executable SECURITY DEFINER (`refresh_agent_models_cron`, `rls_auto_enable`). Migration `20260623120000_revoke_anon_definer_function_execute.sql` REVOKEs PUBLIC/anon/authenticated (cron owner unaffected; `rls_auto_enable` guarded by `to_regprocedure` for replay-safety). Deploy via `db push`; re-run advisor (lints 0028/0029 clear).
 - **D-02** Security · 🟡 — 11 functions mutable `search_path`. Not exploitable (INVOKER + service-role + schema-qualified). Follow-up migration `set search_path=''`.
-- **D-03** Security · 🟡 — `pg_net` in public schema. Move to dedicated schema.
+- **D-03** Security · ✅ accepted / won't-fix (2026-07-08) — `pg_net` in public schema. Live introspection: the extension's `extnamespace` is `public` (what the `extension_in_public` advisor keys on), but pg_net is **non-relocatable** (`ALTER EXTENSION … SET SCHEMA` errors, control-file schema is null) and its actual objects (`net.http_post`, `net.http_request_queue`, …) already live in the **`net`** schema — nothing exploitable sits in `public`, so the lint is cosmetic. The only way to clear it is `drop extension pg_net; create extension … with schema extensions`, i.e. dropping/recreating Supabase-managed infra on the prod billing DB; baked into a migration it would re-run on every fresh DB + preview branch. Disproportionate to a cosmetic WARN → accepted as low risk. Revisit only if pg_net becomes relocatable or a real public-schema object appears. If ever desired, clear it once via a controlled dashboard step on staging→prod, verifying the daily `refresh-agent-models` cron's `net.http_post` still fires — NOT via a repo migration.
 - **D-04** Security · ✅ accepted — RLS-enabled-no-policy: live shows 13/14 FORCED + service-role-only (auto-forced via `rls_auto_enable` event trigger). Exception `affiliate_referrals` = C-10.
-- **D-05** Performance · 🟡 — 4 unused indexes; recheck post-launch before dropping.
+- **D-05** Performance · 🟡 deferred (rechecked 2026-07) — 4 unused indexes; live recheck found every public table still near-zero scale (0–143 rows), where `idx_scan` is not meaningful (tiny tables seq-scan regardless). NO index dropped — retained for scale; re-evaluate once production tables carry real row counts.
 - *Consolidation: migration sweep clean (no unscoped destructive ops, 47 idempotency guards); 3 pg_cron jobs healthy; `rls_auto_enable` search_path already pinned (`pg_catalog`) — C-03 residual = commit its body to a migration to end drift.*
 
 ### E — Desktop billing & entitlement (client) ✅ reviewed
@@ -116,12 +116,12 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **E-01** Security · ✅ fixed-in-code — deeplink no longer auto-activates: prefills key + explicit Activate; `LicenseService.activate` adds a replace-confirm gate BEFORE any POST/Keychain write (covers deeplink + manual paste; decline leaves license intact); purchase analytics gated on a real user-initiated outcome; parse hardening intact. Full suite green (673). Ships in app build.
 - **E-02** Payments/UX · ✅ fixed (decision: 30) — **live secret confirmed already 30** (digest = sha256("30"); the grant I first saw at 40 was a stale pre-change test row — my earlier "live=40" read was wrong). Web copy + JSON-LD + FAQ (×2 incl. line 41) → 30; `site-config.ts:26` comment + `EntitlementStore.swift:924` fallback → 30. App reads server value dynamically. Vercel deploy pending. (Optional: clear stale 40-limit test grants.)
 - **E-03** Security · 🟡 — Keychain `AfterFirstUnlock` (not `…ThisDeviceOnly`). Confirmed justified; only trial slots merit ThisDeviceOnly.
-- **E-04** Reliability · 🟡 — crash-restored Dev-Mode paid-block resumes via non-dev path (degrades; no double-charge).
-- **E-05** Payments/UX · 🟡 — hardcoded paywall price literals can drift from LS.
-- **E-06** Reliability · 🟡 — paywall CTAs render enabled when checkout URL unresolved.
-- **E-07** UX · 🟡 — trial credit line not network-refreshed on activation (acceptable).
+- **E-04** Reliability · ✅ fixed-in-code (2026-07-10, phase-5-billing) — crash-restored Dev-Mode paid-block resumed via the non-dev path. `PendingPaidGeneration` now persists optional Dev context (project path / agent id / agent model); both restore paths reapply it so the resume keeps the dev prompt + dispatch. Old markers decode nil → non-dev, unchanged. App build.
+- **E-05** Payments/UX · ✅ addressed-in-docs (2026-07-10, phase-5-billing) — hardcoded paywall price literals can drift from LS. Sync step added to DEPLOY-RUNBOOK §5 (launch action 6) + `KEEP IN SYNC` comment at the `Price` literals. Display-only; LS stays the charge truth.
+- **E-06** Reliability · ✅ fixed-in-code (2026-07-10, phase-5-billing) — BYOK/Managed paywall CTAs now disable when their checkout URL is unresolved (mirrors the top-up gate); placeholder log kept as belt-and-suspenders. App build.
+- **E-07** UX · ✅ accepted (2026-07-10) — trial credit line not network-refreshed on activation. Display-only staleness, bounded: the server enforces the trial cap on every generation regardless of what the client shows, and multi-device trial drift is a non-issue at this stage. No code change; revisit only if multi-device trial use becomes real.
 - **E-08** Privacy · 🟡 — non-checkout `zerro://` URLs logged at `.public` + flow into diagnostics blob (confirmed I). Log host/scheme only.
-- **E-09** Code quality · 🟡 — `displayedCreditsRemaining` unclamped (latent; render clamps).
+- **E-09** Code quality · ✅ fixed-in-code (2026-07-10, phase-5-billing) — `displayedCreditsRemaining` now clamps non-negative at the source (`max(0, …)`); the render-side "Out of Credits" handling is unchanged. App build.
 - **E-10** Code quality · 🟡 — money-path invariants under-tested (idempotency-key stability, fail-safe dispatch).
 - **E-11** Security · ✅ resolved (Section L) — Release build defines no `DEBUG`; dev hatches compiled out.
 
@@ -130,19 +130,20 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **F-01** Privacy · ✅ fixed-in-code — Dev-Mode anchor crops + OCR hints now masked in lock-step (both managed + BYOK; fail-safe-ON default). App build.
 - **F-02** Privacy · ⚪ confirm — best-effort redaction scope / audio-not-redacted = copy/consent. Fixes: H-05 (onboarding), H-08 (settings), K-02 (landing, ✅).
 - **F-03** Privacy · 🟡 — OCR-fail/no-text frame uploads raw; telemeter OCR-fail rate.
-- **F-04** Privacy · 🟡 (decision) — one redaction toggle for managed (third-party) + BYOK; consider a floor for the third-party path.
-- **F-05** Functionality/Cost · 🟡 — Dev Mode appends uncapped anchor frames past the 28-cap.
-- **F-06** Functionality · 🟡 — no-candidates fallback caps at 180 not 28.
-- **F-07** Reliability/Cost · 🟡 — no client-side payload/audio-byte cap pre-upload.
-- **F-08** Performance · 🟡 — no `autoreleasepool` around full-res decode loop (5K spike).
+- **F-04** Privacy · ✅ fixed-in-code (Phase 3, decision: floor) — redaction FORCED ON whenever generation routes through Zerro's servers (`AppState.effectiveRedactSecrets`: toggle OR `routesThroughManagedProxy`, nil → force on; evaluated at `startRecording`, superset-of-dispatch on purpose); the toggle only loosens BYOK. Settings toggle gains an "enforced on your plan" caption for Managed/trial. App build.
+- **F-05** Functionality/Cost · ✅ fixed-in-code (Phase 3) — anchor frames capped at `ProcessingConfig.maxAnchorFrames` (8; worst-case total 28+8=36), highest-confidence kept with original `refIndex` preserved, cap applied BEFORE the expensive per-reference work. App build.
+- **F-06** Functionality · ✅ fixed-in-code (Phase 3) — no-candidates fallback now honors `maxKeyframes` (28), widening its stride so the kept frames still span the recording; min-length guard unchanged. App build.
+- **F-07** Reliability/Cost · ✅ fixed-in-code (Phase 3) — client now mirrors the server's `/generate` input fuse (2 MB audio / 60 MB raw body, `ManagedBackend.maxAudioUploadBytes`/`.maxPayloadUploadBytes`, same strictly-greater-than boundary) across all three encode paths; over-cap fails LOCALLY with the distinct `.recordingTooLarge` pill before any upload or token mint. App build.
+- **F-08** Performance · ✅ fixed-in-code (Phase 3) — per-iteration `autoreleasepool` around each anchor's crop/OCR/redact/encode; the native frame is scoped per iteration (the decode itself is an `await`, outside the pool). Memory-lifetime only. App build.
 - **F-09** Reliability/Privacy · 🟡 — `abandon()` releases SCStream without `stopCapture()` → indicator clear non-deterministic on sleep→wake.
-- **F-10** Functionality · 🟡 — low-confidence deixis anchors ship a definitive "pointed here" hint.
+- **F-10** Functionality · ✅ fixed-in-code (Phase 3) — hint now gated on the anchor's client confidence vs `devLowConfidenceThreshold` (0.45, the review card's amber bar): below → hedged "MAY have been referring near here … best guess"; at/above → byte-identical definitive hint. App build.
 - **F-11** Reliability · 🟡 — auto-stop finalize-window revocation discards a completed 3-min recording (data loss). Gate on `state==.recording`.
 - **F-12** Privacy/Reliability · 🟡 — per-recording sidecars orphaned in temp until next launch sweep.
-- **F-13** Performance · 🟡 (info) — `encodeBody` holds whole payload + base64 (bounded ~20–30MB).
-- **F-14** Performance · 🟡 — `AudioActivity.hasSpeech` decodes whole audio (fine ≤3min).
-- **F-15** Performance/Reliability · 🟡 (info) — CursorTracker 30Hz on MainActor; nil free-space proceeds.
-- **F-16** Code quality · 🟡 (info) — anchor pairing by position; stale paid-block dir lingers.
+- **F-13** Performance · ✅ accepted (Phase 3) — `encodeBody` holds whole payload + base64, bounded ~20–30 MB for a ≤3-min tool.
+- **F-14** Performance · ✅ accepted (Phase 3) — `AudioActivity.hasSpeech` decodes the whole clip, fine ≤3 min.
+- **F-15** Performance/Reliability · ✅ split (Phase 3) — nil free-space read now REFUSES to record (fixed-in-code, `AppState.shouldRefuseRecordingForFreeSpace` — never "nil == OK"); the 30 Hz CursorTracker-on-MainActor poll accepted as info.
+- **F-16** Code quality · ✅ split (Phase 3) — stale paid-block working dir now reclaimed: the sweep spares only a FRESH `pending-paid.json` (marker `createdAt` vs the same 7-day `maxAge` the restore uses; garbage marker = stale) (fixed-in-code); position-based anchor pairing accepted as info.
+- *Phase 3 accepts (F-13, F-14, F-15/F-16 info sub-parts): accepted as bounded/info at current scale (≤3-min recordings, bounded frame counts); revisit if recordings get longer.*
 - **F-17** Code quality · 🟡 — test gaps (OCR-fail redaction, cap boundaries, teardown).
 
 ### G — Dev Mode / agent runner ✅ reviewed
@@ -196,7 +197,7 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **J-05** Reliability · 🟡 — fence-token scrubber deletes trailing real text on malformed open token.
 - **J-06** Code quality · 🟡 — Swift BYOK adapter response/error/truncation paths untested.
 - **J-07** Code quality · 🟡 (info) — interleave wire-rendering triplicated; no cross-language golden fixture; stale `.fuse_hidden*`.
-- **J-08** UX · ⚪ confirm — BYOK needs an OpenAI key for transcription regardless of chat provider; confirm communicated.
+- **J-08** UX · ✅ confirmed — BYOK transcription requirement (on-device model OR OpenAI key, independent of chat provider) is communicated at every surface: the `.apiKeyMissing`/`.localModelUnavailable` failure copy names both paths, the BYOK record-start pre-flight blocks with the same `.apiKeyMissing` copy (`EntitlementStore.preflightBlock`) so a keyless/model-less user never hits a generic error, and Settings states the prerequisites on both the OpenAI-key field ("powers cloud transcription. On-device transcription needs no key.") and the Transcription engine picker's caveat lines. Onboarding is trial-first (no key step), so no gap there. Docs-only.
 
 ### K — Web app, checkout & privacy-copy ✅ reviewed
 **Verdict:** Privacy policy strong; two launch-blockers fixed (K-01/K-02). No service-role secret to client; no exploitable XSS.
@@ -205,10 +206,10 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **K-02** Privacy/Legal · ✅ copy rewritten — landing locality claims scoped to BYOK + privacy caveat. Owner sign-off + Vercel pending. **Follow-up — fixed during H-05/H-08:** the BYOK "never leaves your Mac" overstatement spanned ~6 lines (`built-right.tsx:29`, `pricing.tsx:130/139/424`, `structured-data.tsx:95` JSON-LD, `faq-data.ts:51` "Is my data private?"). The original K-02 audit wrongly accepted these as "scoped to BYOK" — but BYOK recordings DO go to the provider, so they were inaccurate. All now use the precise "straight to your provider / never through Zerro's servers" wording; faq-data expanded to match the privacy policy (best-effort redaction + audio-not-redacted). Verified zero remaining locality-overstatement strings site-wide. `privacy/page.tsx:139` left as-is (hardware-ID line — confirm it reflects a salted hash is sent). Site now internally consistent + matches the policy.
 - **K-03** Security/UX · ✅ fixed — dead `/auth` page removed (page + layout + 3 auth-only UI components + `robots.ts` ref); `/sign-up` & `/forgot-password` were 404 scaffolding only-linked from `/auth`, now gone; build clean (12/12 pages), grep proves zero dangling links. Vercel deploy pending.
 - **K-04** Security · ✅ fixed — added HSTS (`max-age=63072000; includeSubDomains`, no preload), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and a usage-derived **report-only** CSP (`default-src 'self'`; PostHog same-origin `/ingest` + Supabase beacon in connect-src; posthog gzip worker `blob:`; `frame-ancestors 'none'`). Residuals (acceptable): `script-src`/`style-src 'unsafe-inline'` (Next.js App Router hydration + next/font) — no `unsafe-eval`. Verified curl + 0 console violations on home/pricing/checkout-complete; `/Zerro.dmg` redirect intact. **Follow-ups:** flip report-only→enforcing after a clean prod check (PostHog only fires on the live domain); HSTS `preload` optional. Vercel deploy pending.
-- **K-05** Security · 🟡 — affiliate beacon sends unvalidated/unbounded `aff`. Clamp.
+- **K-05** Security · ✅ fixed — affiliate-capture.tsx now clamps `aff` client-side, mirroring the server's normalizeAffCode (trim + `^[A-Za-z0-9_-]{1,64}$`); malformed/oversized values skip the beacon entirely. Defense-in-depth on top of the server validation.
 - **K-06** Code quality · 🟡 (info) — dep advisories not runtime-reachable (static site).
-- **K-07** Code quality · 🟡 (info) — `/Zerro.dmg` redirect comment misstates (307 to Supabase, not 302 GitHub).
-- **K-08** Payments/Code quality · ✅ fixed — `llms.txt`/`llms-full.txt` refreshed to live facts (verified against pricing.tsx): trial 30, BYOK $69, Managed live $15/mo·$144/yr, 300 credits/mo, +Anthropic, +top-ups (Boost 200/$10, Power 500/$22). Also corrected two **false claims** found in the files: "all future updates" → "1 year of updates"; removed a non-existent "Priority support" line. Vercel deploy pending. **Follow-up (post-launch):** llms files still position Zerro narrowly as "structured prompt for coding agents" — broaden to the full artifact range (prompt/message/snippet/document/answer) to match the site; left as a separate brand task.
+- **K-07** Code quality · ✅ fixed — the next.config.ts `/Zerro.dmg` redirect comments were already correct (307/`permanent: false` → Supabase Storage; both the redirect block and the appcast-rewrite cross-reference). The lingering misstatement was `DOWNLOAD_URL`'s doc comment in `lib/site-config.ts` ("redirected (302) to GitHub's latest release via the rewrite") — corrected to the 307 → Supabase Storage redirect.
+- **K-08** Payments/Code quality · ✅ fixed — `llms.txt`/`llms-full.txt` refreshed to live facts (verified against pricing.tsx): trial 30, BYOK $69, Managed live $15/mo·$144/yr, 300 credits/mo, +Anthropic, +top-ups (Boost 200/$10, Power 500/$22). Also corrected two **false claims** found in the files: "all future updates" → "1 year of updates"; removed a non-existent "Priority support" line. Vercel deploy pending. **Follow-up:** ✅ done (2026-07-10) — both llms files broadened to the full artifact range (prompt/message/snippet/document/answer), matching the hero/FAQ framing; llms-full FAQ regenerated from the live faq-data.ts; all verified facts kept intact.
 
 ### L — Build, release, signing & CI/CD ✅ reviewed
 **Verdict:** Release free of DEBUG hatches (E-11 resolved). Signing/notarization/EdDSA-publish chain tamper-resistant, no CI secret leak.
@@ -217,9 +218,9 @@ X-02 (proper Dev-Mode combined billing, deferred — client+server shared key) �
 - **L-03** Supply-chain · ✅ fixed — `actions/checkout`→`34e1148…` (v4.3.1) and `softprops/action-gh-release`→`3bb1273…` (v2.6.2), SHAs verified via `git ls-remote` (zero behavior change). 
 - **L-04** Reliability · 🟡 — manual backend deploy, no CI gate, ordering-sensitive, no rollback (with A-02).
 - **L-05** Reliability · 🟡 — deploy runbook lists 5 of 9 edge functions (drift).
-- **L-06** Reliability · 🟡 — `cut-release.sh` emits `v*` tags the workflow no longer triggers on.
-- **L-07** Distribution/Reliability · 🟡 — mutable single `Zerro.dmg` URL → no retention + release-window signature race. Versioned object name.
-- **L-08** Code quality · 🟡 — stale release docs (tags, workflow filename, two-repo topology). *(Also: the notarize step's error-handler fetches a STALE prior submission log on a submit-403, masking the real error — fix to show the real failure.)*
+- **L-06** Reliability · ✅ fixed — `cut-release.sh` now emits `app-v$VERSION` (the tag release-app.yml actually triggers on); all downstream references flow from the one TAG assignment.
+- **L-07** Distribution/Reliability · ✅ fixed — release-app.yml uploads each release as the permanent, immutable `downloads/Zerro-<build>.dmg` (the only URL the appcast references; a guard fails the release if any appcast item points at the mutable `Zerro.dmg`, which is now marketing-only), closing the retention gap + release-window signature race. Verified intact 2026-07-10.
+- **L-08** Code quality · ✅ fixed — release docs refreshed (release-app.yml filename, app-v* tags, Supabase Storage publish; historical banners where the old two-repo narrative is retained; DEPLOY-RUNBOOK.md was already accurate). Notarize handler now captures the submit's own output and only fetches the log for the submission id parsed from THAT output — an auth-403 surfaces the real submit error instead of a stale prior submission's log.
 - **L-09** Distribution · ⏳ owner-verify — shipped `SUPublicEDKey` (`IV0J9TIWJpe/…`, confirmed 32-byte Ed25519) ↔ CI `SPARKLE_PRIVATE_KEY` must be a pair or auto-update silently breaks for all users. Verify via staging "Check for Updates" (definitive) or `generate_keys -p` vs Info.plist. Owner/manual — needs the private key + a build.
 
 ### X — Cross-cutting

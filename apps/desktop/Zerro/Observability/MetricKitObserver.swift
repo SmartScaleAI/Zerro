@@ -28,7 +28,9 @@
 //  Only BOUNDED metadata leaves here — enums, numeric codes, bucketed
 //  durations/sizes, and the payload's build/OS strings. The one deliberate
 //  exception is `terminationReason`, which can in principle embed a path: it
-//  is TRUNCATED to `maxTerminationReasonChars` and treated as diagnostic
+//  is home-path REDACTED (`redactUserPaths`, I-04) and THEN truncated to
+//  `maxTerminationReasonChars` — redact-then-truncate, so a path straddling
+//  the cap can't leak a partial username — and treated as diagnostic
 //  metadata. The full, unsymbolicated `callStackTree` JSON is NEVER sent as a
 //  property (large, low-value, and a PostHog property-size risk) — it is
 //  logged once on-device at `.private` for deep debugging only.
@@ -128,11 +130,42 @@ final class MetricKitObserver: NSObject, MXMetricManagerSubscriber {
             properties["signal"] = String(signal.intValue)
         }
         if let reason = d.terminationReason {
-            // Deliberate, scoped exception to the no-content rule: truncated and
-            // treated as diagnostic metadata (it's often the real Swift fault).
-            properties["termination_reason"] = String(reason.prefix(Self.maxTerminationReasonChars))
+            // Deliberate, scoped exception to the no-content rule: home paths
+            // redacted FIRST, then truncated (I-04 — redact-then-truncate, so a
+            // /Users/<name> sitting near the cap can't leak a partial
+            // username), and treated as diagnostic metadata (it's often the
+            // real Swift fault).
+            let redacted = Self.redactUserPaths(reason)
+            properties["termination_reason"] = String(redacted.prefix(Self.maxTerminationReasonChars))
         }
         return properties
+    }
+
+    // MARK: - Home-path redaction (I-04)
+
+    /// Strips macOS home directories from free-text diagnostics before they
+    /// leave the device: `/Users/<name>` → `/Users/<redacted>` — only the
+    /// first segment after /Users/ is dropped, so the rest of the path keeps
+    /// its debugging value. Belt-and-suspenders, the literal current home
+    /// directory collapses to the same placeholder (covers a non-standard home
+    /// outside /Users/). A bare-NSUserName() pass is deliberately NOT done:
+    /// a common-word username ("test", "dev") would mangle unrelated message
+    /// text, and the /Users/ prefix is where usernames actually appear here.
+    /// Local to MetricKitObserver on purpose (termination_reason is the only
+    /// free-text field any builder emits) — promote to a shared util if a
+    /// second caller appears. Internal (not private) solely so the unit tests
+    /// can exercise it.
+    nonisolated static func redactUserPaths(_ text: String) -> String {
+        var redacted = text.replacingOccurrences(
+            of: #"/Users/[^/]+"#,
+            with: "/Users/<redacted>",
+            options: .regularExpression
+        )
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if home.count > 1 {
+            redacted = redacted.replacingOccurrences(of: home, with: "/Users/<redacted>")
+        }
+        return redacted
     }
 
     nonisolated private func hangEvent(_ d: MXHangDiagnostic) -> [String: String] {

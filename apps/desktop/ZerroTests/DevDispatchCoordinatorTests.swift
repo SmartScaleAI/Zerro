@@ -260,6 +260,45 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.runCount, 0, "agent must NOT run after a pre-dispatch cancel")
     }
 
+    // MARK: - G-02: the quit path is synchronous
+
+    func testTerminateNowForwardsToRunnerSynchronously() {
+        // `prepareForTermination` returns straight into `.terminateNow`, so the
+        // kill must have reached the runner BEFORE this call returns — asserted
+        // by checking the count with no awaiting/settling in between. It must
+        // route to the runner's synchronous kill, never the async cancel().
+        let runner = FakeRunner(result: .succeeded(summary: nil))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+
+        coordinator.terminateNow()
+
+        XCTAssertEqual(runner.terminateNowCount, 1,
+                       "the quit path must hit the runner's synchronous kill before returning")
+        XCTAssertEqual(runner.cancelCount, 0,
+                       "the quit path must NOT route through the async cancel()")
+    }
+
+    func testTerminateNowAlsoAbortsANotYetSpawnedDispatch() async throws {
+        initRepo()
+        write("a.txt", "x\n"); git("add", "-A"); git("commit", "-m", "b"); backdate("a.txt")
+
+        let runner = FakeRunner(result: .succeeded(summary: nil))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+        // Quit lands while the dispatch is still checkpointing (agent not yet
+        // spawned): the cancelled flag must short-circuit the run, same as
+        // cancel() — quit must never race a spawn into an orphan.
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
+            onCheckpoint: { _, _ in coordinator.terminateNow() },
+            onPhase: { _ in }
+        )
+        guard case .failed(let failure, _, _, _) = outcome else {
+            return XCTFail("expected cancelled failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .agent(.cancelled))
+        XCTAssertEqual(runner.runCount, 0, "agent must NOT spawn after a quit-path terminate")
+    }
+
     // MARK: - Pre-edit confirm gate (Ask Permission review)
 
     func testConfirmGateDeclineSkipsTheAgentAfterCheckpoint() async throws {
@@ -365,9 +404,15 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
     private let sideEffect: (@Sendable (URL) -> Void)?
     private let lock = NSLock()
     private var _runCount = 0
+    private var _cancelCount = 0
+    private var _terminateNowCount = 0
     private var _lastModel: String?
     private var _lastPrompt: String?
     var runCount: Int { lock.lock(); defer { lock.unlock() }; return _runCount }
+    /// How often the coordinator asked for the graceful (user-Cancel) terminate.
+    var cancelCount: Int { lock.lock(); defer { lock.unlock() }; return _cancelCount }
+    /// How often the coordinator asked for the synchronous quit-path kill (G-02).
+    var terminateNowCount: Int { lock.lock(); defer { lock.unlock() }; return _terminateNowCount }
     /// The `model` forwarded on the most recent run (Phase 2) — lets a test
     /// assert the dispatch threads the selected model through to the runner.
     var lastModel: String? { lock.lock(); defer { lock.unlock() }; return _lastModel }
@@ -399,7 +444,9 @@ private final class FakeRunner: DevAgentRunner, @unchecked Sendable {
         return result
     }
 
-    func cancel() {}
+    func cancel() { lock.withLock { _cancelCount += 1 } }
+
+    func terminateNow() { lock.withLock { _terminateNowCount += 1 } }
 }
 
 // `nonisolated`: these are lock-guarded, manually-`Sendable` helpers read and

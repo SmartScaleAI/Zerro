@@ -10,7 +10,7 @@
 //
 //  These four components are the canonical replacements, applied with a
 //  semantic-by-intent color rule (see the per-view call sites in PillView.swift
-//  and ArtifactCardView.swift):
+//  and OutputCardView.swift):
 //
 //    - PillPrimaryButton    — the one filled button; .role picks the fill.
 //    - PillSecondaryButton  — the quiet text button (Cancel / Discard / Revert).
