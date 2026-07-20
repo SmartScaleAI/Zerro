@@ -63,7 +63,7 @@ final class DevPromptTests: XCTestCase {
         XCTAssertTrue(dev.contains("DEIXIS REFERENCE"), "explains the crosshair-marked reference frames")
         XCTAssertTrue(dev.contains("zerro_anchors"), "asks for the structured anchor block")
         XCTAssertTrue(dev.contains("confidence"), "anchors carry the model's confidence (combined with the client's)")
-        // The anchors block must stay OUTSIDE the artifact fence so ArtifactParser
+        // The anchors block must stay OUTSIDE the artifact fence so OutputParser
         // doesn't swallow it and DevAnchorParser can read it.
         XCTAssertTrue(dev.contains("OUTSIDE"))
     }

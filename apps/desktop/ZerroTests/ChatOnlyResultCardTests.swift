@@ -4,7 +4,7 @@
 //
 //  Guards the chat-only (artifact == nil) result card after the "Write agent
 //  prompt" convert affordance was removed. The card no longer carries any
-//  conversion state — `ArtifactCardView`/`PillView` have no `conversion`/
+//  conversion state — `OutputCardView`/`PillView` have no `conversion`/
 //  `onConvert` parameters, so the compiler is the primary guarantee there is
 //  no convert footer to render. These render-smoke tests pin the remaining
 //  behavior: a chat-only response still lays out cleanly with its text, the
@@ -14,7 +14,7 @@
 //  artifact behavior). Two seams cover it deterministically without UI
 //  automation: `AppState.resultCopyPayload` supplies the chat text the button
 //  copies (falling back to the raw `generatedPrompt`), and
-//  `ArtifactCardView.showsCopyAction` decides whether the footer renders the
+//  `OutputCardView.showsCopyAction` decides whether the footer renders the
 //  Copy button at all.
 //
 
@@ -106,12 +106,12 @@ final class ChatOnlyResultCardTests: XCTestCase {
 
     // MARK: Copy payload seam (AppState)
 
-    /// A chat-only response (`parsedResponse.artifact == nil`) copies the chat
+    /// A chat-only response (`output.artifact == nil`) copies the chat
     /// text — the data the Copy button writes to the pasteboard.
     func testResultCopyPayloadReturnsChatTextForChatOnly() {
         let appState = AppState()
         appState.generatedPrompt = "<<<raw model output>>>"
-        appState.parsedResponse = ParsedResponse(
+        appState.output = Output(
             chatText: "Nothing on screen needs a code change.",
             artifact: nil,
             isValid: true,
@@ -129,7 +129,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
     func testResultCopyPayloadFallsBackToGeneratedPromptWhenChatEmpty() {
         let appState = AppState()
         appState.generatedPrompt = "the raw fallback text"
-        appState.parsedResponse = ParsedResponse(
+        appState.output = Output(
             chatText: "",
             artifact: nil,
             isValid: false,
@@ -140,15 +140,15 @@ final class ChatOnlyResultCardTests: XCTestCase {
         XCTAssertEqual(appState.resultCopyPayload, "the raw fallback text")
     }
 
-    // MARK: Copy visibility seam (ArtifactCardView.showsCopyAction)
+    // MARK: Copy visibility seam (OutputCardView.showsCopyAction)
 
     private func makeCard(
         artifact: Artifact?,
         chatText: String,
-        failure: ArtifactCardView.FailureConfig? = nil,
-        devResult: ArtifactCardView.DevResultConfig? = nil
-    ) -> ArtifactCardView {
-        ArtifactCardView(
+        failure: OutputCardView.FailureConfig? = nil,
+        devResult: OutputCardView.DevResultConfig? = nil
+    ) -> OutputCardView {
+        OutputCardView(
             artifact: artifact,
             chatText: chatText,
             chargeLine: nil,
@@ -183,7 +183,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
 
     /// The failure footer owns its own actions (Retry / Cancel) — Copy yields.
     func testHidesCopyActionForFailure() {
-        let failure = ArtifactCardView.FailureConfig(
+        let failure = OutputCardView.FailureConfig(
             headline: "Generation failed",
             detail: "The model returned an error."
         )
@@ -192,7 +192,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
 
     /// The dev-result footer owns Undo/Accept — Copy yields.
     func testHidesCopyActionForDevResult() {
-        let dev = ArtifactCardView.DevResultConfig(
+        let dev = OutputCardView.DevResultConfig(
             title: "Changes applied",
             summary: "Recolored the button.",
             diffText: "diff --git a/App.css b/App.css"

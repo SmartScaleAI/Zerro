@@ -92,7 +92,7 @@ enum ManagedGenerationError: Error, Equatable {
     /// The success body wasn't the JSON shape we expected.
     case malformedResponse
     /// A frame/audio artifact couldn't be read off disk to upload.
-    case artifactUnreadable
+    case outputUnreadable
 }
 
 // MARK: - ManagedGenerationResult
@@ -402,7 +402,7 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
         }
         // F-07: mirror the server's audio-byte fuse BEFORE base64/upload — an
         // over-cap file would ride the wire in full only to get the same 413
@@ -427,7 +427,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,
@@ -494,7 +494,7 @@ final class ManagedProxyClient {
         do {
             audioData = try Data(contentsOf: audioURL)
         } catch {
-            throw ManagedGenerationError.artifactUnreadable
+            throw ManagedGenerationError.outputUnreadable
         }
         // F-07: same pre-upload audio fuse as `encodeBody` — dev call 1 is
         // audio-only, so this is the whole payload in practice.
@@ -550,7 +550,7 @@ final class ManagedProxyClient {
             do {
                 frameData = try Data(contentsOf: frame.url)
             } catch {
-                throw ManagedGenerationError.artifactUnreadable
+                throw ManagedGenerationError.outputUnreadable
             }
             frameObjects.append([
                 "timestamp": frame.timestamp,

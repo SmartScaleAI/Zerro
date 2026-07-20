@@ -19,7 +19,7 @@ import SwiftUI
 /// The result pill's render model (Phase 5 of the typed-artifact refactor):
 /// chat text and the optional typed artifact it introduces. Assembled by
 /// `AppState.resultPresentation` from the parsed response so `PillView`
-/// stays a pure renderer — it never sees `ParsedResponse`'s parse
+/// stays a pure renderer — it never sees `Output`'s parse
 /// bookkeeping (validity, recovery, warnings), only what gets drawn.
 struct ResultPresentation: Equatable {
     /// Conversational text rendered above the card. Never nil — a parse

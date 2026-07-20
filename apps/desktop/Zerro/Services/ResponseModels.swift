@@ -7,7 +7,7 @@
 //  Phase 2 of the modes → typed-artifact refactor
 //  (docs/refactor-artifact-response-plan.md): the data model for a parsed
 //  model response — chat text plus at most one typed artifact. ADDITIVE in
-//  this phase: nothing constructs these yet; Phase 4 wires ArtifactParser
+//  this phase: nothing constructs these yet; Phase 4 wires OutputParser
 //  into the generation paths and Phase 5 renders them.
 //
 //  The per-type UI table in plan §2 is the SINGLE SOURCE OF TRUTH for the
@@ -85,9 +85,9 @@ struct Artifact: Equatable, Sendable {
     let body: String
 }
 
-// MARK: - ParsedResponse
+// MARK: - Output
 
-/// The result of running `ArtifactParser` over a raw model response.
+/// The result of running `OutputParser` over a raw model response.
 ///
 /// Fail-safe by construction: `chatText` is ALWAYS renderable — on any
 /// malformed input it carries the entire raw output and `artifact` is nil
@@ -95,7 +95,7 @@ struct Artifact: Equatable, Sendable {
 /// when the §2 recovery tier (R1/R2/R3) rescued a malformed fence; recovered
 /// responses are valid, but the flag is surfaced so recovery rate stays
 /// observable (the same discipline as the eval scorecard's fifth metric).
-struct ParsedResponse: Equatable, Sendable {
+struct Output: Equatable, Sendable {
     let chatText: String
     let artifact: Artifact?
     /// False when the fail-safe fallback fired (whole output became chat).
