@@ -190,7 +190,7 @@ final class IdempotencyKeyReuseTests: XCTestCase {
 
     /// A ProcessedRecording whose working dir + audio.m4a really exist on disk
     /// (the proxy path reads the audio at request-build time; a missing file
-    /// would fail `.artifactUnreadable` before any request is recorded).
+    /// would fail `.outputUnreadable` before any request is recorded).
     private func makeProcessed(idempotencyKey: String = UUID().uuidString) throws -> ProcessedRecording {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("zerro-idem-\(UUID().uuidString)", isDirectory: true)

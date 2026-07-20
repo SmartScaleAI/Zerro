@@ -186,7 +186,7 @@ final class PillWindowController {
         // Don't re-fit a pill that's logically on its way out. This handler runs
         // deferred (DispatchQueue.main.async), so by the time it executes the
         // `.idle → nil` transition is already reflected in `appState.pillState`.
-        // Without this guard, the teardown frame (where `parsedResponse` is nil
+        // Without this guard, the teardown frame (where `output` is nil
         // and the result view briefly renders an empty/placeholder card) would
         // re-measure and animate the window to that card's height before the
         // observation Task orders the window out — the dismiss "height flash".

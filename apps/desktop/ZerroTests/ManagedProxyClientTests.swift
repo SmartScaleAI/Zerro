@@ -547,7 +547,7 @@ final class ManagedProxyClientTests: XCTestCase {
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.malformedResponse))
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.inputRejected("nope")))
         XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.network("offline")))
-        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.artifactUnreadable))
+        XCTAssertNil(AppState.providerHTTPDetail(from: ManagedGenerationError.outputUnreadable))
         // Non-managed error → nil.
         XCTAssertNil(AppState.providerHTTPDetail(from: URLError(.timedOut)))
     }

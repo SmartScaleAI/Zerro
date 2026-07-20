@@ -285,12 +285,12 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
     /// off disk when building the provider request — the BYOK services
     /// wrap this in their `.network` case, and the managed client surfaces
-    /// it as `ManagedGenerationError.artifactUnreadable`. Local I/O on
+    /// it as `ManagedGenerationError.outputUnreadable`. Local I/O on
     /// files Zerro itself wrote, so it IS reported to the error tracker, under its
     /// own errorCode rather than polluting the provider or processing
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
-    case artifactUnreadable
+    case outputUnreadable
     /// F-07 — the managed client's pre-upload size fuse tripped: the
     /// recording's audio or encoded payload exceeds the server's `/generate`
     /// input limit, so NOTHING was uploaded and nothing was charged
@@ -372,7 +372,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .artifactUnreadable, .recordingTooLarge,
+             .outputUnreadable, .recordingTooLarge,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
              .providerQuotaExhausted,
@@ -445,7 +445,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "Generation failed \u{2014} try again."
         case .responseTooLong:
             return "The response was too long to finish \u{2014} try a shorter recording."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Couldn\u{2019}t process the recording."
         case .recordingTooLarge:
             return "This recording is too large to send \u{2014} try a shorter recording."
@@ -491,7 +491,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .providerError:             return "Generation failed"
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
-        case .artifactUnreadable:        return "Couldn\u{2019}t read result"
+        case .outputUnreadable:        return "Couldn\u{2019}t read result"
         case .recordingTooLarge:         return "Recording too large"
         case .outOfCredits:              return "Out of credits"
         case .outOfCreditsAtStart:       return "Out of credits"
@@ -556,7 +556,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
         case .responseTooLong:
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
-        case .artifactUnreadable:
+        case .outputUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
         case .recordingTooLarge:
             return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
@@ -843,7 +843,7 @@ final class AppState {
     /// `generatedPrompt` on BOTH generation paths (Managed and BYOK) and
     /// reset wherever it is. The pill's rendering shim and the Copy button's
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
-    var parsedResponse: ParsedResponse?
+    var output: Output?
 
     /// The assembled §2 Attached Context block for the result currently
     /// shown, built ONCE from the processed recording when the result is
@@ -852,7 +852,7 @@ final class AppState {
     /// removed): never rendered and never part of any copy payload. It fed the
     /// app-side "Write agent prompt" convert request, which has since been
     /// removed — the field is still assembled but currently has no reader.
-    /// Reset wherever `parsedResponse` is.
+    /// Reset wherever `output` is.
     var attachedContextBlock: String?
 
     /// True when the result was generated from the screen alone because
@@ -1514,7 +1514,7 @@ final class AppState {
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
-        parsedResponse = nil
+        output = nil
         attachedContextBlock = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
@@ -1812,7 +1812,7 @@ final class AppState {
         lastRecordingURL = nil
         processedRecording = nil
         generatedPrompt = nil
-        parsedResponse = nil
+        output = nil
         attachedContextBlock = nil
         lastGenerationCharge = nil
         resultHadNoNarration = false
@@ -2926,7 +2926,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "managed",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.output?.artifact?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
@@ -2973,7 +2973,7 @@ final class AppState {
                     // `error 0`. Those get a reason+status fingerprint so an
                     // outage collapses into a single issue. The reasons that were
                     // ALREADY captured here before this change (.providerError,
-                    // .artifactUnreadable) have no provider HTTP detail, so they
+                    // .outputUnreadable) have no provider HTTP detail, so they
                     // get NO explicit fingerprint — PostHog keeps their existing
                     // automatic grouping untouched (we only regroup the new
                     // provider cases, not the pre-existing signal).
@@ -3162,8 +3162,8 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
         case .payloadTooLarge:
             // F-07: the client-side pre-upload fuse — nothing left the machine.
             return .recordingTooLarge
@@ -3218,8 +3218,8 @@ final class AppState {
             // display-only — there's no underlying URLError to classify, so
             // treat the whole class as connectivity. Not captured.
             return .networkOffline
-        case .artifactUnreadable:
-            return .artifactUnreadable
+        case .outputUnreadable:
+            return .outputUnreadable
         case .payloadTooLarge:
             // F-07: the client-side pre-upload fuse — nothing left the machine.
             return .recordingTooLarge
@@ -3475,7 +3475,7 @@ final class AppState {
                 Analytics.capture("generation_succeeded", [
                     "route": "byok",
                     "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.parsedResponse?.artifact?.type.rawValue ?? "chat",
+                    "artifact_type": self.output?.artifact?.type.rawValue ?? "chat",
                     "latency_ms": self.generationLatencyMs() ?? 0
                 ])
                 // Phase 13A: terminal-success breadcrumb. If a crash
@@ -3524,11 +3524,11 @@ final class AppState {
     /// parse the raw model output against the §2 contract, surface
     /// recovery/coercion telemetry, and persist the v2 history entry (model
     /// artifact title preferred). `generatedPrompt` keeps the raw text as
-    /// the verbatim fallback; `parsedResponse` is what the pill renders.
+    /// the verbatim fallback; `output` is what the pill renders.
     private func acceptGenerationResult(rawPrompt: String) {
-        let parsed = ArtifactParser.parse(rawPrompt)
+        let parsed = OutputParser.parse(rawPrompt)
         generatedPrompt = rawPrompt
-        parsedResponse = parsed
+        output = parsed
         // Tier 4 analytics: the activation signal — a usable result was produced.
         // Fired here, in the shared generation `.done` tail, so it counts once
         // per generation. Metadata only.
@@ -3549,16 +3549,16 @@ final class AppState {
         // recovery rate was baselined at ~4% of flash artifacts in Phase 1;
         // these are the signals that tell us if it climbs in the wild.
         if !parsed.isValid {
-            Log.artifacts.warning("malformed response degraded to chat text (fail-safe fallback)")
+            Log.outputs.warning("malformed response degraded to chat text (fail-safe fallback)")
         }
         if parsed.wasRecovered {
             let rules = parsed.warnings
                 .filter { $0.hasPrefix("recovered") }
                 .joined(separator: "; ")
-            Log.artifacts.warning("recovery tier fired: \(rules, privacy: .public)")
+            Log.outputs.warning("recovery tier fired: \(rules, privacy: .public)")
         }
         if let artifact = parsed.artifact, artifact.rawType != artifact.type.rawValue {
-            Log.artifacts.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
+            Log.outputs.warning("unknown artifact type \"\(artifact.rawType, privacy: .public)\" coerced to generic")
         }
 
         recentPromptStore?.add(
@@ -3575,7 +3575,7 @@ final class AppState {
     /// as chat text when parsing produced no structure, so the pill always
     /// has something to show.
     var resultPresentation: ResultPresentation? {
-        guard let parsed = parsedResponse else {
+        guard let parsed = output else {
             return generatedPrompt.map {
                 ResultPresentation(chatText: $0, artifact: nil)
             }
@@ -3596,7 +3596,7 @@ final class AppState {
     /// response copies the chat text. Falls back to the raw output when
     /// parsing produced no structure.
     var resultCopyPayload: String? {
-        guard let parsed = parsedResponse else { return generatedPrompt }
+        guard let parsed = output else { return generatedPrompt }
         guard let artifact = parsed.artifact else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
@@ -3635,7 +3635,7 @@ final class AppState {
         // The dispatch payload is the agent_prompt body the dev system prompt
         // produced. No agent_prompt (e.g. the recording held no concrete change
         // → ZERRO_NO_REQUEST) → nothing to dispatch.
-        guard let artifact = parsedResponse?.artifact,
+        guard let artifact = output?.artifact,
               artifact.type == .agentPrompt,
               !artifact.body.isEmpty else {
             devFailure = .noChangeRequested
@@ -4202,7 +4202,7 @@ final class AppState {
     /// Retry a failed dispatch with the same generated prompt (the `.devFailed`
     /// button). REVERT-THEN-RETRY: first restore the ORIGINAL pre-run tree so the
     /// retry runs against a clean slate (never a partially-edited one), THEN take
-    /// a fresh checkpoint and re-dispatch. `parsedResponse`/`recordingProjectURL`/
+    /// a fresh checkpoint and re-dispatch. `output`/`recordingProjectURL`/
     /// `recordingAgentID` are still set from the original run, so `beginDevDispatch`
     /// re-runs the same prompt. A revert that doesn't fully restore aborts the
     /// retry (we won't re-dispatch onto a tree we couldn't clean) and keeps the
@@ -4629,7 +4629,7 @@ final class AppState {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
-             .processingFailed, .artifactUnreadable,
+             .processingFailed, .outputUnreadable,
              // F-07: a real recording can't exceed the pre-upload fuse, so
              // tripping it means the pipeline mis-sized something — triage it.
              .recordingTooLarge,
@@ -4666,7 +4666,7 @@ final class AppState {
     /// response — transport (`network`), billing/entitlement
     /// (`outOfCredits`/`notEntitled`), contract
     /// (`malformedResponse`/`inputRejected`/`authFailed`), local I/O
-    /// (`artifactUnreadable`), and any non-managed error — so only genuine
+    /// (`outputUnreadable`), and any non-managed error — so only genuine
     /// provider responses carry a `providerStatus`/fingerprint. `body` is
     /// already bounded (≤80, single line) at the throw site; it's a
     /// transport/server message, NEVER content.
@@ -4681,7 +4681,7 @@ final class AppState {
             // Always HTTP 422 (the value-less case predates carrying a status).
             return (422, nil)
         case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .artifactUnreadable,
+             .network, .malformedResponse, .outputUnreadable,
              // Client-side pre-upload fuse (F-07) — no HTTP response exists.
              .payloadTooLarge:
             return nil
@@ -4739,7 +4739,7 @@ final class AppState {
                 return "The response was too long and got cut off before it finished."
             case .malformedResponse:
                 return "The generation service returned an unexpected response."
-            case .artifactUnreadable:
+            case .outputUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
             case .payloadTooLarge:
                 return "The recording exceeds the upload size limit \u{2014} nothing was sent."
@@ -4905,14 +4905,14 @@ final class AppState {
     ///   • URLError, anything else  → `.providerUnavailable` (transport
     ///     weather between us and the provider; now captured for triage,
     ///     un-fingerprinted on this BYOK path)
-    ///   • not a URLError           → `.artifactUnreadable` (local I/O on
+    ///   • not a URLError           → `.outputUnreadable` (local I/O on
     ///     files Zerro wrote — `Data(contentsOf:)` throws CocoaErrors,
     ///     never URLErrors; captured under its own errorCode)
     ///
     /// Out-of-space never reaches this: `failureReason` checks
     /// `isOutOfSpace` before any typed-error branch.
     private static func networkClassReason(_ underlying: Error) -> RecordingFailureReason {
-        guard underlying is URLError else { return .artifactUnreadable }
+        guard underlying is URLError else { return .outputUnreadable }
         return isOfflineClass(underlying) ? .networkOffline : .providerUnavailable
     }
 

@@ -252,7 +252,7 @@ Phase 1 pass bar (default model): attach/no-attach ≥ 90%, contract validity
 ≥ 98%, type accuracy ≥ 85%.
 
 The harness's `parseArtifactResponse` is the JS reference for Phase 2's
-`ArtifactParser.swift` — once that exists, keep the two in sync (same
+`OutputParser.swift` — once that exists, keep the two in sync (same
 discipline as the prompt mirrors). The parser's executable spec lives in
 `Scripts/artifact-eval/parser-tests.json` (strict + recovery-tier cases,
 including the real model outputs that motivated the tier); run it with:
@@ -261,7 +261,7 @@ including the real model outputs that motivated the tier); run it with:
 node Scripts/eval-models.mjs --parser-tests   # no API keys needed
 ```
 
-Phase 2's `ArtifactParserTests.swift` ports the same list and must pass all
+Phase 2's `OutputParserTests.swift` ports the same list and must pass all
 of it. Add a case to the JSON whenever a new real-world malformation shows up.
 
 ## Keep in sync

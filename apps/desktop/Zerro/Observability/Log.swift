@@ -125,7 +125,7 @@ enum Log {
     /// unknown-type coercions (the type token only), and fail-safe
     /// fallbacks. Never response content. Production visibility for the
     /// recovery rate baselined in the Phase 1 eval (~4% of flash artifacts).
-    nonisolated static let artifacts = Logger(subsystem: subsystem, category: "artifacts")
+    nonisolated static let outputs = Logger(subsystem: subsystem, category: "outputs")
 
     /// Per-request cost accounting (Whisper minutes + GPT tokens).
     /// Separate category so a user inspecting costs can filter to just
