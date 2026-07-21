@@ -55,11 +55,11 @@ enum FeedbackError: Error, Equatable {
         case .emptyMessage:
             return "Enter a message before sending."
         case .network:
-            return "Couldn\u{2019}t reach the server \u{2014} check your connection and try again."
+            return "Couldn\u{2019}t reach the server. Check your connection and try again."
         case .server:
-            return "Couldn\u{2019}t send your feedback \u{2014} please try again."
+            return "Couldn\u{2019}t send your feedback. Please try again."
         case .malformedResponse:
-            return "Something went wrong sending your feedback \u{2014} please try again."
+            return "Something went wrong sending your feedback. Please try again."
         }
     }
 }

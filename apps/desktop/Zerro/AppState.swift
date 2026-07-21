@@ -406,9 +406,9 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .microphoneUnavailable:
             return "Selected microphone isn\u{2019}t available."
         case .audioSetupFailed:
-            return "Couldn\u{2019}t record from your microphone \u{2014} try again."
+            return "Couldn\u{2019}t record from your microphone. Try again."
         case .microphoneDisconnected:
-            return "Your microphone disconnected \u{2014} recording stopped."
+            return "Your microphone disconnected, so recording stopped."
         case .streamStartFailed:
             return "Couldn\u{2019}t start screen capture."
         case .writerStartFailed:
@@ -426,39 +426,39 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             // can't drift from the threshold the gate actually enforces.
             return "Recording needs to be at least \(Int(ProcessingConfig.minRecordingSeconds)) seconds long."
         case .diskFull:
-            return "Your Mac is out of storage \u{2014} free up space and try again."
+            return "Your Mac is out of storage. Free up space and try again."
         case .noInputCaptured:
-            return "Didn\u{2019}t catch anything to act on \u{2014} nothing was charged. Check your mic and record again."
+            return "Didn\u{2019}t catch anything to act on, so nothing was charged. Check your mic and record again."
         case .apiKeyMissing:
             return "Zerro needs a chat model key, plus the on-device model or an OpenAI key to transcribe. Add them in Settings."
         case .apiAuth:
-            return "Your API key was rejected \u{2014} check it in Settings."
+            return "Your API key was rejected. Check it in Settings."
         case .localModelUnavailable:
-            return "On-device transcription needs its model \u{2014} download it in Settings, or switch to OpenAI cloud."
+            return "On-device transcription needs its model. Download it in Settings, or switch to OpenAI cloud."
         case .networkOffline:
-            return "Couldn\u{2019}t connect \u{2014} check your connection."
+            return "Couldn\u{2019}t connect. Check your connection."
         case .rateLimited:
-            return "Hit a rate limit \u{2014} try again in a minute."
+            return "Hit a rate limit. Try again in a minute."
         case .providerQuotaExhausted:
-            return "Your AI provider account is out of quota or credits \u{2014} top up billing with your provider, then start a new recording."
+            return "Your AI provider account is out of quota or credits. Top up billing with your provider, then start a new recording."
         case .providerError, .providerUnavailable:
-            return "Generation failed \u{2014} try again."
+            return "Generation failed. Try again."
         case .responseTooLong:
-            return "The response was too long to finish \u{2014} try a shorter recording."
+            return "The response was too long to finish. Try a shorter recording."
         case .outputUnreadable:
             return "Couldn\u{2019}t process the recording."
         case .recordingTooLarge:
-            return "This recording is too large to send \u{2014} try a shorter recording."
+            return "This recording is too large to send. Try a shorter recording."
         case .outOfCredits:
-            return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset \u{2014} your library stays open."
+            return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset. Your library stays open."
         case .outOfCreditsAtStart:
-            return "You\u{2019}re out of credits \u{2014} top up to start a new recording."
+            return "You\u{2019}re out of credits. Top up to start a new recording."
         case .subscriptionInactive:
-            return "Your subscription isn\u{2019}t active right now \u{2014} check Billing in Settings."
+            return "Your subscription isn\u{2019}t active right now. Check Billing in Settings."
         case .trialVerificationRequired:
             return "Verify your email to use your free trial generations."
         case .trialCreditsExhausted:
-            return "You\u{2019}ve used all your free trial credits \u{2014} subscribe or add your own API keys to keep going."
+            return "You\u{2019}ve used all your free trial credits. Subscribe or add your own API keys to keep going."
         }
     }
 
@@ -519,49 +519,49 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .audioSetupFailed:
             return "Zerro couldn\u{2019}t start capturing audio from your microphone. Make sure no other app is using it, then try recording again."
         case .microphoneDisconnected:
-            return "Your microphone disconnected partway through, so the recording stopped early. Reconnect it \u{2014} or pick another input in Settings \u{2014} and record again."
+            return "Your microphone disconnected partway through, so the recording stopped early. Reconnect it (or pick another input in Settings) and record again."
         case .streamStartFailed:
-            return "Zerro couldn\u{2019}t start screen capture. This is usually temporary \u{2014} start a new recording, and if it keeps happening, restart the app."
+            return "Zerro couldn\u{2019}t start screen capture. This is usually temporary: start a new recording, and if it keeps happening, restart the app."
         case .writerStartFailed:
             return "Zerro couldn\u{2019}t create the file to save your recording. Make sure you have free disk space, then start a new recording."
         case .captureInterrupted:
-            return "Your recording was interrupted before it finished \u{2014} this can happen when the app quits or your Mac goes to sleep mid-capture. Start a new recording to try again."
+            return "Your recording was interrupted before it finished. This can happen when the app quits or your Mac goes to sleep mid-capture. Start a new recording to try again."
         case .displayUnavailable:
             return "The display you were recording is no longer connected. Reconnect it or choose another screen, then start a new recording."
         case .displayChanged:
-            return "Your display setup changed while recording \u{2014} a screen was added, removed, or rearranged \u{2014} so capture stopped. Start a new recording on your current setup."
+            return "Your display setup changed while recording (a screen was added, removed, or rearranged), so capture stopped. Start a new recording on your current setup."
         case .processingFailed:
             return "Zerro couldn\u{2019}t turn your recording into a prompt. Press Retry to run it again; if it keeps failing, record the screen once more."
         case .recordingTooShort:
-            return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds \u{2014} too short to capture enough context. Record again, narrating the change you want as you go."
+            return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds, too short to capture enough context. Record again, narrating the change you want as you go."
         case .diskFull:
             return "Your Mac ran out of storage while saving the recording, so it couldn\u{2019}t finish. Free up a few gigabytes, then start a new recording."
         case .noInputCaptured:
-            return "This recording didn\u{2019}t include anything to act on \u{2014} no narration and no clicks \u{2014} so nothing was sent and nothing was charged. Check that your microphone is on, then record again, narrating the change you want."
+            return "This recording didn\u{2019}t include anything to act on (no narration and no clicks), so nothing was sent and nothing was charged. Check that your microphone is on, then record again, narrating the change you want."
         case .apiKeyMissing:
             return "To use your own API keys, Zerro needs a chat model key (OpenAI, Anthropic, or Gemini) and a way to transcribe your audio: either the on-device model or an OpenAI key. Add what\u{2019}s missing under Settings (download the on-device model under Transcription, or add an OpenAI key), then start a new recording."
         case .apiAuth:
-            return "Your API key was rejected. Check it under Settings \u{2014} it may be expired, revoked, or missing the right access \u{2014} then try again."
+            return "Your API key was rejected. Check it under Settings (it may be expired, revoked, or missing the right access), then try again."
         case .localModelUnavailable:
             return "On-device transcription needs its model downloaded. Open Settings \u{203A} Transcription to download it, or switch transcription to OpenAI cloud if you have an OpenAI key, then start a new recording."
         case .networkOffline:
-            return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry \u{2014} your recording is saved, so it\u{2019}ll run again without re-recording."
+            return "Zerro couldn\u{2019}t reach the generation service. Check your internet connection and press Retry. Your recording is saved, so it\u{2019}ll run again without re-recording."
         case .rateLimited:
-            return "The service is temporarily limiting requests. Wait a minute, then press Retry \u{2014} your recording is saved and ready to run."
+            return "The service is temporarily limiting requests. Wait a minute, then press Retry. Your recording is saved and ready to run."
         case .providerQuotaExhausted:
-            return "Your AI provider reported this account is out of quota or credits \u{2014} not a temporary rate limit, so retrying won\u{2019}t help. Add or top up billing on your provider\u{2019}s site, then start a new recording."
+            return "Your AI provider reported this account is out of quota or credits. That isn\u{2019}t a temporary rate limit, so retrying won\u{2019}t help. Add or top up billing on your provider\u{2019}s site, then start a new recording."
         case .providerError:
-            return "The generation service ran into an error while creating your prompt. Your recording is saved \u{2014} press Retry to run it again."
+            return "The generation service ran into an error while creating your prompt. Your recording is saved, so press Retry to run it again."
         case .providerUnavailable:
-            return "The generation service is temporarily unavailable. This is usually brief \u{2014} press Retry in a moment and your saved recording will run without re-recording."
+            return "The generation service is temporarily unavailable. This is usually brief: press Retry in a moment and your saved recording will run without re-recording."
         case .responseTooLong:
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
         case .outputUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
         case .recordingTooLarge:
-            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session \u{2014} or one focused on a single change \u{2014} and try again."
+            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session, or one focused on a single change, and try again."
         case .outOfCredits:
-            return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset \u{2014} your library and this recording stay available."
+            return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset. Your library and this recording stay available."
         case .outOfCreditsAtStart:
             return "You\u{2019}re out of credits. Top up from the menu bar or wait for your monthly reset to start a new recording."
         case .subscriptionInactive:
@@ -4742,7 +4742,7 @@ final class AppState {
             case .outputUnreadable:
                 return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
             case .payloadTooLarge:
-                return "The recording exceeds the upload size limit \u{2014} nothing was sent."
+                return "The recording exceeds the upload size limit, so nothing was sent."
             }
         }
         return error.localizedDescription

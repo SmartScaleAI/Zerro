@@ -57,7 +57,7 @@ import SwiftUI
 struct PaywallCopy: Equatable {
     let headline: String
     let subheadline: String
-    /// The window title-bar text, shown as "Zerro \u{2014} <windowTitle>". Tracks
+    /// The window title-bar text, shown as "Zerro: <windowTitle>". Tracks
     /// the context so the chrome matches the body (e.g. "Add Credits" when a
     /// Managed user tops up, not the generic "Unlock").
     let windowTitle: String
@@ -97,7 +97,7 @@ struct PaywallCopy: Equatable {
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active \u{2014} upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage.",
+        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage.",
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
@@ -111,7 +111,7 @@ struct PaywallCopy: Equatable {
     /// Entitled user managing their plan — de-emphasize the sell.
     static let manage = PaywallCopy(
         headline: "Manage your plan",
-        subheadline: "Switch options, activate a key, or manage your devices and billing \u{2014} everything for your plan lives here.",
+        subheadline: "Switch options, activate a key, or manage your devices and billing. Everything for your plan lives here.",
         windowTitle: "Manage Plan"
     )
 }
@@ -165,7 +165,7 @@ struct PaywallView: View {
             // Title-bar text tracks the context (the static Window() label is
             // the generic "Unlock"; this overrides it per trigger so e.g. a
             // top-up reads "Zerro — Add Credits").
-            .navigationTitle("Zerro \u{2014} \(copy.windowTitle)")
+            .navigationTitle("Zerro: \(copy.windowTitle)")
             .onAppear {
                 // Tier 3 analytics: the gate stashes WHY the paywall opened
                 // (`manual` when there's no preflight reason, e.g. an expired
@@ -277,7 +277,7 @@ struct PaywallView: View {
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all six models \u{2014} no API key to manage. $12/mo if you choose yearly billing."
+                        subtitle: "We handle the AI. 300 credits a month across all six models, no API key to manage. $12/mo if you choose yearly billing."
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with
@@ -470,7 +470,7 @@ final class PaywallActivationModel {
             capturePurchaseOutcome("failed", product: "unknown")
             return false
         } catch {
-            phase = .failed(message: "Activation failed — please try again.", showManageDevices: false)
+            phase = .failed(message: "Activation failed. Please try again.", showManageDevices: false)
             capturePurchaseOutcome("failed", product: "unknown")
             return false
         }
@@ -509,7 +509,7 @@ private struct BuyOnceCard: View {
                     .foregroundStyle(Color.vfTextPrimary)
             }
 
-            Text("Pay once \u{2014} includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings never pass through Zerro\u{2019}s servers \u{2014} they go straight to your provider.")
+            Text("Pay once, and it includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings never pass through Zerro\u{2019}s servers; they go straight to your provider.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)
@@ -624,7 +624,7 @@ private struct SubscriptionOptionCard: View {
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
 private struct ManagedPrivacyNote: View {
     var body: some View {
-        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers \u{2014} it goes straight to that provider on your own key.")
+        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers and goes straight to that provider on your own key.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)
@@ -646,7 +646,7 @@ private struct ManagedPrivacyNote: View {
 private struct AddCreditsCard: View {
     var body: some View {
         OptionCardChrome(padding: VFSpacing.lg) {
-            Text("Choose a pack on the next screen \u{2014} 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
+            Text("Choose a pack on the next screen, from 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
                 .multilineTextAlignment(.leading)

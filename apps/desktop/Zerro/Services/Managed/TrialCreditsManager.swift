@@ -99,17 +99,17 @@ enum TrialStartError: Error, Equatable {
         switch self {
         case .invalidEmail:    return "That doesn\u{2019}t look like a valid email address."
         case .disposableEmail: return "Please use a non-disposable email address."
-        case .rateLimited:     return "Too many attempts \u{2014} please wait a bit and try again."
-        case .sendFailed:      return "Couldn\u{2019}t send the code \u{2014} please try again."
+        case .rateLimited:     return "Too many attempts. Please wait a bit and try again."
+        case .sendFailed:      return "Couldn\u{2019}t send the code. Please try again."
         case .alreadyUsed:     return "This email has already used its free trial."
         case .deviceTrialUsed: return "This Mac has already used its free trial. Upgrade to keep going."
-        case .invalidCode:     return "That code isn\u{2019}t right \u{2014} check it and try again."
-        case .codeExpired:     return "That code expired \u{2014} send a new one."
-        case .tooManyAttempts: return "Too many incorrect codes \u{2014} send a new one."
-        case .network:         return "Couldn\u{2019}t reach Zerro \u{2014} check your connection."
-        case .server:          return "Something went wrong \u{2014} please try again."
-        case .malformedResponse: return "Unexpected response \u{2014} please try again."
-        case .malformedRequest:  return "Something went wrong \u{2014} please try again."
+        case .invalidCode:     return "That code isn\u{2019}t right. Check it and try again."
+        case .codeExpired:     return "That code expired. Send a new one."
+        case .tooManyAttempts: return "Too many incorrect codes. Send a new one."
+        case .network:         return "Couldn\u{2019}t reach Zerro. Check your connection."
+        case .server:          return "Something went wrong. Please try again."
+        case .malformedResponse: return "Unexpected response. Please try again."
+        case .malformedRequest:  return "Something went wrong. Please try again."
         }
     }
 }

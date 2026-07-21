@@ -44,7 +44,7 @@ struct APIAuthSection: View {
         SettingsSection("API Keys") {
             APIKeyRow(
                 model: openAIModel,
-                description: "Optional \u{2014} unlocks the OpenAI chat models, and powers cloud transcription. On-device transcription needs no key. Stored in macOS Keychain."
+                description: "Optional. Unlocks the OpenAI chat models, and powers cloud transcription. On-device transcription needs no key. Stored in macOS Keychain."
             )
             SettingsRowDivider()
             APIKeyRow(

@@ -1084,7 +1084,7 @@ private struct ConfirmRecoveryPillContent: View {
         HStack(spacing: VFSpacing.md) {
             PillLeadingIconBadge(systemImage: "arrow.clockwise", tint: .vfAccentBlue)
 
-            Text("Recording stopped \u{2014} generate a prompt from it?")
+            Text("Recording stopped. Generate a prompt from it?")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Color.vfTextPrimary)
                 .fixedSize()

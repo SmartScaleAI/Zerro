@@ -211,7 +211,7 @@ final class BillingLicenseModel {
         } catch let error as LicenseError {
             phase = .failed(error.userFacingMessage)
         } catch {
-            phase = .failed("Activation failed — please try again.")
+            phase = .failed("Activation failed. Please try again.")
         }
     }
 
@@ -227,7 +227,7 @@ final class BillingLicenseModel {
             } catch let error as LicenseError {
                 phase = .failed(error.userFacingMessage)
             } catch {
-                phase = .failed("Couldn\u{2019}t deactivate — please try again.")
+                phase = .failed("Couldn\u{2019}t deactivate. Please try again.")
             }
         }
     }
@@ -257,11 +257,11 @@ private struct CurrentPlanRow: View {
                 ? "1 trial credit left."
                 : "\(creditsRemaining) trial credits left."
         case .expired:
-            return "You\u{2019}ve used your trial credits \u{2014} subscribe below to keep going."
+            return "You\u{2019}ve used your trial credits. Subscribe below to keep going."
         case .byok:
             // Shown only transiently (a `.byok` user previewing the Managed
             // pane via the switch link); never the lifetime-license framing.
-            return "You\u{2019}re on BYOK \u{2014} subscribe below to switch to Zerro-hosted credits."
+            return "You\u{2019}re on BYOK. Subscribe below to switch to Zerro-hosted credits."
         case .managed:
             return managedDescription
         }
@@ -316,7 +316,7 @@ private struct TrialVerifyRow: View {
     var body: some View {
         SettingsRow(
             label: "Free Trial Credits",
-            description: "Verify your email to start your free trial \u{2014} server-funded credits, no API key needed."
+            description: "Verify your email to start your free trial: server-funded credits, no API key needed."
         ) {
             Button("Verify email") {
                 AppDelegate.openTrialEmailCapture()
@@ -336,7 +336,7 @@ private struct PastDueRow: View {
     var body: some View {
         SettingsRow(
             label: "Payment Issue",
-            description: "A recent payment didn\u{2019}t go through. Update your card to keep your plan \u{2014} you can keep generating on remaining credits in the meantime."
+            description: "A recent payment didn\u{2019}t go through. Update your card to keep your plan. You can keep generating on remaining credits in the meantime."
         ) {
             Button("Update card") {
                 guard let url = BillingLinks.customerPortalURL else {
@@ -372,7 +372,7 @@ enum BillingDateFormat {
     /// " — resets {date}" clause, or "" when there's no real reset date.
     static func resetClause(_ date: Date?) -> String {
         guard let formatted = resetDate(date) else { return "" }
-        return " \u{2014} resets \(formatted)"
+        return " \u{00B7} resets \(formatted)"
     }
 }
 
@@ -418,7 +418,7 @@ private struct LicenseKeyRow: View {
         SettingsRow(
             label: context == .subscription ? "Subscription Key" : "License Key",
             description: context == .subscription
-                ? "From your purchase email \u{2014} activates your subscription on this device. Stored in macOS Keychain."
+                ? "From your purchase email. Activates your subscription on this device. Stored in macOS Keychain."
                 : "Your BYOK license key. Stored in macOS Keychain; activates online once, then works offline.",
             verticalPadding: RowMetrics.verticalPaddingTall
         ) {
@@ -537,7 +537,7 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month if you choose yearly billing \u{2014} 300 credits every month, all six models."
+        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all six models."
     }
 }
 
@@ -750,7 +750,7 @@ private struct UsageMeterRow: View {
         // Managed upgrade instead, escalating on the shared low threshold.
         if isLow(balance: credits) {
             HStack(spacing: VFSpacing.sm) {
-                Text("Running low \u{2014} upgrade to keep going")
+                Text("Running low. Upgrade to keep going")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.vfWarningAmber)
                 Button("Upgrade to Managed") {
@@ -808,7 +808,7 @@ private struct UsageMeterRow: View {
         let url = BillingLinks.topupCheckoutURL
         if low || url != nil {
             HStack(spacing: VFSpacing.sm) {
-                Text(low ? "Running low \u{2014} top up to keep going" : "Need more credits?")
+                Text(low ? "Running low. Top up to keep going" : "Need more credits?")
                     .font(.system(size: 12))
                     .foregroundStyle(low ? Color.vfWarningAmber : Color.vfTextSecondary)
                 if let url {
@@ -849,7 +849,7 @@ private struct ByokManageRow: View {
             label: isLicensed ? "Manage License" : "Get a License",
             description: isLicensed
                 ? "Manage your devices and order in the LemonSqueezy portal."
-                : "$69 one-time \u{2014} includes 1 year of updates. You pay your providers directly for usage."
+                : "$69 one-time. Includes 1 year of updates. You pay your providers directly for usage."
         ) {
             Button(isLicensed ? "Manage devices" : "Get a license") {
                 // Manage devices = portal (not a checkout); Get a license = BYOK checkout.

@@ -590,7 +590,7 @@ struct ZerroApp: App {
         // computed from the persisted hasCompletedOnboarding flag at
         // app-init time; the AppDelegate handles NSApp.activate so the
         // window actually surfaces in front of other apps.
-        Window("Zerro \u{2014} Setup", id: OnboardingScene.windowID) {
+        Window("Zerro Setup", id: OnboardingScene.windowID) {
             OnboardingWindowView()
                 .dockIconVisibility(windowID: OnboardingScene.windowID)
                 .environment(permissions)
@@ -610,7 +610,7 @@ struct ZerroApp: App {
         // guarantees it NEVER auto-presents at launch — it is brought
         // forward only by the recording-start gate via
         // `AppDelegate.openPaywall()` when the user is `.expired`.
-        Window("Zerro \u{2014} Unlock", id: PaywallScene.windowID) {
+        Window("Zerro Unlock", id: PaywallScene.windowID) {
             PaywallView()
                 .dockIconVisibility(windowID: PaywallScene.windowID)
                 .disablesWindowRestoration()
@@ -640,7 +640,7 @@ struct ZerroApp: App {
         // auto-presents (`.suppressed`); AppState brings it forward via
         // `AppDelegate.openTrialEmailCapture()` at the first server-funded
         // generation, and dismisses on verify/cancel.
-        Window("Zerro \u{2014} Free Trial", id: TrialEmailScene.windowID) {
+        Window("Zerro Free Trial", id: TrialEmailScene.windowID) {
             TrialEmailCaptureView()
                 .dockIconVisibility(windowID: TrialEmailScene.windowID)
                 .disablesWindowRestoration()
@@ -656,7 +656,7 @@ struct ZerroApp: App {
         // menu-bar "Send feedback" row and the Settings "Send Feedback" row via
         // openWindow(id:). Mirrors the Settings window's chromeless/fixed-size
         // treatment (`.hiddenTitleBar` + `.contentSize`); never auto-presents.
-        Window("Zerro \u{2014} Feedback", id: FeedbackScene.windowID) {
+        Window("Zerro Feedback", id: FeedbackScene.windowID) {
             FeedbackView()
                 .dockIconVisibility(windowID: FeedbackScene.windowID)
                 .disablesWindowRestoration()
@@ -679,7 +679,7 @@ struct ZerroApp: App {
         // pattern above); otherwise suppressed, and opened manually from the
         // Settings About "What's New" row via openWindow(id:). The AppDelegate
         // handles NSApp.activate for the auto-pop case.
-        Window("Zerro \u{2014} What\u{2019}s New", id: WhatsNewScene.windowID) {
+        Window("Zerro: What\u{2019}s New", id: WhatsNewScene.windowID) {
             WhatsNewView()
                 .dockIconVisibility(windowID: WhatsNewScene.windowID)
                 .disablesWindowRestoration()
