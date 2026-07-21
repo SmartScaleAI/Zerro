@@ -7,7 +7,6 @@ import { Check, Copy, X, Square, ChevronDown, PlayCircle } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
 import { motion, AnimatePresence } from "motion/react"
 import { useEffect, useState } from "react"
-import { APP_VERSION } from "@/lib/site-config"
 
 type PillState = "recording" | "processing" | "ready"
 
@@ -210,7 +209,7 @@ const Hero = () => {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          {`v${APP_VERSION} · Apple Silicon · Signed & notarized`}
+          {"Apple Silicon · Signed & notarized"}
         </p>
       </section>
 
