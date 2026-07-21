@@ -73,7 +73,7 @@ final class MenuBarBillingActionTests: XCTestCase {
     func testManagedPastDueManagesWithNudge() {
         let action = resolve(managed(), isPastDue: true)
         XCTAssertEqual(action.label, "Manage Plan")
-        XCTAssertEqual(action.secondary, "Payment issue \u{2014} update your card")
+        XCTAssertEqual(action.secondary, "Payment issue: update your card")
         XCTAssertEqual(action.trigger, .manage)
     }
 

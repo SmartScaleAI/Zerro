@@ -150,7 +150,7 @@ struct WhatsNewEntryList: View {
             VStack(alignment: .leading, spacing: VFSpacing.sm) {
                 ForEach(entry.highlights) { highlight in
                     HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-                        Text("\u{2014}")
+                        Text("\u{2022}")
                             .font(.system(size: 13))
                             .foregroundStyle(Color.vfTextTertiary)
                         Text(highlight.text)

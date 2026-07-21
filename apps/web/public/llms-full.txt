@@ -1,7 +1,7 @@
-# Zerro — full site content
+# Zerro: full site content
 
 > Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
-> instructions into exactly what you need — an agent prompt, a message, a snippet,
+> instructions into exactly what you need: an agent prompt, a message, a snippet,
 > a document, or a clear answer. Record it. Paste it. Zerro in between.
 
 This file contains the full marketing-site content as Markdown, for AI tools that
@@ -15,13 +15,13 @@ Zerro is a native macOS menu-bar utility that turns a screen recording and spoke
 instructions into exactly what you need: an agent prompt, a ready-to-send message,
 a code or spreadsheet snippet, a written-up document, or a clear answer when you
 just want to understand something. You frame a region of your screen, dictate what
-you want in plain language, and Zerro returns ready-to-use text — paste it into
+you want in plain language, and Zerro returns ready-to-use text. Paste it into
 Cursor, ChatGPT, Claude, or any tool that takes text, or send it to a person.
 
 Processing is local-first: your recording is prepared on your machine before the AI
-step turns it into a prompt. You can let Zerro handle the AI on the Managed plan —
+step turns it into a prompt. You can let Zerro handle the AI on the Managed plan,
 where your prepped (redacted) recording and audio are sent to a third-party AI
-provider — or bring your own OpenAI, Google, or
+provider, or bring your own OpenAI, Google, or
 Anthropic keys, stored in the macOS Keychain, so the request goes straight to the
 provider with no Zerro servers in the middle and no account required.
 
@@ -31,41 +31,41 @@ learn; the whole flow runs from the menu bar.
 
 ---
 
-## How it works — Record. Speak. Copy.
+## How it works: Record. Speak. Copy.
 
 1. **Select a region.** Hit the hotkey, drag to frame the part of your screen you
    want Zerro to see. Native macOS crosshair, no window switching.
 2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
    Point at things, change your mind, ramble. Zerro records up to 3 minutes.
 3. **Your Mac preps it, then AI.** The recording is prepared locally on your
-   machine, with detected on-screen secrets masked. Then an AI call — in the
-   cloud on the Managed plan, or on your own key with BYOK — turns it into the
+   machine, with detected on-screen secrets masked. Then an AI call (in the
+   cloud on the Managed plan, or on your own key with BYOK) turns it into the
    artifact you asked for.
-4. **Paste it anywhere.** The result lands on your clipboard — an agent prompt, a
-   ready-to-send message, a snippet, a document, or a plain-language answer —
+4. **Paste it anywhere.** The result lands on your clipboard (an agent prompt, a
+   ready-to-send message, a snippet, a document, or a plain-language answer),
    ready to drop into Cursor, ChatGPT, Claude, or any tool that takes text, or
    to send to a person.
 
-You get the artifact that fits what you asked for, not a raw transcript — agent
+You get the artifact that fits what you asked for, not a raw transcript: agent
 prompts arrive as structured Markdown with clear sections (such as Context,
 Current State, and Request).
 
 ---
 
-## The difference — stop typing it, just say it
+## The difference: stop typing it, just say it
 
 Today, getting your screen's context to an AI means screenshotting a few parts of
-your screen, pasting them into ChatGPT or your coding agent, and typing out — in
-detail — what you want. Writing that description out is the slow, tedious part.
+your screen, pasting them into ChatGPT or your coding agent, and typing out, in
+detail, what you want. Writing that description out is the slow, tedious part.
 
 With Zerro, you present your screen instead: hit a hotkey, frame the region, and
-talk through what you want out loud. Zerro turns it into exactly what you need — a
-prompt, message, snippet, doc, or answer — ready to paste wherever it goes. Same
+talk through what you want out loud. Zerro turns it into exactly what you need (a
+prompt, message, snippet, doc, or answer), ready to paste wherever it goes. Same
 context, a fraction of the effort.
 
 ---
 
-## Built right — native, local-first, no surprises
+## Built right: native, local-first, no surprises
 
 Zerro is built the way you'd build it if it were your tool.
 
@@ -84,40 +84,40 @@ Zerro is built the way you'd build it if it were your tool.
 
 ---
 
-## The shift — now we're talking
+## The shift: now we're talking
 
-The keyboard was never the point — it was just the only interface we had. As agents
+The keyboard was never the point; it was just the only interface we had. As agents
 get better at acting on what you actually mean, typing out every instruction by hand
 starts to feel like the bottleneck it always was.
 
 You think faster than you type. You talk faster than you think. Voice closes that
-gap — and dictation is becoming the default. You speak nearly 4× faster than you
+gap, and dictation is becoming the default. You speak nearly 4× faster than you
 type. Zerro is built for that future: less typing, more talking.
 
 ---
 
-## Pricing — pay once, or let us handle it
+## Pricing: pay once, or let us handle it
 
-Both BYOK and Managed are available now. Everyone starts free with 30 credits —
-no card, no key, no time limit — then picks a path.
+Both BYOK and Managed are available now. Everyone starts free with 30 credits
+(no card, no key, no time limit), then picks a path.
 
-### BYOK — $69 one-time (available now)
+### BYOK: $69 one-time (available now)
 
 Pay once. Bring your own keys.
 
-- Includes 1 year of updates — your installed version keeps working after
+- Includes 1 year of updates; your installed version keeps working after
 - Bring your own OpenAI, Gemini & Anthropic keys
 - Keys stored in your macOS Keychain
 - No subscription, no account required
 - No servers handling your data
 
-### Managed — $15/month, or $12/month billed yearly ($144/year)
+### Managed: $15/month, or $12/month billed yearly ($144/year)
 
-We handle the tokens — no keys, no setup.
+We handle the tokens: no keys, no setup.
 
 - No API keys required
 - 300 credits per month across 6 models (Claude, GPT & Gemini)
-- Top up anytime — packs from $5 (50 credits) to $300 (10,000 credits)
+- Top up anytime with packs from $5 (50 credits) to $300 (10,000 credits)
 - We manage all token usage
 - Cancel anytime
 
@@ -162,10 +162,10 @@ have Zerro turn a confusing screen into a plain-language document, draft a messa
 or pull out the exact snippet they need, no code involved.
 
 **How much does Zerro cost?**
-Everyone starts free with 30 credits — no card, no key, no time limit. After that,
+Everyone starts free with 30 credits: no card, no key, no time limit. After that,
 BYOK is a one-time $69 purchase that includes 1 year of updates; your installed
-version keeps working after that. Managed — where Zerro handles token usage and no
-API keys are required — is available now at $15/month, or $12/month billed yearly
+version keeps working after that. Managed, where Zerro handles token usage and no
+API keys are required, is available now at $15/month, or $12/month billed yearly
 ($144/year), with 300 credits per month.
 
 **Is my data private?**
@@ -173,7 +173,7 @@ Your recording is prepared locally on your Mac, and a
 best-effort pass masks the on-screen secrets it detects (it can't catch everything)
 before anything leaves your machine. On the Managed and Trial plans, that prepped,
 redacted recording and your spoken narration are sent to a third-party AI provider
-(OpenAI, Google, or Anthropic) to generate the result — audio is sent as recorded
+(OpenAI, Google, or Anthropic) to generate the result; audio is sent as recorded
 and isn't redacted. On BYOK, the request goes straight to the provider on your own
 key, so it never touches Zerro's servers.
 

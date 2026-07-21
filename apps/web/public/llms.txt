@@ -1,24 +1,24 @@
 # Zerro
 
-> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into exactly what you need: an agent prompt, a ready-to-send message, a code or spreadsheet snippet, a written-up document, or a clear answer to your question. Frame a region of your screen, dictate what you want, and Zerro puts ready-to-use text on your clipboard — paste it into Cursor, ChatGPT, Claude, or any tool that takes text, or send it to a person. Processing — including best-effort secret redaction — always happens on your Mac first to prepare the recording; on the Managed plan the prepped recording and your narration go to a third-party AI provider (OpenAI, Google, or Anthropic), or — with BYOK — straight to that provider on your own key, no Zerro servers in the middle and no account required.
+> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken instructions into exactly what you need: an agent prompt, a ready-to-send message, a code or spreadsheet snippet, a written-up document, or a clear answer to your question. Frame a region of your screen, dictate what you want, and Zerro puts ready-to-use text on your clipboard. Paste it into Cursor, ChatGPT, Claude, or any tool that takes text, or send it to a person. Processing (including best-effort secret redaction) always happens on your Mac first to prepare the recording; on the Managed plan the prepped recording and your narration go to a third-party AI provider (OpenAI, Google, or Anthropic), or, with BYOK, straight to that provider on your own key, no Zerro servers in the middle and no account required.
 
-Zerro is built for anyone who would rather talk through what they want than type it out — handing a coding agent real context, drafting a message about what's on screen, grabbing the exact formula or snippet, turning messy notes into a clean write-up, or getting a confusing screen explained. You speak roughly 4× faster than you type; Zerro closes that gap by capturing what's on screen alongside what you say.
+Zerro is built for anyone who would rather talk through what they want than type it out: handing a coding agent real context, drafting a message about what's on screen, grabbing the exact formula or snippet, turning messy notes into a clean write-up, or getting a confusing screen explained. You speak roughly 4× faster than you type; Zerro closes that gap by capturing what's on screen alongside what you say.
 
 ## How it works
 
 - Hit the hotkey and drag to frame the part of your screen Zerro should see.
-- Dictate what you want in plain language — up to 3 minutes per recording.
+- Dictate what you want in plain language, up to 3 minutes per recording.
 - Zerro prepares the recording locally on your Mac, then makes a single API call.
 - Ready-to-use text lands on your clipboard: the artifact that fits what you asked for (an agent prompt, a message, a snippet, a document) or a plain-language answer.
 
 ## Key facts
 
 - Platform: native macOS app (Swift & SwiftUI, built on ScreenCaptureKit). Not Electron.
-- Processing: local-first — your recording is prepared on your machine.
+- Processing: local-first, meaning your recording is prepared on your machine.
 - Keys: bring your own OpenAI, Gemini & Anthropic keys, stored in the macOS Keychain.
 - Recording cap: 3 minutes per recording, for fast and predictable cost.
 - Distribution: signed & notarized .dmg, with Sparkle auto-updates.
-- Free trial: start with 30 credits — no card, no key, no time limit (runs on the Managed pipeline).
+- Free trial: start with 30 credits. No card, no key, no time limit (runs on the Managed pipeline).
 - Pricing: BYOK is $69 one-time (includes 1 year of updates). Managed is $15/month, or $12/month billed yearly ($144/year), with 300 credits per month. Both available now.
 
 ## Links

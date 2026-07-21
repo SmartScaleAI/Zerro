@@ -1009,7 +1009,7 @@ struct AreaSelectorView: View {
     static let permissionTrailingIconSize: CGFloat = 16
     /// Hover-tooltip copy for the fenced tiers' git-shield (verbatim the old
     /// bottom-row reassurance line).
-    static let permissionGitSnapshotTooltip = "Snapshots with git before each change — undo anything."
+    static let permissionGitSnapshotTooltip = "Snapshots with git before each change, so you can undo anything."
     /// Hover-tooltip copy for the Unrestricted ⚠.
     static let permissionUnrestrictedTooltip = "Can make changes outside the git snapshot that Zerro may not be able to undo."
     /// Width of the disclosure chevron box on each collapsed summary row (Agent /
@@ -2390,7 +2390,7 @@ struct AreaSelectorView: View {
     /// number can never drift from the actual confirm gate.
     static var tooSmallMessageText: String {
         let m = Int(AreaSelectorState.minimumSelectionSize)
-        return "Selection too small \u{2014} drag at least \(m) \u{00D7} \(m) to record"
+        return "Selection too small. Drag at least \(m) \u{00D7} \(m) to record"
     }
 
     /// One-time, NON-BLOCKING post-denial explainer (Phase 3): a floating capsule

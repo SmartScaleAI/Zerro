@@ -74,7 +74,7 @@ enum PurchaseSuccessInfo: Equatable {
         case .byok:
             return "Bring-your-own-key is active. Add your provider API key in Settings to start generating."
         case .topup(let added, let total):
-            return "Added \(added) credits \u{2014} \(total) total."
+            return "Added \(added) credits. \(total) total."
         }
     }
 }

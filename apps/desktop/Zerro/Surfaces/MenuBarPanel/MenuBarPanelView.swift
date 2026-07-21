@@ -57,7 +57,7 @@ struct MenuBarBillingAction: Equatable {
             if isPastDue {
                 return MenuBarBillingAction(
                     label: "Manage Plan",
-                    secondary: "Payment issue \u{2014} update your card",
+                    secondary: "Payment issue: update your card",
                     trigger: .manage
                 )
             }

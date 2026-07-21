@@ -88,7 +88,7 @@ struct AccountBillingPane: View {
 
     private var modeTitle: String {
         switch mode {
-        case .managed: return "Managed \u{2014} Zerro\u{2019}s plan + credits"
+        case .managed: return "Managed: Zerro\u{2019}s plan + credits"
         case .byok: return "Bring your own API keys (BYOK)"
         }
     }
@@ -104,9 +104,9 @@ struct AccountBillingPane: View {
         }
         switch mode {
         case .managed:
-            return "Generation runs on Zerro-hosted credits \u{2014} the simplest way to use Zerro."
+            return "Generation runs on Zerro-hosted credits, the simplest way to use Zerro."
         case .byok:
-            return "You pay your providers directly for usage \u{2014} no credits involved."
+            return "You pay your providers directly for usage, with no credits involved."
         }
     }
 
