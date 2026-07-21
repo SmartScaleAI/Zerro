@@ -103,7 +103,7 @@ final class FeedbackModel {
             } catch let error as FeedbackError {
                 phase = .failed(error.userMessage)
             } catch {
-                phase = .failed("Couldn\u{2019}t send your feedback \u{2014} please try again.")
+                phase = .failed("Couldn\u{2019}t send your feedback. Please try again.")
             }
         }
     }
@@ -193,9 +193,9 @@ struct FeedbackView: View {
     private var subtitle: String {
         switch model.kind {
         case .issue:
-            return "Tell us what went wrong, with steps to reproduce if you can \u{2014} not for account or billing help."
+            return "Tell us what went wrong, with steps to reproduce if you can. Not for account or billing help."
         case .feedback:
-            return "Ideas, feature requests, praise, or general feedback \u{2014} not for support issues."
+            return "Ideas, feature requests, praise, or general feedback. Not for support issues."
         }
     }
 

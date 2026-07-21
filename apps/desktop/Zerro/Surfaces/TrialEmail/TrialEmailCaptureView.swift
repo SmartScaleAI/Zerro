@@ -70,7 +70,7 @@ final class TrialEmailModel {
             } catch let error as TrialStartError {
                 phase = .failed(error.userMessage)
             } catch {
-                phase = .failed("Couldn\u{2019}t send the code \u{2014} please try again.")
+                phase = .failed("Couldn\u{2019}t send the code. Please try again.")
             }
         }
     }
@@ -92,7 +92,7 @@ final class TrialEmailModel {
             } catch let error as TrialStartError {
                 phase = .failed(error.userMessage)
             } catch {
-                phase = .failed("Couldn\u{2019}t verify the code \u{2014} please try again.")
+                phase = .failed("Couldn\u{2019}t verify the code. Please try again.")
             }
         }
     }
@@ -168,7 +168,7 @@ struct TrialEmailCaptureView: View {
     private var subhead: String {
         switch model.step {
         case .email:
-            return "Verify your email to get free generations on us \u{2014} no credit card, no API key. We\u{2019}ll send a 6-digit code."
+            return "Verify your email to get free generations on us: no credit card, no API key. We\u{2019}ll send a 6-digit code."
         case .code:
             return "We sent a 6-digit code to \(model.trimmedEmail). Enter it below to finish."
         }

@@ -119,6 +119,15 @@ final class AreaSelectorState {
         )
     }
 
+    /// True in the area mode's initial resting state — before any drag has
+    /// begun and with no walkthrough running. Drives the large centered
+    /// instruction pill: it disappears the instant `beginDrag` sets a
+    /// selection rect, and never shows in `.fullScreen` (that mode keeps
+    /// its own small top prompt).
+    var showsRestingInstructionPill: Bool {
+        mode == .area && selectionRect == nil && toolbarWalkthroughStep == nil
+    }
+
     // MARK: - Confirmable selection
 
     /// Minimum confirmable selection, in view-local points (per axis).
@@ -1205,6 +1214,18 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
         switch self {
         case .mode, .model, .mic: return false
         case .agent, .record:     return true
+        }
+    }
+
+    /// Whether the control this step points at exists ONLY in the Dev-Mode
+    /// toolbar layout — drives the "Dev Mode only" callout badge. Distinct
+    /// from `showsDevControls`: the record step is *displayed* in the Dev
+    /// layout for continuity, but the Record button works in Ask mode too,
+    /// so only `.agent` is genuinely Dev-only.
+    var isDevModeOnly: Bool {
+        switch self {
+        case .agent:                        return true
+        case .mode, .model, .mic, .record:  return false
         }
     }
 }

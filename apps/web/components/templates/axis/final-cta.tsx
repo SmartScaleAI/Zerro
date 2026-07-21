@@ -6,7 +6,6 @@ import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
 import { motion } from "motion/react";
-import { APP_VERSION } from "@/lib/site-config";
 
 const FinalCTA = () => {
     return (
@@ -82,7 +81,7 @@ const FinalCTA = () => {
                             Download for Mac
                         </DownloadButton>
                         <p className="text-sm text-muted-foreground">
-                            {`v${APP_VERSION} · Apple Silicon · Signed & notarized`}
+                            {"Apple Silicon · Signed & notarized"}
                         </p>
                     </div>
                 </div>

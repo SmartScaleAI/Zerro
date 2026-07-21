@@ -411,7 +411,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
                 guard DevSeatbeltSandbox.isAvailable() else {
                     Log.dev.error("Dev agent run aborted — \(DevSeatbeltSandbox.sandboxExecPath, privacy: .public) unavailable; refusing to run a fenced-tier agent unsandboxed")
                     return .failed(.spawnFailed(
-                        "filesystem sandbox unavailable — \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
+                        "filesystem sandbox unavailable: \(DevSeatbeltSandbox.sandboxExecPath) is missing, so the agent can't be confined to the project. Refusing to run unsandboxed in this tier."))
                 }
 
                 // §8 network egress filter: start a loopback host-allowlisting proxy
@@ -432,7 +432,7 @@ final class ClaudeCodeAgentRunner: DevAgentRunner, @unchecked Sendable {
                         proxy.stop()
                         Log.dev.error("Dev agent run aborted — network filter proxy failed to start: \(String(describing: error), privacy: .public)")
                         return .failed(.spawnFailed(
-                            "network egress filter unavailable — \(String(describing: error)). Refusing to run with open network in this tier."))
+                            "network egress filter unavailable: \(String(describing: error)). Refusing to run with open network in this tier."))
                     }
                 }
 
@@ -1225,7 +1225,7 @@ private final class DevAgentProcessExecution: @unchecked Sendable {
         // from `permission_denials` when present.
         let denials = permissionDenialSummary(obj["permission_denials"])
         switch (base, denials) {
-        case let (b?, d?):  return "\(b) — \(d)"
+        case let (b?, d?):  return "\(b) (\(d))"
         case let (b?, nil): return b
         case let (nil, d?): return d
         case (nil, nil):    return nil

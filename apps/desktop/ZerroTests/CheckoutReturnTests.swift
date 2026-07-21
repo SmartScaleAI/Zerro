@@ -405,7 +405,7 @@ final class CheckoutReturnTests: XCTestCase {
         )
         XCTAssertEqual(
             PurchaseSuccessInfo.topup(added: 100, total: 220).detailLine { _ in "" },
-            "Added 100 credits \u{2014} 220 total."
+            "Added 100 credits. 220 total."
         )
     }
 

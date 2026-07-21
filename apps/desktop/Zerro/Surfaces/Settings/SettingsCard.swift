@@ -464,11 +464,11 @@ struct SettingsStatusPill: View {
             }
             SettingsSection("History") {
                 SettingsNavigationRow(
-                    label: "Recent Prompts",
-                    description: "Browse and re-copy your last prompts."
+                    label: "Recent Results",
+                    description: "Browse and re-copy your last results."
                 ) {}
                 SettingsRowDivider()
-                SettingsRow(label: "Clear History", description: "Permanently deletes every saved prompt.") {
+                SettingsRow(label: "Clear History", description: "Permanently deletes every saved result.") {
                     Button("Clear History\u{2026}") {}
                         .buttonStyle(SettingsDestructiveButtonStyle())
                 }

@@ -64,7 +64,7 @@ private struct CrashReportingRow: View {
     var body: some View {
         SettingsRow(
             label: "Send Anonymous Usage Data & Crash Reports",
-            description: "Shares anonymous product usage and crash diagnostics so we can fix bugs and improve Zerro. Recordings, transcripts, generated prompts, and your API key are never sent."
+            description: "Shares anonymous product usage and crash diagnostics so we can fix bugs and improve Zerro. Recordings, transcripts, generated results, and your API key are never sent."
         ) {
             Toggle("Send Anonymous Usage Data & Crash Reports", isOn: $isEnabled)
                 .labelsHidden()
@@ -158,7 +158,7 @@ private struct ResetDefaultsRow: View {
     private func confirmAndReset() {
         let alert = NSAlert()
         alert.messageText = "Reset settings to defaults?"
-        alert.informativeText = "This restores the microphone selection and default output mode to their original values. Your API key and prompt history aren't affected."
+        alert.informativeText = "This restores the microphone selection and default output mode to their original values. Your API key and result history aren't affected."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Reset")
         alert.addButton(withTitle: "Cancel")

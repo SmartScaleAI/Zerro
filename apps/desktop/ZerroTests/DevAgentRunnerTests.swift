@@ -1175,13 +1175,13 @@ final class DevAgentRunnerTests: XCTestCase {
         XCTAssertEqual(
             ClaudeCodeAgentRunner.parseResultErrorForTesting(
                 #"{"type":"result","subtype":"error","is_error":true,"result":"","error":"Permission denied","permission_denials":[{"tool_name":"Bash","tool_use_id":"x","tool_input":{"command":"git fetch origin main"}}]}"#),
-            "Permission denied — Bash: git fetch origin main")
+            "Permission denied (Bash: git fetch origin main)")
         // Multiple denials are joined (capped at 3); a denial without a command
         // falls back to just the tool name.
         XCTAssertEqual(
             ClaudeCodeAgentRunner.parseResultErrorForTesting(
                 #"{"type":"result","is_error":true,"error":"Permission denied","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}},{"tool_name":"WebFetch"}]}"#),
-            "Permission denied — Bash: rm -rf /; WebFetch")
+            "Permission denied (Bash: rm -rf /; WebFetch)")
         // Denials present but no base text → the denial summary stands alone.
         XCTAssertEqual(
             ClaudeCodeAgentRunner.parseResultErrorForTesting(

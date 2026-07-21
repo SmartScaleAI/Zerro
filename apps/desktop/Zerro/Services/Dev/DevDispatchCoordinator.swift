@@ -59,7 +59,7 @@ enum DevDispatchFailure: Equatable, Sendable {
     var userMessage: String {
         switch self {
         case .notAGitRepo:
-            return "Dev Mode needs a git repo — pick a folder that's inside one."
+            return "Dev Mode needs a git repo. Pick a folder that's inside one."
         case .gitUnavailable:
             return "Couldn't find git on your system."
         case .indexLocked:
@@ -67,11 +67,11 @@ enum DevDispatchFailure: Equatable, Sendable {
         case .checkpointFailed:
             return "Couldn't snapshot the project before editing."
         case .agentUnavailable:
-            return "The coding agent isn't available — check it's installed."
+            return "The coding agent isn't available. Check it's installed."
         case .noChangeRequested:
-            return "No concrete change to make — I didn't catch an edit to dispatch."
+            return "No concrete change to make. I didn't catch an edit to dispatch."
         case .revertFailed:
-            return "Couldn't fully restore your files — check your working tree."
+            return "Couldn't fully restore your files. Check your working tree."
         case .confirmDeclined:
             return "Cancelled."
         case .agent(let reason):

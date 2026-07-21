@@ -41,13 +41,13 @@ struct WelcomeStepView: View {
                     .multilineTextAlignment(.center)
 
                 VStack(spacing: VFSpacing.sm) {
-                    Text("Record your screen, narrate what you want, and get a ready-to-paste prompt for your agent.")
+                    Text("Record your screen, narrate what you want, and get a ready-to-paste result \u{2014} a prompt, draft, or snippet.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
-                    Text("We\u{2019}ll set up a few things \u{2014} takes about a minute.")
+                    Text("We\u{2019}ll set up a few things. It takes about a minute.")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.vfTextTertiary)
                         .multilineTextAlignment(.center)
@@ -151,17 +151,17 @@ struct EmailStepView: View {
 
     private var subhead: String {
         if verified {
-            return "Your free trial is ready \u{2014} you\u{2019}re good to go."
+            return "Your free trial is ready. You\u{2019}re good to go."
         }
         if deviceUsed {
-            return "This Mac has already used its free trial. You can continue \u{2014} add your own API keys or subscribe anytime."
+            return "This Mac has already used its free trial. You can continue: add your own API keys or subscribe anytime."
         }
         if alreadyUsed {
-            return "This email has already used its free trial. You can continue \u{2014} add your own API keys or subscribe anytime."
+            return "This email has already used its free trial. You can continue: add your own API keys or subscribe anytime."
         }
         switch step {
         case .email:
-            return "Verify your email to start your free trial \u{2014} no credit card, no API key. We\u{2019}ll send a 6-digit code."
+            return "Verify your email to start your free trial: no credit card, no API key. We\u{2019}ll send a 6-digit code."
         case .code:
             return "We sent a 6-digit code to \(trimmedEmail). Enter it below to finish."
         }
@@ -334,7 +334,7 @@ struct EmailStepView: View {
             } catch let error as TrialStartError {
                 handle(error)
             } catch {
-                handleSystem("Couldn\u{2019}t send the code \u{2014} please try again.", error)
+                handleSystem("Couldn\u{2019}t send the code. Please try again.", error)
             }
         }
     }
@@ -363,7 +363,7 @@ struct EmailStepView: View {
             } catch let error as TrialStartError {
                 handle(error)
             } catch {
-                handleSystem("Couldn\u{2019}t verify the code \u{2014} please try again.", error)
+                handleSystem("Couldn\u{2019}t verify the code. Please try again.", error)
             }
         }
     }
@@ -730,7 +730,7 @@ struct DevModeStepView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text("Normally Zerro copies a ready-to-paste result \u{2014} a prompt, draft, snippet, or doc \u{2014} to your clipboard. Flip the green </> Dev switch in the selector toolbar and Zerro instead hands your narrated recording to a local coding agent \u{2014} like Claude Code \u{2014} that edits the files in your project for you.")
+                Text("Normally Zerro copies a ready-to-paste result (a prompt, draft, snippet, or doc) to your clipboard. Flip the green </> Dev switch in the selector toolbar and Zerro instead hands your narrated recording to a local coding agent, like Claude Code, that edits the files in your project for you.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)

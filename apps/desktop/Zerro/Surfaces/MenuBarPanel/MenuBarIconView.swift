@@ -80,25 +80,29 @@ struct MenuBarIconView: View {
 
     private static func glyph(recording: Bool) -> NSImage {
         guard let base = NSImage(named: "MenuBarLogo") else { return NSImage() }
-        let image = NSImage(size: iconSize)
-        image.lockFocus()
-        let rect = NSRect(origin: .zero, size: iconSize)
-        base.draw(in: rect)
-        #if STAGING
-        // Staging: always tint the glyph amber and bake it in (non-template) so
-        // the menu-bar icon is unmistakably the staging build at a glance —
-        // whether or not a recording is in progress.
-        NSColor(Color.vfStagingAccent).set()
-        rect.fill(using: .sourceAtop)
-        #else
-        if recording {
-            // Tint the drawn glyph red and bake it into the pixels so it
-            // survives the menu bar (template rendering would strip color).
-            NSColor(Color.vfRecordingRed).set()
+        // Drawing handler (not lockFocus) so the glyph re-renders at the
+        // destination's backing scale on every draw — lockFocus would bake a
+        // single bitmap at whatever scale happened to be current, blurring
+        // the icon on Retina bars. The handler can run on any thread; it only
+        // touches the captured base image and static colors.
+        let image = NSImage(size: iconSize, flipped: false) { rect in
+            base.draw(in: rect)
+            #if STAGING
+            // Staging: always tint the glyph amber and bake it in (non-template) so
+            // the menu-bar icon is unmistakably the staging build at a glance —
+            // whether or not a recording is in progress.
+            NSColor(Color.vfStagingAccent).set()
             rect.fill(using: .sourceAtop)
+            #else
+            if recording {
+                // Tint the drawn glyph red and bake it into the pixels so it
+                // survives the menu bar (template rendering would strip color).
+                NSColor(Color.vfRecordingRed).set()
+                rect.fill(using: .sourceAtop)
+            }
+            #endif
+            return true
         }
-        #endif
-        image.unlockFocus()
         #if STAGING
         image.isTemplate = false
         #else

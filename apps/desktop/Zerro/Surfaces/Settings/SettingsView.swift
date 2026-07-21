@@ -20,7 +20,7 @@
 //                  • a category pane → ScrollView of that category's
 //                    section view(s)
 //                  • History + route == .recentPrompts →
-//                    SettingsSubpage(title: "Recent Prompts") wrapping
+//                    SettingsSubpage(title: "Recent Results") wrapping
 //                    RecentPromptsView, with a back chevron + Escape.
 //
 //  The five categories (SETTINGS / ACCOUNT groups) regroup the seven
@@ -142,7 +142,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailContent: some View {
         if selection == .history && route == .recentPrompts {
-            SettingsSubpage(title: "Recent Prompts") {
+            SettingsSubpage(title: "Recent Results") {
                 route = .root
             } content: {
                 RecentPromptsView()
