@@ -379,7 +379,7 @@ final class DevRecoveryTests: XCTestCase {
         XCTAssertEqual(read(repo, "untracked.txt"), "u1\n",
                        "the user's pre-existing untracked file must not be lost")
         // The detail copy now signals the failed restore.
-        XCTAssertTrue(app.devRecoveryDetail.contains("try Undo again"),
+        XCTAssertTrue(app.devRecoveryDetail.contains("Try Undo again"),
                       "the re-presented offer copy reflects the failed restore: \(app.devRecoveryDetail)")
     }
 

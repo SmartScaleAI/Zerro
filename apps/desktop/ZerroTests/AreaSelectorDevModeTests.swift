@@ -263,10 +263,10 @@ final class AreaSelectorDevModeTests: XCTestCase {
     }
 
     /// The bottom git-reassurance copy now lives ONLY as the Permissions safety
-    /// tooltip — verbatim the old line — so the wording didn't silently change.
+    /// tooltip — pinned verbatim so the wording can't silently change.
     func testGitSnapshotCopyPreservedVerbatim() {
         XCTAssertEqual(AreaSelectorView.permissionGitSnapshotTooltip,
-                       "Snapshots with git before each change — undo anything.")
+                       "Snapshots with git before each change, so you can undo anything.")
     }
 
     // MARK: - Accordion behavior (state)
