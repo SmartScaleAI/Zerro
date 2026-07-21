@@ -42,6 +42,12 @@ TAG="app-v$VERSION"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Pre-release gate: the version being cut must have a What's New entry in
+# Changelog.swift, or the in-app pop silently skips this release (see
+# docs/DEPLOY-RUNBOOK.md step 6). CI enforces the same check; failing here is
+# just faster. Intentional internal-only release: ZERRO_ALLOW_NO_CHANGELOG=1.
+python3 "$ROOT/Scripts/check_changelog_entry.py" --version "$VERSION"
+
 # Must be on main.
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$BRANCH" != "main" ]; then

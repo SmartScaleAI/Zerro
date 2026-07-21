@@ -50,6 +50,23 @@ jobs:
           token: ${{ secrets.RELEASE_PAT }}
           fetch-depth: 0
 
+      # Pre-release gate: the version in apps/desktop/VERSION must have a
+      # What's New entry in Changelog.swift (the in-app pop silently skips a
+      # release without one — 1.4.24–1.4.28 shipped that way). Runs BEFORE the
+      # tag step, so a forgotten entry blocks the release before any build
+      # starts, instead of surfacing as the after-the-fact Slack ⚠️.
+      # Intentional internal-only release: put [no-changelog] in the promotion
+      # PR title (it lands in the merge commit message checked here).
+      # The message goes through an env var, never inlined into the script
+      # (PR titles are attacker-ish input; inlining would allow injection).
+      - name: Require a What's New entry for this VERSION
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          python3 apps/desktop/Scripts/check_changelog_entry.py \
+            --commit-message "${COMMIT_MESSAGE:-}"
+
       # Read the marketing version from the file and create the tag if — and only
       # if — it doesn't already exist yet. The guard makes this idempotent: the
       # first commit that introduces VERSION at the current shipped version (and

@@ -73,6 +73,22 @@ jobs:
           echo "Releasing $MARKETING (build $BUILD)"
 
       # ----------------------------------------------------------------------
+      # Pre-build gate: the released version must have a What's New entry in
+      # Changelog.swift. auto-release.yml runs the same check before tagging;
+      # this one also covers hand-pushed app-v* tags and workflow_dispatch
+      # runs, and it fails BEFORE the expensive sign/notarize pipeline.
+      # Intentional internal-only release: [no-changelog] in the released
+      # commit's message (for a promotion PR, the PR title lands in the merge
+      # commit body), or re-run via auto-release with the marker.
+      - name: Require a What's New entry for this version
+        run: |
+          set -euo pipefail
+          COMMIT_MESSAGE="$(git log -1 --format=%B HEAD)"
+          python3 Scripts/check_changelog_entry.py \
+            --version "${{ steps.ver.outputs.marketing }}" \
+            --commit-message "$COMMIT_MESSAGE"
+
+      # ----------------------------------------------------------------------
       # Select the Xcode toolchain. Pinned to 26.4.x to keep the build toolchain
       # aligned with the macOS 26.4 deployment target, not to dodge a compiler
       # bug.
