@@ -90,7 +90,7 @@ struct PaywallCopy: Equatable {
     /// Trial exhausted (the original wall). Copy unchanged from v1.
     static let blocked = PaywallCopy(
         headline: "You\u{2019}ve used your free generations",
-        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work.",
+        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste result. Pick the option that fits how you work.",
         windowTitle: "Unlock"
     )
     /// Voluntary upgrade from an active trial — lead with the Managed value,

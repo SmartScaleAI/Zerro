@@ -531,7 +531,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .displayChanged:
             return "Your display setup changed while recording (a screen was added, removed, or rearranged), so capture stopped. Start a new recording on your current setup."
         case .processingFailed:
-            return "Zerro couldn\u{2019}t turn your recording into a prompt. Press Retry to run it again; if it keeps failing, record the screen once more."
+            return "Zerro couldn\u{2019}t turn your recording into a result. Press Retry to run it again; if it keeps failing, record the screen once more."
         case .recordingTooShort:
             return "Your recording was under \(Int(ProcessingConfig.minRecordingSeconds)) seconds, too short to capture enough context. Record again, narrating the change you want as you go."
         case .diskFull:
@@ -569,7 +569,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .trialVerificationRequired:
             return "Verify your email to unlock your free trial generations. Check your inbox for the verification link, then start a new recording."
         case .trialCreditsExhausted:
-            return "You\u{2019}ve used all your free trial generations. Subscribe, or add your own API keys under Settings, to keep generating prompts."
+            return "You\u{2019}ve used all your free trial generations. Subscribe, or add your own API keys under Settings, to keep generating results."
         }
     }
 }

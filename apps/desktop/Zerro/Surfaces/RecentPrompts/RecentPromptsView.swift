@@ -52,10 +52,10 @@ struct RecentPromptsView: View {
             Image(systemName: "tray")
                 .font(.system(size: 36))
                 .foregroundStyle(Color.vfTextTertiary)
-            Text("No prompts yet")
+            Text("No results yet")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.vfTextPrimary)
-            Text("Your recent prompts will appear here.")
+            Text("Your recent results will appear here.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
         }
@@ -141,7 +141,7 @@ struct RecentPromptsView: View {
         } else {
             VStack {
                 Spacer()
-                Text("Select a prompt")
+                Text("Select a result")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.vfTextSecondary)
                 Spacer()
@@ -365,9 +365,9 @@ private struct DetailPane: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(SettingsDestructiveButtonStyle())
-            .help("Delete this prompt")
+            .help("Delete this result")
             .confirmationDialog(
-                "Delete this prompt?",
+                "Delete this result?",
                 isPresented: $isConfirmingDelete
             ) {
                 Button("Delete", role: .destructive, action: onDelete)
