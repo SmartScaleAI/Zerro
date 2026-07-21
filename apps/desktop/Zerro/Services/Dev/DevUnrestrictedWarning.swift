@@ -49,7 +49,7 @@ enum DevUnrestrictedWarning {
 
     static let title = "Run in Unrestricted mode?"
     static let body = """
-        Unrestricted mode lets the agent do anything on your computer — run any \
+        Unrestricted mode lets the agent do anything on your computer: run any \
         command, access the internet, and make changes outside this project, \
         including to databases, deployments, and files Zerro cannot undo. Only \
         continue if you fully trust the agent with this task. (Ask Permission and \

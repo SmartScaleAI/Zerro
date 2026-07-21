@@ -106,17 +106,17 @@ enum LicenseError: Error, Equatable {
         case .atActivationLimit:
             return "This license is already active on the maximum number of devices. Deactivate one from your account, then try again."
         case .keyInvalid:
-            return "We couldn\u{2019}t find that license key \u{2014} double-check it and try again."
+            return "We couldn\u{2019}t find that license key. Double-check it and try again."
         case .keyDisabled:
             return "This license has been deactivated. If you think that\u{2019}s a mistake, reach out to support."
         case .keyExpired:
             return "This license has expired."
         case .network:
-            return "Couldn\u{2019}t reach the licensing server \u{2014} check your connection and try again."
+            return "Couldn\u{2019}t reach the licensing server. Check your connection and try again."
         case .malformedResponse:
-            return "Something went wrong activating your license \u{2014} please try again."
+            return "Something went wrong activating your license. Please try again."
         case .replaceCancelled:
-            return "Kept your current license \u{2014} activation cancelled."
+            return "Kept your current license. Activation cancelled."
         }
     }
 }
@@ -660,7 +660,7 @@ final class LicenseService {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Replace your current license?"
-        alert.informativeText = "This Mac is already activated with a different license. Activating this key will replace it on this device. Your existing license stays valid \u{2014} you can re-activate it later."
+        alert.informativeText = "This Mac is already activated with a different license. Activating this key will replace it on this device. Your existing license stays valid, and you can re-activate it later."
         alert.addButton(withTitle: "Replace License")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

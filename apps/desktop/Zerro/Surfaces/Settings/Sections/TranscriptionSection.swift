@@ -137,7 +137,7 @@ struct TranscriptionSection: View {
     private var modelStatusRow: some View {
         switch modelManager.state {
         case .notDownloaded:
-            SettingsRow(label: "On-device model", description: "Not downloaded \u{2014} a one-time ~1 GB download.") {
+            SettingsRow(label: "On-device model", description: "Not downloaded. A one-time ~1 GB download.") {
                 Button("Download") { modelManager.download() }
                     .buttonStyle(SettingsSecondaryButtonStyle())
             }
@@ -158,7 +158,7 @@ struct TranscriptionSection: View {
             }
 
         case let .ready(version):
-            SettingsRow(label: "On-device model", description: "Installed \u{2014} \(version).") {
+            SettingsRow(label: "On-device model", description: "Installed: \(version).") {
                 HStack(spacing: VFSpacing.sm) {
                     Button("Re-download") { modelManager.download() }
                         .buttonStyle(SettingsSecondaryButtonStyle())

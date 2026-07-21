@@ -70,11 +70,11 @@ enum Changelog {
             date: releaseDate(2026, 7, 2),
             highlights: [
                 ChangelogHighlight(
-                    "On-device transcription \u{2014} recordings can now be transcribed locally with Whisper, no API key or network required.",
+                    "On-device transcription: recordings can now be transcribed locally with Whisper, no API key or network required.",
                     kind: .new
                 ),
                 ChangelogHighlight(
-                    "Resize and move a selection before recording \u{2014} grab an edge handle or drag from inside the area.",
+                    "Resize and move a selection before recording: grab an edge handle or drag from inside the area.",
                     kind: .new
                 ),
                 ChangelogHighlight(
@@ -96,7 +96,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 30),
             highlights: [
                 ChangelogHighlight(
-                    "Top up with one-time Credit Packs from the Upgrade window \u{2014} no subscription change needed.",
+                    "Top up with one-time Credit Packs from the Upgrade window, no subscription change needed.",
                     kind: .new
                 ),
                 ChangelogHighlight(
@@ -114,11 +114,11 @@ enum Changelog {
             date: releaseDate(2026, 6, 29),
             highlights: [
                 ChangelogHighlight(
-                    "Dev Mode status is now descriptive \u{2014} see what the agent is doing, with a live step-by-step plan line as it works.",
+                    "Dev Mode status is now descriptive: see what the agent is doing, with a live step-by-step plan line as it works.",
                     kind: .improved
                 ),
                 ChangelogHighlight(
-                    "Onboarding is shorter \u{2014} Screen Recording and Microphone are now a single permissions step.",
+                    "Onboarding is shorter: Screen Recording and Microphone are now a single permissions step.",
                     kind: .improved
                 ),
                 ChangelogHighlight(
@@ -132,7 +132,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 27),
             highlights: [
                 ChangelogHighlight(
-                    "Claude Code now signs in reliably in Dev Mode\u{2019}s fenced tiers \u{2014} it runs in its own built-in sandbox instead of an external wrapper.",
+                    "Claude Code now signs in reliably in Dev Mode\u{2019}s fenced tiers: it runs in its own built-in sandbox instead of an external wrapper.",
                     kind: .fixed
                 ),
             ]
@@ -149,11 +149,11 @@ enum Changelog {
             date: releaseDate(2026, 6, 26),
             highlights: [
                 ChangelogHighlight(
-                    "Snappier capture processing \u{2014} heavy frame extraction now runs off the main thread.",
+                    "Snappier capture processing: heavy frame extraction now runs off the main thread.",
                     kind: .improved
                 ),
                 ChangelogHighlight(
-                    "More reliable automatic updates \u{2014} older versions can always reach the newest release.",
+                    "More reliable automatic updates: older versions can always reach the newest release.",
                     kind: .improved
                 ),
             ]
@@ -173,7 +173,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 25),
             highlights: [
                 ChangelogHighlight(
-                    "After checkout, a dedicated \u{201C}Activate your key\u{201D} window opens with your license prefilled \u{2014} one click to activate.",
+                    "After checkout, a dedicated \u{201C}Activate your key\u{201D} window opens with your license prefilled, one click to activate.",
                     kind: .improved
                 ),
             ]
@@ -183,7 +183,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 25),
             highlights: [
                 ChangelogHighlight(
-                    "Dev Mode permission tiers \u{2014} one trust dial from Ask Permission to Auto-Approve to Unrestricted.",
+                    "Dev Mode permission tiers: one trust dial from Ask Permission to Auto-Approve to Unrestricted.",
                     kind: .new
                 ),
                 ChangelogHighlight(
@@ -230,7 +230,7 @@ enum Changelog {
                     kind: .improved
                 ),
                 ChangelogHighlight(
-                    "A failed Dev Mode undo can no longer lose work \u{2014} the checkpoint is kept until your files are verified restored.",
+                    "A failed Dev Mode undo can no longer lose work: the checkpoint is kept until your files are verified restored.",
                     kind: .fixed
                 ),
             ]
@@ -247,7 +247,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 22),
             highlights: [
                 ChangelogHighlight(
-                    "Dev Mode can start a brand-new project from scratch \u{2014} pick a location and Zerro creates the folder and repository.",
+                    "Dev Mode can start a brand-new project from scratch: pick a location and Zerro creates the folder and repository.",
                     kind: .new
                 ),
                 ChangelogHighlight(
@@ -269,7 +269,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 19),
             highlights: [
                 ChangelogHighlight(
-                    "More dictation fixes \u{2014} common words can no longer be swapped for project-specific terms.",
+                    "More dictation fixes: common words can no longer be swapped for project-specific terms.",
                     kind: .fixed
                 ),
             ]
@@ -289,7 +289,7 @@ enum Changelog {
             date: releaseDate(2026, 6, 19),
             highlights: [
                 ChangelogHighlight(
-                    "Starting a new recording can no longer dismiss an unresolved result \u{2014} the hotkey flashes the pill instead.",
+                    "Starting a new recording can no longer dismiss an unresolved result: the hotkey flashes the pill instead.",
                     kind: .fixed
                 ),
             ]
@@ -351,11 +351,11 @@ enum Changelog {
             date: releaseDate(2026, 6, 18),
             highlights: [
                 ChangelogHighlight(
-                    "Dev Mode \u{2014} record what you want changed and Zerro dispatches it to your coding agent (Claude Code, Codex, or Cursor), with automatic checkpoints so everything can be undone.",
+                    "Dev Mode: record what you want changed and Zerro dispatches it to your coding agent (Claude Code, Codex, or Cursor), with automatic checkpoints so everything can be undone.",
                     kind: .new
                 ),
                 ChangelogHighlight(
-                    "Point and say \u{201C}this button\u{201D} \u{2014} Dev Mode tracks your cursor and reads the screen to resolve what you mean.",
+                    "Point and say \u{201C}this button\u{201D}: Dev Mode tracks your cursor and reads the screen to resolve what you mean.",
                     kind: .new
                 ),
                 ChangelogHighlight(
@@ -363,7 +363,7 @@ enum Changelog {
                     kind: .new
                 ),
                 ChangelogHighlight(
-                    "Redesigned capture toolbar \u{2014} compact icons with a Prompt/Dev mode switch.",
+                    "Redesigned capture toolbar: compact icons with a Prompt/Dev mode switch.",
                     kind: .improved
                 ),
                 ChangelogHighlight(
@@ -377,11 +377,11 @@ enum Changelog {
             date: releaseDate(2026, 6, 16),
             highlights: [
                 ChangelogHighlight(
-                    "Subscribe in-app: Zerro Pro with metered credits \u{2014} no API key required.",
+                    "Subscribe in-app: Zerro Pro with metered credits, no API key required.",
                     kind: .new
                 ),
                 ChangelogHighlight(
-                    "Full-screen capture \u{2014} record the entire display with one click from the selector.",
+                    "Full-screen capture: record the entire display with one click from the selector.",
                     kind: .new
                 ),
                 ChangelogHighlight(

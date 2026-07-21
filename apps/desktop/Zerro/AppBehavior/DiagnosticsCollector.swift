@@ -69,7 +69,7 @@ enum DiagnosticsCollector {
         // notice+ to keep volume down and reduce the chance of
         // routine .info / .debug noise carrying anything sensitive.
         lines.append("")
-        lines.append("Recent log entries (last 60s, level=notice+) — REVIEW BEFORE SHARING:")
+        lines.append("Recent log entries (last 60s, level=notice+). REVIEW BEFORE SHARING:")
         let logLines = recentLogLines(durationSeconds: 60)
         if logLines.isEmpty {
             lines.append("  (no entries)")

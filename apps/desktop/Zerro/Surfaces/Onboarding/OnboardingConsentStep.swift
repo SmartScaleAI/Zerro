@@ -74,7 +74,7 @@ struct ConsentStepView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.vfTextPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Metadata only \u{2014} never your recordings, transcripts, or results. Change anytime in Settings.")
+                Text("Metadata only, never your recordings, transcripts, or prompts. Change anytime in Settings.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextTertiary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -139,7 +139,7 @@ extension AppState {
             // pill's EXISTING Cancel (the same SIGTERM→SIGKILL safe-cancel).
             // Advisory only: nothing is auto-killed, the next output clears it.
             if devAgentStalled {
-                return .devProgress(label: devProgressLabel("Agent seems stuck \u{2014} Cancel?"), cancellable: true)
+                return .devProgress(label: devProgressLabel("Agent seems stuck. Cancel?"), cancellable: true)
             }
             return .devProgress(label: devProgressLabel(devRunSubstatus?.label ?? "Working\u{2026}"), cancellable: true)
         case .devReverting:
@@ -193,7 +193,7 @@ extension AppState {
         // (the marker + snapshot are retained so it stays retryable) — say so rather
         // than silently re-showing the original offer copy.
         if devRecoveryRevertFailed {
-            return "Couldn\u{2019}t fully restore your files \u{2014} try Undo again."
+            return "Couldn\u{2019}t fully restore your files. Try Undo again."
         }
         let stat = pending.diffStat
         let files = stat.filesChanged == 1 ? "1 file" : "\(stat.filesChanged) files"
