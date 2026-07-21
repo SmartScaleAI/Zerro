@@ -1084,7 +1084,7 @@ private struct ConfirmRecoveryPillContent: View {
         HStack(spacing: VFSpacing.md) {
             PillLeadingIconBadge(systemImage: "arrow.clockwise", tint: .vfAccentBlue)
 
-            Text("Recording stopped \u{2014} generate a prompt from it?")
+            Text("Recording stopped \u{2014} generate a result from it?")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Color.vfTextPrimary)
                 .fixedSize()
@@ -1327,7 +1327,7 @@ private struct ResultPillContent: View {
 // pinned inside the locked capsule.
 #Preview("Processing \u{00B7} Long") {
     PillView(state: .processing(
-        stepLabel: "Writing your prompt and gathering all the context it needs\u{2026} \u{00B7} 0:42"
+        stepLabel: "Writing your result and gathering all the context it needs\u{2026} \u{00B7} 0:42"
     ))
     .padding(40)
     .background(Color.vfPanelBackground)

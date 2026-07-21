@@ -41,7 +41,7 @@ struct WelcomeStepView: View {
                     .multilineTextAlignment(.center)
 
                 VStack(spacing: VFSpacing.sm) {
-                    Text("Record your screen, narrate what you want, and get a ready-to-paste prompt for your agent.")
+                    Text("Record your screen, narrate what you want, and get a ready-to-paste result \u{2014} a prompt, draft, or snippet.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)

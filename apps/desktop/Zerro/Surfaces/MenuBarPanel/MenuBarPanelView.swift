@@ -161,15 +161,15 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
-            // Phase A library-stays-readable rule: "Copy last prompt" and
-            // "Recent Prompts" read RecentPromptStore directly and never
+            // Phase A library-stays-readable rule: "Copy last result" and
+            // "Recent Results" read RecentPromptStore directly and never
             // consult EntitlementStore.canGenerate — reading/copying past
             // prompts stays open in every entitlement state, `.expired`
             // included. Only the recording START path (handleHotkey) gates;
             // do not add an entitlement check to these rows.
             CopyLastPromptRow()
             MenuRow(
-                label: "Recent Prompts",
+                label: "Recent Results",
                 trailing: .submenu,
                 forceSelected: highlightRecentPrompts || showRecentPrompts
             ) {
@@ -937,7 +937,7 @@ private struct BillingActionRow: View {
 // prompt will be copied. Phase 11: reads the most-recent entry from the
 // RecentPromptStore in the environment; clicking copies that prompt's
 // full body to the clipboard. When the history is empty the row renders
-// disabled with a "No prompts yet" preview line.
+// disabled with a "No results yet" preview line.
 
 private struct CopyLastPromptRow: View {
     @Environment(RecentPromptStore.self) private var recentPrompts
@@ -960,11 +960,11 @@ private struct CopyLastPromptRow: View {
     var body: some View {
         Button(action: copyToClipboard) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Copy last prompt")
+                Text("Copy last result")
                     .font(.system(size: 13))
                     .foregroundStyle(primaryColor)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry?.title ?? "No prompts yet")
+                Text(entry?.title ?? "No results yet")
                     .font(.system(size: 11))
                     .foregroundStyle(secondaryColor)
                     .lineLimit(1)
@@ -1038,7 +1038,7 @@ struct RecentPromptsSubmenu: View {
 
 private struct RecentPromptsEmptyState: View {
     var body: some View {
-        Text("No prompts yet")
+        Text("No results yet")
             .font(.system(size: 12))
             .foregroundStyle(Color.vfTextTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)

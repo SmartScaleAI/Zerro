@@ -43,8 +43,8 @@ struct HistorySection: View {
         // check here; do not gate this path.
         SettingsSection("History") {
             SettingsNavigationRow(
-                label: "Recent Prompts",
-                description: "Browse and re-copy your last prompts."
+                label: "Recent Results",
+                description: "Browse and re-copy your last results."
             ) {
                 onOpenRecentPrompts()
             }
@@ -53,7 +53,7 @@ struct HistorySection: View {
 
             SettingsRow(
                 label: "Clear History",
-                description: "Permanently deletes every saved prompt. You'll be asked to confirm first."
+                description: "Permanently deletes every saved result. You'll be asked to confirm first."
             ) {
                 Button("Clear History...", action: confirmAndClear)
                     .buttonStyle(SettingsDestructiveButtonStyle())
@@ -64,8 +64,8 @@ struct HistorySection: View {
 
     private func confirmAndClear() {
         let alert = NSAlert()
-        alert.messageText = "Clear all saved prompts?"
-        alert.informativeText = "This removes every prompt from your history. The change can't be undone."
+        alert.messageText = "Clear all saved results?"
+        alert.informativeText = "This removes every result from your history. The change can't be undone."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Clear History")
         alert.addButton(withTitle: "Cancel")

@@ -90,7 +90,7 @@ struct PaywallCopy: Equatable {
     /// Trial exhausted (the original wall). Copy unchanged from v1.
     static let blocked = PaywallCopy(
         headline: "You\u{2019}ve used your free generations",
-        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste prompt. Pick the option that fits how you work.",
+        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste result. Pick the option that fits how you work.",
         windowTitle: "Unlock"
     )
     /// Voluntary upgrade from an active trial — lead with the Managed value,
@@ -624,7 +624,7 @@ private struct SubscriptionOptionCard: View {
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
 private struct ManagedPrivacyNote: View {
     var body: some View {
-        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers \u{2014} it goes straight to that provider on your own key.")
+        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your result. Bring-your-own-key skips our servers \u{2014} it goes straight to that provider on your own key.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)
