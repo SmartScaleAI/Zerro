@@ -159,6 +159,11 @@ struct PillView: View {
     var onStop: () -> Void = {}
     var onCancel: () -> Void = {}
     var onCopy: () -> Void = {}
+    /// The expanded card's artifact-corner copy icon — copies the artifact
+    /// body alone (`AppState.resultCopyPayload`), where `onCopy` is the
+    /// footer's whole-response Copy. Default no-op for #Preview
+    /// blocks and the states that never render an artifact.
+    var onCopyArtifact: () -> Void = {}
     var onToggleExpand: () -> Void = {}
     var onDismissError: () -> Void = {}
     /// Re-runs the API stage against the already-processed recording on
@@ -381,6 +386,7 @@ struct PillView: View {
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
                 onCopy: onCopy,
+                onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
             )
@@ -392,6 +398,7 @@ struct PillView: View {
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
                 onCopy: onCopy,
+                onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
             )
@@ -1141,6 +1148,10 @@ private struct ResultPillContent: View {
     /// single-line header exactly as before.
     let chargeLine: String?
     let onCopy: () -> Void
+    /// Forwarded to the expanded card's artifact-corner copy icon (artifact
+    /// body only). The compact capsule ignores it — signatures stay uniform
+    /// across the two forms.
+    let onCopyArtifact: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
     /// as a circular close badge after the Hide/View toggle in the header
@@ -1161,6 +1172,7 @@ private struct ResultPillContent: View {
                     noNarration: noNarration,
                     stoppedBySleep: stoppedBySleep,
                     onCopy: onCopy,
+                    onCopyArtifact: onCopyArtifact,
                     onCollapse: onToggleExpand,
                     onDismiss: onDismiss
                 )

@@ -3590,17 +3590,35 @@ final class AppState {
         )
     }
 
-    /// The Copy button's payload per the §2 per-type table (revised
+    /// The artifact-scope copy payload per the §2 per-type table (revised
     /// 2026-06-12): the artifact body alone for EVERY type — the Attached
     /// Context is internal-only and is never copied. A chat-only
     /// response copies the chat text. Falls back to the raw output when
-    /// parsing produced no structure.
+    /// parsing produced no structure. Feeds the artifact well's corner copy
+    /// icon (and the history rows); the footer's whole-response copy is
+    /// `resultFullCopyPayload`.
     var resultCopyPayload: String? {
         guard let parsed = output else { return generatedPrompt }
         guard let artifact = parsed.artifact else {
             return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
         }
         return artifact.body
+    }
+
+    /// The footer Copy payload — the whole response: the chat summary, then
+    /// the artifact (a `snippet` fenced as a markdown code block so it pastes
+    /// as code; other types appended raw). Chat-only falls back to the
+    /// summary, then the raw generatedPrompt — never nil/empty.
+    var resultFullCopyPayload: String? {
+        guard let parsed = output else { return generatedPrompt }
+        guard let artifact = parsed.artifact else {
+            return parsed.chatText.isEmpty ? generatedPrompt : parsed.chatText
+        }
+        let body: String = artifact.type.rendersMonospace
+            ? "```\n\(artifact.body)\n```"
+            : artifact.body
+        let summary = parsed.chatText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return summary.isEmpty ? body : "\(summary)\n\n\(body)"
     }
 
     /// The system-prompt mode for the CURRENT recording's generation: `.dev` for
