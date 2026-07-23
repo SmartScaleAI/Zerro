@@ -271,7 +271,7 @@ export default function ToolFeature() {
                     It Writes Itself.
                 </h2>
                 <p className="max-w-xl text-base text-muted-foreground">
-                    Every recording becomes exactly what you need: an agent prompt, a message, a snippet, or a document, written up and ready to use. Or, when you just want to understand something, a clear answer in plain language.
+                    Every recording becomes exactly what you need: an answer, a prompt, a message, a snippet, or a document, written up and ready to use.
                 </p>
             </div>
 

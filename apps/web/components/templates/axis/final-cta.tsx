@@ -48,9 +48,10 @@ const FinalCTA = () => {
                 </div>
 
                 <div className="relative flex flex-col items-center text-center gap-8">
-                    <h2 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground leading-[1.05] max-w-3xl">
-                        Record it. Paste it.{" "}
-                        <br />
+                    <div className='flex flex-col items-center gap-4'>
+                        <h2 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground leading-[1.05] max-w-3xl">
+                        Explain with{" "}
+                    
                         <motion.span
                             className="bg-clip-text text-transparent bg-[length:200%_auto]"
                             style={{
@@ -64,12 +65,14 @@ const FinalCTA = () => {
                                 ease: "linear",
                             }}
                         >
-                            Zerro in between.
-                        </motion.span>
+                            Zerro
+                        </motion.span>{" "}
+                        effort.
                     </h2>
                     <p className="max-w-xl text-base text-muted-foreground">
-                        Stop describing what you want. Show it. Zerro turns the recording into exactly what you need: a prompt, a message, a snippet, a document, or a straight answer.
+                        Stop typing what you want. Show it. Zerro turns the recording into exactly what you need.
                     </p>
+                    </div>
                     <div className="flex flex-col items-center gap-3">
                         <DownloadButton
                             placement="final_cta"

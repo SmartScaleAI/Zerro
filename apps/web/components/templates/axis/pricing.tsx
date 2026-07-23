@@ -98,9 +98,23 @@ type Tier = {
     placement: string;
 };
 
-// Order matters: cards render left-to-right in array order. The highlighted
-// Managed plan (the primary, recommended path) leads on the left; BYOK second.
+// Order matters: cards render left-to-right in array order. Free is the entry
+// point on the left, the highlighted Managed plan (the primary, recommended
+// path) sits in the middle, and BYOK closes on the right.
 const tiers: Tier[] = [
+    {
+        name: "Free",
+        blurb: "Try Zerro before you pay anything.",
+        price: "$0",
+        cadence: "to start",
+        features: [
+            "30 free credits to start",
+            "Recommended model: Gemini 3.5 Flash",
+            "No card, no key, no time limit.",
+        ],
+        cta: { label: "Download for Mac", variant: "outline" },
+        placement: "pricing_free",
+    },
     {
         name: "Managed",
         blurb: "We handle the AI. No keys, no setup.",
@@ -117,7 +131,6 @@ const tiers: Tier[] = [
         badge: "Most popular",
         limitedOffer: true,
         features: [
-            "30 free credits to start",
             {
                 label: "300 credits per month",
                 note: "≈ 50 generations on standard models.",
@@ -139,7 +152,6 @@ const tiers: Tier[] = [
         comparePrice: "$99",
         limitedOffer: true,
         features: [
-            "30 free credits to start",
             "Includes 1 year of updates; your installed version keeps working after",
             "Bring your own OpenAI, Gemini & Anthropic API keys",
             "All 5 models: Claude, GPT & Gemini",
@@ -195,25 +207,26 @@ const Pricing = () => {
                 >
                     <AnimatedBorder />
                     <Sparkles className="h-4 w-4" strokeWidth={2} />
-                    Get your free credits
+                    Try it free
                 </DownloadButton>
                 <p className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     Start free with 30 credits. No card, no key, no time limit.
                 </p>
             </div>
 
-            {/* Cards. Both plans share the same promotion, so each card carries its
-                own "Limited offer" badge straddling its top edge (half above, half
-                on the card) rather than a single detached badge above the pair. The
-                wrapper's top margin reserves room for the badges' overhang. */}
-            <div className="relative z-10 mt-10 lg:mt-12 max-w-4xl mx-auto">
-                {/* Stacked on mobile, the BYOK card's "Limited offer" badge
-                    straddles its top edge and would smush against the Managed
-                    card above with only gap-4 between them — so the single-column
+            {/* Cards. Both paid plans share the same promotion, so each of those
+                cards carries its own "Limited offer" badge straddling its top edge
+                (half above, half on the card) rather than a single detached badge
+                above the pair; the Free card carries no badge. The wrapper's top
+                margin reserves room for the badges' overhang. */}
+            <div className="relative z-10 mt-10 lg:mt-12 max-w-6xl mx-auto">
+                {/* Stacked on mobile, the paid cards' "Limited offer" badges
+                    straddle their top edge and would smush against the card
+                    above with only gap-4 between them — so the single-column
                     vertical gap is widened to clear the badge's overhang. Side by
                     side at lg the badges overhang into the wrapper's top margin,
                     so the tighter lg:gap-6 (horizontal) is unaffected. */}
-                <div className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-2 lg:gap-6">
+                <div className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-3 lg:gap-6">
                 {tiers.map((tier, i) => {
                     const isSubscription = !!tier.monthly;
                     const showYearly = isSubscription && billing === "yearly";
