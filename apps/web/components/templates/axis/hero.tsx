@@ -133,7 +133,7 @@ const MorphingPill = () => {
               >
                 <Check className="h-3 w-3 text-white" strokeWidth={3} />
               </motion.div>
-              <span className="text-sm font-medium">Ready to paste</span>
+              <span className="text-sm font-medium">Response ready</span>
             </div>
             <div className="flex items-center gap-4">
               <button className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
