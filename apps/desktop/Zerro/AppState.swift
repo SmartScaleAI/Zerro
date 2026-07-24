@@ -4117,6 +4117,7 @@ final class AppState {
         case .noChangeRequested:  return "no_change_requested"
         case .revertFailed:       return "revert_failed"
         case .confirmDeclined:    return "confirm_declined"
+        case .sessionExpired:     return "agent_auth_expired"
         case .agent(let reason):
             switch reason {
             case .nonZeroExit:          return "agent_nonzero_exit"

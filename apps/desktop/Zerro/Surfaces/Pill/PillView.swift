@@ -1589,6 +1589,22 @@ private struct ResultPillContent: View {
         .background(Color.vfPanelBackground)
 }
 
+#Preview("Dev failed \u{00B7} session expired") {
+    // The recoverable auth-failure card (`.sessionExpired`): plain sign-back-in
+    // instructions in place of the raw "API Error: 401 …" text, same chrome and
+    // Revert + Retry footer as any dev failure.
+    PillView(state: .devFailed(
+        headline: "Claude Code session expired",
+        detail: "Your Claude Code login has expired. In Terminal, run: claude, "
+            + "then type /login to sign back in (or run: claude setup-token for a "
+            + "longer-lived login), then Retry. Your approved change is saved, so "
+            + "Retry re-runs it as is.",
+        canRevert: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
 #Preview("Dev failed \u{00B7} no revert") {
     // A failure BEFORE the checkpoint (non-git folder / missing agent): nothing to
     // undo, so the footer drops Revert and shows Retry alone — the header X stays.
