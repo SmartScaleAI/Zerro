@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useDeferredValue, useRef, useState } from "react"
 import { motion } from "motion/react"
 import { Play } from "lucide-react"
 
@@ -28,18 +28,32 @@ const USE_CASES: UseCase[] = [
     playLabel: "Play the scrolling capture walkthrough",
   },
   {
-    id: "dev-mode",
-    label: "Dev Mode",
+    id: "compare-tabs",
+    label: "Compare tabs",
     src: PLACEHOLDER_SRC,
     poster: PLACEHOLDER_POSTER,
-    playLabel: "Play the Dev Mode walkthrough",
+    playLabel: "Play the compare tabs walkthrough",
   },
   {
-    id: "custom-output",
-    label: "Custom Output",
+    id: "explain-a-video",
+    label: "Explain a video",
     src: PLACEHOLDER_SRC,
     poster: PLACEHOLDER_POSTER,
-    playLabel: "Play the Custom Output walkthrough",
+    playLabel: "Play the explain a video walkthrough",
+  },
+  {
+    id: "verify-changes",
+    label: "Verify changes",
+    src: PLACEHOLDER_SRC,
+    poster: PLACEHOLDER_POSTER,
+    playLabel: "Play the verify changes walkthrough",
+  },
+  {
+    id: "get-unstuck",
+    label: "Get unstuck",
+    src: PLACEHOLDER_SRC,
+    poster: PLACEHOLDER_POSTER,
+    playLabel: "Play the get unstuck walkthrough",
   },
 ]
 
@@ -48,7 +62,12 @@ const Feature = () => {
   const [hasStarted, setHasStarted] = useState(false)
   const [useCaseId, setUseCaseId] = useState(USE_CASES[0].id)
 
-  const useCase = USE_CASES.find((u) => u.id === useCaseId) ?? USE_CASES[0]
+  // Remounting the <video> is the expensive part of a tab switch. Deferring it
+  // lets the tab highlight repaint immediately instead of stalling on the
+  // video teardown + metadata load.
+  const deferredUseCaseId = useDeferredValue(useCaseId)
+  const useCase =
+    USE_CASES.find((u) => u.id === deferredUseCaseId) ?? USE_CASES[0]
 
   return (
     <motion.section
@@ -76,28 +95,41 @@ const Feature = () => {
       <div className="mb-5 flex justify-center">
         <div
           role="group"
-          aria-label="Show walkthrough for a use case"
+          aria-label="Show walkthrough for an example use case"
           className="flex flex-wrap items-center justify-center gap-0.5 rounded-2xl bg-foreground/[0.06] p-0.5 ring-1 ring-foreground/10 sm:rounded-full"
         >
-          {USE_CASES.map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              onClick={() => {
-                if (u.id === useCaseId) return
-                setUseCaseId(u.id)
-                setHasStarted(false)
-              }}
-              aria-pressed={u.id === useCaseId}
-              className={`rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 ${
-                u.id === useCaseId
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {u.label}
-            </button>
-          ))}
+          {USE_CASES.map((u) => {
+            const isActive = u.id === useCaseId
+            return (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => {
+                  if (u.id === useCaseId) return
+                  setUseCaseId(u.id)
+                  setHasStarted(false)
+                }}
+                aria-pressed={isActive}
+                className={`relative rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 ${
+                  isActive
+                    ? "text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {/* One shared highlight that slides between tabs. A single
+                    element can't double-render the way two crossfading
+                    per-button backgrounds could. */}
+                {isActive && (
+                  <motion.span
+                    layoutId="use-case-highlight"
+                    className="absolute inset-0 rounded-full bg-foreground"
+                    transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                  />
+                )}
+                <span className="relative">{u.label}</span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -106,7 +138,7 @@ const Feature = () => {
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true, amount: 0.3 }}
         transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="relative mx-auto max-w-[1120px] overflow-hidden rounded-2xl border border-border"
+        className="relative mx-auto max-w-[992px] overflow-hidden rounded-2xl border border-border"
       >
         <video
           // Keyed by use case so switching tabs remounts a fresh, unplayed
@@ -138,6 +170,11 @@ const Feature = () => {
           </button>
         )}
       </motion.div>
+
+      {/* Quiet footnote so the tabs read as a sampler, not the full menu. */}
+      <p className="mt-5 text-center text-sm text-muted-foreground/80">
+        Just a few examples. Show Zerro anything and ask for what you need.
+      </p>
     </motion.section>
   )
 }

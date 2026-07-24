@@ -5,7 +5,28 @@ import { AnimatedBorder } from "@/components/ui/animated-border";
 import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
+import { TypewriterWords } from "@/components/ui/typewriter-words";
 import { motion } from "motion/react";
+
+const TYPEWRITER_WORDS = [
+    "Explain",
+    "Write",
+    "Code",
+    "Build",
+    "Prompt",
+    "Work",
+    "Create",
+    "Ask",
+];
+
+// The color stops of the animated "Zerro" gradient below, cycled one solid
+// color per typed word so the headline stays in the same palette.
+const TYPEWRITER_COLORS = [
+    "rgb(135,160,215)",
+    "rgb(115,190,165)",
+    "rgb(180,140,215)",
+    "rgb(125,190,150)",
+];
 
 const FinalCTA = () => {
     return (
@@ -50,8 +71,12 @@ const FinalCTA = () => {
                 <div className="relative flex flex-col items-center text-center gap-8">
                     <div className='flex flex-col items-center gap-4'>
                         <h2 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground leading-[1.05] max-w-3xl">
-                        Explain with{" "}
-                    
+                        <TypewriterWords
+                            words={TYPEWRITER_WORDS}
+                            colors={TYPEWRITER_COLORS}
+                        />{" "}
+                        with{" "}
+
                         <motion.span
                             className="bg-clip-text text-transparent bg-[length:200%_auto]"
                             style={{
