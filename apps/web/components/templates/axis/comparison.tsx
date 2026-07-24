@@ -159,8 +159,7 @@ const Comparison = () => {
           Stop Typing. Just Say It.
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
-          Record your screen, say what you want, and Zerro turns it into exactly
-          what you need. No typing a description by hand.
+          Screenshots can show the AI your screen, but they can&apos;t point out what you&apos;re focused on or spell out what you want changed.
         </p>
       </div>
 
