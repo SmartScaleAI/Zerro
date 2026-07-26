@@ -209,7 +209,7 @@ const Pricing = () => {
                     <Sparkles className="h-4 w-4" strokeWidth={2} />
                     Try it free
                 </DownloadButton>
-                <p className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <p className="text-center text-sm font-medium text-muted-foreground">
                     Start free with 30 credits. No card, no key, no time limit.
                 </p>
             </div>

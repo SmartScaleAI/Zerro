@@ -89,7 +89,7 @@ const Feature = () => {
         <div
           role="group"
           aria-label="Show walkthrough for an example use case"
-          className="flex flex-wrap items-center justify-center gap-0.5 rounded-2xl bg-foreground/[0.06] p-0.5 ring-1 ring-foreground/10 sm:rounded-full"
+          className="grid w-full max-w-[360px] grid-cols-2 gap-1 rounded-2xl bg-foreground/[0.06] p-1 ring-1 ring-foreground/10 sm:flex sm:w-auto sm:max-w-none sm:flex-wrap sm:items-center sm:justify-center sm:gap-0.5 sm:rounded-full sm:p-0.5"
         >
           {USE_CASES.map((u) => {
             const isActive = u.id === useCaseId
@@ -103,7 +103,7 @@ const Feature = () => {
                   setHasStarted(false)
                 }}
                 aria-pressed={isActive}
-                className={`relative rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 ${
+                className={`relative rounded-full px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 sm:py-1 ${
                   isActive
                     ? "text-background"
                     : "text-muted-foreground hover:text-foreground"
