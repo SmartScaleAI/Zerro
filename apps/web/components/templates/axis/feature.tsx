@@ -30,29 +30,22 @@ const USE_CASES: UseCase[] = [
   {
     id: "compare-tabs",
     label: "Compare tabs",
-    src: PLACEHOLDER_SRC,
-    poster: PLACEHOLDER_POSTER,
+    src: "/videos/compare-tabs.mp4",
+    poster: "/videos/compare-tabs-poster.jpg",
     playLabel: "Play the compare tabs walkthrough",
   },
   {
     id: "explain-a-video",
     label: "Explain a video",
-    src: PLACEHOLDER_SRC,
-    poster: PLACEHOLDER_POSTER,
+    src: "/videos/explain-a-video.mp4",
+    poster: "/videos/explain-a-video-poster.jpg",
     playLabel: "Play the explain a video walkthrough",
-  },
-  {
-    id: "verify-changes",
-    label: "Verify changes",
-    src: PLACEHOLDER_SRC,
-    poster: PLACEHOLDER_POSTER,
-    playLabel: "Play the verify changes walkthrough",
   },
   {
     id: "get-unstuck",
     label: "Get unstuck",
-    src: PLACEHOLDER_SRC,
-    poster: PLACEHOLDER_POSTER,
+    src: "/videos/get-unstuck.mp4",
+    poster: "/videos/get-unstuck-poster.jpg",
     playLabel: "Play the get unstuck walkthrough",
   },
 ]
@@ -86,7 +79,7 @@ const Feature = () => {
           Record. Speak. Done.
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
-          Explain what you need and get a ready-to-use artifact or answer in seconds.
+          Explain what you need and get a ready-to-use result in seconds.
         </p>
       </div>
 
@@ -164,8 +157,8 @@ const Feature = () => {
             onClick={() => videoRef.current?.play()}
             className="group absolute inset-0 flex items-center justify-center"
           >
-            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 group-hover:scale-105 sm:h-20 sm:w-20">
-              <Play className="h-6 w-6 translate-x-0.5 fill-white text-white sm:h-7 sm:w-7" />
+            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-black/50 shadow-lg ring-1 ring-white/30 backdrop-blur-md transition-transform duration-200 group-hover:scale-105 sm:h-20 sm:w-20">
+              <Play className="h-6 w-6 translate-x-0.5 fill-white text-white drop-shadow sm:h-7 sm:w-7" />
             </span>
           </button>
         )}

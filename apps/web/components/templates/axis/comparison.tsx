@@ -156,7 +156,7 @@ const Comparison = () => {
           The difference
         </p>
         <h2 className="max-w-2xl text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">
-          Stop Typing. Just Say It.
+          Screenshots miss the point.
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
           Screenshots can show the AI your screen, but they can&apos;t point out what you&apos;re focused on or spell out what you want changed.
