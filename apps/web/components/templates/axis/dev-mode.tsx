@@ -468,7 +468,7 @@ function DevModeFlow() {
 
                     {/* Subtitle — what the user is saying out loud */}
                     <motion.div
-                        className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-2 rounded-lg bg-black/70 px-3 py-2 backdrop-blur-sm"
+                        className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-2.5 rounded-xl bg-black/70 px-4 py-3 backdrop-blur-sm"
                         initial={false}
                         animate={{
                             opacity: showSubtitle ? 1 : 0,
@@ -476,14 +476,14 @@ function DevModeFlow() {
                         }}
                         transition={{ duration: 0.3 }}
                     >
-                        <Mic className="h-3.5 w-3.5 shrink-0 text-green-400" strokeWidth={1.8} />
+                        <Mic className="h-5 w-5 shrink-0 text-green-400" strokeWidth={1.8} />
                         {/* Live waveform while speaking */}
                         <div className="flex shrink-0 items-end gap-[2px]">
                             {[0.5, 0.9, 0.6, 1, 0.55, 0.85].map((h, i) => (
                                 <motion.span
                                     key={i}
-                                    className="w-[2px] rounded-full bg-green-400/80"
-                                    style={{ height: 14, originY: 1 }}
+                                    className="w-[2.5px] rounded-full bg-green-400/80"
+                                    style={{ height: 20, originY: 1 }}
                                     animate={
                                         speaking
                                             ? { scaleY: [0.35, h, 0.35] }
@@ -502,7 +502,7 @@ function DevModeFlow() {
                                 />
                             ))}
                         </div>
-                        <span className="truncate text-[12px] text-white/85">
+                        <span className="truncate text-sm text-white/85">
                             &ldquo;Fix this card so it matches the other cards in this section.&rdquo;
                         </span>
                     </motion.div>

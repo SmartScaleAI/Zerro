@@ -47,10 +47,108 @@ enum Changelog {
     /// The bundled, curated changelog — newest first. This is the single
     /// source of truth for both the auto-pop and the About → What's New
     /// window. Keep bullets short, human, and user-facing (what changed for
-    /// them, not which internals moved). Entries below 1.4.23 were distilled
-    /// from each release tag's app-only commit range
-    /// (`git log --no-merges app-vP..app-vN -- apps/desktop/`).
+    /// them, not which internals moved). Entries below 1.4.23, plus the
+    /// 1.4.24…1.4.28 backfill, were distilled from each release tag's app-only
+    /// commit range (`git log --no-merges app-vP..app-vN -- apps/desktop/`).
+    /// Scripts/check_changelog_entry.py fails the release when the version in
+    /// apps/desktop/VERSION has no entry here, so this list can't silently
+    /// fall behind again.
     static let entries: [ChangelogEntry] = [
+        ChangelogEntry(
+            version: "1.4.29",
+            date: releaseDate(2026, 7, 21),
+            highlights: [
+                ChangelogHighlight(
+                    "\u{201C}Prompt\u{201D} is now \u{201C}Result\u{201D}: the menu bar, your history, and Settings all use the clearer name.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "The area selector\u{2019}s instruction pill is bigger and centered, so the next step is easier to spot.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "The capture-toolbar tour now marks the agent step with a \u{201C}Dev Mode only\u{201D} badge.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "The menu bar icon is sharper on Retina displays.",
+                    kind: .fixed
+                ),
+                ChangelogHighlight(
+                    "The What\u{2019}s New history in Settings \u{2192} About & Support is caught up: releases 1.4.24 through 1.4.28 have their notes again.",
+                    kind: .fixed
+                ),
+            ]
+        ),
+        ChangelogEntry(
+            version: "1.4.28",
+            date: releaseDate(2026, 7, 21),
+            highlights: [
+                ChangelogHighlight(
+                    "Renamed \u{201C}Prompt\u{201D} to \u{201C}Result\u{201D} across the menu bar, history, and Settings.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "A bigger, centered instruction pill while the area selector waits for you to drag.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "The capture-toolbar tour\u{2019}s agent step is labeled \u{201C}Dev Mode only\u{201D}.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "Fixed a blurry menu bar icon on Retina displays.",
+                    kind: .fixed
+                ),
+            ]
+        ),
+        ChangelogEntry(
+            version: "1.4.27",
+            date: releaseDate(2026, 7, 20),
+            highlights: [
+                ChangelogHighlight("Performance and stability improvements.", kind: .note),
+            ]
+        ),
+        ChangelogEntry(
+            version: "1.4.26",
+            date: releaseDate(2026, 7, 20),
+            highlights: [
+                ChangelogHighlight(
+                    "Artifact mode is now called Ask, across the toolbar and Settings.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "Dev Mode shows a Cancel button when the agent stalls, and canceling now reliably stops the agent and all of its helper processes.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "The status pill appears on the display you\u{2019}re recording, and the microphone picker updates when devices are plugged in or unplugged.",
+                    kind: .fixed
+                ),
+                ChangelogHighlight(
+                    "A recording that finishes just as macOS revokes Screen Recording permission is no longer lost.",
+                    kind: .fixed
+                ),
+                ChangelogHighlight(
+                    "Privacy hardening: analytics wait for your consent, and home-folder paths are stripped from diagnostics.",
+                    kind: .improved
+                ),
+            ]
+        ),
+        ChangelogEntry(
+            version: "1.4.25",
+            date: releaseDate(2026, 7, 3),
+            highlights: [
+                ChangelogHighlight("Performance and stability improvements.", kind: .note),
+            ]
+        ),
+        ChangelogEntry(
+            version: "1.4.24",
+            date: releaseDate(2026, 7, 3),
+            highlights: [
+                ChangelogHighlight("Performance and stability improvements.", kind: .note),
+            ]
+        ),
         ChangelogEntry(
             version: "1.4.23",
             date: releaseDate(2026, 7, 2),

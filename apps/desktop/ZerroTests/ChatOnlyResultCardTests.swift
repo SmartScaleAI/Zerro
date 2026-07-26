@@ -10,12 +10,14 @@
 //  behavior: a chat-only response still lays out cleanly with its text, the
 //  charge line (when managed), and the dismiss chrome — no layout break.
 //
-//  The chat-only card now also offers a plain "Copy" action (matching the
-//  artifact behavior). Two seams cover it deterministically without UI
-//  automation: `AppState.resultCopyPayload` supplies the chat text the button
-//  copies (falling back to the raw `generatedPrompt`), and
-//  `OutputCardView.showsCopyAction` decides whether the footer renders the
-//  Copy button at all.
+//  The card offers the two-tier copy model: the footer Copy copies the
+//  whole response and the artifact well's corner icon copies the artifact
+//  body alone. Three seams cover it deterministically without UI automation:
+//  `AppState.resultFullCopyPayload` supplies the whole-response payload
+//  (summary + artifact, snippet fenced), `AppState.resultCopyPayload` the
+//  artifact-scope payload (both falling back to the raw `generatedPrompt`),
+//  and `OutputCardView.showsCopyAction` decides whether the footer renders
+//  the Copy button at all.
 //
 
 import AppKit
@@ -62,6 +64,25 @@ final class ChatOnlyResultCardTests: XCTestCase {
                 chatText: "The lockfile is stale \u{2014} re-run install to clear it.",
                 artifact: nil
             )
+        )
+
+        let image = try render(view)
+        XCTAssertGreaterThan(image.size.width, 0)
+        XCTAssertGreaterThan(image.size.height, 0)
+    }
+
+    /// The expanded artifact card lays out with the merged single scroll and
+    /// both copy affordances: the corner icon on the artifact well and the
+    /// Copy footer. A regression in either (or in the shared scroll
+    /// wrapping summary + well) fails the render here.
+    func testArtifactExpandedWithTwoTierCopyRenders() throws {
+        let view = PillView(
+            state: .resultExpanded,
+            result: ResultPresentation(
+                chatText: "Here is a prompt you can hand straight to your agent.",
+                artifact: sampleArtifact
+            ),
+            chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
         )
 
         let image = try render(view)
@@ -138,6 +159,100 @@ final class ChatOnlyResultCardTests: XCTestCase {
         )
 
         XCTAssertEqual(appState.resultCopyPayload, "the raw fallback text")
+    }
+
+    // MARK: Full-copy payload seam (AppState.resultFullCopyPayload)
+
+    /// The footer Copy with an artifact joins the summary and the artifact
+    /// body with a blank line — the whole response in one paste.
+    func testResultFullCopyPayloadJoinsSummaryAndArtifactBody() {
+        let appState = AppState()
+        appState.output = Output(
+            chatText: "Here is a prompt for that refactor.",
+            artifact: Artifact(
+                type: .agentPrompt, rawType: "agent_prompt",
+                title: "Fix the bug", body: "Do the thing."
+            ),
+            isValid: true,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(
+            appState.resultFullCopyPayload,
+            "Here is a prompt for that refactor.\n\nDo the thing."
+        )
+    }
+
+    /// A `snippet` body is fenced as a markdown code block so it pastes as
+    /// code into docs/Slack/editors; other types are appended raw (above).
+    func testResultFullCopyPayloadFencesSnippetBody() {
+        let appState = AppState()
+        appState.output = Output(
+            chatText: "This one-liner clears the cache.",
+            artifact: Artifact(
+                type: .snippet, rawType: "snippet",
+                title: "Clear the cache", body: "rm -rf node_modules/.cache"
+            ),
+            isValid: true,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(
+            appState.resultFullCopyPayload,
+            "This one-liner clears the cache.\n\n```\nrm -rf node_modules/.cache\n```"
+        )
+    }
+
+    /// An artifact with no summary copies the body alone — no leading blank
+    /// line.
+    func testResultFullCopyPayloadOmitsEmptySummary() {
+        let appState = AppState()
+        appState.output = Output(
+            chatText: "  \n",
+            artifact: Artifact(
+                type: .document, rawType: "document",
+                title: "Release note", body: "The full note text."
+            ),
+            isValid: true,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(appState.resultFullCopyPayload, "The full note text.")
+    }
+
+    /// A chat-only response copies the chat text — same as the artifact-scope
+    /// payload, so the footer Copy never surprises on a plain answer.
+    func testResultFullCopyPayloadReturnsChatTextForChatOnly() {
+        let appState = AppState()
+        appState.generatedPrompt = "<<<raw model output>>>"
+        appState.output = Output(
+            chatText: "Nothing on screen needs a code change.",
+            artifact: nil,
+            isValid: true,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(appState.resultFullCopyPayload, "Nothing on screen needs a code change.")
+    }
+
+    /// Empty chat + malformed parse falls back to the raw `generatedPrompt` —
+    /// never nil/empty, mirroring `resultCopyPayload`.
+    func testResultFullCopyPayloadFallsBackToGeneratedPromptWhenChatEmpty() {
+        let appState = AppState()
+        appState.generatedPrompt = "the raw fallback text"
+        appState.output = Output(
+            chatText: "",
+            artifact: nil,
+            isValid: false,
+            wasRecovered: false,
+            warnings: []
+        )
+
+        XCTAssertEqual(appState.resultFullCopyPayload, "the raw fallback text")
     }
 
     // MARK: Copy visibility seam (OutputCardView.showsCopyAction)

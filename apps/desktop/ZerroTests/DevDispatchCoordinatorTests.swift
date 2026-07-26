@@ -213,6 +213,55 @@ final class DevDispatchCoordinatorTests: XCTestCase {
         XCTAssertEqual(diff?.filesChanged, 1)
     }
 
+    func testAuthExpiredExitMapsToSessionExpired() async throws {
+        initRepo()
+        write("app.css", "blue\n")
+        git("add", "-A"); git("commit", "-m", "baseline")
+
+        // The exact failure that prompted this: Claude Code's expired-OAuth 401,
+        // reported in its terminal `result` text. It must map to the recoverable
+        // `.sessionExpired` state (carrying the agent id for the tailored copy),
+        // NOT the generic `.agent(.nonZeroExit)` raw-error card. The checkpoint
+        // is kept exactly as on any agent failure, so Revert stays available.
+        let raw = "Failed to authenticate. API Error: 401 OAuth access token has "
+            + "expired. Re-authenticate to continue."
+        let runner = FakeRunner(result: .failed(.nonZeroExit(code: 1, stderrTail: raw)))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
+            onPhase: { _ in }
+        )
+
+        guard case .failed(let failure, let checkpoint, let service, _) = outcome else {
+            return XCTFail("expected failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .sessionExpired(agentID: "fake"))
+        XCTAssertNotNil(checkpoint, "checkpoint kept so the user can Revert")
+        XCTAssertNotNil(service)
+    }
+
+    func testNonAuthExitStaysGenericAgentFailure() async throws {
+        initRepo()
+        write("app.css", "blue\n")
+        git("add", "-A"); git("commit", "-m", "baseline")
+
+        // An unrelated non-zero exit must NOT be reclassified — only the
+        // 401/OAuth shape becomes `.sessionExpired`.
+        let runner = FakeRunner(result: .failed(.nonZeroExit(code: 1, stderrTail: "npm ERR! build failed")))
+        let coordinator = DevDispatchCoordinator(runner: runner)
+
+        let outcome = await coordinator.dispatch(
+            prompt: "go", projectURL: repo, agent: agentEntry(), tier: .askPermission,
+            onPhase: { _ in }
+        )
+
+        guard case .failed(let failure, _, _, _) = outcome else {
+            return XCTFail("expected failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .agent(.nonZeroExit(code: 1, stderrTail: "npm ERR! build failed")))
+    }
+
     // MARK: - Checkpoint surfacing + cancel (Milestone 7)
 
     func testSurfacesCheckpointBeforeDispatching() async throws {

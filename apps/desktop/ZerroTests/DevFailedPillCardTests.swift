@@ -80,6 +80,10 @@ final class DevFailedPillCardTests: XCTestCase {
         let failures: [DevDispatchFailure] = [
             .notAGitRepo, .gitUnavailable, .indexLocked, .checkpointFailed,
             .agentUnavailable, .noChangeRequested, .revertFailed, .confirmDeclined,
+            .sessionExpired(agentID: DevAgentRegistry.claudeCodeID),
+            .sessionExpired(agentID: DevAgentRegistry.codexID),
+            .sessionExpired(agentID: DevAgentRegistry.cursorID),
+            .sessionExpired(agentID: "someday-agent"),
             .agent(.nonZeroExit(code: 2, stderrTail: Self.longAgentError)),
             .agent(.spawnFailed("boom")), .agent(.busy), .agent(.cancelled),
         ]
@@ -93,6 +97,32 @@ final class DevFailedPillCardTests: XCTestCase {
         XCTAssertNotEqual(exit.headline, exit.userMessage)
         XCTAssertFalse(exit.headline.contains("ActionRequiredError"),
                        "the headline must be a label, not the agent's raw error")
+    }
+
+    // MARK: Session-expired copy (recoverable auth failure)
+
+    /// `.sessionExpired` replaced the raw "API Error: 401 OAuth access token has
+    /// expired" text — its user-facing copy must stay plain-language: no status
+    /// codes or API jargon, and (for the known agents) the concrete terminal
+    /// command to sign back in.
+    func testSessionExpiredCopyIsPlainLanguage() {
+        let cases: [(DevDispatchFailure, expectedCommand: String)] = [
+            (.sessionExpired(agentID: DevAgentRegistry.claudeCodeID), "/login"),
+            (.sessionExpired(agentID: DevAgentRegistry.codexID), "codex login"),
+            (.sessionExpired(agentID: DevAgentRegistry.cursorID), "cursor-agent"),
+        ]
+        for (failure, command) in cases {
+            let message = failure.userMessage
+            XCTAssertFalse(message.contains("401"), "no status codes in user copy: \(message)")
+            XCTAssertFalse(message.contains("API"), "no API jargon in user copy: \(message)")
+            XCTAssertFalse(message.lowercased().contains("oauth"), "no OAuth jargon in user copy: \(message)")
+            XCTAssertTrue(message.contains(command), "copy must give the sign-in command: \(message)")
+            XCTAssertTrue(message.contains("Retry"), "copy must point at Retry (the prompt is preserved): \(message)")
+        }
+        // The unknown-agent fallback still reads as a session problem with a way out.
+        let fallback = DevDispatchFailure.sessionExpired(agentID: "someday-agent").userMessage
+        XCTAssertFalse(fallback.contains("401"))
+        XCTAssertTrue(fallback.contains("Retry"))
     }
 
     // MARK: Render smoke (no truncation)

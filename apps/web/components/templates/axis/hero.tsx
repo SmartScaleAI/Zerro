@@ -133,7 +133,7 @@ const MorphingPill = () => {
               >
                 <Check className="h-3 w-3 text-white" strokeWidth={3} />
               </motion.div>
-              <span className="text-sm font-medium">Ready to paste</span>
+              <span className="text-sm font-medium">Response ready</span>
             </div>
             <div className="flex items-center gap-4">
               <button className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
@@ -161,9 +161,9 @@ const Hero = () => {
       viewport={{ once: true, amount: 0.15 }}
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
-      <section className="flex w-full max-w-4xl flex-col items-center gap-7 text-center">
+      <section className="flex w-full max-w-4xl flex-col items-center text-center">
         <h1 className="text-5xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-[85px]">
-          Give your agent
+          Give your AI
           <br />
           <motion.span
             className="bg-clip-text text-transparent bg-[length:200%_auto]"
@@ -181,13 +181,10 @@ const Hero = () => {
             eyes and ears.
           </motion.span>
         </h1>
-        <p className="max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
-          Record your screen, dictate what you want, and Zerro turns it into
-          exactly what you need: an agent prompt, a message, a snippet, a
-          written-up document, or even real-time updates to your website or
-          application.
+        <p className="mt-5 max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
+          Record your screen, explain what you want, get what you need.
         </p>
-        <div className="flex flex-row flex-wrap items-center justify-center gap-3">
+        <div className="mt-7 flex flex-row flex-wrap items-center justify-center gap-3">
           <DownloadButton
             placement="hero"
             className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
@@ -208,7 +205,7 @@ const Hero = () => {
             How it works
           </Button>
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="mt-4 text-sm text-muted-foreground">
           {"Apple Silicon · Signed & notarized"}
         </p>
       </section>

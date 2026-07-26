@@ -2,7 +2,7 @@
 
 > Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
 > instructions into exactly what you need: an agent prompt, a message, a snippet,
-> a document, or a clear answer. Record it. Paste it. Zerro in between.
+> a document, or a clear answer. Explain with Zerro effort.
 
 This file contains the full marketing-site content as Markdown, for AI tools that
 want deep ingestion. Source: https://getzerro.app
@@ -31,7 +31,7 @@ learn; the whole flow runs from the menu bar.
 
 ---
 
-## How it works: Record. Speak. Copy.
+## How it works: Record. Speak. Done.
 
 1. **Select a region.** Hit the hotkey, drag to frame the part of your screen you
    want Zerro to see. Native macOS crosshair, no window switching.

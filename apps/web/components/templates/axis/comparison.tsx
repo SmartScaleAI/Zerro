@@ -47,7 +47,7 @@ const AFTER: Column = {
     { icon: Mic, text: "Talk through what you want, out loud" },
     {
       icon: ClipboardCheck,
-      text: "Paste the finished result wherever it goes",
+      text: "Finished result in seconds",
     },
   ],
   footnote: "Say it instead of typing it. Same context, a fraction of the effort.",
@@ -156,11 +156,10 @@ const Comparison = () => {
           The difference
         </p>
         <h2 className="max-w-2xl text-3xl leading-tight font-medium tracking-tight text-foreground sm:text-4xl lg:text-5xl">
-          Stop Typing It. Just Say It
+          Screenshots miss the point.
         </h2>
         <p className="max-w-xl text-base text-muted-foreground">
-          Record your screen, say what you want, and Zerro turns it into exactly
-          what you need. No typing a description by hand.
+          Screenshots can show the AI your screen, but they can&apos;t point out what you&apos;re focused on or spell out what you want changed.
         </p>
       </div>
 

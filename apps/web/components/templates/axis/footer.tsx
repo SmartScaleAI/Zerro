@@ -38,11 +38,6 @@ const Footer = () => {
         </span>
       </Link>
 
-      {/* Tagline */}
-      <p className="max-w-md text-sm text-muted-foreground">
-        Record it. Paste it. Zerro in between.
-      </p>
-
       {/* Nav links */}
       <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
         {links.map((link) => (

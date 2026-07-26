@@ -53,6 +53,17 @@ enum DevDispatchFailure: Equatable, Sendable {
     /// the agent never ran, so the caller discards the checkpoint (nothing to
     /// revert). Never rendered.
     case confirmDeclined
+    /// The agent's OWN login expired or was revoked (an HTTP 401 / OAuth
+    /// authentication error from its provider) — split out from the generic
+    /// `.agent(.nonZeroExit)` so the pill can swap the raw API error for
+    /// sign-back-in instructions. Every agent authenticates via its own CLI
+    /// login (Claude Code: the macOS Keychain item its `/login` writes; Codex/
+    /// Cursor: token files under their config dirs) — Zerro holds no credential
+    /// to refresh, and the CLI has already failed its own token refresh by the
+    /// time it reports this, so re-auth is necessarily the user's interactive
+    /// browser flow. `agentID` picks the per-agent instructions. Retry re-runs
+    /// the same approved prompt; Revert works as on any agent failure.
+    case sessionExpired(agentID: String)
     /// The agent process itself failed (non-zero exit, timeout, …).
     case agent(DevRunFailureReason)
 
@@ -74,6 +85,29 @@ enum DevDispatchFailure: Equatable, Sendable {
             return "Couldn't fully restore your files. Check your working tree."
         case .confirmDeclined:
             return "Cancelled."
+        case .sessionExpired(let agentID):
+            // Plain-language recovery only — no status codes / raw API text. The
+            // trailing "change is saved" line matters: Retry re-dispatches the
+            // same approved prompt, so the user re-enters nothing.
+            switch agentID {
+            case DevAgentRegistry.claudeCodeID:
+                return "Your Claude Code login has expired. In Terminal, run: claude, "
+                    + "then type /login to sign back in (or run: claude setup-token "
+                    + "for a longer-lived login), then Retry. Your approved change is "
+                    + "saved, so Retry re-runs it as is."
+            case DevAgentRegistry.codexID:
+                return "Your Codex login has expired. In Terminal, run: codex login "
+                    + "to sign back in, then Retry. Your approved change is saved, so "
+                    + "Retry re-runs it as is."
+            case DevAgentRegistry.cursorID:
+                return "Your Cursor login has expired. In Terminal, run: cursor-agent "
+                    + "login to sign back in, then Retry. Your approved change is "
+                    + "saved, so Retry re-runs it as is."
+            default:
+                return "The coding agent\u{2019}s login has expired. Sign in to it "
+                    + "again, then Retry. Your approved change is saved, so Retry "
+                    + "re-runs it as is."
+            }
         case .agent(let reason):
             switch reason {
             case .nonZeroExit(_, let tail):
@@ -99,6 +133,13 @@ enum DevDispatchFailure: Equatable, Sendable {
         case .noChangeRequested: return "Nothing to change"
         case .revertFailed:     return "Couldn\u{2019}t restore your files"
         case .confirmDeclined:  return "Cancelled"
+        case .sessionExpired(let agentID):
+            switch agentID {
+            case DevAgentRegistry.claudeCodeID: return "Claude Code session expired"
+            case DevAgentRegistry.codexID:      return "Codex session expired"
+            case DevAgentRegistry.cursorID:     return "Cursor session expired"
+            default:                            return "Agent session expired"
+            }
         case .agent(let reason):
             switch reason {
             case .nonZeroExit:  return "Couldn\u{2019}t apply changes"
@@ -107,6 +148,46 @@ enum DevDispatchFailure: Equatable, Sendable {
             case .cancelled:    return "Run stopped"
             }
         }
+    }
+}
+
+/// Recognizes the specific "the agent's own login expired / is invalid" failure
+/// in an agent's terminal error so it can surface as `.sessionExpired` instead
+/// of the raw API error. Ordered structured-first, prose last:
+///
+///   1. The provider's machine error code — Anthropic's 401 body carries
+///      `"type":"authentication_error"`, and Claude Code echoes that body in its
+///      terminal `result` text. The code is stable API surface, not prose.
+///   2. A standalone `401` status token TOGETHER WITH an auth marker word — the
+///      shape every CLI's auth failure takes ("API Error: 401 …", "401
+///      Unauthorized"). Requiring both keeps a stray "401" in unrelated output
+///      from tripping it.
+///   3. Last resort only: the CLIs' own literal re-auth phrases ("Please run
+///      /login", "OAuth access token has expired") for a build that omits the
+///      status line.
+///
+/// The input is the best-available failure detail the runner assembled (the
+/// stream-json `result`/`error` text, else the stderr tail) — the same string
+/// the pill used to show raw. Claude Code's stream-json carries no dedicated
+/// status/code FIELD for API failures, so the embedded error code + status
+/// token above are the most structured signals that exist.
+enum DevAgentAuthErrorDetector {
+    nonisolated static func isSessionExpired(_ detail: String) -> Bool {
+        let text = detail.lowercased()
+        guard !text.isEmpty else { return false }
+        // 1) The provider's machine-readable auth error code.
+        if text.contains("authentication_error") { return true }
+        // 2) A 401 status + an auth marker ("authenticat" covers authenticate/
+        //    authentication/authenticating).
+        if text.range(of: #"\b401\b"#, options: .regularExpression) != nil {
+            let markers = ["oauth", "unauthorized", "authenticat", "token has expired",
+                           "token expired", "re-authenticate"]
+            if markers.contains(where: text.contains) { return true }
+        }
+        // 3) The CLIs' own re-auth instructions, verbatim.
+        let phrases = ["oauth access token has expired", "oauth token has expired",
+                       "please run /login", "re-authenticate to continue"]
+        return phrases.contains(where: text.contains)
     }
 }
 
@@ -325,6 +406,14 @@ final class DevDispatchCoordinator {
             // Compute the partial-edit stat (how far the agent got before
             // failing) for analytics; nil if the diff itself errors.
             let diff = try? await Task.detached { try service.diffStat(since: checkpoint) }.value
+            // An expired/invalid agent login (401 / OAuth) is its own recoverable
+            // state: the pill shows sign-back-in instructions instead of the raw
+            // API error, keeping the same Retry (same approved prompt) + Revert.
+            if case .nonZeroExit(_, let tail) = reason,
+               DevAgentAuthErrorDetector.isSessionExpired(tail) {
+                return .failed(.sessionExpired(agentID: agent.id),
+                               checkpoint: checkpoint, service: service, diff: diff)
+            }
             return .failed(.agent(reason), checkpoint: checkpoint, service: service, diff: diff)
         }
     }

@@ -165,7 +165,29 @@ backend-to-app window short — most users auto-update.
 auto-pops once per version update, but ONLY when the current version has an
 entry — a release without one silently skips the pop (defensive guard in
 `WhatsNewPolicy`), so forgetting this means users never see that version's
-notes.
+notes. And because `ZerroApp` advances the last-seen marker even when the pop
+is suppressed, a forgotten entry can NOT be fixed retroactively for users who
+already updated — the notes have to ride the next version bump (this is
+exactly how 1.4.24–1.4.28 shipped silent).
+
+**This step is now CI-enforced** by
+`apps/desktop/Scripts/check_changelog_entry.py` (it reuses the Slack script's
+entry parser, so the gate and the notification always agree):
+
+- `auto-release.yml` runs it before creating the `app-v*` tag — a VERSION bump
+  merged to `main` without a matching `Changelog.swift` entry fails there and
+  no release starts.
+- `release-app.yml` runs it again before the Xcode build, covering hand-pushed
+  tags and `workflow_dispatch` re-runs.
+- `Scripts/cut-release.sh` and `Scripts/release.sh` run it as a local
+  preflight.
+
+**Intentional internal-only release** (no user-facing changes, no entry
+wanted): put `[no-changelog]` in the promotion PR title (it lands in the merge
+commit message CI checks), or set `ZERRO_ALLOW_NO_CHANGELOG=1` when running
+the local scripts. The Slack post's ⚠️ flag line still appears for such
+releases — that's now the confirmation of an intentional skip, not the only
+detection.
 
 **Release-note callouts (required):**
 
