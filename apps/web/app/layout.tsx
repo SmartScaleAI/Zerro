@@ -60,18 +60,18 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Zerro: Give your agent eyes and ears",
+    title: "Zerro: Give your AI eyes and ears",
     description:
-      "Record your screen, dictate what you want, and Zerro hands you exactly what you need: a prompt, a message, a snippet, a document, or a clear answer. Record it. Paste it. Zerro in between.",
+      "Record your screen, explain what you want, get what you need.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro: Give your agent eyes and ears",
+    title: "Zerro: Give your AI eyes and ears",
     description:
-      "Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
+      "Record your screen, explain what you want, get what you need.",
   },
 };
 
