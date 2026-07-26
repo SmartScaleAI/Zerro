@@ -14,25 +14,30 @@
 //       "Response ready" (chat-only) left; "Hide ⌃" + hairline divider +
 //       close X right (the pre-refactor header's divider + gray-circle
 //       hover treatment).
-//    2. chat text — the conversational summary as prose (ChatProseText),
-//       sitting visually on top of the prompt box below it.
-//    3. body well — the dark inner prompt container (artifact only):
-//       monospace for `snippet`, markdown otherwise.
-//    4. footer — credits charge line bottom-left (when managed); the copy
-//       capsule bottom-right. An artifact shows its per-type label
-//       ("Copy Prompt", "Copy snippet", …); a chat-only result shows the
-//       plain "Copy" action for its explanation text.
+//    2. ONE scroll region — the conversational summary as prose
+//       (ChatProseText) flowing into the artifact well (the dark inner
+//       container: monospace for `snippet`, markdown otherwise) inside a
+//       single HeightCappedScroll. The two used to scroll independently;
+//       nested scroll regions in a pill this narrow hijacked the wheel and
+//       hid content, so header/footer stay pinned and everything between
+//       them scrolls together.
+//    3. footer — credits charge line bottom-left (when managed); the "Copy"
+//       capsule bottom-right, copying the WHOLE response (summary +
+//       artifact, snippet fenced). The artifact well carries its own corner
+//       copy icon for the artifact body alone (per-type tooltip:
+//       "Copy Prompt", "Copy snippet", …) — the two-tier copy model.
 //
 //  Pure renderer: everything it shows arrives via props, every effect
-//  leaves via a closure. Copy payloads live upstream in
-//  `AppState.resultCopyPayload`; this view only fires `onCopy`.
+//  leaves via a closure. Copy payloads live upstream
+//  (`AppState.resultFullCopyPayload` / `resultCopyPayload`); this view only
+//  fires `onCopy` / `onCopyArtifact`.
 //
 
 import SwiftUI
 
 struct OutputCardView: View {
-    /// nil → the chat-only layout: no body well, and the footer's Copy uses
-    /// the plain "Copy" label (it copies the explanation `chatText`).
+    /// nil → the chat-only layout: no artifact well (so no corner copy
+    /// icon); the footer's Copy copies the explanation `chatText`.
     let artifact: Artifact?
     /// Conversational summary above the prompt box. May be empty when the
     /// model led straight into the artifact.
@@ -44,9 +49,15 @@ struct OutputCardView: View {
     let noNarration: Bool
     /// Neutral heads-up: recovered from a sleep-interrupted recording.
     let stoppedBySleep: Bool
-    /// Writes the per-type payload to the clipboard (wired to
-    /// `AppState.resultCopyPayload` via the pill's onCopy).
+    /// The footer Copy — writes the whole-response payload
+    /// (summary + artifact) to the clipboard (wired to
+    /// `AppState.resultFullCopyPayload` via the pill's onCopy).
     let onCopy: () -> Void
+    /// The artifact well's corner copy icon — writes the artifact body alone
+    /// (the §2 per-type payload) to the clipboard (wired to
+    /// `AppState.resultCopyPayload`). Defaulted so failure/preview call sites
+    /// that never render an artifact well compile unchanged.
+    var onCopyArtifact: () -> Void = {}
     /// The header's Hide chevron — collapses to the compact capsule.
     let onCollapse: () -> Void
     /// The header's close X — dismisses the result (AppState.resetToIdle).
@@ -148,11 +159,22 @@ struct OutputCardView: View {
                 if noNarration {
                     noNarrationNote
                 }
-                if !chatText.isEmpty {
-                    chatSection
-                }
-                if let artifact {
-                    bodyWell(for: artifact)
+                // ONE scroll region for the whole answer: the summary flows
+                // into the artifact well so a single scrollbar moves both
+                // (the heads-up notes above are contextual banners, pinned
+                // with the header/footer). The cap is the sum of the two
+                // regions it replaced (160 chat + 320 well).
+                if !chatText.isEmpty || artifact != nil {
+                    HeightCappedScroll(maxHeight: 480, fadesScrollEdges: true) {
+                        VStack(alignment: .leading, spacing: VFSpacing.md) {
+                            if !chatText.isEmpty {
+                                ChatProseText(text: chatText)
+                            }
+                            if let artifact {
+                                artifactWell(for: artifact)
+                            }
+                        }
+                    }
                 }
             }
             footer
@@ -250,24 +272,21 @@ struct OutputCardView: View {
             .frame(width: 1, height: 20)
     }
 
-    // MARK: Chat text
+    // MARK: Artifact well
 
-    /// The summary, directly below the header and above the prompt box.
-    /// Hugs short chat and scrolls long chat: with a body well below, the
-    /// cap is tight (the chat is the intro, the prompt is the payload);
-    /// chat-only gets the room the old body had.
-    private var chatSection: some View {
-        HeightCappedScroll(maxHeight: artifact == nil ? 420 : 160, fadesScrollEdges: true) {
-            ChatProseText(text: chatText)
-        }
-    }
-
-    // MARK: Body well
-
-    /// The darker inner well the prompt text sits in — the card's deepest
-    /// layer, near-black over the chrome.
-    private func bodyWell(for artifact: Artifact) -> some View {
-        HeightCappedScroll(maxHeight: 320) {
+    /// The darker inner well the artifact sits in — the card's deepest
+    /// layer, near-black over the chrome. No scroll of its own: it flows
+    /// inside the card's single shared scroll region. Its compact top row
+    /// holds the corner copy icon (artifact body only, per-type tooltip) —
+    /// rendered only here, so chat-only cards never show it.
+    private func artifactWell(for artifact: Artifact) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Spacer(minLength: 0)
+                CopyIconButton(label: artifact.type.buttonLabel, action: handleCopyArtifact)
+            }
+            .padding(.top, VFSpacing.sm)
+            .padding(.horizontal, VFSpacing.sm)
             Group {
                 if artifact.type.rendersMonospace {
                     // snippet — exact text, code voice. (agent_prompt is
@@ -281,7 +300,7 @@ struct OutputCardView: View {
                     HighlightedMarkdownView(markdown: artifact.body)
                 }
             }
-            .padding(VFSpacing.lg)
+            .padding([.horizontal, .bottom], VFSpacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(
@@ -439,9 +458,11 @@ struct OutputCardView: View {
     private var undoButton: some View { DevUndoButton(action: onUndo) }
     private var acceptButton: some View { DevAcceptButton(action: onDismiss) }
 
-    /// The hero Copy action. At rest it's the `.positive` primary; on tap it
-    /// flips to a transient green "Copied" confirmation (same capsule footprint,
-    /// still tappable so a re-tap restarts the window) before reverting.
+    /// The hero footer Copy action — the whole response (summary +
+    /// artifact); the artifact-only copy lives on the well's corner icon. At
+    /// rest it's the `.positive` primary; on tap it flips to a transient green
+    /// "Copied" confirmation (same capsule footprint, still tappable so a
+    /// re-tap restarts the window) before reverting.
     @ViewBuilder
     private var copyButton: some View {
         if didCopy {
@@ -464,7 +485,7 @@ struct OutputCardView: View {
             .animation(.easeInOut(duration: 0.15), value: didCopy)
         } else {
             PillPrimaryButton(
-                title: artifact?.type.buttonLabel ?? "Copy",
+                title: "Copy",
                 systemImage: "doc.on.doc",
                 role: .positive,
                 action: handleCopy
@@ -475,8 +496,8 @@ struct OutputCardView: View {
 
     private func handleCopy() {
         onCopy()
-        Analytics.capture("artifact_copied", [
-            "artifact_type": artifact?.type.rawValue ?? "chat"
+        Analytics.capture("result_copied", [
+            "has_artifact": artifact != nil
         ])
         didCopy = true
         copyResetTask?.cancel()
@@ -485,6 +506,17 @@ struct OutputCardView: View {
             guard !Task.isCancelled else { return }
             didCopy = false
         }
+    }
+
+    /// The corner icon's action: the artifact-scope copy. The "Copied" flip
+    /// is self-contained in `CopyIconButton`; this only fires the effect and
+    /// the artifact-scope analytics event (which stays `artifact_copied` —
+    /// the footer's whole-response copy emits `result_copied`).
+    private func handleCopyArtifact() {
+        onCopyArtifact()
+        Analytics.capture("artifact_copied", [
+            "artifact_type": artifact?.type.rawValue ?? "chat"
+        ])
     }
 
     // MARK: Notes

@@ -5,7 +5,28 @@ import { AnimatedBorder } from "@/components/ui/animated-border";
 import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 import { AppleIcon } from "@/components/ui/apple-icon";
+import { TypewriterWords } from "@/components/ui/typewriter-words";
 import { motion } from "motion/react";
+
+const TYPEWRITER_WORDS = [
+    "Explain",
+    "Write",
+    "Code",
+    "Build",
+    "Prompt",
+    "Work",
+    "Create",
+    "Ask",
+];
+
+// The color stops of the animated "Zerro" gradient below, cycled one solid
+// color per typed word so the headline stays in the same palette.
+const TYPEWRITER_COLORS = [
+    "rgb(135,160,215)",
+    "rgb(115,190,165)",
+    "rgb(180,140,215)",
+    "rgb(125,190,150)",
+];
 
 const FinalCTA = () => {
     return (
@@ -48,9 +69,14 @@ const FinalCTA = () => {
                 </div>
 
                 <div className="relative flex flex-col items-center text-center gap-8">
-                    <h2 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground leading-[1.05] max-w-3xl">
-                        Record it. Paste it.{" "}
-                        <br />
+                    <div className='flex flex-col items-center gap-4'>
+                        <h2 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground leading-[1.05] max-w-3xl">
+                        <TypewriterWords
+                            words={TYPEWRITER_WORDS}
+                            colors={TYPEWRITER_COLORS}
+                        />{" "}
+                        with{" "}
+
                         <motion.span
                             className="bg-clip-text text-transparent bg-[length:200%_auto]"
                             style={{
@@ -64,12 +90,14 @@ const FinalCTA = () => {
                                 ease: "linear",
                             }}
                         >
-                            Zerro in between.
-                        </motion.span>
+                            Zerro
+                        </motion.span>{" "}
+                        effort.
                     </h2>
                     <p className="max-w-xl text-base text-muted-foreground">
-                        Stop describing what you want. Show it. Zerro turns the recording into exactly what you need: a prompt, a message, a snippet, a document, or a straight answer.
+                        Stop typing what you want. Show it. Zerro turns the recording into exactly what you need.
                     </p>
+                    </div>
                     <div className="flex flex-col items-center gap-3">
                         <DownloadButton
                             placement="final_cta"

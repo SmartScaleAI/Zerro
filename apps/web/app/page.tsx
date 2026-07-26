@@ -9,7 +9,6 @@ import NowTalking from "@/components/templates/axis/now-talking";
 import Pricing from "@/components/templates/axis/pricing";
 import FinalCTA from "@/components/templates/axis/final-cta";
 import Footer from "@/components/templates/axis/footer";
-import WhatIsZerro from "@/components/templates/axis/what-is-zerro";
 import Comparison from "@/components/templates/axis/comparison";
 import Faq from "@/components/templates/axis/faq";
 import { SectionView } from "@/components/section-view";
@@ -76,9 +75,6 @@ const Page = () => {
       <main className="relative flex flex-col gap-24 lg:gap-40 mt-44 mb-14 lg:mt-52 lg:mb-32 mx-auto w-full">
         <SectionView section="hero">
           <Hero />
-        </SectionView>
-        <SectionView section="what_is_zerro">
-          <WhatIsZerro />
         </SectionView>
         <SectionView section="how_it_works">
           <Feature />

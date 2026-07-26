@@ -159,6 +159,11 @@ struct PillView: View {
     var onStop: () -> Void = {}
     var onCancel: () -> Void = {}
     var onCopy: () -> Void = {}
+    /// The expanded card's artifact-corner copy icon — copies the artifact
+    /// body alone (`AppState.resultCopyPayload`), where `onCopy` is the
+    /// footer's whole-response Copy. Default no-op for #Preview
+    /// blocks and the states that never render an artifact.
+    var onCopyArtifact: () -> Void = {}
     var onToggleExpand: () -> Void = {}
     var onDismissError: () -> Void = {}
     /// Re-runs the API stage against the already-processed recording on
@@ -381,6 +386,7 @@ struct PillView: View {
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
                 onCopy: onCopy,
+                onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
             )
@@ -392,6 +398,7 @@ struct PillView: View {
                 stoppedBySleep: stoppedBySleep,
                 chargeLine: chargeLine,
                 onCopy: onCopy,
+                onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
                 onDismiss: onDismissResult
             )
@@ -1141,6 +1148,10 @@ private struct ResultPillContent: View {
     /// single-line header exactly as before.
     let chargeLine: String?
     let onCopy: () -> Void
+    /// Forwarded to the expanded card's artifact-corner copy icon (artifact
+    /// body only). The compact capsule ignores it — signatures stay uniform
+    /// across the two forms.
+    let onCopyArtifact: () -> Void
     let onToggleExpand: () -> Void
     /// Dismisses the result pill — wired to AppState.resetToIdle. Rendered
     /// as a circular close badge after the Hide/View toggle in the header
@@ -1161,6 +1172,7 @@ private struct ResultPillContent: View {
                     noNarration: noNarration,
                     stoppedBySleep: stoppedBySleep,
                     onCopy: onCopy,
+                    onCopyArtifact: onCopyArtifact,
                     onCollapse: onToggleExpand,
                     onDismiss: onDismiss
                 )
@@ -1571,6 +1583,22 @@ private struct ResultPillContent: View {
             + "only use Auto. Re-run with the Auto model, or upgrade your Cursor "
             + "plan to use a named model. (The coding agent exited with this error "
             + "before making any changes; your working tree is untouched.)",
+        canRevert: true
+    ))
+        .padding(40)
+        .background(Color.vfPanelBackground)
+}
+
+#Preview("Dev failed \u{00B7} session expired") {
+    // The recoverable auth-failure card (`.sessionExpired`): plain sign-back-in
+    // instructions in place of the raw "API Error: 401 …" text, same chrome and
+    // Revert + Retry footer as any dev failure.
+    PillView(state: .devFailed(
+        headline: "Claude Code session expired",
+        detail: "Your Claude Code login has expired. In Terminal, run: claude, "
+            + "then type /login to sign back in (or run: claude setup-token for a "
+            + "longer-lived login), then Retry. Your approved change is saved, so "
+            + "Retry re-runs it as is.",
         canRevert: true
     ))
         .padding(40)

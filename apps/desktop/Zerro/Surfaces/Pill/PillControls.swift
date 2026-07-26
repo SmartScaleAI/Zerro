@@ -15,6 +15,7 @@
 //    - PillPrimaryButton    — the one filled button; .role picks the fill.
 //    - PillSecondaryButton  — the quiet text button (Cancel / Discard / Revert).
 //    - PillDismissButton    — the corner "x".
+//    - CopyIconButton       — the artifact well's corner copy icon.
 //    - PillLeadingIconBadge — the badged status icon (every leading icon).
 //
 //  Pure renderers: geometry comes from `PillMetrics`, color from the semantic
@@ -147,6 +148,63 @@ struct PillDismissButton: View {
     }
 }
 
+// MARK: - CopyIconButton
+
+/// Icon-only copy control for the artifact well's top-right corner — the
+/// per-block half of the two-tier copy model (the footer Copy copies
+/// the whole response; this copies just the artifact body). Always visible at
+/// low emphasis: secondary glyph at rest, primary on hover, with the same
+/// circular gray hover background as `PillDismissButton`. On tap it flips to a
+/// green checkmark for the canonical 1.6s copy-feedback window (a re-tap
+/// restarts it) — self-contained here so the corner and footer confirmations
+/// can't entangle. The per-type label ("Copy snippet", "Copy draft", …) rides
+/// the tooltip + accessibility label instead of a visible caption.
+struct CopyIconButton: View {
+    /// The per-type copy label (`ArtifactType.buttonLabel`), surfaced as the
+    /// `.help` tooltip and the accessibility label.
+    let label: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+    @State private var didCopy = false
+    @State private var copyResetTask: Task<Void, Never>?
+
+    private static let copyFeedbackDuration: Duration = .seconds(1.6)
+
+    var body: some View {
+        Button(action: handleTap) {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(didCopy
+                    ? Color.vfSuccessGreen
+                    : (isHovering ? Color.vfTextPrimary : Color.vfTextSecondary))
+                .frame(width: PillMetrics.dismissBadge, height: PillMetrics.dismissBadge)
+                .background(
+                    Circle()
+                        .fill(Color.vfPillControlHover)
+                        .opacity(isHovering ? 1 : 0)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private func handleTap() {
+        action()
+        didCopy = true
+        copyResetTask?.cancel()
+        copyResetTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.copyFeedbackDuration)
+            guard !Task.isCancelled else { return }
+            didCopy = false
+        }
+    }
+}
+
 // MARK: - Dev-result actions (shared: collapsed pill + expanded footer)
 //
 // The Dev Mode result card's two terminal actions, rendered identically in the
@@ -242,6 +300,7 @@ struct PillLeadingIconBadge: View {
             PillSecondaryButton(title: "Cancel") {}
             PillSecondaryButton(title: "Discard") {}
             PillDismissButton {}
+            CopyIconButton(label: "Copy snippet") {}
         }
         HStack(spacing: 12) {
             PillLeadingIconBadge(systemImage: "checkmark", tint: .vfSuccessGreen)

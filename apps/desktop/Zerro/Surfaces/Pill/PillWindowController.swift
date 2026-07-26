@@ -358,11 +358,17 @@ private struct PillHostView: View {
                 appState.cancelRecording()
             },
             onCopy: {
-                // Typed-artifact refactor: copy per the §2 per-type payload
-                // table — agent_prompt copies body + Attached Context, other
-                // types the body alone, chat-only the chat text; raw output
-                // as the fallback when parsing produced no structure. (See
+                // Footer Copy → the WHOLE response: chat summary,
+                // then the artifact (snippet fenced as a markdown code
+                // block); chat-only copies the summary, raw output as the
+                // fallback when parsing produced no structure. (See
                 // Pasteboard.copy for the replace-not-append contract.)
+                guard let payload = appState.resultFullCopyPayload, !payload.isEmpty else { return }
+                Pasteboard.copy(payload)
+            },
+            onCopyArtifact: {
+                // Artifact-corner icon → the §2 per-type payload: the
+                // artifact body alone, for every type.
                 guard let payload = appState.resultCopyPayload, !payload.isEmpty else { return }
                 Pasteboard.copy(payload)
             },
