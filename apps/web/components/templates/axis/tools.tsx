@@ -292,14 +292,14 @@ export default function ToolFeature() {
 
                 {/* Example switcher — frames the card as a marketing illustration of the
                     artifact types (one recording), NOT a live control on a user's result. */}
-                <div className="relative z-10 mb-5 flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                <div className="relative z-10 mb-5 flex flex-wrap items-center justify-center gap-3 md:justify-between">
+                    <p className="w-full text-center text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground md:w-auto md:text-left">
                         One recording. The right artifact.
                     </p>
                     <div
                         role="group"
                         aria-label="Show example artifact type"
-                        className="flex flex-wrap items-center gap-0.5 rounded-2xl bg-foreground/[0.06] p-0.5 ring-1 ring-foreground/10 sm:rounded-full"
+                        className="flex flex-wrap items-center justify-center gap-0.5 rounded-2xl bg-foreground/[0.06] p-0.5 ring-1 ring-foreground/10 sm:rounded-full md:justify-start"
                     >
                         {ARTIFACT_ORDER.map((t) => (
                             <button
