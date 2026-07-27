@@ -18,7 +18,7 @@ const sansFont = "var(--font-inter), ui-sans-serif, system-ui, sans-serif";
 
 export const metadata: Metadata = {
   title: {
-    default: "Zerro: Give your agent eyes and ears",
+    default: "Zerro: Stop typing out what's already on your screen",
     template: "%s | Zerro",
   },
   description:
@@ -60,18 +60,18 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Zerro: Give your AI eyes and ears",
+    title: "Zerro: Stop typing out what's already on your screen",
     description:
-      "Record your screen, explain what you want, get what you need.",
+      "Record your screen, explain what you want, get the answer in seconds.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro: Give your AI eyes and ears",
+    title: "Zerro: Stop typing out what's already on your screen",
     description:
-      "Record your screen, explain what you want, get what you need.",
+      "Record your screen, explain what you want, get the answer in seconds.",
   },
 };
 

@@ -46,7 +46,7 @@ export function WebSiteJsonLd() {
         name: "Zerro",
         url: SITE_URL,
         description:
-          "Give your agent eyes and ears. Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
+          "Stop typing out what's already on your screen. Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
         publisher: { "@type": "Organization", name: "Zerro", url: SITE_URL },
       }}
     />
