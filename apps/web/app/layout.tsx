@@ -18,11 +18,11 @@ const sansFont = "var(--font-inter), ui-sans-serif, system-ui, sans-serif";
 
 export const metadata: Metadata = {
   title: {
-    default: "Zerro: Stop typing out what's already on your screen",
+    default: "Zerro: Talk to your screen. Zerro does the work.",
     template: "%s | Zerro",
   },
   description:
-    "Record your screen, dictate what you want, and Zerro hands you exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer, ready to paste. Record it. Paste it. Zerro in between.",
+    "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster. Zerro hands you exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer, ready to paste.",
   applicationName: "Zerro",
   metadataBase: new URL("https://getzerro.app"),
   alternates: {
@@ -60,18 +60,18 @@ export const metadata: Metadata = {
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Zerro: Stop typing out what's already on your screen",
+    title: "Zerro: Talk to your screen. Zerro does the work.",
     description:
-      "Record your screen, explain what you want, get the answer in seconds.",
+      "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro: Stop typing out what's already on your screen",
+    title: "Zerro: Talk to your screen. Zerro does the work.",
     description:
-      "Record your screen, explain what you want, get the answer in seconds.",
+      "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster.",
   },
 };
 

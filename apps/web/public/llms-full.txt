@@ -1,11 +1,21 @@
 # Zerro: full site content
 
-> Zerro is a native macOS menu-bar utility that turns a screen recording and spoken
-> instructions into exactly what you need: an agent prompt, a message, a snippet,
-> a document, or a clear answer. Explain with Zerro effort.
+> **Talk to your screen. Zerro does the work.** A lightweight macOS menu bar app.
+> Record your screen, explain what you want, and get it done faster: an agent
+> prompt, a message, a snippet, a document, or a clear answer.
 
 This file contains the full marketing-site content as Markdown, for AI tools that
 want deep ingestion. Source: https://getzerro.app
+
+---
+
+## Homepage headline
+
+Mac app: lightweight, lives in your menu bar
+
+**Talk to your screen. Zerro does the work.**
+
+Record your screen, explain what you want, and get it done faster.
 
 ---
 

@@ -20,27 +20,27 @@ import {
 import { faqEntries } from "@/components/templates/axis/faq-data";
 
 export const metadata: Metadata = {
-  // Absolute so the homepage title is fully controlled and lead-with-product,
-  // rather than relying on the root template suffix.
+  // Absolute so the homepage title is fully controlled and mirrors the hero
+  // headline, rather than relying on the root template suffix.
   title: {
-    absolute: "Zerro: Turn your screen and voice into exactly what you need",
+    absolute: "Zerro: Talk to your screen. Zerro does the work.",
   },
   description:
-    "Zerro is a native macOS menu-bar app. Record a region of your screen, dictate what you want, and get exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Local-first, bring your own keys.",
+    "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Local-first, bring your own keys.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Zerro: Turn your screen and voice into exactly what you need",
+    title: "Zerro: Talk to your screen. Zerro does the work.",
     description:
-      "Record a region of your screen, dictate what you want, and get exactly what you need: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Native macOS, local-first, bring your own keys.",
+      "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster: an agent prompt, a message, a snippet, a document, or a clear answer to your question. Local-first, bring your own keys.",
     url: "https://getzerro.app",
     siteName: "Zerro",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Zerro: Turn your screen and voice into exactly what you need",
+    title: "Zerro: Talk to your screen. Zerro does the work.",
     description:
-      "Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer. Native macOS, local-first, BYOK.",
+      "A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster: a prompt, a message, a snippet, a document, or a clear answer. Local-first, BYOK.",
   },
 };
 
@@ -76,7 +76,10 @@ const Page = () => {
         <SectionView section="hero">
           <Hero />
         </SectionView>
-        <SectionView section="how_it_works">
+        {/* Pulled up against the hero so "How it works" sits right under the
+            CTAs, where the recording pill used to be, instead of a full
+            section gap away. */}
+        <SectionView section="how_it_works" className="-mt-4 lg:-mt-12">
           <Feature />
         </SectionView>
         <SectionView section="comparison">

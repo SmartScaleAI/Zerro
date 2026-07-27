@@ -3,155 +3,10 @@
 import { DownloadButton } from "@/components/download-button"
 import { Button } from "@/components/ui/button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
-import { Check, Copy, X, Square, ChevronDown, PlayCircle } from "lucide-react"
+import { PlayCircle } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
-import { motion, AnimatePresence, useReducedMotion } from "motion/react"
-import { useEffect, useState } from "react"
+import { motion, useReducedMotion } from "motion/react"
 import { track } from "@/lib/analytics"
-
-type PillState = "recording" | "processing" | "ready"
-
-const stateSequence: PillState[] = ["recording", "processing", "ready"]
-
-const stateDurations: Record<PillState, number> = {
-  recording: 3000,
-  processing: 2200,
-  ready: 3000,
-}
-
-const MorphingPill = () => {
-  const [stateIndex, setStateIndex] = useState(0)
-  const currentState = stateSequence[stateIndex]
-
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      setStateIndex((i) => (i + 1) % stateSequence.length)
-    }, stateDurations[currentState])
-    return () => clearTimeout(timeout)
-  }, [stateIndex, currentState])
-
-  return (
-    <div className="relative flex h-14 w-[480px] max-w-full items-center justify-center overflow-hidden rounded-full bg-neutral-900 px-4 shadow-[0_20px_60px_-10px_rgba(120,135,150,0.05),0_0_0_1px_rgba(255,255,255,0.08)] sm:px-5">
-      <AnimatePresence mode="wait">
-        {currentState === "recording" && (
-          <motion.div
-            key="recording"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="flex w-full items-center justify-between text-white"
-          >
-            <div className="flex items-center gap-2 sm:gap-3">
-              <motion.div
-                className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-500"
-                animate={{ opacity: [1, 0.35, 1] }}
-                transition={{ duration: 1.2, repeat: Infinity }}
-              />
-              <span className="font-mono text-sm tracking-tight whitespace-nowrap tabular-nums">
-                0:02{" "}
-                {/* On mobile the waveform is hidden, so show a "Recording"
-                    label next to the running timer instead of the "/ 3:00"
-                    max-duration; desktop keeps "/ 3:00" alongside the waveform. */}
-                <span className="text-white/40 sm:hidden">Recording</span>
-                <span className="hidden text-white/40 sm:inline">/ 3:00</span>
-              </span>
-              {/* Waveform is decorative and the widest flexible element — hide it
-                  on mobile so the timer + Cancel + Stop fit inside the pill. */}
-              <div className="hidden h-5 items-center gap-[3px] sm:flex">
-                {[
-                  0.45, 0.55, 0.9, 1.0, 0.5, 0.6, 0.45, 0.55, 0.85, 1.0, 0.5,
-                  0.95, 0.6, 1.0, 1.0, 0.55, 0.9, 0.6, 0.5, 0.85, 1.0, 0.55,
-                  0.5, 0.9, 0.6, 0.5, 0.45,
-                ].map((h, i) => (
-                  <motion.span
-                    key={i}
-                    className="w-[2px] rounded-full bg-white/70"
-                    animate={{ scaleY: [h, h * 0.7, h, h] }}
-                    transition={{
-                      duration: 0.9,
-                      repeat: Infinity,
-                      delay: i * 0.06,
-                      ease: "easeInOut",
-                    }}
-                    style={{ height: `${h * 100}%`, transformOrigin: "center" }}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2 sm:gap-4">
-              <button className="flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white/90">
-                <X className="h-4 w-4" />
-                <span className="hidden sm:inline">Cancel</span>
-              </button>
-              <button className="flex shrink-0 items-center gap-2 rounded-full bg-red-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500/90 sm:px-4">
-                <Square className="h-3 w-3 fill-current" />
-                Stop
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {currentState === "processing" && (
-          <motion.div
-            key="processing"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="flex w-full items-center justify-between text-white"
-          >
-            <div className="flex items-center gap-3">
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
-                className="h-4 w-4 rounded-full border-2 border-white/20 border-t-white/80"
-              />
-              <span className="text-sm font-medium">Generating your response…</span>
-            </div>
-            <button className="flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white/90">
-              <X className="h-4 w-4" />
-              Cancel
-            </button>
-          </motion.div>
-        )}
-
-        {currentState === "ready" && (
-          <motion.div
-            key="ready"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="flex w-full items-center justify-between text-white"
-          >
-            <div className="flex items-center gap-3">
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: "spring", stiffness: 500, damping: 20 }}
-                className="flex h-5 w-5 items-center justify-center rounded-full bg-green-500"
-              >
-                <Check className="h-3 w-3 text-white" strokeWidth={3} />
-              </motion.div>
-              <span className="text-sm font-medium">Response ready</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <button className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
-                <Copy className="h-3.5 w-3.5" />
-                Copy
-              </button>
-              <button className="flex items-center gap-1 text-sm text-white/60 transition-colors hover:text-white/90">
-                View
-                <ChevronDown className="h-4 w-4" />
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  )
-}
 
 const Hero = () => {
   const reduceMotion = useReducedMotion()
@@ -165,8 +20,17 @@ const Hero = () => {
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <section className="flex w-full max-w-4xl flex-col items-center text-center">
+        {/* Category eyebrow. Two-tone pill: the chip files Zerro into a
+            category at a glance, the label says what kind of app it is.
+            Asymmetric padding keeps the chip tight against the left edge. */}
+        <div className="inline-flex items-center gap-[9px] rounded-full border border-white/[0.14] bg-white/[0.035] py-[5px] pr-[14px] pl-[6px] text-[12.5px] text-foreground/80 backdrop-blur-[8px]">
+          <span className="rounded-full bg-foreground/10 px-2 py-[2px] text-[10.5px] font-bold tracking-[0.06em] text-foreground uppercase">
+            Mac app
+          </span>
+          Lightweight, lives in your menu bar
+        </div>
         <h1 className="mt-5 text-5xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-[72px]">
-          {"Stop typing out what's"}
+          Talk to your screen.
           <br />
           <motion.span
             className="bg-clip-text text-transparent bg-[length:200%_auto]"
@@ -185,11 +49,11 @@ const Hero = () => {
               ease: "linear",
             }}
           >
-            already on your screen.
+            Zerro does the work.
           </motion.span>
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
-          Record your screen, explain what you want, get the answer in seconds.
+          Record your screen, explain what you want, and get it done faster.
         </p>
         <div className="mt-6 flex flex-row flex-wrap items-center justify-center gap-3">
           <DownloadButton
@@ -199,7 +63,7 @@ const Hero = () => {
           >
             <AnimatedBorder />
             <AppleIcon className="h-4 w-4" />
-            Download for Mac
+            Try it for free
           </DownloadButton>
           <Button
             variant="outline"
@@ -219,24 +83,6 @@ const Hero = () => {
           {"Apple Silicon · Signed & notarized"}
         </p>
       </section>
-
-      {/* The morphing pill — sits directly under the CTAs */}
-      <div className="relative mt-12 flex w-full max-w-4xl items-center justify-center lg:mt-16">
-        {/* Ambient glow */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        >
-          <div
-            className="h-[280px] w-[280px] rounded-full opacity-30 blur-[80px]"
-            style={{
-              background:
-                "radial-gradient(circle at center, rgba(150,165,180,0.5), rgba(150,165,180,0) 70%)",
-            }}
-          />
-        </div>
-        <MorphingPill />
-      </div>
     </motion.div>
   )
 }

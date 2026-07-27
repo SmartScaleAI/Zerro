@@ -46,7 +46,7 @@ export function WebSiteJsonLd() {
         name: "Zerro",
         url: SITE_URL,
         description:
-          "Stop typing out what's already on your screen. Record your screen, dictate what you want, and get exactly what you need: a prompt, a message, a snippet, a document, or a clear answer.",
+          "Talk to your screen. Zerro does the work. A lightweight macOS menu bar app. Record your screen, explain what you want, and get it done faster: a prompt, a message, a snippet, a document, or a clear answer.",
         publisher: { "@type": "Organization", name: "Zerro", url: SITE_URL },
       }}
     />
