@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 
 // Static social share card, 1200×630. Rendered once at build via ImageResponse.
 // Uses the default sans font (no font fetch) to keep the route lightweight.
-export const alt = "Zerro: Give your AI eyes and ears";
+export const alt = "Zerro: Stop typing out what's already on your screen";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -57,11 +57,12 @@ export default function OpengraphImage() {
               letterSpacing: "-0.03em",
             }}
           >
-            <span>Give your AI</span>
-            <span>eyes and ears.</span>
+            <span>Stop typing out what&apos;s</span>
+            <span>already on your screen.</span>
           </div>
           <div style={{ color: "#a1a1a1", fontSize: 32, fontWeight: 400 }}>
-            Record your screen, explain what you want, get what you need.
+            Record your screen, explain what you want, get the answer in
+            seconds.
           </div>
         </div>
       </div>
