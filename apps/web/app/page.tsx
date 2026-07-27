@@ -72,7 +72,7 @@ const Page = () => {
         }}
       />
 
-      <main className="relative flex flex-col gap-24 lg:gap-40 mt-44 mb-14 lg:mt-52 lg:mb-32 mx-auto w-full">
+      <main className="relative flex flex-col gap-24 lg:gap-40 mt-36 mb-14 lg:mt-40 lg:mb-32 mx-auto w-full">
         <SectionView section="hero">
           <Hero />
         </SectionView>

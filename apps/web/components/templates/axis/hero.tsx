@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button"
 import { AnimatedBorder } from "@/components/ui/animated-border"
 import { Check, Copy, X, Square, ChevronDown, PlayCircle } from "lucide-react"
 import { AppleIcon } from "@/components/ui/apple-icon"
-import { motion, AnimatePresence } from "motion/react"
+import { motion, AnimatePresence, useReducedMotion } from "motion/react"
 import { useEffect, useState } from "react"
+import { track } from "@/lib/analytics"
 
 type PillState = "recording" | "processing" | "ready"
 
@@ -30,7 +31,7 @@ const MorphingPill = () => {
   }, [stateIndex, currentState])
 
   return (
-    <div className="relative flex h-14 w-[480px] max-w-full items-center justify-center overflow-hidden rounded-full bg-neutral-900 px-4 shadow-[0_20px_60px_-10px_rgba(120,135,150,0.35),0_0_0_1px_rgba(255,255,255,0.08)] sm:px-5">
+    <div className="relative flex h-14 w-[480px] max-w-full items-center justify-center overflow-hidden rounded-full bg-neutral-900 px-4 shadow-[0_20px_60px_-10px_rgba(120,135,150,0.05),0_0_0_1px_rgba(255,255,255,0.08)] sm:px-5">
       <AnimatePresence mode="wait">
         {currentState === "recording" && (
           <motion.div
@@ -153,6 +154,8 @@ const MorphingPill = () => {
 }
 
 const Hero = () => {
+  const reduceMotion = useReducedMotion()
+
   return (
     <motion.div
       className="flex flex-col items-center justify-center px-4"
@@ -162,8 +165,8 @@ const Hero = () => {
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
       <section className="flex w-full max-w-4xl flex-col items-center text-center">
-        <h1 className="text-5xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-[85px]">
-          Give your AI
+        <h1 className="mt-5 text-5xl leading-[1.05] font-medium tracking-tighter text-foreground md:text-6xl lg:text-[72px]">
+          {"Stop typing out what's"}
           <br />
           <motion.span
             className="bg-clip-text text-transparent bg-[length:200%_auto]"
@@ -171,20 +174,24 @@ const Hero = () => {
               backgroundImage:
                 "linear-gradient(to right, rgb(135,160,215), rgb(115,190,165), rgb(180,140,215), rgb(125,190,150), rgb(135,160,215))",
             }}
-            animate={{ backgroundPosition: ["200% center", "-200% center"] }}
+            animate={
+              reduceMotion
+                ? undefined
+                : { backgroundPosition: ["200% center", "-200% center"] }
+            }
             transition={{
               repeat: Number.POSITIVE_INFINITY,
               duration: 9,
               ease: "linear",
             }}
           >
-            eyes and ears.
+            already on your screen.
           </motion.span>
         </h1>
-        <p className="mt-5 max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg lg:max-w-2xl">
-          Record your screen, explain what you want, get what you need.
+        <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground md:text-lg">
+          Record your screen, explain what you want, get the answer in seconds.
         </p>
-        <div className="mt-7 flex flex-row flex-wrap items-center justify-center gap-3">
+        <div className="mt-6 flex flex-row flex-wrap items-center justify-center gap-3">
           <DownloadButton
             placement="hero"
             className="relative gap-2 rounded-full hover:border-border hover:bg-muted hover:text-foreground hover:backdrop-blur-md dark:hover:border-input dark:hover:bg-input/30 dark:hover:text-foreground"
@@ -200,9 +207,12 @@ const Hero = () => {
             className="gap-2 rounded-full"
             nativeButton={false}
             render={<a href="#how-it-works" />}
+            onClick={() =>
+              track("hero_secondary_clicked", { target: "how_it_works" })
+            }
           >
             <PlayCircle className="h-4 w-4" />
-            How it works
+            Watch it work
           </Button>
         </div>
         <p className="mt-4 text-sm text-muted-foreground">
