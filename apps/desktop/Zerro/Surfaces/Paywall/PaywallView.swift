@@ -97,7 +97,7 @@ struct PaywallCopy: Equatable {
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage.",
+        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all five models, with no API keys to manage.",
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
@@ -272,12 +272,12 @@ struct PaywallView: View {
                 // an entitled user sees the manage link instead, not a re-sell.
                 HStack(alignment: .top, spacing: VFSpacing.md) {
                     // Managed — THE plan (multi-model §1.3): Zerro-hosted
-                    // credits, all six models, no API keys to manage. Monthly vs
+                    // credits, all five models, no API keys to manage. Monthly vs
                     // yearly ($12/mo billed annually) is chosen on the
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all six models, no API key to manage. $12/mo if you choose yearly billing."
+                        subtitle: "We handle the AI. 300 credits a month across all five models, no API key to manage. $12/mo if you choose yearly billing."
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with

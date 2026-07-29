@@ -537,7 +537,7 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all six models."
+        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all five models."
     }
 }
 

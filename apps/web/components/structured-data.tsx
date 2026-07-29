@@ -83,7 +83,7 @@ export function SoftwareApplicationJsonLd() {
             price: "15",
             priceCurrency: "USD",
             description:
-              "Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 6 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
+              "Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 5 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
             availability: "https://schema.org/InStock",
           },
           {

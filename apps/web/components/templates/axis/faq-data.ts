@@ -38,7 +38,7 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "How much does Zerro cost?",
     answer:
-      "Everyone starts free with 30 credits. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, is $15/month ($12/month billed yearly) and gives you 300 credits a month across 6 models (Claude, GPT & Gemini), with top-ups available anytime if you need more. Credits cover your usage, and the cost per generation varies by model: premium models like Claude Opus use more credits per generation than a fast model like Gemini Flash. Or BYOK, a one-time $69 purchase where you bring your own OpenAI, Gemini & Anthropic keys and pay once, with no subscription. BYOK includes 1 year of updates, and your installed version keeps working after that.",
+      "Everyone starts free with 30 credits. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, is $15/month ($12/month billed yearly) and gives you 300 credits a month across 5 models (Claude, GPT & Gemini), with top-ups available anytime if you need more. Credits cover your usage, and the cost per generation varies by model: premium models like Claude Opus use more credits per generation than a fast model like Gemini Flash. Or BYOK, a one-time $69 purchase where you bring your own OpenAI, Gemini & Anthropic keys and pay once, with no subscription. BYOK includes 1 year of updates, and your installed version keeps working after that.",
   },
   {
     question: "Do I need my own API keys?",
