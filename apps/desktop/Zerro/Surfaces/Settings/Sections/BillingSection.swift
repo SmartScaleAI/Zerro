@@ -537,7 +537,9 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all five models."
+        // Model count derived from the registry (ModelRegistry.selectableCountWord)
+        // so a kill switch can't leave this string claiming a stale number.
+        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all \(ModelRegistry.selectableCountWord) models."
     }
 }
 

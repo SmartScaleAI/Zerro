@@ -20,7 +20,8 @@ their generations route through the SAME `generate` proxy on a `kind:"trial"`
 token (decrementing `trial_grants` instead of a subscription period). The cap is
 enforced server-side per verified email, so delete+reinstall can't farm fresh
 credits. **The multi-model phases (0–6) add the model registry**: the app picks
-one of 6 models per generation, each with a fixed credit price, plus one-time
+one of 5 selectable models per generation (6 registry entries, one
+kill-switched), each with a fixed credit price, plus one-time
 top-up credit packs and a yearly billing interval — see "Model registry + credit
 pricing" and "Yearly subscriptions" below.
 
@@ -606,7 +607,9 @@ byte cap; X-02 closes that gap with an **authorization hold**:
 
 ## Model registry + credit pricing (multi-model)
 
-The 6 user-selectable models live in **`generate/models.ts`** — one table of
+The models live in **`generate/models.ts`** — 6 registry entries, of which 5 are
+user-selectable (`gpt-5.4-mini` is kill-switched via `enabled:false` but kept in
+the table so historic `generation_log` rows still resolve its name and cost) — one table of
 `{ id, provider, displayName, creditPrice, enabled }` that feeds request
 validation (`ALLOWED_MODELS`), provider routing, pricing, and the app's picker.
 Credit price is **fixed per model** (plan §1.2; 1 credit = $0.01 of provider
@@ -633,8 +636,8 @@ cost, a unit deliberately not env-tunable):
   `GENERATE_CIRCUIT_BREAKER_MULTIPLIER` (default 3) × the price in dollars, in
   which case the metered amount (`ceil(cost / $0.01)`) is charged instead.
   `credits_charged` in the response makes this visible to the app.
-- **No tier-gating:** subscription + trial see all 6 models; BYOK sees all 6
-  but each is selectable only with a key for its provider.
+- **No tier-gating:** subscription + trial see all 5 selectable models; BYOK sees
+  all 5 but each is selectable only with a key for its provider.
 
 **Three synced mirrors (KEEP IN SYNC):** the per-token price table in
 `generate/cost.ts` (`CHAT_PRICING`) is mirrored in the eval harness
@@ -716,7 +719,7 @@ provider failure charges nothing, over-cap rejects with no charge,
 drops to the paywall — trial credits exhausted is one of the two trial-expiry
 conditions). `consume_trial_credit` is the conditional UPDATE that is the
 double-spend guard; the slot cap makes check-then-consume safe exactly as for
-subscriptions. Trials see all 6 registry models at the same credit prices.
+subscriptions. Trials see all 5 selectable models at the same credit prices.
 A trial generation logs to `generation_log` with `subscription_id = null` (no FK;
 the cap is enforced on `trial_grants`, not the log).
 

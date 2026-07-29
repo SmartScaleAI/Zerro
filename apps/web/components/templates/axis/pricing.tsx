@@ -7,6 +7,7 @@ import { BorderTrail } from "@/components/ui/border-trail";
 import { Card } from "@/components/ui/card";
 import { GradientField } from "@/components/ui/gradient-field";
 import { track } from "@/lib/analytics";
+import { MODEL_VENDORS, SELECTABLE_MODEL_COUNT } from "@/lib/model-registry";
 import { cn } from "@/lib/utils";
 import { Check, Sparkles } from "lucide-react";
 import { AppleIcon } from "@/components/ui/apple-icon";
@@ -135,7 +136,7 @@ const tiers: Tier[] = [
                 label: "300 credits per month",
                 note: "≈ 50 generations on standard models.",
             },
-            "5 models to choose from: Claude, GPT & Gemini",
+            `${SELECTABLE_MODEL_COUNT} models to choose from: ${MODEL_VENDORS}`,
             "Top up anytime: packs from 50 credits to 10,000 credits",
             "We manage all token usage: no API keys",
             "Cancel anytime",
@@ -154,7 +155,7 @@ const tiers: Tier[] = [
         features: [
             "Includes 1 year of updates; your installed version keeps working after",
             "Bring your own OpenAI, Gemini & Anthropic API keys",
-            "All 5 models: Claude, GPT & Gemini",
+            `All ${SELECTABLE_MODEL_COUNT} models: ${MODEL_VENDORS}`,
             "Keys stored in your macOS Keychain",
             "Recordings never pass through Zerro's servers",
             "No subscription, no account",

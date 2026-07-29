@@ -6,6 +6,11 @@
  * Facts here must stay in sync with the on-page copy — only verifiable claims.
  */
 
+import {
+  MODEL_VENDORS,
+  SELECTABLE_MODEL_COUNT,
+} from "@/lib/model-registry";
+
 const SITE_URL = "https://getzerro.app";
 
 function JsonLd({ data }: { data: Record<string, unknown> }) {
@@ -82,8 +87,7 @@ export function SoftwareApplicationJsonLd() {
             name: "Managed",
             price: "15",
             priceCurrency: "USD",
-            description:
-              "Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across 5 models (Claude, GPT & Gemini); credit cost per generation varies by model, with top-ups available.",
+            description: `Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across ${SELECTABLE_MODEL_COUNT} models (${MODEL_VENDORS}); credit cost per generation varies by model, with top-ups available.`,
             availability: "https://schema.org/InStock",
           },
           {

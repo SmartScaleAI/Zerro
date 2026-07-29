@@ -97,7 +97,7 @@ struct PaywallCopy: Equatable {
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all five models, with no API keys to manage.",
+        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all \(ModelRegistry.selectableCountWord) models, with no API keys to manage.",
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
@@ -114,6 +114,11 @@ struct PaywallCopy: Equatable {
         subheadline: "Switch options, activate a key, or manage your devices and billing. Everything for your plan lives here.",
         windowTitle: "Manage Plan"
     )
+
+    /// The Managed plan card's subtitle. Hoisted out of `PaywallView.body` so the
+    /// model-count copy guard can assert on it like the other copy constants.
+    static let managedCardSubtitle =
+        "We handle the AI. 300 credits a month across all \(ModelRegistry.selectableCountWord) models, no API key to manage. $12/mo if you choose yearly billing."
 }
 
 struct PaywallView: View {
@@ -277,7 +282,7 @@ struct PaywallView: View {
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all five models, no API key to manage. $12/mo if you choose yearly billing."
+                        subtitle: PaywallCopy.managedCardSubtitle
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with
