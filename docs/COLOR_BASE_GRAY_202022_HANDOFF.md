@@ -1,5 +1,11 @@
 # Claude Code handoff — recolor the base background gray to #202022
 
+> **Superseded on 2026-07-30.** Zerro now uses the fixed black palette defined
+> in `apps/desktop/Zerro/DesignSystem/Colors.swift`: `#000000` base/pill
+> surfaces, unified `#1C1C1E` accent surfaces for cards, controls, artifacts,
+> and overlays, plus a `#303030` floating-overlay border. The material below
+> is kept only as historical context for the earlier gray-theme migration.
+
 **Goal:** make the app's **main background gray exactly `#202022`** across the pills,
 response views, error/failure pills, the overlay (area-selector) pills + toolbar
 backgrounds, and the **Settings** and **Onboarding** windows. Keep the existing

@@ -361,7 +361,7 @@ private struct APIKeyRow: View {
         .frame(height: 36)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.vfPillBackground)
+                .fill(Color.vfControlBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

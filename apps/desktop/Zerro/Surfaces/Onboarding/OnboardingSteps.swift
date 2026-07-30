@@ -65,18 +65,35 @@ struct WelcomeStepView: View {
 
 // MARK: - Email verification (Phase F — required step)
 
+@MainActor
+enum TrialEmailNoCodeContinuation {
+    static func perform(on onboarding: OnboardingState) {
+        perform(on: onboarding) { Analytics.capture($0, $1) }
+    }
+
+    static func perform(
+        on onboarding: OnboardingState,
+        capture: (_ event: String, _ properties: [String: Any]) -> Void
+    ) {
+        // This action intentionally has no TrialCreditsManager dependency, so it
+        // cannot persist an email/token/grant or grant credits.
+        capture("trial_verification_skipped", [
+            "reason": "code_not_received",
+            "surface": "onboarding",
+        ])
+        Log.billing.notice("trial email verification skipped after no-code help — continuing without credits")
+        onboarding.advance()
+    }
+}
+
 /// The required email-verification step (right after Welcome). Every new user
 /// verifies an email here; on success the server-funded trial credits are
 /// granted (via `TrialCreditsManager` / `trial-start`) so the trial works
-/// afterward with no mid-task interruption. There is NO user-facing skip —
-/// verification is required to advance.
+/// afterward with no mid-task interruption.
 ///
-/// Infra-failure resilience (NOT a skip): if the backend/email service is
-/// genuinely unreachable (network / 5xx / Resend failure) and keeps failing,
-/// the user is allowed to proceed into the app WITHOUT granted credits, with a
-/// persistent "verify in Settings" affordance to finish later. This path is
-/// reached only on repeated SYSTEM failure — never by user choice, and never via
-/// a visible "Skip" control. A wrong code / unverified user simply stays here.
+/// Delivery-failure resilience: repeated infrastructure errors OR the explicit
+/// "Didn't get a code?" help path may continue WITHOUT trial credits. No email
+/// or token is persisted, and Settings keeps the verification affordance.
 struct EmailStepView: View {
     @Environment(OnboardingState.self) private var onboarding
     @Environment(TrialCreditsManager.self) private var trialCredits
@@ -89,13 +106,10 @@ struct EmailStepView: View {
     @State private var code: String = ""
     @State private var working: Bool = false
     @State private var verified: Bool = false
-    /// The email's trial is already spent (exhausted grant) — there are no
-    /// credits to grant, but the user may still continue (it's not an error).
-    @State private var alreadyUsed: Bool = false
-    /// THIS Mac already used its trial under a different email (device binding).
-    /// A new email won't help — distinct copy, but still not a dead end: the user
-    /// can continue and add API keys / subscribe.
-    @State private var deviceUsed: Bool = false
+    /// A spent email or device is informational, not a retryable send failure.
+    /// Both outcomes remain continuable without granting or resetting credits.
+    @State private var terminalState: TrialEmailTerminalState?
+    @State private var showNoCodeHelp: Bool = false
     @State private var errorMessage: String?
     /// True when the last error was an infrastructure failure (network/5xx/send)
     /// rather than user error (wrong code, etc.) — only these unlock the
@@ -130,7 +144,7 @@ struct EmailStepView: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !verified && !alreadyUsed && !deviceUsed {
+                if !verified && terminalState == nil {
                     field
                 }
             }
@@ -144,8 +158,7 @@ struct EmailStepView: View {
 
     private var headline: String {
         if verified { return "Email verified" }
-        if deviceUsed { return "Trial already used" }
-        if alreadyUsed { return "Welcome back" }
+        if let terminalState { return terminalState.headline }
         return step == .email ? "Verify your email" : "Enter your code"
     }
 
@@ -153,17 +166,12 @@ struct EmailStepView: View {
         if verified {
             return "Your free trial is ready. You\u{2019}re good to go."
         }
-        if deviceUsed {
-            return "This Mac has already used its free trial. You can continue: add your own API keys or subscribe anytime."
-        }
-        if alreadyUsed {
-            return "This email has already used its free trial. You can continue: add your own API keys or subscribe anytime."
-        }
+        if let terminalState { return terminalState.message }
         switch step {
         case .email:
             return "Verify your email to start your free trial: no credit card, no API key. We\u{2019}ll send a 6-digit code."
         case .code:
-            return "We sent a 6-digit code to \(trimmedEmail). Enter it below to finish."
+            return TrialEmailCopy.codeDelivery(to: trimmedEmail)
         }
     }
 
@@ -221,7 +229,7 @@ struct EmailStepView: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(Color.vfControlBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
@@ -233,9 +241,8 @@ struct EmailStepView: View {
 
     @ViewBuilder
     private var actions: some View {
-        if verified || alreadyUsed || deviceUsed {
-            // The ONLY way to advance is after verification (or a genuinely
-            // already-used email / device). No skip exists for an unverified user.
+        if verified || terminalState != nil {
+            // Verified and genuinely already-used states advance normally.
             OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
         } else {
             switch step {
@@ -251,20 +258,19 @@ struct EmailStepView: View {
                 } else {
                     OnboardingPrimaryButton("Verify", isEnabled: trimmedCode.count == 6) { verify() }
                 }
-                Button("Resend code", action: sendCode)
+                Button(showNoCodeHelp ? "Hide delivery options" : "Didn\u{2019}t get a code?") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        showNoCodeHelp.toggle()
+                    }
+                }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(Color.vfTextSecondary)
                     .disabled(working)
                     .padding(.top, 2)
-                Button("Use a different email") {
-                    step = .email
-                    code = ""
-                    errorMessage = nil
+                if showNoCodeHelp {
+                    noCodeHelp
                 }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
             }
 
             // Infra fallback — appears ONLY after repeated SYSTEM failures, so a
@@ -293,6 +299,33 @@ struct EmailStepView: View {
             .foregroundStyle(Color.vfTextSecondary)
         }
         .padding(.top, VFSpacing.sm)
+    }
+
+    private var noCodeHelp: some View {
+        VStack(spacing: VFSpacing.xs) {
+            Text("Check spam or wait a minute before trying again. You can also continue without trial credits and verify later in Settings \u{2192} Billing.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Resend code", action: sendCode)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.vfTextSecondary)
+                .disabled(working)
+
+            Button("Use a different email", action: useDifferentEmail)
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+
+            Button("Continue without trial", action: continueWithoutTrial)
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.vfTextSecondary)
+        }
+        .padding(.top, VFSpacing.xs)
     }
 
     // MARK: - Behavior
@@ -330,6 +363,7 @@ struct EmailStepView: View {
                 try await trialCredits.requestCode(email: address)
                 step = .code
                 code = ""
+                showNoCodeHelp = false
                 fieldFocused = true
             } catch let error as TrialStartError {
                 handle(error)
@@ -374,13 +408,13 @@ struct EmailStepView: View {
         switch error {
         case .alreadyUsed:
             // Not an error — the email's trial is spent. Let them continue.
-            alreadyUsed = true
+            terminalState = TrialEmailTerminalState(error)
             errorMessage = nil
         case .deviceTrialUsed:
             // Not an error — this Mac's trial is spent (a new email won't help).
             // Distinct copy, still continuable. Log so we can measure how often
             // the hard block fires on real (possibly shared-machine) users.
-            deviceUsed = true
+            terminalState = TrialEmailTerminalState(error)
             errorMessage = nil
             Log.billing.notice("trial email verification: device already trialed (onboarding) — continuing without credits")
         case .network, .server, .sendFailed, .malformedResponse, .malformedRequest:
@@ -398,6 +432,19 @@ struct EmailStepView: View {
         errorIsSystem = true
         systemFailureCount += 1
         Log.billing.error("trial email verification system failure #\(systemFailureCount, privacy: .public) during onboarding: \(String(describing: error), privacy: .public)")
+    }
+
+    private func useDifferentEmail() {
+        step = .email
+        code = ""
+        errorMessage = nil
+        errorIsSystem = false
+        showNoCodeHelp = false
+        fieldFocused = true
+    }
+
+    private func continueWithoutTrial() {
+        TrialEmailNoCodeContinuation.perform(on: onboarding)
     }
 }
 
@@ -629,7 +676,7 @@ private struct PermissionRow<Trailing: View>: View {
             trailing()
         }
         .padding(VFSpacing.md)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
                 .strokeBorder(Color.vfHairline, lineWidth: 1)
@@ -840,7 +887,7 @@ private struct DevModeToolbarIllustration: View {
             .frame(width: 26, height: 26)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.vfControlBackground)
             )
     }
 
@@ -1013,7 +1060,7 @@ struct OnboardingIconTile: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.white.opacity(0.06))
+            .fill(Color.vfCardBackground)
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: systemName)
@@ -1039,7 +1086,7 @@ struct OnboardingKeyCapLarge: View {
             .frame(minWidth: 48, minHeight: 48)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
@@ -1240,7 +1287,7 @@ struct OnboardingDeniedView: View {
         }
         .padding(.horizontal, VFSpacing.md)
         .padding(.vertical, VFSpacing.md)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
     }
 }
 

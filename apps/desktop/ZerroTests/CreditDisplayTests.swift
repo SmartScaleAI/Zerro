@@ -3,8 +3,8 @@
 //  ZerroTests
 //
 //  Phase 6 (multi-model 6B) — the credit-UX helpers: the price-agnostic
-//  low-balance threshold (one source of truth for both the generation-flow
-//  prompt and the billing card), the §1.5 strings, the usage meter, and the
+//  low-balance thresholds (one source of truth for the trial and paid-plan
+//  prompts), the §1.5 strings, the usage meter, and the
 //  post-generation toast. Per-model "~N left" / translation helpers were
 //  removed in metered-credits Phase 4 (the app shows no per-model cost).
 //
@@ -17,13 +17,21 @@ final class CreditDisplayTests: XCTestCase {
 
     // MARK: - Low-balance threshold (price-agnostic — metered-credits Phase 4)
 
-    func testLowBalanceTripsAtOrBelowThreshold() {
-        // LOW_BALANCE_CREDITS = 30: at/below is low, just above is not.
-        XCTAssertEqual(CreditDisplay.LOW_BALANCE_CREDITS, 30)
-        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 31)) // above → fine
-        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 30))  // at threshold → low
-        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 29))  // below → low
-        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 0))   // empty → low
+    func testTrialLowBalanceTripsAtOrBelowTenCredits() {
+        XCTAssertEqual(CreditDisplay.TRIAL_LOW_BALANCE_CREDITS, 10)
+        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 30, type: .trial))
+        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 11, type: .trial))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 10, type: .trial))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 9, type: .trial))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 0, type: .trial))
+    }
+
+    func testPaidLowBalanceTripsAtOrBelowThirtyCredits() {
+        XCTAssertEqual(CreditDisplay.PAID_LOW_BALANCE_CREDITS, 30)
+        XCTAssertFalse(CreditDisplay.isLowBalance(balance: 31, type: .paid))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 30, type: .paid))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 29, type: .paid))
+        XCTAssertTrue(CreditDisplay.isLowBalance(balance: 0, type: .paid))
     }
 
     // MARK: - §1.5 strings

@@ -120,3 +120,23 @@ enum ModelRegistry {
     static let defaultModelID: String =
         (all.first { $0.recommended && $0.enabled } ?? enabled[0]).id
 }
+
+// MARK: - Copy derivation
+
+extension ModelRegistry {
+
+    /// User-facing count of selectable models, spelled out for prose copy
+    /// ("all five models"). Derived from `enabled` so marketing copy can never
+    /// drift from the registry again — a kill switch flipped in `all` rewrites
+    /// the paywall and Billing strings with it. Falls back to a numeral past ten.
+    ///
+    /// Safe to interpolate into `static let` copy constants: `enabled` is a pure
+    /// value table (no I/O, no actor hop) and Swift's lazy static init orders the
+    /// dependency for us.
+    static var selectableCountWord: String {
+        let n = enabled.count
+        let words = ["zero", "one", "two", "three", "four", "five",
+                     "six", "seven", "eight", "nine", "ten"]
+        return n < words.count ? words[n] : String(n)
+    }
+}

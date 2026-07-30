@@ -17,11 +17,11 @@
 // Two actions on one function (dispatched on the `action` field):
 //   request — { action:"request", email } → normalize, block disposables,
 //             rate-limit, generate a 6-digit code, store its HASH with a short
-//             TTL, and email it via Resend. Returns { status:"code_sent" } —
-//             UNIFORMLY (C-05): an already-exhausted email gets the SAME body
-//             with no send, so `request` never works as an email-enumeration
-//             oracle; the true already_used only surfaces at verify/resume,
-//             after the caller proves control of the mailbox.
+//             TTL, and email it via Resend. Returns { status:"code_sent" }
+//             uniformly unless an exhausted grant is bound to THIS device, in
+//             which case the device match safely returns `already_used`.
+//             Exhausted grants from an unmatched/missing device still receive a
+//             real code, so their state is revealed only after mailbox proof.
 //   verify  — { action:"verify", email, code } → look up the pending code,
 //             constant-time compare the hash, check TTL + attempts, then
 //             create-once the grant (verify_trial_grant) and mint a short-lived
@@ -48,7 +48,7 @@
 import { json } from "../_shared/http.ts";
 import { sha256Hex, timingSafeEqual } from "../_shared/crypto.ts";
 import { signSessionToken } from "../_shared/jwt.ts";
-import { EmailSendError, type EmailSender } from "./resend.ts";
+import { type EmailSender, EmailSendError } from "./resend.ts";
 import { generateCode, isDisposableEmail, normalizeEmail } from "./email.ts";
 import type { TrialStore } from "./store.ts";
 import {
@@ -81,7 +81,11 @@ function clientIp(req: Request): string {
 /** Combined per-email + per-IP rate gate. TRUE = allowed. C-07: the two keys
  * carry DIFFERENT limiter-error postures (the old blanket fail-open silently
  * disabled every abuse bound whenever check_rate_limit broke). */
-async function withinRate(store: TrialStore, email: string, ip: string): Promise<boolean> {
+async function withinRate(
+  store: TrialStore,
+  email: string,
+  ip: string,
+): Promise<boolean> {
   // Hash the email into the rate-limit key so the limiter table never holds a
   // raw address. Per-email fails OPEN on limiter error: this key also meters
   // legitimate verify retries, so a limiter outage must not lock a real user
@@ -108,7 +112,10 @@ async function withinRate(store: TrialStore, email: string, ip: string): Promise
   return okIp;
 }
 
-export async function handleTrialStart(req: Request, deps: TrialStartDeps): Promise<Response> {
+export async function handleTrialStart(
+  req: Request,
+  deps: TrialStartDeps,
+): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   let body: Record<string, unknown>;
@@ -120,7 +127,8 @@ export async function handleTrialStart(req: Request, deps: TrialStartDeps): Prom
 
   const action = String(body.action ?? "");
   // Tolerate the implicit form too: a body with `code` is a verify.
-  const isVerify = action === "verify" || (action === "" && body.code !== undefined);
+  const isVerify = action === "verify" ||
+    (action === "" && body.code !== undefined);
   const isResume = action === "resume";
   if (!isVerify && !isResume && action !== "request") {
     return json({ error: "invalid_action" }, 400);
@@ -161,12 +169,27 @@ function readDeviceIdHash(body: Record<string, unknown>): string | null {
 /** Structured device-block telemetry: the hashed device id only — never an email
  * or a raw UUID (tier-only analytics rule). Greppable in the function logs; a
  * PostHog event can be layered on via the shared `capturePostHog` helper. */
-function logDeviceBlock(phase: "request" | "verify", deviceIdHash: string): void {
+function logDeviceBlock(
+  phase: "request" | "verify",
+  deviceIdHash: string,
+): void {
   console.log(JSON.stringify({
     fn: "trial-start",
     event: "trial_device_block",
     phase,
     device_id_hash: deviceIdHash,
+  }));
+}
+
+/** PII-free terminal request telemetry. Outcome is deliberately a fixed enum:
+ * never add the submitted email or stable device hash to this event. */
+function logRequestOutcome(
+  outcome: "same_device_email_exhausted" | "different_email_device_used",
+): void {
+  console.log(JSON.stringify({
+    fn: "trial-start",
+    event: "trial_request_outcome",
+    outcome,
   }));
 }
 
@@ -186,30 +209,36 @@ async function handleRequest(
   // hard-block here — BEFORE generating/emailing a code (saves the mail + gives
   // instant UX). A grant under the SAME email is a legitimate reinstall and
   // falls through to the normal re-verify path below.
-  if (deviceIdHash && (await deps.store.deviceAlreadyGranted(deviceIdHash, email))) {
-    logDeviceBlock("request", deviceIdHash);
+  if (
+    deviceIdHash && (await deps.store.deviceAlreadyGranted(deviceIdHash, email))
+  ) {
+    logRequestOutcome("different_email_device_used");
     return json({ status: "device_trial_used" }, 200);
   }
 
-  // One grant per email, ever. If this email already verified AND spent all its
-  // credits, a new code can't unlock anything — but DON'T say so here. C-05:
-  // `request` answers an unauthenticated prober, so every email state
-  // (brand-new, verified-with-credits, exhausted) gets the SAME
-  // { status: "code_sent" }; for the exhausted email we just skip the send.
-  // The true already_used still surfaces — at verify/resume, AFTER the caller
-  // proves control of the mailbox. (The early returns above are NOT email
-  // oracles: device_trial_used reflects the caller's own device and
-  // disposable_email the domain's class, not this address's trial state.)
+  // One grant per email, ever. An exhausted grant bound to THIS SAME device can
+  // safely return the terminal state immediately: the response proves only what
+  // this Mac already knows about its own trial. Do NOT reveal exhaustion when
+  // the device is missing, legacy-unbound, or different — that would turn this
+  // unauthenticated endpoint into an email-enumeration oracle. Those callers get
+  // a real code and learn `already_used` only after proving mailbox control at
+  // verify. A grant with credits remaining also gets a real code so reinstalling
+  // can re-mint a token without resetting its persisted balance.
   const grant = await deps.store.loadGrantByEmail(email);
   if (grant && grant.verified_at) {
-    const remaining = Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
-    if (remaining <= 0) {
-      return json({ status: "code_sent" }, 200);
+    const remaining = Math.max(
+      0,
+      grant.trial_credits_limit - grant.trial_credits_used,
+    );
+    if (
+      remaining <= 0 &&
+      deviceIdHash !== null &&
+      grant.device_id_hash !== null &&
+      grant.device_id_hash === deviceIdHash
+    ) {
+      logRequestOutcome("same_device_email_exhausted");
+      return json({ status: "already_used" }, 200);
     }
-    // Verified but with credits left (e.g. the app lost its in-memory token on
-    // reinstall): allow a re-request → re-verify to re-mint a token. This grants
-    // NO new credits (verify_trial_grant never resets) — the code is still the
-    // gate.
   }
 
   // C-05 email-bomb sub-limit: a second, TIGHTER per-email counter consumed
@@ -298,7 +327,11 @@ async function handleVerify(
   // enforcing the one-grant-per-device cap (the partial unique index is the race
   // backstop behind verify_trial_grant).
   await deps.store.deleteCode(email);
-  const result = await deps.store.verifyGrant(email, TRIAL_CREDITS, deviceIdHash);
+  const result = await deps.store.verifyGrant(
+    email,
+    TRIAL_CREDITS,
+    deviceIdHash,
+  );
 
   // This Mac already trialed under a different email → hard block (mirrors the
   // `request` early-block for the race where two emails verify near-simultaneously
@@ -320,7 +353,13 @@ async function handleVerify(
   const grant = await deps.store.loadGrantByEmail(email);
   const creditsLimit = grant?.trial_credits_limit ?? TRIAL_CREDITS;
 
-  return await mintTokenResponse(deps, grantId, creditsRemaining, creditsLimit, nowSeconds);
+  return await mintTokenResponse(
+    deps,
+    grantId,
+    creditsRemaining,
+    creditsLimit,
+    nowSeconds,
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -331,7 +370,10 @@ async function handleVerify(
 // silently, so token expiry never forces re-proving ownership. This only READS
 // the grant — it creates no grant and no credits, so the per-email cap (the real
 // abuse bound) is unchanged.
-async function handleResume(deps: TrialStartDeps, email: string): Promise<Response> {
+async function handleResume(
+  deps: TrialStartDeps,
+  email: string,
+): Promise<Response> {
   const grant = await deps.store.loadGrantByEmail(email);
 
   // No grant, or one that never completed verification → genuine first-time
@@ -342,13 +384,22 @@ async function handleResume(deps: TrialStartDeps, email: string): Promise<Respon
   }
 
   // Verified but the pool is spent → nothing to authorize (mirrors verify).
-  const remaining = Math.max(0, grant.trial_credits_limit - grant.trial_credits_used);
+  const remaining = Math.max(
+    0,
+    grant.trial_credits_limit - grant.trial_credits_used,
+  );
   if (remaining <= 0) {
     return json({ status: "already_used" }, 200);
   }
 
   const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
-  return await mintTokenResponse(deps, grant.id, remaining, grant.trial_credits_limit, nowSeconds);
+  return await mintTokenResponse(
+    deps,
+    grant.id,
+    remaining,
+    grant.trial_credits_limit,
+    nowSeconds,
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -380,7 +431,13 @@ async function mintTokenResponse(
   // fails LOUDLY here instead of silently re-gating every client.
   if (!Number.isFinite(exp) || exp <= nowSeconds) {
     console.error(
-      JSON.stringify({ fn: "trial-start", op: "mint", error: "non_future_exp", exp, nowSeconds }),
+      JSON.stringify({
+        fn: "trial-start",
+        op: "mint",
+        error: "non_future_exp",
+        exp,
+        nowSeconds,
+      }),
     );
     return json({ error: "server_error" }, 500);
   }

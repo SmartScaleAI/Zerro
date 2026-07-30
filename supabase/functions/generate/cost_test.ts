@@ -50,7 +50,8 @@ Deno.test("estimatedCostUsd: unknown chat model → null (generation still proce
   assertEquals(estimatedCostUsd(60, "gemini", "gemini-9-imaginary", M, M), null);
 });
 
-// ---- the six selectable models (multi-model plan §1.1; F8 mirror) -----------
+// ---- the six registry models (five selectable + the kill-switched mini,
+//      still priced for historic rows; multi-model plan §1.1; F8 mirror) ------
 
 Deno.test("chatCostUsd: openai:gpt-5.4-mini priced from the table", () => {
   // 1M in @ $0.75, 1M out @ $4.5 → $5.25

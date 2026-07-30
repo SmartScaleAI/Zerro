@@ -62,7 +62,7 @@ struct ActivateKeyView: View {
             }
         }
         .frame(width: Self.windowWidth)
-        .background(Color.vfCardBackground)
+        .background(Color.vfPanelBackground)
         // Checkout-return deep link: a buyer lands here with the issued key
         // already in the field + focused. `onAppear` covers a freshly-opened
         // window; the `onChange` handlers cover the flags flipping while the
@@ -119,7 +119,7 @@ struct ActivateKeyView: View {
                     .frame(height: 36)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.vfPillBackground)
+                            .fill(Color.vfControlBackground)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)

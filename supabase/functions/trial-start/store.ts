@@ -10,9 +10,9 @@
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
+  rateLimiterErrorVerdict,
   type RateLimitKeyKind,
   type RateLimitOnError,
-  rateLimiterErrorVerdict,
 } from "./ratelimit.ts";
 
 /** The subset of a trial_grants row trial-start reads. */
@@ -21,6 +21,7 @@ export interface TrialGrantRow {
   verified_at: string | null;
   trial_credits_limit: number;
   trial_credits_used: number;
+  device_id_hash: string | null;
 }
 
 /** A pending trial_codes row. */
@@ -57,7 +58,11 @@ export interface TrialStore {
    * writer. A non-null `deviceIdHash` already used under a DIFFERENT email yields
    * `{ deviceBlocked: true }` — nothing is created.
    */
-  verifyGrant(email: string, limit: number, deviceIdHash: string | null): Promise<VerifyGrantResult>;
+  verifyGrant(
+    email: string,
+    limit: number,
+    deviceIdHash: string | null,
+  ): Promise<VerifyGrantResult>;
   /**
    * TRUE if a grant already exists for `deviceIdHash` under an email OTHER than
    * `email`. A cheap read used to hard-block the `request` step before any code
@@ -87,17 +92,29 @@ export class SupabaseTrialStore implements TrialStore {
   async loadGrantByEmail(email: string): Promise<TrialGrantRow | null> {
     const { data, error } = await this.db
       .from("trial_grants")
-      .select("id, verified_at, trial_credits_limit, trial_credits_used")
+      .select(
+        "id, verified_at, trial_credits_limit, trial_credits_used, device_id_hash",
+      )
       .eq("email_normalized", email)
       .maybeSingle();
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "loadGrant", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "loadGrant",
+          error: error.message,
+        }),
+      );
       throw error;
     }
     return (data as TrialGrantRow) ?? null;
   }
 
-  async upsertCode(email: string, codeHash: string, expiresAt: Date): Promise<void> {
+  async upsertCode(
+    email: string,
+    codeHash: string,
+    expiresAt: Date,
+  ): Promise<void> {
     const { error } = await this.db
       .from("trial_codes")
       .upsert(
@@ -111,7 +128,13 @@ export class SupabaseTrialStore implements TrialStore {
         { onConflict: "email_normalized" },
       );
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "upsertCode", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "upsertCode",
+          error: error.message,
+        }),
+      );
       throw error;
     }
   }
@@ -123,7 +146,13 @@ export class SupabaseTrialStore implements TrialStore {
       .eq("email_normalized", email)
       .maybeSingle();
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "loadCode", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "loadCode",
+          error: error.message,
+        }),
+      );
       throw error;
     }
     return (data as TrialCodeRow) ?? null;
@@ -132,27 +161,54 @@ export class SupabaseTrialStore implements TrialStore {
   async incrementCodeAttempts(email: string): Promise<void> {
     // C-09: one atomic UPDATE (attempts = attempts + 1) via RPC — no
     // read-modify-write window. Missing row = no-op.
-    const { error } = await this.db.rpc("increment_trial_code_attempts", { p_email: email });
+    const { error } = await this.db.rpc("increment_trial_code_attempts", {
+      p_email: email,
+    });
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "incrAttempts", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "incrAttempts",
+          error: error.message,
+        }),
+      );
     }
   }
 
   async deleteCode(email: string): Promise<void> {
-    const { error } = await this.db.from("trial_codes").delete().eq("email_normalized", email);
+    const { error } = await this.db.from("trial_codes").delete().eq(
+      "email_normalized",
+      email,
+    );
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "deleteCode", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "deleteCode",
+          error: error.message,
+        }),
+      );
     }
   }
 
-  async verifyGrant(email: string, limit: number, deviceIdHash: string | null): Promise<VerifyGrantResult> {
+  async verifyGrant(
+    email: string,
+    limit: number,
+    deviceIdHash: string | null,
+  ): Promise<VerifyGrantResult> {
     const { data, error } = await this.db.rpc("verify_trial_grant", {
       p_email: email,
       p_limit: limit,
       p_device_id_hash: deviceIdHash,
     });
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "verifyGrant", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "verifyGrant",
+          error: error.message,
+        }),
+      );
       throw error;
     }
     // The function RETURNS TABLE → supabase-js yields an array of one row.
@@ -169,7 +225,10 @@ export class SupabaseTrialStore implements TrialStore {
     };
   }
 
-  async deviceAlreadyGranted(deviceIdHash: string, email: string): Promise<boolean> {
+  async deviceAlreadyGranted(
+    deviceIdHash: string,
+    email: string,
+  ): Promise<boolean> {
     const { data, error } = await this.db
       .from("trial_grants")
       .select("id")
@@ -178,7 +237,13 @@ export class SupabaseTrialStore implements TrialStore {
       .limit(1)
       .maybeSingle();
     if (error) {
-      console.error(JSON.stringify({ fn: "trial-start", op: "deviceCheck", error: error.message }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "deviceCheck",
+          error: error.message,
+        }),
+      );
       throw error;
     }
     return data !== null;

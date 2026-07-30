@@ -36,6 +36,7 @@ final class TrialEmailModel {
         case idle
         case working
         case failed(String)
+        case terminal(TrialEmailTerminalState)
     }
 
     var step: Step = .email
@@ -47,11 +48,15 @@ final class TrialEmailModel {
     var trimmedCode: String { code.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var isWorking: Bool { phase == .working }
+    var terminalState: TrialEmailTerminalState? {
+        guard case .terminal(let state) = phase else { return nil }
+        return state
+    }
 
     /// Editing after an error demotes back to `.idle` so the stale error clears.
     func handleEdit() {
         if isWorking { return }
-        if phase != .idle { phase = .idle }
+        if case .failed = phase { phase = .idle }
     }
 
     /// Request a code be emailed. On success advances to the code step.
@@ -68,7 +73,7 @@ final class TrialEmailModel {
                 phase = .idle
                 step = .code
             } catch let error as TrialStartError {
-                phase = .failed(error.userMessage)
+                handle(error)
             } catch {
                 phase = .failed("Couldn\u{2019}t send the code. Please try again.")
             }
@@ -90,10 +95,18 @@ final class TrialEmailModel {
                 phase = .idle
                 onVerified()
             } catch let error as TrialStartError {
-                phase = .failed(error.userMessage)
+                handle(error)
             } catch {
                 phase = .failed("Couldn\u{2019}t verify the code. Please try again.")
             }
+        }
+    }
+
+    private func handle(_ error: TrialStartError) {
+        if let terminal = TrialEmailTerminalState(error) {
+            phase = .terminal(terminal)
+        } else {
+            phase = .failed(error.userMessage)
         }
     }
 }
@@ -126,27 +139,31 @@ struct TrialEmailCaptureView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } actions: {
-            VStack(spacing: VFSpacing.md) {
-                switch model.step {
-                case .email: emailStep
-                case .code:  codeStep
-                }
+            if model.terminalState != nil {
+                OnboardingPrimaryButton("Done", action: cancel)
+            } else {
+                VStack(spacing: VFSpacing.md) {
+                    switch model.step {
+                    case .email: emailStep
+                    case .code:  codeStep
+                    }
 
-                if case .failed(let message) = model.phase {
-                    Text(message)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.vfWarningAmber)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    if case .failed(let message) = model.phase {
+                        Text(message)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.vfWarningAmber)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
-                OnboardingSecondaryButton("Not now", action: cancel)
+                    OnboardingSecondaryButton("Not now", action: cancel)
+                }
             }
         }
         .frame(width: 460)
         .frame(minHeight: 440)
-        .background(Color.vfCardBackground)
+        .background(Color.vfPanelBackground)
         .onAppear {
             // Pre-fill the remembered email (reinstall / repeat-trial convenience).
             if model.email.isEmpty, let remembered = trialCredits.rememberedEmail {
@@ -159,6 +176,7 @@ struct TrialEmailCaptureView: View {
     // MARK: Copy
 
     private var headline: String {
+        if let terminal = model.terminalState { return terminal.headline }
         switch model.step {
         case .email: return "Start your free trial"
         case .code:  return "Enter your code"
@@ -166,11 +184,12 @@ struct TrialEmailCaptureView: View {
     }
 
     private var subhead: String {
+        if let terminal = model.terminalState { return terminal.message }
         switch model.step {
         case .email:
             return "Verify your email to get free generations on us: no credit card, no API key. We\u{2019}ll send a 6-digit code."
         case .code:
-            return "We sent a 6-digit code to \(model.trimmedEmail). Enter it below to finish."
+            return TrialEmailCopy.codeDelivery(to: model.trimmedEmail)
         }
     }
 
@@ -233,7 +252,7 @@ struct TrialEmailCaptureView: View {
     // MARK: Chrome
 
     private var fieldBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.vfPillBackground)
+        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.vfControlBackground)
     }
     private var fieldBorder: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)

@@ -22,19 +22,27 @@ enum CreditDisplay {
 
     // MARK: - Low-balance threshold (6B.4 / 6F.4 — the ONE source of truth)
 
-    /// Nudge threshold (credits): at or below this, the menu-bar billing row
-    /// and the billing card escalate to the low-balance top-up / upgrade
-    /// prompt. A price-agnostic floor (the app no longer knows per-model cost) —
-    /// ≈ one heavy recording's worth of credits, so the user is warned before a
-    /// recording can fail mid-flight. Tunable.
-    static let LOW_BALANCE_CREDITS = 30
+    /// Trials start with fewer credits than paid plans, so each balance type
+    /// needs its own low-balance floor. Keeping the context explicit at call
+    /// sites prevents a fresh 30-credit trial from being compared with the
+    /// paid-plan threshold and immediately showing a warning.
+    enum BalanceType {
+        case trial
+        case paid
+    }
 
-    /// True when the spendable balance has dropped to the nudge threshold.
-    /// Drives both the generation-flow top-up prompt and the billing-card
-    /// escalation. Price-agnostic: charging is metered server-side, so the app
-    /// nudges on an absolute balance floor rather than a selected-model price.
-    static func isLowBalance(balance: Int) -> Bool {
-        balance <= LOW_BALANCE_CREDITS
+    static let TRIAL_LOW_BALANCE_CREDITS = 10
+    static let PAID_LOW_BALANCE_CREDITS = 30
+
+    /// True when the spendable balance has dropped to the applicable nudge
+    /// threshold. The thresholds remain price-agnostic because charging is
+    /// metered server-side.
+    static func isLowBalance(balance: Int, type: BalanceType) -> Bool {
+        let threshold = switch type {
+        case .trial: TRIAL_LOW_BALANCE_CREDITS
+        case .paid: PAID_LOW_BALANCE_CREDITS
+        }
+        return balance <= threshold
     }
 
     // MARK: - Headline + helper strings
