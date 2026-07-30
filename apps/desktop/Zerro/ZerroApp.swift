@@ -592,6 +592,7 @@ struct ZerroApp: App {
         // window actually surfaces in front of other apps.
         Window("Zerro Setup", id: OnboardingScene.windowID) {
             OnboardingWindowView()
+                .applyZerroTitledWindowChrome()
                 .dockIconVisibility(windowID: OnboardingScene.windowID)
                 .environment(permissions)
                 .environment(onboarding)
@@ -612,6 +613,7 @@ struct ZerroApp: App {
         // `AppDelegate.openPaywall()` when the user is `.expired`.
         Window("Zerro Unlock", id: PaywallScene.windowID) {
             PaywallView()
+                .applyZerroTitledWindowChrome()
                 .dockIconVisibility(windowID: PaywallScene.windowID)
                 .disablesWindowRestoration()
                 .environment(entitlements)
@@ -628,6 +630,7 @@ struct ZerroApp: App {
         // taps Activate (E-01); the full paywall is no longer opened for that flow.
         Window("Activate your key", id: ActivateKeyScene.windowID) {
             ActivateKeyView()
+                .applyZerroTitledWindowChrome()
                 .dockIconVisibility(windowID: ActivateKeyScene.windowID)
                 .disablesWindowRestoration()
                 .environment(entitlements)
@@ -642,6 +645,7 @@ struct ZerroApp: App {
         // generation, and dismisses on verify/cancel.
         Window("Zerro Free Trial", id: TrialEmailScene.windowID) {
             TrialEmailCaptureView()
+                .applyZerroTitledWindowChrome()
                 .dockIconVisibility(windowID: TrialEmailScene.windowID)
                 .disablesWindowRestoration()
                 .environment(appState)

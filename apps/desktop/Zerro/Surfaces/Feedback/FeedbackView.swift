@@ -221,7 +221,7 @@ struct FeedbackView: View {
                 .padding(.vertical, VFSpacing.sm)
                 .background(
                     RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
-                        .fill(isSelected ? Color.vfCardBackground : Color.clear)
+                        .fill(isSelected ? Color.vfControlBackground : Color.clear)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
@@ -241,7 +241,7 @@ struct FeedbackView: View {
     private var editor: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.vfCardBackground)
+                .fill(Color.vfControlBackground)
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
                 .strokeBorder(Color.vfHairline, lineWidth: 0.5)
 

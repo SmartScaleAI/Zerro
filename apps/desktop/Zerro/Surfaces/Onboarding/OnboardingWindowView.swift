@@ -12,8 +12,7 @@
 //      manually.
 //
 //  Window chrome (title bar, traffic lights) is provided by the Window
-//  scene in `OnboardingScene`. The dark panel background and rounded
-//  card here match the mockup composition.
+//  scene in `OnboardingScene`. The root uses the pure-black panel token.
 //
 
 import SwiftUI
@@ -25,7 +24,7 @@ struct OnboardingWindowView: View {
     var body: some View {
         mainPanel
             .frame(width: 580)
-            .background(Color.vfCardBackground)
+            .background(Color.vfPanelBackground)
             .onAppear {
                 // Register the openWindow action so the global hotkey can
                 // re-present this window after the user has dismissed it.

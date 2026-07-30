@@ -483,7 +483,7 @@ private struct LicenseKeyRow: View {
             .frame(height: 36)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.vfPillBackground)
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -774,9 +774,9 @@ private struct UsageMeterRow: View {
     private func meterBar(fraction: Double, tint: Color = .vfDevAccent) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                // A subtle lighter overlay rather than vfPillBackground (which is
-                // the same #202022 as the card, making a near-full bar's empty
-                // end invisible). Reads on any card background.
+                // A subtle lighter overlay rather than the pure-black
+                // vfPillBackground, so a near-full bar's empty end remains
+                // visible on the raised card background.
                 Capsule().fill(Color.white.opacity(0.10))
                 Capsule()
                     .fill(tint)

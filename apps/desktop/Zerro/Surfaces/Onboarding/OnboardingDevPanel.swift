@@ -46,7 +46,7 @@ struct OnboardingDevPanel: View {
         .padding(VFSpacing.md)
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.vfCardBackground)
         )
     }
 

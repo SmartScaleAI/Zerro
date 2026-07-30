@@ -43,16 +43,53 @@ extension Color {
     /// the meaning is "destructive action."
     static let vfDestructive = vfRecordingRed
 
-    // Surfaces (dark theme)
-    // Base / main background — pinned to #202022 (the base gray) for pills,
-    // response views, error/overlay pills, overlay toolbars, Settings, and
-    // Onboarding windows. Was #1A1A1F.
-    static let vfPanelBackground = Color(red: 0.1255, green: 0.1255, blue: 0.1333) // #202022
-    // Raised cards sit on the base — kept slightly lighter for depth. Was #242429.
-    static let vfCardBackground = Color(red: 0.165, green: 0.165, blue: 0.173) // ~#2A2A2C
-    // Pill chrome — same base gray as the panel so pills and their surrounding
-    // surface read as one. Was #1F1F24.
-    static let vfPillBackground = Color(red: 0.1255, green: 0.1255, blue: 0.1333) // #202022
+    // Surfaces (fixed black theme)
+    // Base / main background for every first-party Zerro window and panel.
+    static let vfPanelBackground = Color.black // #000000
+    // Pill shells share the pure-black base across every compact/expanded state.
+    static let vfPillBackground = Color.black // #000000
+
+    // The single raised accent gray used over the black base throughout the
+    // app. Fixed #1C1C1E: light enough to establish card/control boundaries,
+    // still dark enough that the application reads as a black theme.
+    static let vfAccentGray = Color(
+        red: 28.0 / 255.0,
+        green: 28.0 / 255.0,
+        blue: 30.0 / 255.0
+    ) // #1C1C1E
+
+    // Semantic aliases keep intent readable while guaranteeing that cards,
+    // overlays, artifacts, fields, selects, and selected segments share the
+    // same accent gray. Future palette tuning happens at `vfAccentGray`.
+    static let vfCardBackground = vfAccentGray
+    static let vfOverlayBackground = vfAccentGray
+    static let vfArtifactBackground = vfAccentGray
+    // Hover/pressed overlays remain local interaction feedback.
+    static let vfControlBackground = vfAccentGray
+    // Overlay dropdown panels use the same default gray as their toolbar
+    // triggers. Keep this semantic alias tied to `vfControlBackground` so the
+    // two surfaces cannot drift during future palette adjustments.
+    static let vfDropdownBackground = vfControlBackground
+
+    // Custom dropdown interaction states. These deliberately step up from the
+    // #1C1C1E panel instead of reusing it: a quiet hover, a persistent
+    // selection, then a slightly brighter selected-hover state. Other menus,
+    // including the intentionally blue menu-bar panel, retain their own styling.
+    static let vfDropdownRowHover = Color(
+        red: 36.0 / 255.0,
+        green: 36.0 / 255.0,
+        blue: 38.0 / 255.0
+    ) // #242426
+    static let vfDropdownRowSelected = Color(
+        red: 44.0 / 255.0,
+        green: 44.0 / 255.0,
+        blue: 46.0 / 255.0
+    ) // #2C2C2E
+    static let vfDropdownRowSelectedHover = Color(
+        red: 52.0 / 255.0,
+        green: 52.0 / 255.0,
+        blue: 55.0 / 255.0
+    ) // #343437
 
     // Text
     static let vfTextPrimary = Color.white.opacity(0.95)
@@ -61,6 +98,14 @@ extension Color {
 
     // Borders/separators
     static let vfHairline = Color.white.opacity(0.08)
+    // Outer edge for floating overlays and pills. Fixed #303030 so pure-black
+    // Zerro chrome stays distinguishable over black captured content; internal
+    // separators continue using the quieter `vfHairline`.
+    static let vfOverlayBorder = Color(
+        red: 48.0 / 255.0,
+        green: 48.0 / 255.0,
+        blue: 48.0 / 255.0
+    ) // #303030
 
     // Selection / hover fill used by the menu-bar dropdown rows. Fixed
     // #1868BF — a muted blue that holds up over the panel's dark

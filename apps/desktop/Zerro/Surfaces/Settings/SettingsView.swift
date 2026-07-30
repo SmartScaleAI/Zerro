@@ -305,7 +305,7 @@ private struct SidebarRow: View {
     }
 
     private var fillColor: Color {
-        if isSelected { return Color.white.opacity(0.08) }
+        if isSelected { return Color.vfControlBackground }
         if isHovered { return Color.white.opacity(0.03) }
         return Color.clear
     }

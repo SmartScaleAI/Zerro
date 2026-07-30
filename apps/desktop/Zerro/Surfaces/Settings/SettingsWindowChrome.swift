@@ -52,29 +52,6 @@ enum SettingsScene {
     static let sidebarWidth: CGFloat = 188
 }
 
-// MARK: - WindowConfigurator
-
-/// Lightweight NSViewRepresentable used as a `.background` on the
-/// Settings root view to reach the hosting NSWindow and apply title-bar
-/// / fullSizeContentView properties at the AppKit layer. Runs once per
-/// window mount via `DispatchQueue.main.async`, which gives SwiftUI
-/// time to attach the view to its window before we look it up.
-struct WindowConfigurator: NSViewRepresentable {
-    let configure: (NSWindow) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                configure(window)
-            }
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
 extension View {
     /// Convenience wrapper that pushes the configurator into the view
     /// background so the rest of the layout stays unaffected. Applied
@@ -82,15 +59,9 @@ extension View {
     func applySettingsWindowChrome() -> some View {
         background(
             WindowConfigurator { window in
-                window.titlebarAppearsTransparent = true
+                applyZerroBlackWindowAppearance(to: window)
                 window.titleVisibility = .hidden
                 window.styleMask.insert(.fullSizeContentView)
-                // The dark surface should bleed up under the traffic
-                // lights without an inset border; the explicit
-                // backgroundColor handles cases where SwiftUI leaves the
-                // window background nil (which renders as the system
-                // window default, not our panel color).
-                window.backgroundColor = NSColor(Color.vfPanelBackground)
                 // Drag from anywhere in the chromeless surface — there's
                 // no title bar to grab otherwise.
                 window.isMovableByWindowBackground = true

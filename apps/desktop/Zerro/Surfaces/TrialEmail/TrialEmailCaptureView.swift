@@ -146,7 +146,7 @@ struct TrialEmailCaptureView: View {
         }
         .frame(width: 460)
         .frame(minHeight: 440)
-        .background(Color.vfCardBackground)
+        .background(Color.vfPanelBackground)
         .onAppear {
             // Pre-fill the remembered email (reinstall / repeat-trial convenience).
             if model.email.isEmpty, let remembered = trialCredits.rememberedEmail {
@@ -233,7 +233,7 @@ struct TrialEmailCaptureView: View {
     // MARK: Chrome
 
     private var fieldBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.vfPillBackground)
+        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.vfControlBackground)
     }
     private var fieldBorder: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)

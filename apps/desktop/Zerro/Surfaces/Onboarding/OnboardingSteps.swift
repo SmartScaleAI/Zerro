@@ -221,7 +221,7 @@ struct EmailStepView: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(Color.vfControlBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
@@ -629,7 +629,7 @@ private struct PermissionRow<Trailing: View>: View {
             trailing()
         }
         .padding(VFSpacing.md)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
                 .strokeBorder(Color.vfHairline, lineWidth: 1)
@@ -840,7 +840,7 @@ private struct DevModeToolbarIllustration: View {
             .frame(width: 26, height: 26)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.vfControlBackground)
             )
     }
 
@@ -1013,7 +1013,7 @@ struct OnboardingIconTile: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.white.opacity(0.06))
+            .fill(Color.vfCardBackground)
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: systemName)
@@ -1039,7 +1039,7 @@ struct OnboardingKeyCapLarge: View {
             .frame(minWidth: 48, minHeight: 48)
             .background(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
@@ -1240,7 +1240,7 @@ struct OnboardingDeniedView: View {
         }
         .padding(.horizontal, VFSpacing.md)
         .padding(.vertical, VFSpacing.md)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
     }
 }
 

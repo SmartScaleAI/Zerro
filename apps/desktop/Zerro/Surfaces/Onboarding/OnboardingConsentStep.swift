@@ -94,7 +94,7 @@ struct ConsentStepView: View {
         }
         .padding(.horizontal, VFSpacing.md)
         .padding(.vertical, VFSpacing.md)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: VFRadius.md))
+        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
     }
 
     // MARK: - Consent action

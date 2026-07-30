@@ -383,7 +383,7 @@ struct AreaSelectorView: View {
         .frame(height: Self.pillHeight)
         .padding(.horizontal, VFSpacing.lg)
         .background(Color.vfPillBackground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
+        .overlay(Capsule().strokeBorder(Color.vfOverlayBorder, lineWidth: 1))
         .fixedSize()
         .position(
             x: bounds.width / 2,
@@ -407,7 +407,7 @@ struct AreaSelectorView: View {
         .frame(height: Self.restingPillHeight)
         .padding(.horizontal, VFSpacing.xxl)
         .background(Color.vfPillBackground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 0.5))
+        .overlay(Capsule().strokeBorder(Color.vfOverlayBorder, lineWidth: 1))
         .fixedSize()
         .position(x: bounds.width / 2, y: bounds.height / 2)
     }
@@ -1325,14 +1325,15 @@ struct AreaSelectorView: View {
     // MARK: - CleanShot-style dropdown chrome
     //
     // The model/mic/dev-settings menus share one look: a dark rounded panel
-    // (`menuFill`), a hairline, a soft shadow, a caret pointing at the anchor
-    // icon, and a small gray section header above the rows. Each menu function
-    // emits the panel + caret as siblings positioned at the static frames the
-    // controller hit-tests against.
+    // (`menuFill`), an overlay border, a caret pointing at the anchor icon, and a
+    // small gray section header above the rows. The chrome is deliberately flat:
+    // applying a shadow to this composite also shadows opaque hover/selection
+    // rows inside it. Each menu function emits the panel + caret as siblings
+    // positioned at the static frames the controller hit-tests against.
 
     /// Solid dark panel fill for the dropdowns (CleanShot reads as solid, not
     /// translucent — and a solid color also snapshots faithfully).
-    static let menuFill = Color(red: 0.165, green: 0.165, blue: 0.173) // ~#2A2A2C, raised over #202022 base
+    static let menuFill = Color.vfDropdownBackground
     private static let menuCornerRadius: CGFloat = 12
 
     /// Wrap menu content in the shared panel chrome, sized + positioned to
@@ -1346,9 +1347,8 @@ struct AreaSelectorView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Self.menuCornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                    .strokeBorder(Color.vfOverlayBorder, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
             .position(x: frame.midX, y: frame.midY)
     }
 
@@ -1420,11 +1420,23 @@ struct AreaSelectorView: View {
             .frame(height: Self.menuSectionHeaderHeight, alignment: .bottom)
     }
 
-    /// Shared row highlight (hover or persistent selection), inset from the
-    /// panel edges so it reads as a pill within the menu.
-    private func menuRowHighlight(_ on: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(on ? Color.white.opacity(0.08) : .clear)
+    /// Shared fill-only dropdown-row treatment, inset from the panel edges.
+    /// Hover, persistent selection, and selected-hover are deliberately
+    /// distinct. Selected rows have no stroke or outline.
+    private func menuRowHighlight(selected: Bool = false, hovered: Bool) -> some View {
+        let fill: Color
+        if selected && hovered {
+            fill = .vfDropdownRowSelectedHover
+        } else if selected {
+            fill = .vfDropdownRowSelected
+        } else if hovered {
+            fill = .vfDropdownRowHover
+        } else {
+            fill = .clear
+        }
+
+        return RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(fill)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
     }
@@ -1443,7 +1455,7 @@ struct AreaSelectorView: View {
                     menuSectionHeader("Model")
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         let selected = item.id == state.selectedModelID
-                        let highlighted = (state.highlightedModelIndex == index && !item.gated) || selected
+                        let hovered = state.highlightedModelIndex == index && !item.gated
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .semibold))
@@ -1452,7 +1464,7 @@ struct AreaSelectorView: View {
                                 .frame(width: 14)
                             Text(item.name)
                                 .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                                .foregroundStyle(selected ? Color.vfTextPrimary : Color.vfTextSecondary)
+                                .foregroundStyle(selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                             if item.recommended {
@@ -1475,7 +1487,7 @@ struct AreaSelectorView: View {
                         .padding(.horizontal, 10)
                         .frame(height: Self.modelMenuRowHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(menuRowHighlight(highlighted))
+                        .background(menuRowHighlight(selected: selected, hovered: hovered))
                         .opacity(item.gated ? 0.45 : 1)
                     }
                 }
@@ -1544,7 +1556,7 @@ struct AreaSelectorView: View {
                     menuSectionHeader("Microphone")
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         let selected = item.id == state.selectedMicrophoneID
-                        let highlighted = state.highlightedMicIndex == index || selected
+                        let hovered = state.highlightedMicIndex == index
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .semibold))
@@ -1553,7 +1565,7 @@ struct AreaSelectorView: View {
                                 .frame(width: 14)
                             Text(item.name)
                                 .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                                .foregroundStyle(selected ? Color.vfTextPrimary : Color.vfTextSecondary)
+                                .foregroundStyle(selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                             Spacer(minLength: 0)
@@ -1561,7 +1573,7 @@ struct AreaSelectorView: View {
                         .padding(.horizontal, 10)
                         .frame(height: Self.micMenuRowHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(menuRowHighlight(highlighted))
+                        .background(menuRowHighlight(selected: selected, hovered: hovered))
                     }
                 }
                 .padding(.vertical, Self.menuVPad)
@@ -1594,7 +1606,11 @@ struct AreaSelectorView: View {
                                   value: agents.first { $0.id == state.selectedAgentID }?.name ?? "Select")
                     if expanded == .agent {
                         ForEach(Array(agents.enumerated()), id: \.element.id) { index, item in
-                            devAgentRow(item, highlighted: state.highlightedDevAgentIndex == index || item.id == state.selectedAgentID)
+                            devAgentRow(
+                                item,
+                                selected: item.id == state.selectedAgentID,
+                                hovered: state.highlightedDevAgentIndex == index
+                            )
                         }
                     }
 
@@ -1673,7 +1689,7 @@ struct AreaSelectorView: View {
         .padding(.horizontal, Self.devMenuRowHPad)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(menuRowHighlight(highlighted))
+        .background(menuRowHighlight(selected: expandedHere, hovered: highlighted))
     }
 
     /// The "Project" section header. Matches the collapsed summary rows' label
@@ -1708,7 +1724,11 @@ struct AreaSelectorView: View {
         let viewportHeight = CGFloat(visibleCount) * Self.devMenuRowHeight
         VStack(spacing: 0) {
             ForEach(window, id: \.element.id) { index, item in
-                devModelRow(item, highlighted: state.highlightedDevModelIndex == index || item.id == state.selectedDevModelID)
+                devModelRow(
+                    item,
+                    selected: item.id == state.selectedDevModelID,
+                    hovered: state.highlightedDevModelIndex == index
+                )
             }
         }
         .frame(height: viewportHeight, alignment: .top)
@@ -1740,20 +1760,23 @@ struct AreaSelectorView: View {
 
     /// One Model-section row: green checkmark on the current pick, a model icon,
     /// the display name. Mirrors `devAgentRow` (CleanShot style).
-    private func devModelRow(_ item: AreaSelectorState.DevModelMenuItem, highlighted: Bool) -> some View {
-        let active = item.id == state.selectedDevModelID
+    private func devModelRow(
+        _ item: AreaSelectorState.DevModelMenuItem,
+        selected: Bool,
+        hovered: Bool
+    ) -> some View {
         return HStack(spacing: 8) {
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.vfDevAccent)
-                .opacity(active ? 1 : 0)
+                .opacity(selected ? 1 : 0)
                 .frame(width: 16)
             Image(systemName: "cpu")
                 .font(.system(size: 13))
                 .foregroundStyle(Color.vfTextSecondary)
             Text(item.name)
-                .font(.system(size: 13, weight: active ? .semibold : .regular))
-                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 6)
@@ -1761,23 +1784,30 @@ struct AreaSelectorView: View {
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(menuRowHighlight(highlighted))
+        .background(menuRowHighlight(selected: selected, hovered: hovered))
     }
 
-    private func devAgentRow(_ item: AreaSelectorState.DevAgentMenuItem, highlighted: Bool) -> some View {
-        let active = item.id == state.selectedAgentID
+    private func devAgentRow(
+        _ item: AreaSelectorState.DevAgentMenuItem,
+        selected: Bool,
+        hovered: Bool
+    ) -> some View {
         return HStack(spacing: 8) {
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.vfDevAccent)   // green check on the active agent
-                .opacity(active ? 1 : 0)
+                .opacity(selected ? 1 : 0)
                 .frame(width: 16)
             Image(systemName: "terminal")
                 .font(.system(size: 13))
                 .foregroundStyle(item.installed ? Color.vfTextSecondary : Color.vfTextTertiary)
             Text(item.name)
-                .font(.system(size: 13, weight: active ? .semibold : .regular))
-                .foregroundStyle(item.installed ? (active ? Color.vfTextPrimary : Color.vfTextSecondary) : Color.vfTextTertiary)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(
+                    item.installed
+                        ? (selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
+                        : Color.vfTextTertiary
+                )
                 .lineLimit(1)
             Spacer(minLength: 6)
             if item.installed {
@@ -1798,7 +1828,7 @@ struct AreaSelectorView: View {
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(menuRowHighlight(highlighted))
+        .background(menuRowHighlight(selected: selected, hovered: hovered))
     }
 
     /// One Permissions OPTION row (shown when the Permissions section is expanded):
@@ -1811,7 +1841,7 @@ struct AreaSelectorView: View {
     /// render == hit-test.
     private func devPermissionRow(_ tier: DevPermissionTier, index: Int) -> some View {
         let active = state.devPermissionTier == tier
-        let highlighted = state.highlightedDevPermissionIndex == index || active
+        let hovered = state.highlightedDevPermissionIndex == index
         let unrestricted = tier == .unrestricted
         return HStack(spacing: 8) {
             Image(systemName: "checkmark")
@@ -1826,7 +1856,7 @@ struct AreaSelectorView: View {
                 .frame(width: 16)
             Text(Self.devPermissionTitle(tier))
                 .font(.system(size: 13, weight: active ? .semibold : .regular))
-                .foregroundStyle(active ? Color.vfTextPrimary : Color.vfTextSecondary)
+                .foregroundStyle(active || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
                 .lineLimit(1)
             Spacer(minLength: 6)
             // Per-tier safety icon, trailing-padded by (chevron + gap) so it lines
@@ -1840,7 +1870,7 @@ struct AreaSelectorView: View {
         .padding(.horizontal, 12)
         .frame(height: Self.devMenuRowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(menuRowHighlight(highlighted))
+        .background(menuRowHighlight(selected: active, hovered: hovered))
     }
 
     /// SF Symbol for a permission tier's row glyph.
@@ -2056,7 +2086,7 @@ struct AreaSelectorView: View {
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Self.menuFill))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                            .strokeBorder(Color.vfOverlayBorder, lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
                     .position(x: cx, y: bubbleCenterY)
@@ -2076,7 +2106,7 @@ struct AreaSelectorView: View {
                         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Self.menuFill))
                         .overlay(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                                .strokeBorder(Color.vfOverlayBorder, lineWidth: 1)
                         )
                     Path { p in
                         p.move(to: CGPoint(x: 0, y: 0))
@@ -2171,7 +2201,7 @@ struct AreaSelectorView: View {
     // MARK: - Compact toolbar chrome
     //
     // One rounded container holds every control. Its background matches the
-    // instruction pill (solid `vfPillBackground` + `vfHairline` 0.5 strokeBorder)
+    // instruction pill (solid `vfPillBackground` + `vfOverlayBorder` stroke)
     // so the overlay chrome reads as one cohesive family. Green (`vfDevAccent`)
     // appears ONLY on the active Dev segment, the dev-settings readiness dot, and
     // inside the dev-settings menu; everything else is neutral and Record red.
@@ -2184,7 +2214,7 @@ struct AreaSelectorView: View {
             .fill(Color.vfPillBackground)
             .overlay(
                 Capsule(style: .continuous)
-                    .strokeBorder(Color.vfHairline, lineWidth: 0.5)
+                    .strokeBorder(Color.vfOverlayBorder, lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.35), radius: Self.scaled(18), y: Self.scaled(6))
     }
@@ -2193,7 +2223,7 @@ struct AreaSelectorView: View {
 
     /// The two-segment mode switch: Ask (wand) | Dev (`</>`), inside a
     /// recessed well. The active segment is highlighted — Ask → neutral
-    /// white fill, Dev → green `vfDevAccent` tint + green icon — and the inactive
+    /// neutral control fill, Dev → green `vfDevAccent` tint + green icon — and the inactive
     /// segment's icon is dimmed. Clicking maps to the mode (Part 5 hit-tests the
     /// two halves separately).
     private var modeSwitchControl: some View {
@@ -2223,7 +2253,7 @@ struct AreaSelectorView: View {
 
     private func modeSegment(system: String, active: Bool, isDev: Bool, hovered: Bool) -> some View {
         let fill: Color = active
-            ? (isDev ? Color.vfDevAccent.opacity(0.22) : Color.white.opacity(0.12))
+            ? (isDev ? Color.vfDevAccent.opacity(0.22) : Color.vfControlBackground)
             : (hovered ? Color.white.opacity(0.06) : .clear)
         let iconColor: Color = active
             ? (isDev ? Color.vfDevAccent : Color.vfTextPrimary)
@@ -2321,10 +2351,13 @@ struct AreaSelectorView: View {
     }
 
     private func iconButtonFill(active: Bool, hovered: Bool) -> some View {
-        // Slightly stronger than on the old solid fill — the frosted material is
-        // lighter, so a white tint needs a touch more to register as a button.
-        RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
-            .fill(Color.white.opacity(active ? 0.14 : (hovered ? 0.10 : 0.06)))
+        let interactionOpacity = active ? 0.06 : (hovered ? 0.04 : 0)
+        return RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
+            .fill(Color.vfControlBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.scaled(9), style: .continuous)
+                    .fill(Color.white.opacity(interactionOpacity))
+            )
             .padding(.vertical, Self.scaled(4))
             .padding(.horizontal, Self.scaled(1))
     }
