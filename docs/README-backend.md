@@ -675,12 +675,14 @@ dots/`+tags` collapsed so they can't farm the cap), reject disposable domains
 store its **SHA-256 hash** with a short TTL (`trial_codes`, default 10 min,
 attempts reset to 0), and send it via **Resend** from the verified `getzerro.app`
 sender. A Resend failure → `502 { error: "send_failed" }`. Success →
-`{ status: "code_sent" }` — and **uniformly so (C-05)**: an email that already
-verified and spent every credit, or one past the per-email **send sub-limit**
-(`TRIAL_SEND_LIMIT_PER_EMAIL`), gets the SAME `code_sent` body with **no email
-sent**, so `request` can't be used by an unauthenticated prober to enumerate
-which addresses have (or exhausted) a trial. The true `already_used` surfaces
-only at `verify`/`resume`, after the caller proves control of the mailbox.
+`{ status: "code_sent" }`. An exhausted grant bound to the request's **same
+device hash** returns `{ status: "already_used" }` immediately: that discloses
+only what this Mac already knows about its own trial. An exhausted email from a
+different, missing, or legacy-unbound device receives a real code and reveals
+`already_used` only after `verify`, preserving the C-05 enumeration defense.
+Requests past the per-email **send sub-limit** (`TRIAL_SEND_LIMIT_PER_EMAIL`)
+still receive the uniform `code_sent` body with no email sent, so the throttle
+does not disclose recent activity for an address.
 
 **`{ action: "verify", email, code }`** — look up the pending code, check TTL +
 attempts (expired/over-attempts → burn it), **constant-time compare the hashes**

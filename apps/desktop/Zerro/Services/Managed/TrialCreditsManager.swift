@@ -114,6 +114,39 @@ enum TrialStartError: Error, Equatable {
     }
 }
 
+/// A non-retryable trial-start outcome the UI renders as an informational end
+/// state rather than a delivery failure. Shared by onboarding and the standalone
+/// verification window so the email-vs-device distinction and copy cannot drift.
+enum TrialEmailTerminalState: Equatable {
+    case emailAlreadyUsed
+    case deviceAlreadyUsed
+
+    init?(_ error: TrialStartError) {
+        switch error {
+        case .alreadyUsed:     self = .emailAlreadyUsed
+        case .deviceTrialUsed: self = .deviceAlreadyUsed
+        default:               return nil
+        }
+    }
+
+    var headline: String { "Trial already used" }
+
+    var message: String {
+        switch self {
+        case .emailAlreadyUsed:
+            return "This email has already used its free trial. You can continue: add your own API keys or subscribe anytime."
+        case .deviceAlreadyUsed:
+            return "This Mac has already used its free trial. You can continue: add your own API keys or subscribe anytime."
+        }
+    }
+}
+
+enum TrialEmailCopy {
+    static func codeDelivery(to email: String) -> String {
+        "Check \(email) for a 6-digit code. Delivery may take a minute, and it may land in spam."
+    }
+}
+
 // MARK: - TrialCreditsManager
 
 @MainActor
