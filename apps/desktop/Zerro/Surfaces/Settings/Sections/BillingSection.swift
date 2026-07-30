@@ -749,8 +749,8 @@ private struct UsageMeterRow: View {
         }
 
         // Trials can't buy top-ups (plan §1.4) — the inline prompt is the
-        // Managed upgrade instead, escalating on the shared low threshold.
-        if isLow(balance: credits) {
+        // Managed upgrade instead, escalating at the trial threshold.
+        if CreditDisplay.isLowBalance(balance: credits, type: .trial) {
             HStack(spacing: VFSpacing.sm) {
                 Text("Running low. Upgrade to keep going")
                     .font(.system(size: 12))
@@ -794,10 +794,6 @@ private struct UsageMeterRow: View {
             .frame(width: 7, height: 7)
     }
 
-    private func isLow(balance: Int) -> Bool {
-        CreditDisplay.isLowBalance(balance: balance)
-    }
-
     /// 6F.4 — comfortable balance: a quiet "need more?" line; low balance:
     /// escalate in amber. A single "Add credits" button opens the one
     /// multi-variant Credit Packs checkout (the customer picks the pack on the
@@ -806,7 +802,7 @@ private struct UsageMeterRow: View {
     /// shows the amber notice, but with no dead-link button.
     @ViewBuilder
     private func topupPrompt(balance: Int) -> some View {
-        let low = isLow(balance: balance)
+        let low = CreditDisplay.isLowBalance(balance: balance, type: .paid)
         let url = BillingLinks.topupCheckoutURL
         if low || url != nil {
             HStack(spacing: VFSpacing.sm) {
