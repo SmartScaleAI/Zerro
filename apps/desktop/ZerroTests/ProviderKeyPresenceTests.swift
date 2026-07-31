@@ -67,10 +67,24 @@ final class ProviderKeyPresenceTests: XCTestCase {
     func testFallbackIfUnusable() {
         // .cloud stays when a key is present, resets when it's gone.
         XCTAssertNil(STTEnginePicker.fallbackIfUnusable(current: .cloud, modelInstalled: false, openAIKeyPresent: true))
-        XCTAssertEqual(STTEnginePicker.fallbackIfUnusable(current: .cloud, modelInstalled: false, openAIKeyPresent: false), .auto)
+        XCTAssertNil(
+            STTEnginePicker.fallbackIfUnusable(
+                current: .cloud,
+                modelInstalled: false,
+                openAIKeyPresent: false
+            ),
+            "cloud remains explicitly selected so the UI can require an OpenAI key"
+        )
         // .local stays when installed, resets when removed.
         XCTAssertNil(STTEnginePicker.fallbackIfUnusable(current: .local, modelInstalled: true, openAIKeyPresent: false))
-        XCTAssertEqual(STTEnginePicker.fallbackIfUnusable(current: .local, modelInstalled: false, openAIKeyPresent: false), .auto)
+        XCTAssertNil(
+            STTEnginePicker.fallbackIfUnusable(
+                current: .local,
+                modelInstalled: false,
+                openAIKeyPresent: false
+            ),
+            "local remains explicitly selected so the UI can require the model download"
+        )
         // .auto is always usable → never resets.
         XCTAssertNil(STTEnginePicker.fallbackIfUnusable(current: .auto, modelInstalled: false, openAIKeyPresent: false))
         XCTAssertNil(STTEnginePicker.fallbackIfUnusable(current: .auto, modelInstalled: true, openAIKeyPresent: true))

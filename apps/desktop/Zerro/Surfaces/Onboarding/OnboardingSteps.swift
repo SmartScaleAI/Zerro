@@ -41,7 +41,7 @@ struct WelcomeStepView: View {
                     .multilineTextAlignment(.center)
 
                 VStack(spacing: VFSpacing.sm) {
-                    Text("Record your screen, narrate what you want, and get a ready-to-paste result \u{2014} a prompt, draft, or snippet.")
+                    Text("Record your screen, explain what you want, and get it done faster.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -117,6 +117,7 @@ struct EmailStepView: View {
     @State private var errorIsSystem: Bool = false
     @State private var systemFailureCount: Int = 0
     @FocusState private var fieldFocused: Bool
+    @AppStorage("vf.onboarding.byokPathActive") private var showBYOKFlow = false
 
     /// After this many CONSECUTIVE system-class failures, offer the infra
     /// fallback so a backend/Resend outage can never permanently trap the user.
@@ -129,6 +130,19 @@ struct EmailStepView: View {
     private var emailLooksValid: Bool { trimmedEmail.contains("@") && trimmedEmail.contains(".") }
 
     var body: some View {
+        Group {
+            if showBYOKFlow {
+                BYOKOnboardingFlowView {
+                    showBYOKFlow = false
+                    prefill()
+                }
+            } else {
+                emailFlow
+            }
+        }
+    }
+
+    private var emailFlow: some View {
         OnboardingStepLayout {
             OnboardingIconTile(systemName: "envelope.fill")
         } content: {
@@ -252,6 +266,7 @@ struct EmailStepView: View {
                 } else {
                     OnboardingPrimaryButton("Send code", isEnabled: emailLooksValid) { sendCode() }
                 }
+                byokTrialButton
             case .code:
                 if working {
                     OnboardingPrimaryButton("Verifying\u{2026}", isEnabled: false) { }
@@ -281,6 +296,19 @@ struct EmailStepView: View {
                 infraFallback
             }
         }
+    }
+
+    private var byokTrialButton: some View {
+        Button("Use my own API keys instead") {
+            fieldFocused = false
+            showBYOKFlow = true
+            Analytics.capture("byok_trial_selected", ["surface": "onboarding"])
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .foregroundStyle(Color.vfTextTertiary)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, 2)
     }
 
     private var infraFallback: some View {
@@ -950,17 +978,20 @@ struct AllSetStepView: View {
 /// generous spacing and flanked by flexible spacers so each step sits
 /// centered in the card regardless of how tall its content is.
 struct OnboardingStepLayout<Icon: View, Content: View, Accessory: View, Actions: View>: View {
+    let spacing: CGFloat
     @ViewBuilder var icon: () -> Icon
     @ViewBuilder var content: () -> Content
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var actions: () -> Actions
 
     init(
+        spacing: CGFloat = VFSpacing.xl,
         @ViewBuilder icon: @escaping () -> Icon,
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() },
         @ViewBuilder actions: @escaping () -> Actions
     ) {
+        self.spacing = spacing
         self.icon = icon
         self.content = content
         self.accessory = accessory
@@ -968,7 +999,7 @@ struct OnboardingStepLayout<Icon: View, Content: View, Accessory: View, Actions:
     }
 
     var body: some View {
-        VStack(spacing: VFSpacing.xl) {
+        VStack(spacing: spacing) {
             Spacer(minLength: 0)
 
             icon()
@@ -1425,3 +1456,49 @@ struct OnboardingSecondaryButton: View {
         .buttonStyle(.plain)
     }
 }
+
+#if DEBUG
+
+// MARK: - Canvas previews
+
+#Preview("1 · Welcome") {
+    OnboardingPreviewHost(step: .welcome) {
+        WelcomeStepView()
+    }
+}
+
+#Preview("2 · Terms & Privacy") {
+    OnboardingPreviewHost(step: .consent) {
+        ConsentStepView()
+    }
+}
+
+#Preview("3 · Email") {
+    OnboardingPreviewHost(step: .email) {
+        EmailStepView()
+    }
+}
+
+#Preview("4 · Permissions") {
+    OnboardingPreviewHost(
+        step: .permissions,
+        screenStatus: .granted,
+        microphoneStatus: .granted
+    ) {
+        PermissionsStepView()
+    }
+}
+
+#Preview("5 · Dev Mode") {
+    OnboardingPreviewHost(step: .devMode) {
+        DevModeStepView()
+    }
+}
+
+#Preview("6 · All Set") {
+    OnboardingPreviewHost(step: .allSet) {
+        AllSetStepView()
+    }
+}
+
+#endif

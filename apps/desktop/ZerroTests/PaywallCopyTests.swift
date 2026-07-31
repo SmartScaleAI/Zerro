@@ -44,6 +44,17 @@ final class PaywallCopyTests: XCTestCase {
         XCTAssertEqual(headline(.manage, state), "Manage your plan")
     }
 
+    func testByokTrialCompletionHasDedicatedCopy() {
+        XCTAssertEqual(
+            headline(.byokTrialExhausted, .byokTrialExpired),
+            "Your own-key trial is complete"
+        )
+        XCTAssertEqual(
+            headline(nil, .byokTrialExpired),
+            PaywallCopy.byokTrialComplete.headline
+        )
+    }
+
     // MARK: - Pre-flight block triggers map onto the same copy
 
     func testOutOfCreditsMapsToTopup() {
@@ -85,7 +96,7 @@ final class PaywallCopyTests: XCTestCase {
     // MARK: - Every context has a non-empty subheadline
 
     func testSubheadlinesNonEmpty() {
-        for copy in [PaywallCopy.blocked, .upgrade, .topup, .manage] {
+        for copy in [PaywallCopy.blocked, .byokTrialComplete, .upgrade, .topup, .manage] {
             XCTAssertFalse(copy.subheadline.isEmpty)
             XCTAssertFalse(copy.headline.isEmpty)
         }

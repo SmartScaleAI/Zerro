@@ -969,6 +969,11 @@ final class AppState {
     // local (fail-safe), exactly like a `nil` entitlements.
     @ObservationIgnored weak var trialCredits: TrialCreditsManager?
 
+    /// Anonymous BYOK-trial successful-generation counter. The direct provider
+    /// path remains unchanged; only terminal successful recording UUIDs reach
+    /// this service.
+    @ObservationIgnored weak var byokTrial: BYOKTrialManager?
+
     /// Phase 4 (Local Whisper) — whether the user can run a generation ENTIRELY
     /// on their own dime: they hold at least one CHAT provider key AND have a
     /// usable transcription path for their `sttEngine` (a local model installed,
@@ -3641,9 +3646,31 @@ final class AppState {
     private func finishGenerationOrDispatch() {
         guard recordingIsDevMode else {
             state = .done
+            recordBYOKTrialSuccessIfNeeded()
             return
         }
         beginDevDispatch()
+    }
+
+    /// The anonymous BYOK trial counts usable, terminal results only. Ask counts
+    /// after `.done`; Dev counts separately after the agent reaches `.devDone`.
+    /// The recording's stable UUID makes retries idempotent server-side.
+    private func recordBYOKTrialSuccessIfNeeded() {
+        guard let entitlements, case .byokTrial = entitlements.state,
+              let id = processedRecording?.idempotencyKey,
+              let byokTrial
+        else { return }
+        let counted = byokTrial.recordSuccessfulGenerationLocally(id: id)
+        if counted {
+            // Flip the tenth result to the exhausted state before this main-actor
+            // event returns, so a queued hotkey cannot start generation eleven.
+            entitlements.refresh()
+        }
+        Task { @MainActor [weak entitlements, weak byokTrial] in
+            guard let byokTrial else { return }
+            await byokTrial.syncPending()
+            entitlements?.refresh()
+        }
     }
 
     /// Hand the generated `agent_prompt` to the coding agent: checkpoint → run →
@@ -4061,6 +4088,7 @@ final class AppState {
             // two states never coexist.
             isResultExpanded = false
             state = .devDone
+            recordBYOKTrialSuccessIfNeeded()
             Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
             // M8 analytics — metadata only (counts/durations; no path/content).
             Analytics.capture("dev_run_succeeded", [
