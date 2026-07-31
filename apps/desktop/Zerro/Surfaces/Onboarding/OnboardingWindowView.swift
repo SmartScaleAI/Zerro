@@ -85,3 +85,107 @@ private struct StepDotsIndicator: View {
         }
     }
 }
+
+#if DEBUG
+
+// MARK: - Canvas previews
+
+/// Isolated shell for onboarding Canvas previews. It mirrors the production
+/// panel dimensions and environment while keeping UserDefaults, Keychain,
+/// model storage, and managed-backend traffic out of the developer's real app
+/// state. Individual step previews live below and alongside their private BYOK
+/// views in `BYOKOnboardingFlow.swift`.
+@MainActor
+struct OnboardingPreviewHost<Content: View>: View {
+    @State private var onboarding: OnboardingState
+    @State private var permissions: PermissionsManager
+    @State private var trialCredits: TrialCreditsManager
+    @State private var byokTrial: BYOKTrialManager
+    @State private var entitlements: EntitlementStore
+    @State private var preferences: PreferencesStore
+    @State private var modelManager: LocalModelManager
+    @State private var keyPresence: ProviderKeyPresence
+
+    private let defaults: UserDefaults
+    private let step: OnboardingStep
+    @ViewBuilder private let content: () -> Content
+
+    init(
+        step: OnboardingStep,
+        screenStatus: PermissionStatus? = nil,
+        microphoneStatus: PermissionStatus? = nil,
+        providerKeys: Set<ModelProvider> = [],
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        let defaults = UserDefaults.ephemeralPreview()
+        let onboarding = OnboardingState(defaults: defaults)
+        onboarding.jump(to: step)
+        onboarding.pinnedScreenSubState = screenStatus
+        onboarding.pinnedMicSubState = microphoneStatus
+
+        let preferences = PreferencesStore(defaults: defaults)
+        let permissions = PermissionsManager(defaults: defaults)
+        let trialCredits = TrialCreditsManager.inMemory()
+        let byokTrial = BYOKTrialManager.inMemory()
+        let entitlements = EntitlementStore(
+            licenseService: .inMemory(),
+            sessionTokens: .inMemory(),
+            productKindSlot: InMemoryKeychainSlot(),
+            trialCredits: trialCredits,
+            byokTrial: byokTrial,
+            defaults: defaults
+        )
+        let previewModel = ModelSpec(
+            id: "preview-model",
+            fileName: "preview-model.bin",
+            sourceURL: URL(fileURLWithPath: "/dev/null"),
+            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            byteSize: 0
+        )
+        let modelManager = LocalModelManager(
+            spec: previewModel,
+            preferences: preferences,
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ZerroCanvasPreview-\(UUID().uuidString)", isDirectory: true),
+            diskHeadroom: 0
+        )
+        let keyPresence = ProviderKeyPresence { providerKeys.contains($0) }
+
+        self.defaults = defaults
+        self.step = step
+        self.content = content
+        _onboarding = State(initialValue: onboarding)
+        _permissions = State(initialValue: permissions)
+        _trialCredits = State(initialValue: trialCredits)
+        _byokTrial = State(initialValue: byokTrial)
+        _entitlements = State(initialValue: entitlements)
+        _preferences = State(initialValue: preferences)
+        _modelManager = State(initialValue: modelManager)
+        _keyPresence = State(initialValue: keyPresence)
+    }
+
+    var body: some View {
+        VStack(spacing: VFSpacing.lg) {
+            StepDotsIndicator(current: step)
+                .padding(.top, VFSpacing.lg)
+
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, VFSpacing.lg)
+        }
+        .frame(width: 580, height: 500)
+        .background(Color.vfPanelBackground)
+        .defaultAppStorage(defaults)
+        .environment(permissions)
+        .environment(onboarding)
+        .environment(trialCredits)
+        .environment(byokTrial)
+        .environment(entitlements)
+        .environment(preferences)
+        .environment(modelManager)
+        .environment(keyPresence)
+        .preferredColorScheme(.dark)
+    }
+}
+
+#endif

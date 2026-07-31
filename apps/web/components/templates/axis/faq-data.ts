@@ -34,16 +34,16 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "Is there a free trial?",
     answer:
-      "Yes. Everyone starts with 30 free credits. No credit card, no API key, and no time limit, so there's no clock to race. The free credits run on the Managed pipeline, so you get the zero-setup experience before deciding on a plan. Credits cover your usage; how many a single generation costs depends on the model you pick.",
+      "Yes. Choose 30 Managed credits with email verification and no API key, or try 10 successful BYOK generations with your own OpenAI, Gemini, or Anthropic keys and no email. Neither option needs a credit card or has a time limit, and failed BYOK generations don't count.",
   },
   {
     question: "How much does Zerro cost?",
-    answer: `Everyone starts free with 30 credits. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, is $15/month ($12/month billed yearly) and gives you 300 credits a month across ${SELECTABLE_MODEL_COUNT} models (${MODEL_VENDORS}), with top-ups available anytime if you need more. Credits cover your usage, and the cost per generation varies by model: premium models like Claude Opus use more credits per generation than a fast model like Gemini Flash. Or BYOK, a one-time $69 purchase where you bring your own OpenAI, Gemini & Anthropic keys and pay once, with no subscription. BYOK includes 1 year of updates, and your installed version keeps working after that.`,
+    answer: `Start free with either 30 Managed credits or 10 successful BYOK generations. After that you have two paths. Managed, where Zerro handles the AI with no keys or setup, is $15/month ($12/month billed yearly) and gives you 300 credits a month across ${SELECTABLE_MODEL_COUNT} models (${MODEL_VENDORS}), with top-ups available anytime if you need more. Credits cover your usage, and the cost per generation varies by model. Or BYOK, a one-time $69 purchase where you bring any combination of OpenAI, Gemini, and Anthropic keys and pay once, with no subscription. BYOK includes 1 year of updates, and your installed version keeps working after that.`,
   },
   {
     question: "Do I need my own API keys?",
     answer:
-      "Only if you want to. On the Managed plan, Zerro handles the AI for you. No keys, no setup. On the BYOK plan, you add your own OpenAI, Gemini & Anthropic keys, stored securely in the macOS Keychain, and pay once with no subscription.",
+      "Only if you choose the BYOK trial or plan. You can add one, two, or all three OpenAI, Gemini, and Anthropic keys, stored securely in the macOS Keychain. Managed needs no keys or setup. On BYOK, local transcription needs no extra key; optional cloud transcription requires an OpenAI key.",
   },
   {
     question: "Is my data private?",
@@ -53,7 +53,7 @@ export const faqEntries: FaqEntry[] = [
   {
     question: "Does Zerro need an account?",
     answer:
-      "The BYOK plan requires no account and no subscription. You bring your own OpenAI, Gemini & Anthropic keys and pay once. The Managed plan is a subscription, so it involves an account and a monthly or yearly bill.",
+      "The BYOK trial and paid BYOK plan require no account or email. You bring any combination of OpenAI, Gemini, and Anthropic keys. The Managed trial uses email verification, and the Managed plan is a monthly or yearly subscription.",
   },
   {
     question: "How long can a recording be?",

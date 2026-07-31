@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/terms" },
 }
 
-const LAST_UPDATED = "June 29, 2026"
+const LAST_UPDATED = "July 30, 2026"
 
 export default function TermsPage() {
   return (
@@ -50,13 +50,13 @@ export default function TermsPage() {
 
       <LegalSection title="Accounts">
         <P>
-          You must provide accurate information when creating an account. We do
-          not use passwords: access is tied to your verified email address and,
-          for paid plans, your Lemon Squeezy license key. Keep your email
-          account and license key secure; anyone with access to them can use
-          your account, and you are responsible for activity under your
-          account. You must be at least 13 years old (or the minimum age in
-          your jurisdiction) to use the Service.
+          The anonymous BYOK trial does not require an account or email. If you
+          create an account, you must provide accurate information. We do not
+          use passwords: Managed trial access is tied to your verified email
+          address and paid access uses your Lemon Squeezy license key. Keep
+          your email account, license key, and provider API keys secure; you are
+          responsible for activity through them. You must be at least 13 years
+          old (or the minimum age in your jurisdiction) to use the Service.
         </P>
       </LegalSection>
 
@@ -78,9 +78,14 @@ export default function TermsPage() {
             relationships are governed by their terms.
           </li>
           <li>
-            <Strong>Trial.</Strong> Free trial credits require email
-            verification and are limited per person. We may adjust or revoke
-            trial access to prevent abuse.
+            <Strong>Trials.</Strong> You may choose either 30 server-funded
+            Managed trial credits, which require email verification, or 10
+            successful BYOK trial generations using your own provider keys,
+            which require no email. The two trial types cannot be combined and
+            are limited to one free trial per Mac. Failed generations and
+            retries do not consume the BYOK allowance. Your AI providers may
+            charge you for BYOK trial usage. We may adjust or revoke trial
+            access to prevent abuse.
           </li>
         </UL>
         <P>
@@ -145,8 +150,12 @@ export default function TermsPage() {
           (OpenAI, Google (Gemini), Anthropic), the Claude Code coding agent
           used by Dev Mode, Supabase, Lemon Squeezy, Resend, Slack, and Vercel.
           We are not responsible for third-party services, and your use of your
-          own API keys on the BYOK plan is subject to the relevant
-          provider&rsquo;s terms.
+          own API keys during the BYOK trial or on the BYOK plan is subject to
+          the relevant provider&rsquo;s terms. On BYOK, you may use one or more
+          OpenAI, Google (Gemini), and Anthropic API keys. On-device
+          transcription does not require an additional provider key; optional
+          OpenAI cloud transcription requires an OpenAI API key and sends audio
+          directly to OpenAI.
         </P>
       </LegalSection>
 

@@ -39,7 +39,7 @@ enum PurchaseSuccessInfo: Equatable {
             return .managed(credits: credits, resetDate: resetDate)
         case .byok:
             return .byok
-        case .trial, .expired:
+        case .trial, .expired, .byokTrial, .byokTrialExpired:
             return nil
         }
     }

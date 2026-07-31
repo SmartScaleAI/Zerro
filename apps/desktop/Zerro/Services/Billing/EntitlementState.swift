@@ -32,7 +32,7 @@ import Foundation
 /// this enum is the source of truth a whole subsystem branches on.
 public enum EntitlementState: Equatable {
     /// Free trial active. The trial is simply a pool of server-funded
-    /// generations (the Phase F email-gated grant, default 15) with NO time
+    /// generations (the Phase F email-gated grant, default 30 credits) with NO time
     /// limit — usable whenever. `creditsRemaining` is the live balance from the
     /// grant snapshot, or `nil` before the user has verified an email / received
     /// a grant (a "pre-trial" user; onboarding's email step captures this). The
@@ -43,6 +43,15 @@ public enum EntitlementState: Equatable {
     /// purchase has been made. This is the one state the gate refuses:
     /// hitting record routes to the paywall.
     case expired
+
+    /// Anonymous BYOK trial. Generation and transcription use the user's own
+    /// provider keys directly; only a successful-generation counter is synced
+    /// to Zerro. The unit is generations, never managed-plan credits.
+    case byokTrial(generationsRemaining: Int)
+
+    /// The anonymous BYOK trial delivered its tenth result. The next recording
+    /// is blocked by the gate and opens the BYOK-first purchase surface.
+    case byokTrialExpired
 
     /// Valid one-time BYOK ("bring your own key") license AND the user's
     /// own OpenAI key on file. The user pays once for the app and funds

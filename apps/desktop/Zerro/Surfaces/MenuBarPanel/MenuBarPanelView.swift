@@ -49,6 +49,10 @@ struct MenuBarBillingAction: Equatable {
             return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .voluntaryUpgrade)
         case .expired:
             return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .blocked)
+        case .byokTrial:
+            return MenuBarBillingAction(label: "Get BYOK License", secondary: nil, trigger: .voluntaryUpgrade)
+        case .byokTrialExpired:
+            return MenuBarBillingAction(label: "Get BYOK License", secondary: nil, trigger: .byokTrialExhausted)
         case .byok:
             return MenuBarBillingAction(label: "Manage Plan", secondary: nil, trigger: .manage)
         case .managed:
@@ -149,6 +153,9 @@ struct MenuBarPanelView: View {
             // sees the verify-email banner just below.
             if case .trial(let creditsRemaining) = entitlements.state, let creditsRemaining {
                 trialStatusLine(creditsRemaining: creditsRemaining)
+            }
+            if case .byokTrial(let generationsRemaining) = entitlements.state {
+                byokTrialStatusLine(generationsRemaining: generationsRemaining)
             }
 
             // Phase F: a tappable banner for a trial user who hasn't claimed
@@ -524,6 +531,8 @@ struct MenuBarPanelView: View {
         switch entitlements.state {
         case .trial:
             return "Ready"
+        case .byokTrial:
+            return "Ready"
         case .byok:
             return "Ready"
         case .managed:
@@ -539,6 +548,8 @@ struct MenuBarPanelView: View {
             return "Ready \u{00B7} \(credits)"
         case .expired:
             return "Trial ended"
+        case .byokTrialExpired:
+            return "Trial complete"
         }
     }
 
@@ -546,9 +557,9 @@ struct MenuBarPanelView: View {
     /// the header reads as "inactive" without being alarming (no red).
     private var headerStatusColor: Color {
         switch entitlements.state {
-        case .expired:
+        case .expired, .byokTrialExpired:
             return Color.vfTextTertiary
-        case .trial, .byok, .managed:
+        case .trial, .byokTrial, .byok, .managed:
             return Color.vfSuccessGreen
         }
     }
@@ -605,6 +616,24 @@ struct MenuBarPanelView: View {
         .padding(.vertical, 2)
     }
 
+    private func byokTrialStatusLine(generationsRemaining: Int) -> some View {
+        HStack(spacing: 0) {
+            Text(
+                generationsRemaining == 1
+                    ? "Own-key trial \u{00B7} 1 generation left"
+                    : "Own-key trial \u{00B7} \(generationsRemaining) generations left"
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(
+                generationsRemaining <= 3 ? Color.vfWarningAmber : Color.vfTextSecondary
+            )
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+    }
+
     /// The trial is a pool of server-funded CREDITS with no time limit, so the
     /// line shows the remaining balance — the only thing that bounds it. The
     /// unit is credits, never a flat generation count (§1.5): a generation's
@@ -629,7 +658,7 @@ struct MenuBarPanelView: View {
         case .trial(let credits):
             guard let credits else { return false }
             return CreditDisplay.isLowBalance(balance: credits, type: .trial)
-        case .byok, .expired:
+        case .byok, .expired, .byokTrial, .byokTrialExpired:
             return false
         }
     }

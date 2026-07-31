@@ -57,7 +57,7 @@ final class OnboardingState {
     // opt-in later without touching the view. (EU/US geo-detection of the
     // default is DEFERRED — see ConsentStepView.)
 
-    static let currentTermsVersion = "2026-06-15"
+    static let currentTermsVersion = "2026-07-30"
     static let analyticsDefaultOptIn = true
 
     // MARK: - Persisted

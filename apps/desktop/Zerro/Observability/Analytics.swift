@@ -155,6 +155,10 @@ enum Analytics {
             return creditsRemaining == nil ? "pre_trial" : "trial"
         case .expired:
             return "expired"
+        case .byokTrial:
+            return "byok_trial"
+        case .byokTrialExpired:
+            return "byok_trial_expired"
         case .byok:
             return "byok"
         case .managed:
@@ -174,7 +178,9 @@ enum Analytics {
             balance = creditsRemaining
         case .managed(let creditsRemaining, _):
             balance = creditsRemaining
-        case .byok, .expired:
+        case .byokTrial(let generationsRemaining):
+            balance = generationsRemaining
+        case .byok, .expired, .byokTrialExpired:
             return "n/a"
         }
         switch balance {

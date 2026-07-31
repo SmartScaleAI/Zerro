@@ -29,6 +29,9 @@ struct ZerroApp: App {
     /// display + token presence) and AppState (proxy token provider for a trial
     /// generation), and injected into the trial email-capture window.
     @State private var trialCredits: TrialCreditsManager
+    /// Anonymous own-key trial counter. Generation content never flows through
+    /// this service; it syncs only successful recording UUIDs and a device hash.
+    @State private var byokTrial: BYOKTrialManager
     @State private var recentPrompts: RecentPromptStore
     /// Phase 5 (Local Whisper): the ONE shared on-device-model download/state
     /// manager. Created from `preferences` and injected into Settings so the
@@ -118,7 +121,13 @@ struct ZerroApp: App {
         // Phase F: the trial-credits layer is shared by the entitlement store and
         // AppState (it's the proxy token provider for a trial generation).
         let trial = TrialCreditsManager()
-        let ent = EntitlementStore(sessionTokens: sessionTokens, trialCredits: trial)
+        let ownKeyTrial = BYOKTrialManager()
+        let ent = EntitlementStore(
+            sessionTokens: sessionTokens,
+            trialCredits: trial,
+            byokTrial: ownKeyTrial
+        )
+        ownKeyTrial.stateDidChange = { [weak ent] in ent?.refresh() }
         let history = RecentPromptStore()
         // Phase 5: ONE shared on-device-model manager (created from prefs). Fire
         // download analytics off its state edges in this single place — edge-detected
@@ -172,6 +181,7 @@ struct ZerroApp: App {
         state.managedProxyClient = managedProxy
         // Phase F: the trial token provider + trial-credit bookkeeping.
         state.trialCredits = trial
+        state.byokTrial = ownKeyTrial
         // Phase 6 (multi-model): the proxy generation path reads the picker's
         // selected model from prefs fresh at request time (same lifetime +
         // weak-ref contract as the refs above; prefs lives in @State below).
@@ -200,6 +210,7 @@ struct ZerroApp: App {
         _onboarding = State(initialValue: onb)
         _entitlements = State(initialValue: ent)
         _trialCredits = State(initialValue: trial)
+        _byokTrial = State(initialValue: ownKeyTrial)
         _recentPrompts = State(initialValue: history)
         _modelManager = State(initialValue: modelManager)
         _keyPresence = State(initialValue: keyPresence)
@@ -437,6 +448,13 @@ struct ZerroApp: App {
             Task { @MainActor [weak ent] in
                 await ent?.refreshManagedEntitlement()
             }
+
+            // Retry anonymous BYOK-trial usage ids that were completed while the
+            // counter endpoint was unavailable. The generated result was already
+            // delivered locally; this is bookkeeping only.
+            Task { @MainActor [weak ownKeyTrial] in
+                await ownKeyTrial?.syncPending()
+            }
         }
     }
 
@@ -600,7 +618,11 @@ struct ZerroApp: App {
                 // layer (to request/verify the code + grant credits) and the
                 // entitlement store (to refresh once credits are granted).
                 .environment(trialCredits)
+                .environment(byokTrial)
                 .environment(entitlements)
+                .environment(preferences)
+                .environment(modelManager)
+                .environment(keyPresence)
         }
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
@@ -868,7 +890,11 @@ struct ZerroApp: App {
             // preflight reason → clear any stale block trigger so PaywallView
             // reports `manual`. (A managed out-of-credits / inactive block routes
             // to the failure pill below, not here, and sets its own trigger.)
-            entitlements.paywallTrigger = nil
+            if case .byokTrialExpired = entitlements.state {
+                entitlements.paywallTrigger = .byokTrialExhausted
+            } else {
+                entitlements.paywallTrigger = nil
+            }
             Log.hotkey.notice("gating: not entitled — opening paywall")
             AppDelegate.openPaywall()
             return

@@ -316,6 +316,15 @@ extension KeychainStore {
         accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     )
 
+    /// Short-lived bearer for the anonymous BYOK-trial counter. It authorizes
+    /// only the `byok-trial` endpoint; it cannot be used for generation and
+    /// carries no email, API key, prompt, or recording content.
+    static let byokTrialToken = KeychainStore(
+        service: defaultService,
+        account: "byok_trial_token",
+        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    )
+
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
     /// / `failure`) of the trial email slot read — never the value — so the

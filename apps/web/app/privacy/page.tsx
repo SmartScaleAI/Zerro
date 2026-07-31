@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 }
 
-const LAST_UPDATED = "June 29, 2026"
+const LAST_UPDATED = "July 30, 2026"
 
 export default function PrivacyPage() {
   return (
@@ -55,7 +55,7 @@ export default function PrivacyPage() {
             text only; your spoken audio is uploaded as recorded.
           </li>
           <li>
-            <Strong>On the BYOK plan, recordings never touch our servers.</Strong>{" "}
+            <Strong>On the BYOK trial and plan, recordings never touch our servers.</Strong>{" "}
             Generations go directly from your Mac to your AI provider using
             your own API keys, which are stored in your macOS Keychain.
           </li>
@@ -74,12 +74,13 @@ export default function PrivacyPage() {
 
       <LegalSection title="Information we collect">
         <P>
-          <Strong>Account information.</Strong> We collect your email address.
-          For a free trial you verify your email with a one-time 6-digit code;
-          for paid access you activate a license key issued by Lemon Squeezy.
-          We do not offer social sign-in (such as Apple or Google), and there
-          is no password to manage. Authentication and our database are handled
-          by Supabase.
+          <Strong>Account information.</Strong> We collect your email address
+          if you choose the Managed free trial or create a paid account. The
+          anonymous BYOK trial does not require an email or account. Managed
+          trial users verify their email with a one-time 6-digit code; paid
+          access uses a license key issued by Lemon Squeezy. We do not offer
+          social sign-in (such as Apple or Google), and there is no password to
+          manage. Authentication and our database are handled by Supabase.
         </P>
         <P>
           <Strong>Billing information.</Strong> Payments are processed by Lemon
@@ -118,13 +119,13 @@ export default function PrivacyPage() {
           .
         </P>
         <P>
-          <Strong>Recordings (BYOK plan).</Strong> If you bring your own API
-          keys, generations are sent directly from your Mac to the relevant
-          provider (OpenAI, Google (Gemini), or Anthropic). Audio is always
-          transcribed with your OpenAI key (Whisper) before generation, even
-          when the chat model you selected is Google (Gemini) or Anthropic.
-          Your recordings and keys never pass through our servers; keys are
-          stored locally in your macOS Keychain.
+          <Strong>Recordings (BYOK trial and plan).</Strong> If you bring your
+          own API keys, generations are sent directly from your Mac to the
+          relevant provider (OpenAI, Google (Gemini), or Anthropic). You can
+          transcribe audio on your Mac, or choose OpenAI cloud transcription;
+          the cloud option sends audio directly to OpenAI and requires an
+          OpenAI API key. Your recordings and keys never pass through our
+          servers; keys are stored locally in your macOS Keychain.
         </P>
         <P>
           <Strong>Dev Mode (optional).</Strong> If you turn on Dev Mode, Zerro
@@ -142,17 +143,23 @@ export default function PrivacyPage() {
           its own terms to carry out the work you request.
         </P>
         <P>
-          <Strong>Usage data.</Strong> We record per-generation metadata
-          (token counts, estimated cost, model, provider, and success) to
-          operate credits and billing. We also process IP addresses and
-          session identifiers for rate limiting and abuse prevention.
+          <Strong>Usage data.</Strong> For Managed generations, we record
+          per-generation metadata (token counts, estimated cost, model,
+          provider, and success) to operate credits and billing. For the
+          anonymous BYOK trial, Zerro sends only the one-way device hash and a
+          random generation identifier after a successful result so we can
+          enforce the 10-generation limit and avoid counting a retry twice. We
+          do not receive the recording, prompt, transcript, result, API key,
+          model, or provider for that generation. We also process IP addresses
+          and session identifiers for rate limiting and abuse prevention.
         </P>
         <P>
-          <Strong>Trial verification.</Strong> Starting a free trial requires
-          verifying your email with a one-time code sent via Resend. We store
-          only a hashed version of the code, never the raw code. To prevent
-          trial abuse, we also collect a one-way hash of a hardware identifier
-          to limit free trials to one per device. The underlying identifier
+          <Strong>Trial verification.</Strong> The Managed free trial requires
+          an email verified with a one-time code sent via Resend. We store only
+          a hashed version of the code, never the raw code. The anonymous BYOK
+          trial requires no email. To prevent trial abuse, both paths use a
+          one-way hash of a hardware identifier and are mutually exclusive,
+          limiting each Mac to one free-trial type. The underlying identifier
           never leaves your Mac (only the hash is sent), and it is used solely
           for fraud prevention, never for tracking or advertising.
         </P>
@@ -215,8 +222,9 @@ export default function PrivacyPage() {
           needed to run Zerro: <Strong>Supabase</Strong> (authentication,
           database, and generation service), <Strong>OpenAI</Strong>,{" "}
           <Strong>Google (Gemini)</Strong>, and <Strong>Anthropic</Strong> (AI
-          model processing of recordings on Managed/Trial plans, and audio
-          transcription via OpenAI Whisper), <Strong>Anthropic (Claude Code)</Strong>{" "}
+          model processing of recordings on Managed/Trial plans, direct model
+          processing on BYOK, and optional BYOK cloud transcription through
+          OpenAI), <Strong>Anthropic (Claude Code)</Strong>{" "}
           (the local coding agent that powers Dev Mode, a role separate from
           Anthropic&rsquo;s model API above), <Strong>Lemon Squeezy</Strong>{" "}
           (payments, as merchant of record), <Strong>Resend</Strong>{" "}
@@ -239,8 +247,9 @@ export default function PrivacyPage() {
             during generation only.
           </li>
           <li>
-            <Strong>Generated output:</Strong> cached up to 15 minutes for
-            retry safety, then purged.
+            <Strong>Managed generated output:</Strong> cached up to 15 minutes
+            for retry safety, then purged. BYOK output is returned directly by
+            your AI provider and is never cached by Zerro.
           </li>
           <li>
             <Strong>Account, subscription, and generation metadata:</Strong>{" "}
@@ -250,6 +259,11 @@ export default function PrivacyPage() {
           <li>
             <Strong>Trial verification codes:</Strong> stored hashed and
             expire within minutes.
+          </li>
+          <li>
+            <Strong>BYOK trial ledger:</Strong> the one-way device hash and
+            random successful-generation identifiers are retained to enforce
+            the one-trial-per-Mac and 10-generation limits.
           </li>
           <li>
             <Strong>Anonymous app analytics and crash diagnostics:</Strong>{" "}
@@ -273,9 +287,11 @@ export default function PrivacyPage() {
       <LegalSection title="Security">
         <P>
           We use industry-standard safeguards: data is encrypted in transit
-          (TLS), API keys on the BYOK plan live in your macOS Keychain rather
-          than on our servers, trial verification codes and the trial device
-          identifier are stored only as hashes, and our backend enforces
+          (TLS), API keys on the BYOK trial and plan live in your macOS
+          Keychain rather than on our servers, trial verification codes are
+          stored only as
+          hashes, the underlying trial device identifier never leaves your
+          Mac, and our backend enforces
           authentication, rate limits, and least-privilege access. Some account
           data, such as your email address, is necessarily stored in readable
           form so we can operate billing and trials. No system is perfectly
