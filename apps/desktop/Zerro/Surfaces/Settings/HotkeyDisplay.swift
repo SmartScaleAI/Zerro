@@ -135,7 +135,7 @@ private struct IdleKeycapDisplay: View {
             .padding(.horizontal, label.count > 1 ? 4 : 0)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.vfPillBackground)
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)

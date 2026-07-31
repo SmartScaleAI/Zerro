@@ -11,7 +11,7 @@
 //
 //  Reuses the onboarding window's visual chrome wholesale — the same
 //  `OnboardingStepLayout`, logo tile, primary/secondary button styles,
-//  `vfCardBackground`, and spacing tokens — so the two surfaces read as one
+//  `vfPanelBackground`, and spacing tokens — so the two surfaces read as one
 //  app. Copy is non-punitive (the trial ended, here's how to keep going).
 //
 //  Three buy paths (billing-plan §8), laid out to mirror the website's
@@ -97,7 +97,7 @@ struct PaywallCopy: Equatable {
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all six models, with no API keys to manage.",
+        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all \(ModelRegistry.selectableCountWord) models, with no API keys to manage.",
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
@@ -114,6 +114,11 @@ struct PaywallCopy: Equatable {
         subheadline: "Switch options, activate a key, or manage your devices and billing. Everything for your plan lives here.",
         windowTitle: "Manage Plan"
     )
+
+    /// The Managed plan card's subtitle. Hoisted out of `PaywallView.body` so the
+    /// model-count copy guard can assert on it like the other copy constants.
+    static let managedCardSubtitle =
+        "We handle the AI. 300 credits a month across all \(ModelRegistry.selectableCountWord) models, no API key to manage. $12/mo if you choose yearly billing."
 }
 
 struct PaywallView: View {
@@ -161,7 +166,7 @@ struct PaywallView: View {
             }
         }
             .frame(width: Self.windowWidth)
-            .background(Color.vfCardBackground)
+            .background(Color.vfPanelBackground)
             // Title-bar text tracks the context (the static Window() label is
             // the generic "Unlock"; this overrides it per trigger so e.g. a
             // top-up reads "Zerro — Add Credits").
@@ -272,12 +277,12 @@ struct PaywallView: View {
                 // an entitled user sees the manage link instead, not a re-sell.
                 HStack(alignment: .top, spacing: VFSpacing.md) {
                     // Managed — THE plan (multi-model §1.3): Zerro-hosted
-                    // credits, all six models, no API keys to manage. Monthly vs
+                    // credits, all five models, no API keys to manage. Monthly vs
                     // yearly ($12/mo billed annually) is chosen on the
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
                         title: "Managed",
-                        subtitle: "We handle the AI. 300 credits a month across all six models, no API key to manage. $12/mo if you choose yearly billing."
+                        subtitle: PaywallCopy.managedCardSubtitle
                     )
 
                     // BYOK — $69 one-time license; the user funds generation with
@@ -645,10 +650,13 @@ private struct ManagedPrivacyNote: View {
 /// a placeholder (`topupCheckoutURL == nil`) rather than opening a dead link.
 private struct AddCreditsCard: View {
     var body: some View {
-        OptionCardChrome(padding: VFSpacing.lg) {
+        OptionCardChrome(
+            padding: VFSpacing.lg,
+            backgroundColor: .vfCardBackground
+        ) {
             Text("Choose a pack on the next screen, from 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
                 .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextSecondary)
+                .foregroundStyle(Color.vfTextPrimary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -790,7 +798,7 @@ private struct ActivateLicenseCard: View {
                     .frame(height: 36)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.vfPillBackground)
+                            .fill(Color.vfControlBackground)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -850,6 +858,9 @@ private struct OptionCardChrome<Content: View>: View {
     var padding: CGFloat = VFSpacing.md
     var fillsHeight: Bool = false
     var highlighted: Bool = false
+    /// Titled-window cards use the shared raised gray so every option remains
+    /// clearly separated from the pure-black window root.
+    var backgroundColor: Color = .vfCardBackground
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -859,8 +870,14 @@ private struct OptionCardChrome<Content: View>: View {
         .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
         .padding(padding)
         .background(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .fill(Color.white.opacity(highlighted ? 0.06 : 0.04))
+            ZStack {
+                RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                    .fill(backgroundColor)
+                // The recommended Managed card keeps a quiet lift in addition
+                // to its green border without reverting to a near-black fill.
+                RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                    .fill(Color.white.opacity(highlighted ? 0.04 : 0))
+            }
         )
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)

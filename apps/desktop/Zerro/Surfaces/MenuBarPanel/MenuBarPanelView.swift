@@ -625,10 +625,10 @@ struct MenuBarPanelView: View {
         switch entitlements.state {
         case .managed:
             guard let snapshot = entitlements.managedSnapshot else { return false }
-            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining)
+            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining, type: .paid)
         case .trial(let credits):
             guard let credits else { return false }
-            return CreditDisplay.isLowBalance(balance: credits)
+            return CreditDisplay.isLowBalance(balance: credits, type: .trial)
         case .byok, .expired:
             return false
         }

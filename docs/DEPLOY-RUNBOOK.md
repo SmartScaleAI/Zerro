@@ -197,7 +197,8 @@ detection.
   restores their model choice.
 - **E5 — Existing BYOK users move off gpt-4o:** the registry has no gpt-4o, so
   an updated BYOK install runs `gpt-5.4-mini` (fallback) or whatever the user
-  picks. Same 6 models everywhere by design — call out the behavior change.
+  picks. Same 5 selectable models everywhere by design (6 registry entries, one
+  kill-switched) — call out the behavior change.
 
 **Slack release notification:** every production release (`release-app.yml`)
 posts to Slack as its final step, and the post always fires. The message lists

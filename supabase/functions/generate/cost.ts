@@ -48,7 +48,8 @@ interface ChatPrice {
 // provider price lists in Phase 0. If a rate changes, update BOTH.
 const CHAT_PRICING: Record<string, ChatPrice> = {
   "openai:gpt-4o": { inPerM: 2.5, outPerM: 10.0 }, // 2026-05-28 list (legacy default)
-  // — the six user-selectable models (models.ts registry; rates 2026-06 lists) —
+  // — the six registry models (five selectable + the kill-switched mini, which
+  //   stays priced so historic rows still resolve; rates 2026-06 lists) —
   "openai:gpt-5.4-mini": { inPerM: 0.75, outPerM: 4.5 },
   "openai:gpt-5.5": { inPerM: 5.0, outPerM: 30.0 },
   "gemini:gemini-3.5-flash": { inPerM: 1.5, outPerM: 9.0 }, // 2026-06-04 list, flat

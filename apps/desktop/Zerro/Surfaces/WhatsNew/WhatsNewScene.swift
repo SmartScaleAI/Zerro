@@ -41,13 +41,9 @@ extension View {
     func applyWhatsNewWindowChrome() -> some View {
         background(
             WindowConfigurator { window in
-                window.titlebarAppearsTransparent = true
+                applyZerroBlackWindowAppearance(to: window)
                 window.titleVisibility = .hidden
                 window.styleMask.insert(.fullSizeContentView)
-                // Let the dark surface bleed under the traffic lights; set an
-                // explicit backgroundColor for the case where SwiftUI leaves
-                // the window background nil (renders as the system default).
-                window.backgroundColor = NSColor(Color.vfPanelBackground)
                 // No title bar to grab — drag from anywhere in the surface.
                 window.isMovableByWindowBackground = true
                 // Hard-lock to the preferred size so the user can't drag-resize

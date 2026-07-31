@@ -126,7 +126,7 @@ Pay once. Bring your own keys.
 We handle the tokens: no keys, no setup.
 
 - No API keys required
-- 300 credits per month across 6 models (Claude, GPT & Gemini)
+- 300 credits per month across 5 models (Claude, GPT & Gemini)
 - Top up anytime with packs from $5 (50 credits) to $300 (10,000 credits)
 - We manage all token usage
 - Cancel anytime

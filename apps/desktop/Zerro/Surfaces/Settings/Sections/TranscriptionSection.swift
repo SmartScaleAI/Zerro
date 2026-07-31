@@ -113,7 +113,7 @@ struct TranscriptionSection: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.vfPillBackground)
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

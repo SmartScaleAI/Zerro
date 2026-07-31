@@ -483,7 +483,7 @@ private struct LicenseKeyRow: View {
             .frame(height: 36)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.vfPillBackground)
+                    .fill(Color.vfControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -537,7 +537,9 @@ private struct ManageRow: View {
             // portal URL from the LS API is the cleaner version (DEFERRED).
             return "Update your card, change plan, or cancel in the LemonSqueezy portal."
         }
-        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all six models."
+        // Model count derived from the registry (ModelRegistry.selectableCountWord)
+        // so a kill switch can't leave this string claiming a stale number.
+        return "$15/month, or $12/month if you choose yearly billing. 300 credits every month, all \(ModelRegistry.selectableCountWord) models."
     }
 }
 
@@ -747,8 +749,8 @@ private struct UsageMeterRow: View {
         }
 
         // Trials can't buy top-ups (plan §1.4) — the inline prompt is the
-        // Managed upgrade instead, escalating on the shared low threshold.
-        if isLow(balance: credits) {
+        // Managed upgrade instead, escalating at the trial threshold.
+        if CreditDisplay.isLowBalance(balance: credits, type: .trial) {
             HStack(spacing: VFSpacing.sm) {
                 Text("Running low. Upgrade to keep going")
                     .font(.system(size: 12))
@@ -772,9 +774,9 @@ private struct UsageMeterRow: View {
     private func meterBar(fraction: Double, tint: Color = .vfDevAccent) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                // A subtle lighter overlay rather than vfPillBackground (which is
-                // the same #202022 as the card, making a near-full bar's empty
-                // end invisible). Reads on any card background.
+                // A subtle lighter overlay rather than the pure-black
+                // vfPillBackground, so a near-full bar's empty end remains
+                // visible on the raised card background.
                 Capsule().fill(Color.white.opacity(0.10))
                 Capsule()
                     .fill(tint)
@@ -792,10 +794,6 @@ private struct UsageMeterRow: View {
             .frame(width: 7, height: 7)
     }
 
-    private func isLow(balance: Int) -> Bool {
-        CreditDisplay.isLowBalance(balance: balance)
-    }
-
     /// 6F.4 — comfortable balance: a quiet "need more?" line; low balance:
     /// escalate in amber. A single "Add credits" button opens the one
     /// multi-variant Credit Packs checkout (the customer picks the pack on the
@@ -804,7 +802,7 @@ private struct UsageMeterRow: View {
     /// shows the amber notice, but with no dead-link button.
     @ViewBuilder
     private func topupPrompt(balance: Int) -> some View {
-        let low = isLow(balance: balance)
+        let low = CreditDisplay.isLowBalance(balance: balance, type: .paid)
         let url = BillingLinks.topupCheckoutURL
         if low || url != nil {
             HStack(spacing: VFSpacing.sm) {

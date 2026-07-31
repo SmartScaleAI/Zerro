@@ -321,7 +321,7 @@ private struct DetailPane: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md + 2, style: .continuous)
-                .fill(Color.black.opacity(0.4))
+                .fill(Color.vfArtifactBackground)
         )
     }
 

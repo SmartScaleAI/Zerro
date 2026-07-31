@@ -6,7 +6,7 @@
 //
 //  The ENTIRE expanded result view (UI revision 2): the old outer container
 //  (strip + gutters) is gone — this card IS the expanded pill, drawn on the
-//  pill chrome itself (the chrome's vfPillBackground + hairline is the card
+//  pill chrome itself (the chrome's vfPillBackground + overlay border is the card
 //  surface; this view adds no background of its own). One container, top to
 //  bottom:
 //
@@ -305,7 +305,7 @@ struct OutputCardView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.black.opacity(0.35))
+                .fill(Color.vfArtifactBackground)
         )
         .clipShape(RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous))
     }
@@ -415,7 +415,7 @@ struct OutputCardView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.black.opacity(0.35))
+                .fill(Color.vfArtifactBackground)
         )
         .clipShape(RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous))
     }

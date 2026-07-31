@@ -277,12 +277,12 @@ struct PillView: View {
                     .fill(Color.vfPillBackground)
             )
             .overlay(
-                // `.stroke` (not `.strokeBorder`) so the hairline sits ON
-                // the rounded edge rather than inset 0.25pt inside it —
+                // `.stroke` (not `.strokeBorder`) so the outer border sits ON
+                // the rounded edge rather than inset inside it —
                 // closes the antialiasing gap at the corners that was
                 // showing through as transparent notches.
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.vfHairline, lineWidth: 0.5)
+                    .stroke(Color.vfOverlayBorder, lineWidth: 1)
             )
             // No chrome-level `.clipShape` here: clipping the chrome
             // caused `.shadow` below to render its dark falloff into
@@ -776,7 +776,7 @@ private struct ReviewPromptPillContent: View {
         }
         .background(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.black.opacity(0.35))
+                .fill(Color.vfArtifactBackground)
         )
         .clipShape(RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous))
     }

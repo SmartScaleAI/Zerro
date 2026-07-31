@@ -457,6 +457,127 @@ final class TrialCreditsManagerTests: XCTestCase {
     }
 }
 
+// MARK: - Trial email presentation + continuation
+
+@MainActor
+final class TrialEmailPresentationTests: XCTestCase {
+
+    func testTerminalStatesKeepEmailAndDeviceCopyDistinct() {
+        let emailState = TrialEmailTerminalState(TrialStartError.alreadyUsed)
+        let deviceState = TrialEmailTerminalState(TrialStartError.deviceTrialUsed)
+
+        XCTAssertEqual(emailState, .emailAlreadyUsed)
+        XCTAssertEqual(deviceState, .deviceAlreadyUsed)
+        XCTAssertEqual(emailState?.headline, "Trial already used")
+        XCTAssertEqual(deviceState?.headline, "Trial already used")
+        XCTAssertTrue(emailState?.message.contains("This email") == true)
+        XCTAssertTrue(deviceState?.message.contains("This Mac") == true)
+    }
+
+    func testStandaloneRequestRendersAlreadyUsedAsTerminalState() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.alreadyUsed(), status: 200)
+        let manager = makeTrialManager(transport)
+        let model = TrialEmailModel()
+        model.email = "a@b.com"
+
+        model.sendCode(using: manager)
+        await waitForModel(model)
+
+        XCTAssertEqual(model.phase, .terminal(.emailAlreadyUsed))
+        XCTAssertEqual(model.terminalState, .emailAlreadyUsed)
+        XCTAssertEqual(model.step, .email)
+    }
+
+    func testStandaloneRequestRendersDeviceUsedAsTerminalState() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.deviceTrialUsed(), status: 200)
+        let manager = makeTrialManager(transport)
+        let model = TrialEmailModel()
+        model.email = "second@b.com"
+
+        model.sendCode(using: manager)
+        await waitForModel(model)
+
+        XCTAssertEqual(model.phase, .terminal(.deviceAlreadyUsed))
+        XCTAssertEqual(model.terminalState, .deviceAlreadyUsed)
+    }
+
+    func testStandaloneVerifyRendersExhaustedEmailAsTerminalState() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.alreadyUsed(), status: 200)
+        let manager = makeTrialManager(transport)
+        let model = TrialEmailModel()
+        model.step = .code
+        model.email = "a@b.com"
+        model.code = "123456"
+        var didVerify = false
+
+        model.verify(using: manager) { didVerify = true }
+        await waitForModel(model)
+
+        XCTAssertEqual(model.phase, .terminal(.emailAlreadyUsed))
+        XCTAssertFalse(didVerify)
+        XCTAssertNil(manager.rememberedEmail)
+        XCTAssertFalse(manager.hasActiveTrialToken)
+        XCTAssertNil(manager.creditsRemaining)
+    }
+
+    func testAcceptedRequestAdvancesToNonDefinitiveDeliveryCopy() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.codeSent(), status: 200)
+        let manager = makeTrialManager(transport)
+        let model = TrialEmailModel()
+        model.email = "user@example.com"
+
+        model.sendCode(using: manager)
+        await waitForModel(model)
+
+        XCTAssertEqual(model.step, .code)
+        XCTAssertEqual(model.phase, .idle)
+        let copy = TrialEmailCopy.codeDelivery(to: model.trimmedEmail)
+        XCTAssertTrue(copy.hasPrefix("Check user@example.com"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("we sent"))
+    }
+
+    func testContinueWithoutTrialAdvancesAndPersistsNoTrialState() {
+        let onboarding = OnboardingState(defaults: .ephemeralPreview())
+        onboarding.jump(to: .email)
+        let manager = makeTrialManager(StubManagedTransport())
+        var capturedEvent: String?
+        var capturedProperties: [String: Any] = [:]
+
+        TrialEmailNoCodeContinuation.perform(
+            on: onboarding,
+            capture: {
+                capturedEvent = $0
+                capturedProperties = $1
+            }
+        )
+
+        XCTAssertEqual(onboarding.currentStep, .permissions)
+        XCTAssertEqual(capturedEvent, "trial_verification_skipped")
+        XCTAssertEqual(capturedProperties["reason"] as? String, "code_not_received")
+        XCTAssertEqual(capturedProperties["surface"] as? String, "onboarding")
+        XCTAssertNil(manager.rememberedEmail)
+        XCTAssertFalse(manager.hasActiveTrialToken)
+        XCTAssertNil(manager.creditsRemaining)
+        XCTAssertNil(manager.trialGrantId)
+    }
+
+    private func waitForModel(
+        _ model: TrialEmailModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<100 {
+            if !model.isWorking { return }
+            await Task.yield()
+        }
+        XCTFail("TrialEmailModel did not settle", file: file, line: line)
+    }
+}
+
 // MARK: - EntitlementStore trial routing + dual expiry
 
 @MainActor
