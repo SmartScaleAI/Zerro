@@ -81,7 +81,7 @@ struct BillingSection: View {
         switch entitlements.state {
         case .managed: return entitlements.managedSnapshot != nil
         case .trial(let credits): return credits != nil
-        case .byok, .expired: return false
+        case .byok, .expired, .byokTrial, .byokTrialExpired: return false
         }
     }
 }
@@ -258,6 +258,12 @@ private struct CurrentPlanRow: View {
                 : "\(creditsRemaining) trial credits left."
         case .expired:
             return "You\u{2019}ve used your trial credits. Subscribe below to keep going."
+        case .byokTrial(let generationsRemaining):
+            return generationsRemaining == 1
+                ? "Your own-key trial has 1 successful generation left."
+                : "Your own-key trial has \(generationsRemaining) successful generations left."
+        case .byokTrialExpired:
+            return "You completed 10 own-key trial generations. Get a BYOK license to keep using your keys."
         case .byok:
             // Shown only transiently (a `.byok` user previewing the Managed
             // pane via the switch link); never the lifetime-license framing.
@@ -293,6 +299,13 @@ private struct CurrentPlanRow: View {
             )
         case .expired:
             PlanPill(text: "Expired", tint: Color.vfRecordingRed)
+        case .byokTrial(let generationsRemaining):
+            PlanPill(
+                text: "BYOK Trial \u{00B7} \(generationsRemaining) left",
+                tint: generationsRemaining <= 3 ? Color.vfWarningAmber : Color.vfBrandAccent
+            )
+        case .byokTrialExpired:
+            PlanPill(text: "BYOK Trial \u{00B7} Complete", tint: Color.vfRecordingRed)
         case .byok:
             PlanPill(text: "BYOK", tint: Color.vfSuccessGreen)
         case .managed:
@@ -613,7 +626,7 @@ private struct UsageMeterRow: View {
                 if let credits {
                     trialMeter(credits)
                 }
-            case .byok, .expired:
+            case .byok, .expired, .byokTrial, .byokTrialExpired:
                 EmptyView()
             }
             // B-07: the 1-credit metering floor, stated once where credits are

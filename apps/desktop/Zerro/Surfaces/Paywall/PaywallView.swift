@@ -68,8 +68,11 @@ struct PaywallCopy: Equatable {
     /// for the state so the window never shows the wrong context.
     static func resolve(trigger: EntitlementStore.PaywallTrigger?, state: EntitlementState) -> PaywallCopy {
         if case .expired = state { return .blocked }
+        if case .byokTrialExpired = state { return .byokTrialComplete }
 
         switch trigger {
+        case .byokTrialExhausted:
+            return .byokTrialComplete
         case .blocked:
             return .blocked
         case .voluntaryUpgrade:
@@ -80,9 +83,10 @@ struct PaywallCopy: Equatable {
             return .manage
         case nil:
             switch state {
-            case .trial:            return .upgrade
+            case .trial, .byokTrial: return .upgrade
             case .managed, .byok:   return .manage
             case .expired:          return .blocked  // unreachable (handled above)
+            case .byokTrialExpired: return .byokTrialComplete
             }
         }
     }
@@ -92,6 +96,11 @@ struct PaywallCopy: Equatable {
         headline: "You\u{2019}ve used your free generations",
         subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste result. Pick the option that fits how you work.",
         windowTitle: "Unlock"
+    )
+    static let byokTrialComplete = PaywallCopy(
+        headline: "Your own-key trial is complete",
+        subheadline: "You finished 10 successful generations with your own provider keys. Get a BYOK license to keep your direct, private setup.",
+        windowTitle: "Keep Using Your Keys"
     )
     /// Voluntary upgrade from an active trial — lead with the Managed value,
     /// reassure the trial still works.
@@ -334,7 +343,7 @@ struct PaywallView: View {
     /// The plan sell shows only to users who don't have a plan yet.
     private var showsPlanCards: Bool {
         switch entitlements.state {
-        case .trial, .expired: return true
+        case .trial, .expired, .byokTrial, .byokTrialExpired: return true
         case .byok, .managed:  return false
         }
     }
@@ -343,7 +352,7 @@ struct PaywallView: View {
     private var showsManageLink: Bool {
         switch entitlements.state {
         case .byok, .managed:  return true
-        case .trial, .expired: return false
+        case .trial, .expired, .byokTrial, .byokTrialExpired: return false
         }
     }
 }

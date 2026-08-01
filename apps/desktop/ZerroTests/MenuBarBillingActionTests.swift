@@ -42,6 +42,16 @@ final class MenuBarBillingActionTests: XCTestCase {
         XCTAssertEqual(action.trigger, .blocked)
     }
 
+    func testByokTrialOffersTheByokLicense() {
+        let active = resolve(.byokTrial(generationsRemaining: 3))
+        XCTAssertEqual(active.label, "Get BYOK License")
+        XCTAssertEqual(active.trigger, .voluntaryUpgrade)
+
+        let complete = resolve(.byokTrialExpired)
+        XCTAssertEqual(complete.label, "Get BYOK License")
+        XCTAssertEqual(complete.trigger, .byokTrialExhausted)
+    }
+
     // MARK: - BYOK manages (nothing to upgrade/top up)
 
     func testByokManages() {

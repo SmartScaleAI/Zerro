@@ -229,6 +229,26 @@ export class SupabaseTrialStore implements TrialStore {
     deviceIdHash: string,
     email: string,
   ): Promise<boolean> {
+    // A BYOK claim has no email to compare, so it always blocks an email-trial
+    // request on this Mac. Managed claims still fall through to the existing
+    // email-aware lookup so a legitimate reinstall can resume the same grant.
+    const { data: claim, error: claimError } = await this.db
+      .from("trial_device_claims")
+      .select("trial_kind")
+      .eq("device_id_hash", deviceIdHash)
+      .maybeSingle();
+    if (claimError) {
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "deviceClaimCheck",
+          error: claimError.message,
+        }),
+      );
+      throw claimError;
+    }
+    if (claim?.trial_kind === "byok") return true;
+
     const { data, error } = await this.db
       .from("trial_grants")
       .select("id")

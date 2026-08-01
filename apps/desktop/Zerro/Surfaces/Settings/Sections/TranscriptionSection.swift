@@ -39,12 +39,6 @@ struct TranscriptionSection: View {
             SettingsRowDivider()
             modelStatusRow
         }
-        // UX-C: if the selected engine becomes unusable after an availability
-        // change (e.g. `.cloud` selected, then the OpenAI key removed; or `.local`
-        // after the model is removed), fall back to `.auto` so the picker never
-        // shows a selected-but-disabled engine.
-        .onChange(of: openAIKeyPresent) { _, _ in resetSelectedEngineIfUnusable() }
-        .onChange(of: modelInstalled) { _, _ in resetSelectedEngineIfUnusable() }
     }
 
     // MARK: - Availability signals (cheap, hash-free)
@@ -57,18 +51,6 @@ struct TranscriptionSection: View {
 
     private var openAIKeyPresent: Bool {
         keyPresence.openAIKeyPresent
-    }
-
-    /// Falls the selected engine back to `.auto` when it's no longer selectable
-    /// (delegates the "is it usable" decision to the shared `STTEnginePicker` rule).
-    private func resetSelectedEngineIfUnusable() {
-        if let fallback = STTEnginePicker.fallbackIfUnusable(
-            current: preferences.sttEngine,
-            modelInstalled: modelInstalled,
-            openAIKeyPresent: openAIKeyPresent
-        ) {
-            preferences.sttEngine = fallback
-        }
     }
 
     // MARK: - Engine picker
@@ -207,11 +189,9 @@ enum STTEnginePicker {
         }
     }
 
-    /// The engine the picker should fall back to when `current` is no longer
-    /// selectable — always `.auto` (which is always selectable) — or `nil` to keep
-    /// the current selection. Pure so the selected-but-disabled reset is
-    /// unit-testable (UX-C).
+    /// Explicit privacy choices never silently change. If a prerequisite later
+    /// disappears, recording preflight explains what must be restored.
     static func fallbackIfUnusable(current: STTEngine, modelInstalled: Bool, openAIKeyPresent: Bool) -> STTEngine? {
-        isSelectable(current, modelInstalled: modelInstalled, openAIKeyPresent: openAIKeyPresent) ? nil : .auto
+        nil
     }
 }

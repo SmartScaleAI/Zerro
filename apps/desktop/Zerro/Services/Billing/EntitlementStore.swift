@@ -82,6 +82,9 @@ final class EntitlementStore {
         if case .trial = old, case .expired = new {
             Analytics.capture("trial_exhausted")
         }
+        if case .byokTrial = old, case .byokTrialExpired = new {
+            Analytics.capture("byok_trial_exhausted")
+        }
     }
 
     // MARK: - Dependencies
@@ -109,6 +112,9 @@ final class EntitlementStore {
     /// whether a trial generation can route through the proxy. Optional so tests/
     /// previews that don't exercise trial credits omit it. See [[TrialCreditsManager]].
     private let trialCredits: TrialCreditsManager?
+
+    /// Anonymous BYOK trial selection + successful-generation counter.
+    private let byokTrial: BYOKTrialManager?
 
     /// Backs the display-only Managed entitlement cache (credits/tier/reset/
     /// status). Persisted (non-secret) so the menu-bar credits line is correct
@@ -144,6 +150,11 @@ final class EntitlementStore {
         trialCredits?.trialGrantId
     }
 
+    var byokTrialGenerationsRemaining: Int? {
+        guard byokTrial?.isSelected == true else { return nil }
+        return byokTrial?.generationsRemaining
+    }
+
     // MARK: - Init
 
     /// `nil` constructs the default real-Keychain dependencies inside the
@@ -155,6 +166,7 @@ final class EntitlementStore {
         sessionTokens: SessionTokenManager? = nil,
         productKindSlot: KeychainSlot? = nil,
         trialCredits: TrialCreditsManager? = nil,
+        byokTrial: BYOKTrialManager? = nil,
         defaults: UserDefaults = .standard
     ) {
         let license = licenseService ?? LicenseService()
@@ -164,6 +176,7 @@ final class EntitlementStore {
         self.sessionTokens = tokens
         self.productKindSlot = kindSlot
         self.trialCredits = trialCredits
+        self.byokTrial = byokTrial
         self.defaults = defaults
         // Seed the Managed display snapshot from the local cache so a Managed
         // user's credits line is correct at launch (refreshed async shortly
@@ -177,15 +190,18 @@ final class EntitlementStore {
             licenseService: license,
             productKind: Self.readProductKind(from: kindSlot),
             cachedSnapshot: cached,
-            trialCreditsRemaining: trialCredits?.creditsRemaining
+            trialCreditsRemaining: trialCredits?.creditsRemaining,
+            byokTrialSelected: byokTrial?.isSelected == true,
+            byokTrialRemaining: byokTrial?.generationsRemaining
         )
     }
 
     // MARK: - State computation
 
     /// Derives the current `EntitlementState` from its real sources, in
-    /// precedence order: Managed subscription > BYOK license > trial credits >
-    /// expired. The DEBUG override (in `refresh`) sits above all of this.
+    /// precedence order: paid Managed/BYOK license > selected BYOK trial >
+    /// email-funded trial credits > expired. The DEBUG override (in `refresh`)
+    /// sits above all of this.
     ///
     /// `static` (takes the dependencies explicitly) so `init` can call it
     /// before `self` is fully initialized AND `refresh()` can reuse it.
@@ -193,7 +209,9 @@ final class EntitlementStore {
         licenseService: LicenseService,
         productKind: LicenseProductKind?,
         cachedSnapshot: ManagedEntitlementSnapshot?,
-        trialCreditsRemaining: Int?
+        trialCreditsRemaining: Int?,
+        byokTrialSelected: Bool,
+        byokTrialRemaining: Int?
     ) -> EntitlementState {
         // Phase E: a present (or, fail-open, indeterminate) cached license
         // OUTRANKS the trial clock. WHICH paid state it grants depends on the
@@ -216,6 +234,16 @@ final class EntitlementStore {
                 return managedState(from: cachedSnapshot)
             }
             return .byok
+        }
+
+        // The two free trials are alternative paths. Once BYOK is selected it
+        // outranks the email pre-trial locally; the backend's shared device
+        // claim is the race-safe authority across reinstalls and devices.
+        if byokTrialSelected {
+            let remaining = max(0, byokTrialRemaining ?? BYOKTrialManager.generationLimit)
+            return remaining > 0
+                ? .byokTrial(generationsRemaining: remaining)
+                : .byokTrialExpired
         }
 
         // Phase F: the trial is now PURELY a pool of server-funded credits, with
@@ -269,9 +297,9 @@ final class EntitlementStore {
     ///   • `.expired` → false. The only refusing state.
     var canGenerate: Bool {
         switch state {
-        case .trial, .byok, .managed:
+        case .trial, .byokTrial, .byok, .managed:
             return true
-        case .expired:
+        case .expired, .byokTrialExpired:
             return false
         }
     }
@@ -310,7 +338,9 @@ final class EntitlementStore {
             licenseService: licenseService,
             productKind: readProductKind(),
             cachedSnapshot: managedSnapshot,
-            trialCreditsRemaining: trialCredits?.creditsRemaining
+            trialCreditsRemaining: trialCredits?.creditsRemaining,
+            byokTrialSelected: byokTrial?.isSelected == true,
+            byokTrialRemaining: byokTrial?.generationsRemaining
         )
     }
 
@@ -416,7 +446,7 @@ final class EntitlementStore {
             return true
         case .trial:
             return trialCredits?.hasActiveTrialToken == true
-        case .byok, .expired:
+        case .byokTrial, .byok, .expired, .byokTrialExpired:
             return false
         }
     }
@@ -448,9 +478,9 @@ final class EntitlementStore {
         switch state {
         case .managed:
             return .managedProxy
-        case .byok:
+        case .byokTrial, .byok:
             return .local
-        case .expired:
+        case .expired, .byokTrialExpired:
             // The record-start gate already blocks `.expired`; defensive default.
             return .local
         case .trial:
@@ -509,7 +539,7 @@ final class EntitlementStore {
             if !snapshot.status.isLive { return .subscriptionInactive }
             if snapshot.creditsRemaining <= 0 { return .outOfCredits }
             return nil
-        case .byok:
+        case .byokTrial, .byok:
             // BYOK funds generation locally. If the user has no self-funding setup
             // — no chat key, or no usable transcription path — the recording would
             // fail post-capture (`.apiKeyMissing`); catch it now and route them to
@@ -517,7 +547,7 @@ final class EntitlementStore {
             // model) this is EXACTLY the old "has an OpenAI key?" check, since
             // OpenAI is the only transcription path until a model is installed.
             return canGenerateLocally ? nil : .apiKeyMissing
-        case .trial, .expired:
+        case .trial, .expired, .byokTrialExpired:
             // Trial-exhausted is already mapped to `.expired` by the dual-expiry
             // in `computeState` (so the `canGenerate` gate → paywall catches it);
             // a live trial needs no pre-flight block here, and `.expired` is the
@@ -539,6 +569,7 @@ final class EntitlementStore {
     /// An expired-but-previously-verified token is handled by the silent resume,
     /// not here.
     var needsTrialEmailVerification: Bool {
+        if byokTrial?.isSelected == true { return false }
         guard case .trial = state, let trialCredits else { return false }
         return trialCredits.rememberedEmail == nil
     }
@@ -567,6 +598,8 @@ final class EntitlementStore {
         case topup = "topup"
         /// An entitled user (Managed/BYOK) managing — not a sell.
         case manage = "manage"
+        /// Anonymous BYOK trial exhausted its ten successful generations.
+        case byokTrialExhausted = "byok_trial_exhausted"
     }
     var paywallTrigger: PaywallTrigger?
 
@@ -598,7 +631,7 @@ final class EntitlementStore {
     var isPaidEntitled: Bool {
         switch state {
         case .managed, .byok: return true
-        case .trial, .expired: return false
+        case .trial, .expired, .byokTrial, .byokTrialExpired: return false
         }
     }
 
@@ -715,7 +748,7 @@ final class EntitlementStore {
         switch state {
         case .managed(let creditsRemaining, _): return max(0, creditsRemaining)
         case .trial(let creditsRemaining): return creditsRemaining.map { max(0, $0) }
-        case .byok, .expired: return nil
+        case .byokTrial, .byokTrialExpired, .byok, .expired: return nil
         }
     }
 
@@ -939,7 +972,7 @@ final class EntitlementStore {
             trialCredits?.applyCreditsRemaining(limit)
             state = .trial(creditsRemaining: limit)
             Log.ui.notice("entitlement dev → reset trial credits to \(limit, privacy: .public)")
-        case .byok:
+        case .byokTrial, .byokTrialExpired, .byok:
             // No managed/trial credit pool to reset.
             Log.ui.notice("entitlement dev → reset credits no-op (byok)")
         }

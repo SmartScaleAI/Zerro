@@ -55,6 +55,28 @@ enum Changelog {
     /// fall behind again.
     static let entries: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "1.4.33",
+            date: releaseDate(2026, 7, 31),
+            highlights: [
+                ChangelogHighlight(
+                    "A deeper black theme now runs consistently across Zerro\u{2019}s windows and app surfaces.",
+                    kind: .improved
+                ),
+                ChangelogHighlight(
+                    "Trial onboarding is more reliable when you return to the app, with clearer outcomes and credit handling.",
+                    kind: .fixed
+                ),
+                ChangelogHighlight(
+                    "Low-credit warnings now appear at the correct time.",
+                    kind: .fixed
+                ),
+                ChangelogHighlight(
+                    "Plan and upgrade screens now accurately show the five AI models currently available.",
+                    kind: .fixed
+                ),
+            ]
+        ),
+        ChangelogEntry(
             version: "1.4.29",
             date: releaseDate(2026, 7, 21),
             highlights: [

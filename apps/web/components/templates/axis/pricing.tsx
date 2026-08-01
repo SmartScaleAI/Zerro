@@ -109,9 +109,9 @@ const tiers: Tier[] = [
         price: "$0",
         cadence: "to start",
         features: [
-            "30 free credits to start",
-            "Recommended model: Gemini 3.5 Flash",
-            "No card, no key, no time limit.",
+            "30 Managed credits or 10 BYOK generations",
+            "Use our AI or your OpenAI, Gemini & Anthropic keys",
+            "No card or time limit",
         ],
         cta: { label: "Download for Mac", variant: "outline" },
         placement: "pricing_free",
