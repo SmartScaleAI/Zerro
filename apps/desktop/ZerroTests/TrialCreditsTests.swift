@@ -46,6 +46,12 @@ private enum TrialFixtures {
     }
     /// The resume "first-time user" signal — no token, route to email+code.
     static func needsVerification() -> String { #"{"status":"needs_verification"}"# }
+    static func contactVerified(
+        token: String = "CONTACT-TOK",
+        expiresAt: String = "2030-01-01T00:00:00.000Z"
+    ) -> String {
+        #"{"status":"email_verified","contact_token":"\#(token)","contact_expires_at":"\#(expiresAt)"}"#
+    }
     static func error(_ code: String) -> String { #"{"error":"\#(code)"}"# }
 }
 
@@ -67,6 +73,7 @@ private func isoString(_ date: Date) -> String {
 private func makeTrialManager(
     _ transport: StubManagedTransport,
     tokenSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(nil),
+    contactTokenSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(nil),
     emailSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(nil),
     defaults: UserDefaults? = nil,
     clock: @escaping () -> Date = { Date() }
@@ -74,6 +81,7 @@ private func makeTrialManager(
     TrialCreditsManager(
         emailSlot: emailSlot,
         tokenSlot: tokenSlot,
+        contactTokenSlot: contactTokenSlot,
         transport: transport,
         defaults: defaults ?? .ephemeralPreview(),
         clock: clock
@@ -98,6 +106,101 @@ final class TrialCreditsManagerTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["action"] as? String, "request")
         XCTAssertEqual(json["email"] as? String, "user@example.com")
+    }
+
+    func testSharedOnboardingEmailDoesNotActivateManagedTrialUntilSelection() async throws {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.codeSent(), status: 200)
+        transport.enqueue(TrialFixtures.contactVerified(), status: 200)
+        let contactSlot = InMemoryKeychainSlot(nil)
+        let emailSlot = InMemoryKeychainSlot(nil)
+        let mgr = makeTrialManager(
+            transport,
+            contactTokenSlot: contactSlot,
+            emailSlot: emailSlot
+        )
+
+        try await mgr.requestOnboardingCode(email: "user@example.com")
+        try await mgr.verifyOnboardingCode(
+            email: "user@example.com",
+            code: "123456",
+            marketingEmailOptIn: true
+        )
+
+        XCTAssertTrue(mgr.hasVerifiedOnboardingEmail)
+        XCTAssertNil(mgr.creditsRemaining)
+        XCTAssertFalse(mgr.hasActiveTrialToken)
+        XCTAssertEqual(emailSlot.read(), "user@example.com")
+
+        let requestBody = try XCTUnwrap(transport.requests[0].httpBody)
+        let requestJSON = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
+        )
+        XCTAssertEqual(requestJSON["action"] as? String, "request_contact")
+
+        let verifyBody = try XCTUnwrap(transport.requests[1].httpBody)
+        let verifyJSON = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: verifyBody) as? [String: Any]
+        )
+        XCTAssertEqual(verifyJSON["action"] as? String, "verify_contact")
+        XCTAssertEqual(verifyJSON["marketing_email_opt_in"] as? Bool, true)
+    }
+
+    func testManagedChoiceActivatesTrialWithVerifiedContactBearer() async throws {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.contactVerified(), status: 200)
+        transport.enqueue(
+            TrialFixtures.verifyOK(token: "TRIAL-TOK", remaining: 30, limit: 30),
+            status: 200
+        )
+        let mgr = makeTrialManager(transport)
+
+        try await mgr.verifyOnboardingCode(
+            email: "user@example.com",
+            code: "123456",
+            marketingEmailOptIn: false
+        )
+        let remaining = try await mgr.activateManagedOnboardingTrial()
+
+        XCTAssertEqual(remaining, 30)
+        XCTAssertEqual(mgr.creditsRemaining, 30)
+        XCTAssertTrue(mgr.hasActiveTrialToken)
+        XCTAssertFalse(mgr.hasVerifiedOnboardingEmail)
+        XCTAssertEqual(
+            transport.requests[1].value(forHTTPHeaderField: "Authorization"),
+            "Bearer CONTACT-TOK"
+        )
+        let body = try XCTUnwrap(transport.requests[1].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["action"] as? String, "activate_managed")
+    }
+
+    func testVerifySendsExplicitMarketingEmailChoice() async throws {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        _ = try await mgr.verifyCode(
+            email: "user@example.com",
+            code: "123456",
+            marketingEmailOptIn: true
+        )
+
+        let body = try XCTUnwrap(transport.requests[0].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["marketing_email_opt_in"] as? Bool, true)
+    }
+
+    func testVerifyOmitsMarketingChoiceWhenSurfaceDidNotPresentIt() async throws {
+        let transport = StubManagedTransport()
+        transport.enqueue(TrialFixtures.verifyOK(), status: 200)
+        let mgr = makeTrialManager(transport)
+
+        _ = try await mgr.verifyCode(email: "user@example.com", code: "123456")
+
+        let body = try XCTUnwrap(transport.requests[0].httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["marketing_email_opt_in"])
     }
 
     func testRequestCodeAlreadyUsedThrows() async {
@@ -538,6 +641,25 @@ final class TrialEmailPresentationTests: XCTestCase {
         let copy = TrialEmailCopy.codeDelivery(to: model.trimmedEmail)
         XCTAssertTrue(copy.hasPrefix("Check user@example.com"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("we sent"))
+    }
+
+    func testRepeatedInfrastructureFailuresUnlockOnboardingFallback() async {
+        let transport = StubManagedTransport()
+        transport.enqueue(#"{"error":"server_error"}"#, status: 500)
+        transport.enqueue(#"{"error":"server_error"}"#, status: 500)
+        let manager = makeTrialManager(transport)
+        let model = TrialEmailModel()
+        model.email = "user@example.com"
+
+        model.sendCode(using: manager)
+        await waitForModel(model)
+        XCTAssertEqual(model.systemFailureCount, 1)
+        XCTAssertFalse(model.shouldOfferInfrastructureFallback)
+
+        model.sendCode(using: manager)
+        await waitForModel(model)
+        XCTAssertEqual(model.systemFailureCount, 2)
+        XCTAssertTrue(model.shouldOfferInfrastructureFallback)
     }
 
     func testContinueWithoutTrialAdvancesAndPersistsNoTrialState() {

@@ -31,6 +31,15 @@ export interface TrialCodeRow {
   attempts: number;
 }
 
+/** A mailbox-verified contact collected before a trial path is selected. */
+export interface OnboardingContactRow {
+  id: string;
+  email_normalized: string;
+  verified_at: string;
+  marketing_email_opt_in: boolean;
+  marketing_email_consent_version: string | null;
+}
+
 /**
  * The outcome of a device-aware grant verification. Either a normal grant
  * (create-once / never-reset) or the "device already used under a DIFFERENT
@@ -52,6 +61,16 @@ export interface TrialStore {
   incrementCodeAttempts(email: string): Promise<void>;
   /** Delete a pending code (consumed or expired). */
   deleteCode(email: string): Promise<void>;
+  /** Record mailbox proof and the explicit optional marketing choice. */
+  upsertOnboardingContact(
+    email: string,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
+  ): Promise<OnboardingContactRow>;
+  /** Resolve the opaque subject carried by an onboarding-contact token. */
+  loadOnboardingContact(
+    contactId: string,
+  ): Promise<OnboardingContactRow | null>;
   /**
    * Create-once / never-reset the grant for `email`, bound to `deviceIdHash`,
    * and return its id + credits remaining (verify_trial_grant). The single grant
@@ -62,6 +81,8 @@ export interface TrialStore {
     email: string,
     limit: number,
     deviceIdHash: string | null,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
   ): Promise<VerifyGrantResult>;
   /**
    * TRUE if a grant already exists for `deviceIdHash` under an email OTHER than
@@ -191,15 +212,79 @@ export class SupabaseTrialStore implements TrialStore {
     }
   }
 
+  async upsertOnboardingContact(
+    email: string,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
+  ): Promise<OnboardingContactRow> {
+    const now = new Date().toISOString();
+    const row: Record<string, unknown> = {
+      email_normalized: email,
+      verified_at: now,
+      updated_at: now,
+    };
+    if (marketingEmailOptIn !== null) {
+      row.marketing_email_opt_in = marketingEmailOptIn;
+      row.marketing_email_consent_updated_at = now;
+      row.marketing_email_consent_version = marketingEmailConsentVersion;
+    }
+
+    const { data, error } = await this.db
+      .from("onboarding_contacts")
+      .upsert(row, { onConflict: "email_normalized" })
+      .select(
+        "id, email_normalized, verified_at, marketing_email_opt_in, marketing_email_consent_version",
+      )
+      .single();
+    if (error) {
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "upsertOnboardingContact",
+          error: error.message,
+        }),
+      );
+      throw error;
+    }
+    return data as OnboardingContactRow;
+  }
+
+  async loadOnboardingContact(
+    contactId: string,
+  ): Promise<OnboardingContactRow | null> {
+    const { data, error } = await this.db
+      .from("onboarding_contacts")
+      .select(
+        "id, email_normalized, verified_at, marketing_email_opt_in, marketing_email_consent_version",
+      )
+      .eq("id", contactId)
+      .maybeSingle();
+    if (error) {
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "loadOnboardingContact",
+          error: error.message,
+        }),
+      );
+      throw error;
+    }
+    return (data as OnboardingContactRow) ?? null;
+  }
+
   async verifyGrant(
     email: string,
     limit: number,
     deviceIdHash: string | null,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
   ): Promise<VerifyGrantResult> {
     const { data, error } = await this.db.rpc("verify_trial_grant", {
       p_email: email,
       p_limit: limit,
       p_device_id_hash: deviceIdHash,
+      p_marketing_email_opt_in: marketingEmailOptIn,
+      p_marketing_email_consent_version: marketingEmailConsentVersion,
     });
     if (error) {
       console.error(

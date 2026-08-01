@@ -73,10 +73,24 @@ final class OnboardingState {
     /// rest of the flow. Runtime-only; computed once in `init`.
     private(set) var isReconsenting: Bool = false
 
-    /// Survives the OS-issued SIGKILL on Screen Recording grant.
-    /// Persisted on every change; cleared on completeOnboarding.
+    /// The stable route rendered by the redesigned UI. It remains synchronized
+    /// with `currentStep` so older persisted state and the Screen Recording
+    /// restart path continue to resume safely.
+    var onboardingPath: OnboardingPath {
+        didSet { defaults.set(onboardingPath.rawValue, forKey: OnboardingPersistenceKeys.path) }
+    }
+
+    private(set) var currentScreen: OnboardingScreen {
+        didSet { defaults.set(currentScreen.rawValue, forKey: OnboardingPersistenceKeys.screen) }
+    }
+
+    /// Legacy compatibility bridge. Survives the OS-issued SIGKILL on Screen
+    /// Recording grant until the redesigned UI becomes the only renderer.
     var currentStep: OnboardingStep {
-        didSet { defaults.set(currentStep.rawValue, forKey: Keys.currentStep) }
+        didSet {
+            defaults.set(currentStep.rawValue, forKey: Keys.currentStep)
+            syncRouteFromLegacyStep()
+        }
     }
 
     // MARK: - Dev sub-state pins
@@ -96,8 +110,8 @@ final class OnboardingState {
     @ObservationIgnored private let defaults: UserDefaults
 
     private enum Keys {
-        static let hasCompletedOnboarding = "vf.onboarding.hasCompletedOnboarding"
-        static let currentStep            = "vf.onboarding.currentStep"
+        static let hasCompletedOnboarding = OnboardingPersistenceKeys.legacyCompleted
+        static let currentStep            = OnboardingPersistenceKeys.legacyStep
         // Phase 22 — clickwrap consent record.
         static let termsAcceptedVersion   = "vf.consent.termsAcceptedVersion"
         static let termsAcceptedAt        = "vf.consent.termsAcceptedAt"
@@ -108,18 +122,47 @@ final class OnboardingState {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
+        let completedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
+        self.hasCompletedOnboarding = completedOnboarding
         // `integer(forKey:)` returns 0 for missing keys, which maps to
         // .welcome — exactly the right default for first-ever launches.
         let rawStep = defaults.integer(forKey: Keys.currentStep)
         self.currentStep = OnboardingStep(rawValue: rawStep) ?? .welcome
 
+        let needsConsentNow = defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
+        let route = OnboardingRouteMigration.resolve(
+            .init(
+                persistedSchemaVersion: defaults.object(
+                    forKey: OnboardingPersistenceKeys.routeSchemaVersion
+                ) as? Int,
+                persistedPath: defaults.string(forKey: OnboardingPersistenceKeys.path),
+                persistedScreen: defaults.string(forKey: OnboardingPersistenceKeys.screen),
+                legacyStepRawValue: rawStep,
+                legacyBYOKPathActive: defaults.bool(forKey: OnboardingPersistenceKeys.legacyBYOKPathActive),
+                legacyBYOKSetupStep: defaults.integer(forKey: OnboardingPersistenceKeys.legacyBYOKSetupStep),
+                legacyBYOKSelected: defaults.bool(forKey: BYOKTrialManager.selectedDefaultsKey),
+                hasCompletedOnboarding: completedOnboarding,
+                needsConsent: needsConsentNow
+            )
+        )
+        self.onboardingPath = route.path
+        self.currentScreen = route.screen
+
+        // Property observers do not run during initialization, so commit the
+        // normalized route explicitly. Keeping the old keys during the phased
+        // rollout makes both the current and redesigned renderers resumable.
+        defaults.set(route.path.rawValue, forKey: OnboardingPersistenceKeys.path)
+        defaults.set(route.screen.rawValue, forKey: OnboardingPersistenceKeys.screen)
+        defaults.set(
+            OnboardingRouteMigration.currentSchemaVersion,
+            forKey: OnboardingPersistenceKeys.routeSchemaVersion
+        )
+
         // Phase 22: re-consent gate. If the user already finished onboarding
         // but the Terms version they accepted is stale (or absent), surface
         // the consent screen once before app use. Pin the window to the
         // consent step; the consent view dismisses on accept in this mode.
-        let needsConsentNow = defaults.string(forKey: Keys.termsAcceptedVersion) != Self.currentTermsVersion
-        if hasCompletedOnboarding && needsConsentNow {
+        if completedOnboarding && needsConsentNow {
             self.isReconsenting = true
             self.currentStep = .consent
         }
@@ -127,11 +170,74 @@ final class OnboardingState {
 
     // MARK: - Navigation
 
+    var progressScreens: [OnboardingScreen] {
+        onboardingPath.screens
+    }
+
+    /// Zero-based index used by the progress indicator. Re-consent is
+    /// outside first-run progress and therefore returns nil.
+    var progressIndex: Int? {
+        OnboardingRoute(path: onboardingPath, screen: currentScreen).progressIndex
+    }
+
+    /// Select a product path while keeping the user on the explicit choice
+    /// screen until that path's activation/eligibility work completes.
+    func selectPath(_ path: OnboardingPath) {
+        onboardingPath = path
+        currentScreen = .mode
+    }
+
+    func move(to screen: OnboardingScreen) {
+        currentScreen = OnboardingRoute.normalized(screen: screen, for: onboardingPath)
+    }
+
+    func advanceScreen() {
+        let route = OnboardingRoute(path: onboardingPath, screen: currentScreen)
+        guard let next = route.nextScreen else { return }
+        currentScreen = next
+    }
+
+    func moveBack() {
+        let route = OnboardingRoute(path: onboardingPath, screen: currentScreen)
+        guard let previous = route.previousScreen else { return }
+        currentScreen = previous
+    }
+
+    /// Route transitions used by the redesigned renderer. They also update the
+    /// legacy step so Screen Recording's process restart remains recoverable.
+    func showPathSelection() {
+        currentStep = .email
+        currentScreen = .mode
+    }
+
+    func beginBYOKKeys() {
+        onboardingPath = .byok
+        currentStep = .email
+        currentScreen = .keys
+    }
+
+    func returnToPathSelection() {
+        currentStep = .email
+        currentScreen = .mode
+    }
+
+    func finishSetup() {
+        currentStep = .permissions
+    }
+
+    func recordOnboardingStarted() {
+        Analytics.captureOnce(
+            "onboarding_started",
+            key: "vf.analytics.onboardingStarted",
+            ["path": onboardingPath.rawValue]
+        )
+    }
+
     func advance() {
         // First forward step out of Welcome is our "onboarding started"
         // funnel marker — fired at most once per install.
         if currentStep == .welcome {
-            Analytics.captureOnce("onboarding_started", key: "vf.analytics.onboardingStarted")
+            recordOnboardingStarted()
         }
         if let next = OnboardingStep(rawValue: currentStep.rawValue + 1) {
             currentStep = next
@@ -147,6 +253,22 @@ final class OnboardingState {
 
     func jump(to step: OnboardingStep) {
         currentStep = step
+    }
+
+    /// Mirrors navigation from legacy step mutations into the stable route.
+    private func syncRouteFromLegacyStep() {
+        let screen: OnboardingScreen
+        switch currentStep {
+        case .welcome, .consent:
+            screen = isReconsenting && currentStep == .consent ? .reconsent : .setup
+        case .email:
+            screen = .setup
+        case .permissions:
+            screen = .permissions
+        case .devMode, .allSet:
+            screen = .complete
+        }
+        currentScreen = screen
     }
 
     // MARK: - Step-view funnel (Tier 4)
@@ -165,6 +287,27 @@ final class OnboardingState {
                 "step": step.analyticsName,
                 "step_index": step.rawValue,
                 "total_steps": OnboardingStep.allCases.count,
+            ]
+        )
+    }
+
+    /// Stable funnel event for the redesigned path. Setup is deliberately not
+    /// marked before first-run consent because `captureOnce` persists its flag
+    /// even while telemetry is deferred; the Setup CTA records it immediately
+    /// after consent instead.
+    func recordScreenViewed(_ screen: OnboardingScreen) {
+        if screen == .setup, needsConsent { return }
+
+        let route = OnboardingRoute(path: onboardingPath, screen: screen)
+        let index = route.progressIndex
+        Analytics.captureOnce(
+            "onboarding_screen_viewed",
+            key: "vf.analytics.onboardingScreen.\(screen.analyticsName)",
+            [
+                "screen": screen.analyticsName,
+                "screen_index": index ?? -1,
+                "total_screens": route.progressScreens.count,
+                "path": onboardingPath.rawValue,
             ]
         )
     }
@@ -242,11 +385,18 @@ final class OnboardingState {
     /// Persist the clickwrap consent record. The affirmative button press is
     /// the consent action; this is the only writer of these keys.
     func recordConsent() {
+        let wasReconsenting = isReconsenting
         let now = ISO8601DateFormatter().string(from: Date())
         defaults.set(Self.currentTermsVersion, forKey: Keys.termsAcceptedVersion)
         defaults.set(now, forKey: Keys.termsAcceptedAt)
         defaults.set(Self.currentTermsVersion, forKey: Keys.privacyAcceptedVersion)
         isReconsenting = false
+        if wasReconsenting {
+            // Re-consent dismisses instead of joining first-run progress. Clear
+            // the transient route so a later manual onboarding presentation
+            // has a deterministic starting screen.
+            currentScreen = .setup
+        }
         Log.billing.notice("terms consent recorded locally — version \(Self.currentTermsVersion, privacy: .public)")
 
         // I-03: telemetry startup was DEFERRED at bootstrap when this launch

@@ -57,7 +57,7 @@ echo "==> Deleting Keychain items (these survive reinstall by design)"
 for acct in \
   openai_api_key gemini_api_key anthropic_api_key \
   byok_license_key byok_instance_id byok_last_validated byok_license_created_at \
-  license_product_kind trial_email trial_token
+  license_product_kind trial_email trial_token onboarding_contact_token
 do
   security delete-generic-password -s "$BUNDLE_ID" -a "$acct" >/dev/null 2>&1 \
     && echo "    deleted: $acct"

@@ -117,7 +117,7 @@ struct EmailStepView: View {
     @State private var errorIsSystem: Bool = false
     @State private var systemFailureCount: Int = 0
     @FocusState private var fieldFocused: Bool
-    @AppStorage("vf.onboarding.byokPathActive") private var showBYOKFlow = false
+    @AppStorage(OnboardingPersistenceKeys.legacyBYOKPathActive) private var showBYOKFlow = false
 
     /// After this many CONSECUTIVE system-class failures, offer the infra
     /// fallback so a backend/Resend outage can never permanently trap the user.
@@ -301,6 +301,7 @@ struct EmailStepView: View {
     private var byokTrialButton: some View {
         Button("Use my own API keys instead") {
             fieldFocused = false
+            onboarding.selectPath(.byok)
             showBYOKFlow = true
             Analytics.capture("byok_trial_selected", ["surface": "onboarding"])
         }
@@ -445,7 +446,8 @@ struct EmailStepView: View {
             terminalState = TrialEmailTerminalState(error)
             errorMessage = nil
             Log.billing.notice("trial email verification: device already trialed (onboarding) — continuing without credits")
-        case .network, .server, .sendFailed, .malformedResponse, .malformedRequest:
+        case .network, .server, .sendFailed, .malformedResponse, .malformedRequest,
+             .invalidContactToken:
             handleSystem(error.userMessage, error)
         case .invalidEmail, .disposableEmail, .invalidCode, .codeExpired,
              .tooManyAttempts, .rateLimited:
@@ -478,11 +480,10 @@ struct EmailStepView: View {
 
 // MARK: - Permissions (merged Screen Recording + Microphone)
 
-/// One screen for both macOS permissions Zerro needs, modeled on the
-/// Superwhisper "Let's set up permissions" page: Screen Recording and
-/// Microphone each render as their own row with their own Allow control,
-/// and a single Continue Setup button at the bottom stays disabled until
-/// BOTH are granted.
+/// One native-forward screen for both macOS permissions Zerro needs. Screen
+/// Recording and Microphone each render as their own row with their own state
+/// and action, while a single Continue button stays disabled until BOTH are
+/// granted and live in the current process.
 ///
 /// Advancing is an explicit user action — there is NO auto-advance. The
 /// per-row controls reflect each permission's effective sub-state (with a
@@ -493,6 +494,23 @@ struct PermissionsStepView: View {
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
     @Environment(\.dismissWindow) private var dismissWindow
+
+    #if DEBUG
+    /// Canvas-only overrides keep visual state previews internally consistent
+    /// without weakening the live production gate or mutating macOS TCC.
+    private let previewContinueGate: Bool?
+    private let previewScreenNeedsRelaunch: Bool?
+
+    init(
+        previewContinueGate: Bool? = nil,
+        previewScreenNeedsRelaunch: Bool? = nil
+    ) {
+        self.previewContinueGate = previewContinueGate
+        self.previewScreenNeedsRelaunch = previewScreenNeedsRelaunch
+    }
+    #else
+    init() { }
+    #endif
 
     /// Per-row display state honors the DEBUG dev-panel pin so each
     /// sub-state can be previewed without toggling system permissions.
@@ -510,7 +528,11 @@ struct PermissionsStepView: View {
     /// row that contradicts their System Settings toggle. Suppressed while a
     /// dev pin is active so the panel can still inspect the base tri-state.
     private var screenNeedsRelaunch: Bool {
-        onboarding.pinnedScreenSubState == nil && permissions.screenRecordingNeedsRelaunch
+        #if DEBUG
+        if let previewScreenNeedsRelaunch { return previewScreenNeedsRelaunch }
+        #endif
+        return onboarding.pinnedScreenSubState == nil &&
+            permissions.screenRecordingNeedsRelaunch
     }
 
     /// Continue is gated on the LIVE OS values (never the dev pins) so a
@@ -524,9 +546,25 @@ struct PermissionsStepView: View {
     /// "Relaunch Zerro" affordance — letting a user finish onboarding into a
     /// state where their first recording fails.
     private var bothGranted: Bool {
-        permissions.screenRecordingStatus == .granted &&
-        permissions.microphoneStatus == .granted &&
-        !permissions.screenRecordingNeedsRelaunch
+        #if DEBUG
+        if let previewContinueGate { return previewContinueGate }
+        #endif
+        return OnboardingPermissionsPolicy.canContinue(
+            screenStatus: permissions.screenRecordingStatus,
+            microphoneStatus: permissions.microphoneStatus,
+            screenNeedsRelaunch: permissions.screenRecordingNeedsRelaunch
+        )
+    }
+
+    private var screenPresentationState: OnboardingPermissionPresentationState {
+        OnboardingPermissionsPolicy.presentationState(
+            for: effectiveScreen,
+            needsRelaunch: screenNeedsRelaunch
+        )
+    }
+
+    private var microphonePresentationState: OnboardingPermissionPresentationState {
+        OnboardingPermissionsPolicy.presentationState(for: effectiveMic)
     }
 
     /// Re-keys the polling `.task` whenever either effective status changes,
@@ -536,42 +574,33 @@ struct PermissionsStepView: View {
     }
 
     var body: some View {
-        OnboardingStepLayout {
-            OnboardingIconTile(systemName: "checkmark.shield")
-        } content: {
-            VStack(spacing: VFSpacing.lg) {
-                OnboardingHeadline(
-                    title: "Let\u{2019}s set up permissions",
-                    bodyText: "Zerro needs two macOS permissions to capture what you\u{2019}re showing and hear your narration. Allow both to continue."
-                )
+        VStack(spacing: 22) {
+            Spacer(minLength: 0)
 
-                VStack(spacing: VFSpacing.sm) {
-                    screenRow
-                    micRow
-                }
+            OnboardingSetupHero(
+                systemName: "viewfinder",
+                title: "Allow Zerro to see and hear",
+                description: "These permissions are used only when you start a recording. Zerro stays quiet in your menu bar the rest of the time."
+            )
+
+            VStack(spacing: 10) {
+                screenRow
+                micRow
             }
-        } actions: {
-            // H-06 adjacent: a COMPLETED user lands here only via the record
-            // gate's permission jump (revoked permission). Granting should
-            // return them to the app — advancing would re-run the
-            // devMode → allSet tail and re-fire completeOnboarding(). If they
-            // somehow still owe consent too (e.g. a stale persisted step from
-            // before the consent-first gate), settle it now: reconsent's
-            // accept dismisses.
-            if onboarding.hasCompletedOnboarding {
-                OnboardingPrimaryButton("Done", isEnabled: bothGranted) {
-                    if onboarding.needsConsent {
-                        onboarding.beginReconsent()
-                    } else {
-                        dismissWindow(id: OnboardingScene.windowID)
-                    }
-                }
-            } else {
-                OnboardingPrimaryButton("Continue Setup", isEnabled: bothGranted) {
-                    onboarding.advance()
-                }
+
+            PermissionPrivacyNote()
+
+            OnboardingPrimaryButton(
+                onboarding.hasCompletedOnboarding ? "Done" : "Continue",
+                systemImage: onboarding.hasCompletedOnboarding ? nil : "arrow.right",
+                isEnabled: bothGranted
+            ) {
+                continueFromPermissions()
             }
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, VFSpacing.xxl)
         // Single combined poller: poll iff either row is denied, so two
         // callers can't fight over the one shared timer. Re-runs on every
         // status transition via `pollKey`; stops when neither row is denied
@@ -589,7 +618,8 @@ struct PermissionsStepView: View {
         PermissionRow(
             systemName: "rectangle.dashed.badge.record",
             title: "Screen Recording",
-            description: "Lets Zerro capture what\u{2019}s on your screen."
+            description: screenDescription,
+            state: screenPresentationState
         ) {
             screenControl
         }
@@ -599,9 +629,34 @@ struct PermissionsStepView: View {
         PermissionRow(
             systemName: "mic.fill",
             title: "Microphone",
-            description: "Lets Zerro hear your narration."
+            description: microphoneDescription,
+            state: microphonePresentationState
         ) {
             micControl
+        }
+    }
+
+    private var screenDescription: String {
+        switch screenPresentationState {
+        case .request, .granted:
+            return "Captures only the area you choose."
+        case .denied:
+            return "Turn this on in System Settings, then check again."
+        case .needsRelaunch:
+            return "Permission is on. Relaunch Zerro to apply it."
+        }
+    }
+
+    private var microphoneDescription: String {
+        switch microphonePresentationState {
+        case .request, .granted:
+            return "Hears the explanation you narrate."
+        case .denied:
+            return "Turn this on in System Settings, then check again."
+        case .needsRelaunch:
+            // Microphone never enters this state, but keeping the mapping
+            // exhaustive makes the row safe if the policy grows later.
+            return "Relaunch Zerro to apply this permission."
         }
     }
 
@@ -609,8 +664,8 @@ struct PermissionsStepView: View {
 
     @ViewBuilder
     private var screenControl: some View {
-        if screenNeedsRelaunch {
-            // M1 recovery: grant present in Settings but not live in-process.
+        switch screenPresentationState {
+        case .needsRelaunch:
             PermissionActionStack {
                 PermissionMiniButton("Relaunch Zerro", prominent: true) {
                     permissions.relaunchToApplyScreenRecording()
@@ -619,24 +674,19 @@ struct PermissionsStepView: View {
                     Task { await permissions.probeScreenRecordingEffectiveness() }
                 }
             }
-        } else {
-            switch effectiveScreen {
-            case .notDetermined:
-                PermissionAllowButton { permissions.requestScreenRecording() }
-            case .granted:
-                PermissionGrantedIndicator()
-            case .denied:
-                PermissionActionStack {
-                    PermissionMiniButton("Open Settings", prominent: true) {
-                        NSWorkspace.shared.open(SystemSettingsURLs.screenRecording)
-                    }
-                    // "Check again" runs the SCShareableContent effectiveness
-                    // probe (a decision point): a live grant flips to granted, a
-                    // grant present in Settings but not yet live flips to the
-                    // needs-relaunch affordance, still-missing stays denied.
-                    PermissionMiniButton("Check again") {
-                        Task { await permissions.probeScreenRecordingEffectiveness() }
-                    }
+        case .request:
+            PermissionAllowButton { permissions.requestScreenRecording() }
+        case .granted:
+            PermissionGrantedIndicator()
+        case .denied:
+            PermissionActionStack {
+                PermissionMiniButton("Open Settings", prominent: true) {
+                    NSWorkspace.shared.open(SystemSettingsURLs.screenRecording)
+                }
+                // This live probe distinguishes granted, denied, and the
+                // macOS state that requires a process relaunch.
+                PermissionMiniButton("Check again") {
+                    Task { await permissions.probeScreenRecordingEffectiveness() }
                 }
             }
         }
@@ -644,8 +694,8 @@ struct PermissionsStepView: View {
 
     @ViewBuilder
     private var micControl: some View {
-        switch effectiveMic {
-        case .notDetermined:
+        switch microphonePresentationState {
+        case .request:
             PermissionAllowButton { Task { await permissions.requestMicrophone() } }
         case .granted:
             PermissionGrantedIndicator()
@@ -656,6 +706,23 @@ struct PermissionsStepView: View {
                 }
                 PermissionMiniButton("Check again") { permissions.refreshStatuses() }
             }
+        case .needsRelaunch:
+            EmptyView()
+        }
+    }
+
+    private func continueFromPermissions() {
+        // A COMPLETED user lands here only through the record gate after a
+        // permission is revoked. Return them to the app instead of replaying
+        // the final onboarding route and completion side effects.
+        if onboarding.hasCompletedOnboarding {
+            if onboarding.needsConsent {
+                onboarding.beginReconsent()
+            } else {
+                dismissWindow(id: OnboardingScene.windowID)
+            }
+        } else {
+            onboarding.advance()
         }
     }
 
@@ -676,6 +743,7 @@ private struct PermissionRow<Trailing: View>: View {
     let systemName: String
     let title: String
     let description: String
+    let state: OnboardingPermissionPresentationState
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
@@ -691,7 +759,7 @@ private struct PermissionRow<Trailing: View>: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Color.vfTextPrimary)
                 Text(description)
                     .font(.system(size: 12))
@@ -703,12 +771,27 @@ private struct PermissionRow<Trailing: View>: View {
 
             trailing()
         }
-        .padding(VFSpacing.md)
+        .padding(.horizontal, VFSpacing.lg)
+        .padding(.vertical, VFSpacing.md)
+        .frame(minHeight: 70)
         .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
         .overlay(
             RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .strokeBorder(Color.vfHairline, lineWidth: 1)
+                .strokeBorder(borderColor, lineWidth: 1)
         )
+    }
+
+    private var borderColor: Color {
+        switch state {
+        case .request:
+            return Color.vfHairline
+        case .granted:
+            return Color.vfSuccessGreen.opacity(0.2)
+        case .denied:
+            return Color.vfWarningAmber.opacity(0.32)
+        case .needsRelaunch:
+            return Color.vfBrandAccent.opacity(0.38)
+        }
     }
 }
 
@@ -738,9 +821,45 @@ private struct PermissionGrantedIndicator: View {
                 .foregroundStyle(Color.vfSuccessGreen)
             Text("Allowed")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.vfTextSecondary)
+                .foregroundStyle(Color.vfSuccessGreen)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.vfSuccessGreen.opacity(0.12), in: Capsule())
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct PermissionPrivacyNote: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.vfSuccessGreen)
+                .padding(.top, 1)
+
+            (
+                Text("Local first. ")
+                    .fontWeight(.semibold)
+                    .foregroundColor(Color.vfTextPrimary)
+                + Text("Screen images are prepared on this Mac, and detected secrets are redacted by default.")
+                    .foregroundColor(Color.vfTextSecondary)
+            )
+            .font(.system(size: 12))
+            .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, VFSpacing.md)
+        .padding(.vertical, 11)
+        .background(
+            Color.vfSuccessGreen.opacity(0.055),
+            in: RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
+                .strokeBorder(Color.vfSuccessGreen.opacity(0.15), lineWidth: 1)
+        )
     }
 }
 
@@ -936,38 +1055,104 @@ private struct DevModeToolbarIllustration: View {
 
 // MARK: - All Set
 
+enum OnboardingReadyCopy {
+    static func trialMessage(
+        for path: OnboardingPath,
+        managedCreditsLimit: Int?,
+        managedCreditsRemaining: Int?
+    ) -> String? {
+        switch path {
+        case .byok:
+            return "Your \(BYOKTrialManager.generationLimit)-generation trial is ready."
+        case .free:
+            guard let credits = managedCreditsLimit ?? managedCreditsRemaining,
+                  credits > 0 else {
+                return nil
+            }
+            return "Your \(credits) free credits are ready."
+        }
+    }
+}
+
 struct AllSetStepView: View {
     @Environment(OnboardingState.self) private var onboarding
+    @Environment(TrialCreditsManager.self) private var trialCredits
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
-        OnboardingStepLayout {
-            OnboardingLogoTile()
+        OnboardingStepLayout(spacing: VFSpacing.xxl) {
+            OnboardingSuccessBadge()
         } content: {
-            VStack(spacing: VFSpacing.lg) {
-                Text("You\u{2019}re all set.")
+            VStack(spacing: VFSpacing.md) {
+                Text("You\u{2019}re ready.")
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                HStack(spacing: VFSpacing.sm) {
-                    OnboardingKeyCapLarge(label: "\u{2325}")
-                    Text("+").font(.system(size: 15, weight: .medium)).foregroundStyle(Color.vfTextTertiary)
-                    OnboardingKeyCapLarge(label: "Space")
+                if let trialReadyMessage {
+                    Text(trialReadyMessage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.vfSuccessGreen)
+                        .multilineTextAlignment(.center)
                 }
 
-                Text("Hit \u{2325}Space, select a region, narrate what you want, and we\u{2019}ll do the rest.")
+                Text("Open Zerro\u{2019}s overlay and we\u{2019}ll guide you through your first capture. After that, use the shortcut anytime you want to show, speak, and get a result.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } actions: {
-            OnboardingPrimaryButton("Done") {
-                onboarding.completeOnboarding()
-                dismissWindow(id: OnboardingScene.windowID)
+        } accessory: {
+            VStack(spacing: VFSpacing.sm) {
+                HStack(spacing: VFSpacing.sm) {
+                    OnboardingKeyCapLarge(label: "\u{2325}")
+                    Text("+")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.vfTextTertiary)
+                    OnboardingKeyCapLarge(label: "Space")
+                }
+
+                Text("Your Zerro shortcut, anytime")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.vfTextTertiary)
             }
+        } actions: {
+            OnboardingPrimaryButton("Try Zerro now", systemImage: "arrow.right") {
+                OnboardingCompletionHandoff.perform(
+                    complete: { onboarding.completeOnboarding() },
+                    dismiss: { dismissWindow(id: OnboardingScene.windowID) },
+                    openOverlay: { AppDelegate.openAreaSelector() }
+                )
+            }
+            .frame(maxWidth: 360)
         }
+    }
+
+    private var trialReadyMessage: String? {
+        OnboardingReadyCopy.trialMessage(
+            for: onboarding.onboardingPath,
+            managedCreditsLimit: trialCredits.creditsLimit,
+            managedCreditsRemaining: trialCredits.creditsRemaining
+        )
+    }
+}
+
+private struct OnboardingSuccessBadge: View {
+    var body: some View {
+        Circle()
+            .fill(Color.vfSuccessGreen.opacity(0.14))
+            .frame(width: 58, height: 58)
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(Color.vfSuccessGreen)
+            )
+            .overlay(
+                Circle()
+                    .strokeBorder(Color.vfSuccessGreen.opacity(0.25), lineWidth: 1)
+            )
+            .shadow(color: Color.vfSuccessGreen.opacity(0.12), radius: 21)
+            .accessibilityHidden(true)
     }
 }
 
@@ -1061,7 +1246,7 @@ struct OnboardingStepShell<Actions: View>: View {
 // MARK: - Icon tiles
 
 /// Large black rounded-square tile carrying the white-tinted brand glyph.
-/// Used as the hero icon on Welcome and All Set.
+/// Used as the brand hero icon on onboarding-adjacent setup surfaces.
 struct OnboardingLogoTile: View {
     var size: CGFloat = 80
 
@@ -1123,46 +1308,6 @@ struct OnboardingKeyCapLarge: View {
                 RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
                     .strokeBorder(Color.vfHairline, lineWidth: 1)
             )
-    }
-}
-
-// MARK: - Recording pill demo
-
-/// Static, non-interactive preview of the recording pill, shown on the
-/// Screen Recording step so the user knows what to expect once granted.
-struct RecordingPillDemo: View {
-    var body: some View {
-        HStack(spacing: VFSpacing.md) {
-            HStack(spacing: 6) {
-                PulsingDot(color: .vfRecordingRed, size: 8)
-                Text("0:14")
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.vfTextPrimary)
-            }
-
-            WaveformView(
-                bars: WaveformView.sampleBarsShort,
-                color: Color.vfTextSecondary,
-                barWidth: 2.5,
-                spacing: 2,
-                maxHeight: 16
-            )
-
-            Text("Cancel")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-
-            Text("Stop")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.vfOnBrand)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.vfBrandAccent, in: Capsule())
-        }
-        .padding(.horizontal, VFSpacing.md)
-        .padding(.vertical, VFSpacing.sm)
-        .background(Color.vfPillBackground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.vfHairline, lineWidth: 1))
     }
 }
 
@@ -1422,12 +1567,19 @@ struct OnboardingPrimaryButton: View {
                 }
             }
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(isEnabled ? Color.vfOnBrand : Color.vfTextTertiary)
+            .foregroundStyle(isEnabled ? Color.vfOnBrand : Color.white.opacity(0.50))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
             .background(
-                (isEnabled ? tint : Color.white.opacity(0.08)),
+                (isEnabled ? tint : Color.white.opacity(0.12)),
                 in: RoundedRectangle(cornerRadius: VFRadius.lg)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
+                    .strokeBorder(
+                        isEnabled ? Color.clear : Color.white.opacity(0.09),
+                        lineWidth: 1
+                    )
             )
         }
         .buttonStyle(.plain)
@@ -1479,24 +1631,57 @@ struct OnboardingSecondaryButton: View {
     }
 }
 
-#Preview("4 · Permissions") {
+#Preview("4 · Permissions · Request") {
+    OnboardingPreviewHost(
+        step: .permissions,
+        screenStatus: .notDetermined,
+        microphoneStatus: .notDetermined
+    ) {
+        PermissionsStepView(previewContinueGate: false)
+    }
+}
+
+#Preview("4 · Permissions · Denied") {
+    OnboardingPreviewHost(
+        step: .permissions,
+        screenStatus: .denied,
+        microphoneStatus: .granted
+    ) {
+        PermissionsStepView(previewContinueGate: false)
+    }
+}
+
+#Preview("4 · Permissions · Allowed") {
     OnboardingPreviewHost(
         step: .permissions,
         screenStatus: .granted,
         microphoneStatus: .granted
     ) {
-        PermissionsStepView()
+        PermissionsStepView(previewContinueGate: true)
     }
 }
 
-#Preview("5 · Dev Mode") {
+#Preview("4 · Permissions · Relaunch") {
+    OnboardingPreviewHost(
+        step: .permissions,
+        screenStatus: .granted,
+        microphoneStatus: .granted
+    ) {
+        PermissionsStepView(
+            previewContinueGate: false,
+            previewScreenNeedsRelaunch: true
+        )
+    }
+}
+
+#Preview("Legacy · Dev Mode") {
     OnboardingPreviewHost(step: .devMode) {
         DevModeStepView()
     }
 }
 
-#Preview("6 · All Set") {
-    OnboardingPreviewHost(step: .allSet) {
+#Preview("Complete") {
+    OnboardingPreviewHost(step: .allSet, path: .byok) {
         AllSetStepView()
     }
 }

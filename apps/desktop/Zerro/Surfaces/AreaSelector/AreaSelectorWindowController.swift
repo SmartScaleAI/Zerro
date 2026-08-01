@@ -126,9 +126,20 @@ final class AreaSelectorWindowController {
         // where it is written back as the new last-used (see state.onConfirm).
         // Holding it in state until then means abandoning the overlay (ESC)
         // leaves the persisted last-used model untouched.
+        let entitlementState = entitlements?.state
+        let availableProviders = entitlementState?.usesOwnProviderKeys == true
+            ? ProviderKeys.availableProviders()
+            : []
         state.setModels(
-            Self.modelMenuItems(entitlements: entitlements),
-            selectedID: preferences.selectedModelID
+            Self.modelMenuItems(
+                entitlementState: entitlementState,
+                availableProviders: availableProviders
+            ),
+            selectedID: Self.initialModelID(
+                persistedModelID: preferences.selectedModelID,
+                entitlementState: entitlementState,
+                availableProviders: availableProviders
+            )
         )
         // Trial model-lock: hand the (observable) entitlement store to the state
         // so the chip can show the free model + lock glyph and tapping it opens
@@ -1625,15 +1636,15 @@ final class AreaSelectorWindowController {
     // only — NO per-model cost anywhere (metered-credits Phase 4). BYOK
     // key-gates by provider, carrying an "add key" hint as the only detail
     // text; every other mode renders plain names.
-    private static func modelMenuItems(
-        entitlements: EntitlementStore?
+    static func modelMenuItems(
+        entitlementState: EntitlementState?,
+        availableProviders: Set<ModelProvider>
     ) -> [AreaSelectorState.ModelMenuItem] {
         // Only BYOK needs per-provider key-gating; every other mode renders
         // plain names with no detail.
         var gatedProviders: Set<ModelProvider> = []
-        if case .byok = entitlements?.state {
-            let available = ProviderKeys.availableProviders()
-            gatedProviders = Set(ModelProvider.allCases).subtracting(available)
+        if entitlementState?.usesOwnProviderKeys == true {
+            gatedProviders = Set(ModelProvider.allCases).subtracting(availableProviders)
         }
 
         return ModelRegistry.enabled.map { model in
@@ -1646,6 +1657,24 @@ final class AreaSelectorWindowController {
                 gated: gated
             )
         }
+    }
+
+    /// Keep the chip, the selectable rows, and the provider used for generation
+    /// in agreement. A persisted selection can belong to a provider whose key is
+    /// no longer present (or to Gemini on a fresh Anthropic-only setup); seed the
+    /// picker with the same usable fallback `BYOKRouting` will execute.
+    static func initialModelID(
+        persistedModelID: String,
+        entitlementState: EntitlementState?,
+        availableProviders: Set<ModelProvider>
+    ) -> String {
+        guard entitlementState?.usesOwnProviderKeys == true else {
+            return persistedModelID
+        }
+        return BYOKRouting.effectiveEntry(
+            selectedModelID: persistedModelID,
+            availableProviders: availableProviders
+        )?.id ?? persistedModelID
     }
 
     // MARK: - Microphone picker

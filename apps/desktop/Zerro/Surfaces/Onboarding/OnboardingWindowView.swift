@@ -4,12 +4,9 @@
 //
 //  Created by Colin Breeding on 5/27/26.
 //
-//  Root container for the onboarding window. Hosts:
-//    • Step dots indicator at the top.
-//    • The current step view, switched on OnboardingState.currentStep.
-//    • The dev panel below the main panel (DEBUG only) so jumping
-//      between steps doesn't require advancing through each one
-//      manually.
+//  Root container for the redesigned onboarding window. The visible renderer
+//  follows OnboardingState.currentScreen while the state keeps the legacy step
+//  synchronized for safe phased migration and Screen Recording relaunches.
 //
 //  Window chrome (title bar, traffic lights) is provided by the Window
 //  scene in `OnboardingScene`. The root uses the pure-black panel token.
@@ -23,8 +20,7 @@ struct OnboardingWindowView: View {
 
     var body: some View {
         mainPanel
-            .frame(width: 580)
-            .background(Color.vfPanelBackground)
+            .frame(width: 700, height: 680)
             .onAppear {
                 // Register the openWindow action so the global hotkey can
                 // re-present this window after the user has dismissed it.
@@ -38,52 +34,110 @@ struct OnboardingWindowView: View {
     }
 
     private var mainPanel: some View {
-        VStack(spacing: VFSpacing.lg) {
-            StepDotsIndicator(current: onboarding.currentStep)
-                .padding(.top, VFSpacing.lg)
+        ZStack {
+            onboardingBackground
 
-            stepBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, VFSpacing.lg)
-                // Tier 4: per-step funnel, fired when a step becomes visible.
-                // From the view (not advance()) so the step restored after the
-                // Screen Recording SIGKILL relaunch is counted; deduped per
-                // install inside recordStepViewed so it can't inflate.
-                .onAppear { onboarding.recordStepViewed(onboarding.currentStep) }
-                .onChange(of: onboarding.currentStep) { _, newStep in
-                    onboarding.recordStepViewed(newStep)
+            VStack(spacing: 0) {
+                if onboarding.currentScreen != .reconsent {
+                    OnboardingRouteProgressIndicator(
+                        screens: onboarding.progressScreens,
+                        currentIndex: onboarding.progressIndex
+                    )
+                    .padding(.top, 28)
                 }
+
+                stepBody
+                    .id(onboarding.currentScreen)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 48)
+                    .padding(.top, onboarding.currentScreen == .reconsent ? 28 : 20)
+                    .padding(.bottom, 36)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
         }
-        .frame(minHeight: 460)
+        .animation(.easeInOut(duration: 0.18), value: onboarding.currentScreen)
+        .onAppear { onboarding.recordScreenViewed(onboarding.currentScreen) }
+        .onChange(of: onboarding.currentScreen) { _, screen in
+            onboarding.recordScreenViewed(screen)
+        }
     }
 
     @ViewBuilder
     private var stepBody: some View {
-        switch onboarding.currentStep {
-        case .welcome:     WelcomeStepView()
-        case .consent:     ConsentStepView()
-        case .email:       EmailStepView()
-        case .permissions: PermissionsStepView()
-        case .devMode:     DevModeStepView()
-        case .allSet:      AllSetStepView()
+        switch onboarding.currentScreen {
+        case .setup:
+            OnboardingSetupStepView()
+        case .mode:
+            OnboardingModeSelectionView()
+        case .keys:
+            BYOKSetupView()
+        case .transcription:
+            BYOKSetupView()
+        case .permissions:
+            PermissionsStepView()
+        case .complete:
+            AllSetStepView()
+        case .reconsent:
+            ConsentStepView()
         }
+    }
+
+    private var onboardingBackground: some View {
+        ZStack {
+            Color.vfPanelBackground
+            RadialGradient(
+                colors: [Color.zerroOnboardingBlue.opacity(0.18), .clear],
+                center: UnitPoint(x: 0.18, y: 0.08),
+                startRadius: 0,
+                endRadius: 390
+            )
+            RadialGradient(
+                colors: [Color.zerroOnboardingGreen.opacity(0.13), .clear],
+                center: UnitPoint(x: 0.84, y: 0.12),
+                startRadius: 0,
+                endRadius: 380
+            )
+        }
+        .ignoresSafeArea()
     }
 }
 
-// MARK: - Step dots indicator
+// MARK: - Route progress
 
-private struct StepDotsIndicator: View {
-    let current: OnboardingStep
+struct OnboardingRouteProgressIndicator: View {
+    let screens: [OnboardingScreen]
+    let currentIndex: Int?
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(OnboardingStep.allCases) { step in
-                Circle()
-                    .fill(step == current ? Color.vfBrandAccent : Color.white.opacity(0.18))
-                    .frame(width: 6, height: 6)
+        HStack(spacing: 8) {
+            ForEach(Array(screens.enumerated()), id: \.offset) { index, screen in
+                ZStack {
+                    Capsule()
+                        .fill(Color.white.opacity(index < (currentIndex ?? 0) ? 0.26 : 0.14))
+                    if index == currentIndex {
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [.zerroOnboardingBlue, .zerroOnboardingGreen],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    }
+                }
+                .frame(width: 40, height: 5)
+                .accessibilityLabel(screen.analyticsName.capitalized)
+                .accessibilityValue(index == currentIndex ? "Current step" : "")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Onboarding progress")
     }
+}
+
+private extension Color {
+    static let zerroOnboardingBlue = Color(red: 0.55, green: 0.66, blue: 1.0)
+    static let zerroOnboardingGreen = Color(red: 0.56, green: 0.84, blue: 0.68)
 }
 
 #if DEBUG
@@ -112,6 +166,7 @@ struct OnboardingPreviewHost<Content: View>: View {
 
     init(
         step: OnboardingStep,
+        path: OnboardingPath = .free,
         screenStatus: PermissionStatus? = nil,
         microphoneStatus: PermissionStatus? = nil,
         providerKeys: Set<ModelProvider> = [],
@@ -119,6 +174,7 @@ struct OnboardingPreviewHost<Content: View>: View {
     ) {
         let defaults = UserDefaults.ephemeralPreview()
         let onboarding = OnboardingState(defaults: defaults)
+        onboarding.selectPath(path)
         onboarding.jump(to: step)
         onboarding.pinnedScreenSubState = screenStatus
         onboarding.pinnedMicSubState = microphoneStatus
@@ -166,14 +222,17 @@ struct OnboardingPreviewHost<Content: View>: View {
 
     var body: some View {
         VStack(spacing: VFSpacing.lg) {
-            StepDotsIndicator(current: step)
+            OnboardingRouteProgressIndicator(
+                screens: onboarding.progressScreens,
+                currentIndex: onboarding.progressIndex
+            )
                 .padding(.top, VFSpacing.lg)
 
             content()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, VFSpacing.lg)
         }
-        .frame(width: 580, height: 500)
+        .frame(width: 700, height: 680)
         .background(Color.vfPanelBackground)
         .defaultAppStorage(defaults)
         .environment(permissions)

@@ -31,6 +31,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class TrialEmailModel {
+    enum Purpose { case managedTrial, onboardingContact }
     enum Step: Equatable { case email, code }
     enum Phase: Equatable {
         case idle
@@ -43,11 +44,18 @@ final class TrialEmailModel {
     var email: String = ""
     var code: String = ""
     var phase: Phase = .idle
+    private(set) var systemFailureCount = 0
+    private let purpose: Purpose
+
+    init(purpose: Purpose = .managedTrial) {
+        self.purpose = purpose
+    }
 
     var trimmedEmail: String { email.trimmingCharacters(in: .whitespacesAndNewlines) }
     var trimmedCode: String { code.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var isWorking: Bool { phase == .working }
+    var shouldOfferInfrastructureFallback: Bool { systemFailureCount >= 2 }
     var terminalState: TrialEmailTerminalState? {
         guard case .terminal(let state) = phase else { return nil }
         return state
@@ -64,50 +72,101 @@ final class TrialEmailModel {
         let email = trimmedEmail
         guard email.contains("@"), email.contains(".") else {
             phase = .failed(TrialStartError.invalidEmail.userMessage)
+            systemFailureCount = 0
             return
         }
         phase = .working
         Task { @MainActor in
             do {
-                try await trial.requestCode(email: email)
+                switch purpose {
+                case .managedTrial:
+                    try await trial.requestCode(email: email)
+                case .onboardingContact:
+                    try await trial.requestOnboardingCode(email: email)
+                }
                 phase = .idle
+                systemFailureCount = 0
                 step = .code
             } catch let error as TrialStartError {
                 handle(error)
             } catch {
-                phase = .failed("Couldn\u{2019}t send the code. Please try again.")
+                recordSystemFailure("Couldn\u{2019}t send the code. Please try again.", error: error)
             }
         }
     }
 
     /// Verify the entered code. On success calls `onVerified` (AppState resumes).
-    func verify(using trial: TrialCreditsManager, onVerified: @escaping () -> Void) {
+    func verify(
+        using trial: TrialCreditsManager,
+        marketingEmailOptIn: Bool? = nil,
+        onVerified: @escaping () -> Void
+    ) {
         let email = trimmedEmail
         let code = trimmedCode
         guard code.count == 6, code.allSatisfy(\.isNumber) else {
             phase = .failed(TrialStartError.invalidCode.userMessage)
+            systemFailureCount = 0
             return
         }
         phase = .working
         Task { @MainActor in
             do {
-                _ = try await trial.verifyCode(email: email, code: code)
+                switch purpose {
+                case .managedTrial:
+                    _ = try await trial.verifyCode(
+                        email: email,
+                        code: code,
+                        marketingEmailOptIn: marketingEmailOptIn
+                    )
+                case .onboardingContact:
+                    try await trial.verifyOnboardingCode(
+                        email: email,
+                        code: code,
+                        marketingEmailOptIn: marketingEmailOptIn ?? false
+                    )
+                }
                 phase = .idle
+                systemFailureCount = 0
                 onVerified()
             } catch let error as TrialStartError {
                 handle(error)
             } catch {
-                phase = .failed("Couldn\u{2019}t verify the code. Please try again.")
+                recordSystemFailure("Couldn\u{2019}t verify the code. Please try again.", error: error)
             }
         }
+    }
+
+    func useDifferentEmail() {
+        step = .email
+        code = ""
+        phase = .idle
+        systemFailureCount = 0
     }
 
     private func handle(_ error: TrialStartError) {
         if let terminal = TrialEmailTerminalState(error) {
             phase = .terminal(terminal)
-        } else {
-            phase = .failed(error.userMessage)
+            systemFailureCount = 0
+            return
         }
+
+        switch error {
+        case .network, .server, .sendFailed, .malformedResponse, .malformedRequest,
+             .invalidContactToken:
+            recordSystemFailure(error.userMessage, error: error)
+        case .invalidEmail, .disposableEmail, .rateLimited, .invalidCode,
+             .codeExpired, .tooManyAttempts, .alreadyUsed, .deviceTrialUsed:
+            phase = .failed(error.userMessage)
+            systemFailureCount = 0
+        }
+    }
+
+    private func recordSystemFailure(_ message: String, error: Error) {
+        systemFailureCount += 1
+        phase = .failed(message)
+        Log.billing.error(
+            "trial email system failure #\(self.systemFailureCount, privacy: .public): \(String(describing: error), privacy: .public)"
+        )
     }
 }
 

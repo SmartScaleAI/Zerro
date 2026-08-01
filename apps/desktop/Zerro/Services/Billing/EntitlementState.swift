@@ -66,3 +66,17 @@ public enum EntitlementState: Equatable {
     /// the client never gates on these numbers, it only shows them.
     case managed(creditsRemaining: Int, resetDate: Date)
 }
+
+extension EntitlementState {
+    /// True when chat generation is funded with provider keys stored on this
+    /// Mac. The anonymous BYOK trial and the paid BYOK license use the same
+    /// provider-key/model UI; only their purchase gate differs.
+    var usesOwnProviderKeys: Bool {
+        switch self {
+        case .byokTrial, .byokTrialExpired, .byok:
+            return true
+        case .trial, .expired, .managed:
+            return false
+        }
+    }
+}

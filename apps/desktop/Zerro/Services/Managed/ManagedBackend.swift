@@ -444,7 +444,8 @@ struct TranscribeResponseDTO: Decodable {
     }
 }
 
-/// `/trial-start` response body (Phase F). One shape covers both actions: a
+/// `/trial-start` response body. One shape covers the legacy Managed actions
+/// plus shared onboarding contact verification and deferred Managed activation: a
 /// `request` returns `{ status }` ("code_sent" / "already_used"); a `verify`
 /// returns `{ token, expires_at, trial_credits_remaining, trial_credits_limit }`
 /// on success or `{ status: "already_used" }`. `error` carries the typed
@@ -452,6 +453,8 @@ struct TranscribeResponseDTO: Decodable {
 /// `trialCreditsLimit` (E4) is the persisted grant TOTAL — the denominator the
 /// trial usage meter draws its bar against. Optional: an older server omits it
 /// and the meter degrades to the bar-less display.
+/// `contactToken` and `contactExpiresAt` are mailbox proof only; they are never
+/// accepted by the generation endpoint.
 struct TrialStartResponseDTO: Decodable {
     let token: String?
     let expiresAt: String?
@@ -462,6 +465,8 @@ struct TrialStartResponseDTO: Decodable {
     /// link this grant to the new subscription exactly. Optional: an older
     /// server omits it and conversion falls back to the email match.
     let trialGrantId: String?
+    let contactToken: String?
+    let contactExpiresAt: String?
     let status: String?
     let error: String?
 
@@ -471,6 +476,8 @@ struct TrialStartResponseDTO: Decodable {
         case trialCreditsRemaining = "trial_credits_remaining"
         case trialCreditsLimit = "trial_credits_limit"
         case trialGrantId = "trial_grant_id"
+        case contactToken = "contact_token"
+        case contactExpiresAt = "contact_expires_at"
     }
 }
 

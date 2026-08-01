@@ -1387,7 +1387,7 @@ struct AreaSelectorView: View {
     /// header treatment so it reads as helper text, not a selectable row.
     private var modelMenuNotice: some View {
         VStack(spacing: 0) {
-            Text("More capable models produce more thorough responses, but use more credits and reach your usage limits faster.")
+            Text(modelMenuNoticeText)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfTextTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1404,6 +1404,13 @@ struct AreaSelectorView: View {
                 .padding(.bottom, 5)
         }
         .frame(height: Self.modelMenuNoticeHeight)
+    }
+
+    private var modelMenuNoticeText: String {
+        if state.entitlements?.state.usesOwnProviderKeys == true {
+            return "Models are available when their provider key is connected. Usage is billed directly by that provider."
+        }
+        return "More capable models produce more thorough responses, but use more credits and reach your usage limits faster."
     }
 
     /// Gray section header ("Model" / "Microphone" / "Agent" / "Project").
