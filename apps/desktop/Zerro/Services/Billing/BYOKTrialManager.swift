@@ -51,7 +51,10 @@ final class BYOKTrialManager {
     private let transport: ManagedTransport
     private let deviceHash: () -> String?
 
-    private static let selectedKey = "byok_trial_selected_v1"
+    /// Shared with onboarding route migration so an existing own-key trial
+    /// resumes on the BYOK path even after the legacy nested-flow flag has
+    /// already been cleared.
+    static let selectedDefaultsKey = "byok_trial_selected_v1"
     private static let remainingKey = "byok_trial_generations_remaining_v1"
     private static let grantIdKey = "byok_trial_grant_id_v1"
     private static let pendingKey = "byok_trial_pending_generation_ids_v1"
@@ -73,7 +76,7 @@ final class BYOKTrialManager {
     }
 
     var isSelected: Bool {
-        defaults.bool(forKey: Self.selectedKey)
+        defaults.bool(forKey: Self.selectedDefaultsKey)
     }
 
     var generationsRemaining: Int {
@@ -94,7 +97,7 @@ final class BYOKTrialManager {
     /// Marks BYOK as the chosen onboarding path. This does not claim the
     /// server-side trial; the atomic claim occurs on the first successful result.
     func select() {
-        defaults.set(true, forKey: Self.selectedKey)
+        defaults.set(true, forKey: Self.selectedDefaultsKey)
         if defaults.object(forKey: Self.remainingKey) == nil {
             defaults.set(Self.generationLimit, forKey: Self.remainingKey)
         }
@@ -105,7 +108,7 @@ final class BYOKTrialManager {
     /// choice. A claimed/partially-used trial can never be locally unclaimed.
     func deselectIfUnstarted() {
         guard !hasStarted else { return }
-        defaults.removeObject(forKey: Self.selectedKey)
+        defaults.removeObject(forKey: Self.selectedDefaultsKey)
         defaults.removeObject(forKey: Self.remainingKey)
         tokenSlot.delete()
         stateDidChange?()
@@ -235,7 +238,7 @@ final class BYOKTrialManager {
             defaults.set(grant, forKey: Self.grantIdKey)
         }
         if selecting {
-            defaults.set(true, forKey: Self.selectedKey)
+            defaults.set(true, forKey: Self.selectedDefaultsKey)
         }
         if let serverRemaining = dto.generationsRemaining {
             let reconciled = selecting

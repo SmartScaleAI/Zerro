@@ -7,7 +7,7 @@
 //  Overview
 //  --------
 //  Phase F — the free trial itself: server-funded trial credits, with NO time
-//  limit. The trial is simply a pool of generations (default 15), gated purely
+//  limit. The trial is simply a pool of credits (default 30), gated purely
 //  on credits remaining. This layer authorizes the server-funded generation for
 //  a trial user with NO OpenAI key of their own: the user verifies an EMAIL once
 //  (a 6-digit code) and the backend returns a short-lived TRIAL session token +
@@ -90,8 +90,10 @@ enum TrialStartError: Error, Equatable {
     case server(status: Int)
     /// Response wasn't the JSON shape we expected.
     case malformedResponse
+    /// Shared onboarding email proof expired or could not be validated.
+    case invalidContactToken
     /// Couldn't serialize the request body — should be unreachable for the
-    /// `[String: String]` payload we send. Fail loud here rather than POSTing
+    /// JSON payload we send. Fail loud here rather than POSTing
     /// an empty body the backend would reject with a confusing generic error.
     case malformedRequest
 
@@ -109,6 +111,7 @@ enum TrialStartError: Error, Equatable {
         case .network:         return "Couldn\u{2019}t reach Zerro. Check your connection."
         case .server:          return "Something went wrong. Please try again."
         case .malformedResponse: return "Unexpected response. Please try again."
+        case .invalidContactToken: return "Your email verification expired. Please verify your email again."
         case .malformedRequest:  return "Something went wrong. Please try again."
         }
     }
@@ -170,6 +173,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         let expiresAt: Date
     }
     @ObservationIgnored private var cached: CachedToken?
+    @ObservationIgnored private var contactCached: CachedToken?
 
     /// Single-flight guard for the silent resume (H1). `refreshToken()` is called
     /// from several places that can race on an expired token (launch preflight,
@@ -181,6 +185,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
 
     private let emailSlot: KeychainSlot
     private let tokenSlot: KeychainSlot
+    private let contactTokenSlot: KeychainSlot
     private let defaults: UserDefaults
     private let transport: ManagedTransport
     private let clock: () -> Date
@@ -194,18 +199,21 @@ final class TrialCreditsManager: ProxyTokenProviding {
     init(
         emailSlot: KeychainSlot? = nil,
         tokenSlot: KeychainSlot? = nil,
+        contactTokenSlot: KeychainSlot? = nil,
         transport: ManagedTransport? = nil,
         defaults: UserDefaults = .standard,
         clock: @escaping () -> Date = { Date() }
     ) {
         self.emailSlot = emailSlot ?? KeychainStore.trialEmail
         self.tokenSlot = tokenSlot ?? KeychainStore.trialToken
+        self.contactTokenSlot = contactTokenSlot ?? KeychainStore.onboardingContactToken
         self.transport = transport ?? URLSessionManagedTransport()
         self.defaults = defaults
         self.clock = clock
         // Reload a persisted token so a relaunch (e.g. the onboarding
         // Screen-Recording SIGKILL) keeps the just-verified trial usable.
         self.cached = Self.loadToken(from: self.tokenSlot)
+        self.contactCached = Self.loadToken(from: self.contactTokenSlot)
     }
 
     // MARK: - Display state
@@ -248,6 +256,13 @@ final class TrialCreditsManager: ProxyTokenProviding {
         return cached.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway
     }
 
+    /// Mailbox proof gathered by the common first onboarding step. This is not
+    /// a generation credential and does not mean either trial has been claimed.
+    var hasVerifiedOnboardingEmail: Bool {
+        guard let contactCached else { return false }
+        return contactCached.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway
+    }
+
     // MARK: - trial-start flow
 
     /// Request a verification code be emailed (`action: "request"`). Throws a
@@ -266,12 +281,95 @@ final class TrialCreditsManager: ProxyTokenProviding {
         // status == "code_sent" → nothing to do; the sheet advances to code entry.
     }
 
+    /// Request the shared onboarding code without checking or claiming either
+    /// mutually-exclusive free-trial path.
+    func requestOnboardingCode(email: String) async throws {
+        let dto = try await postTrialStart([
+            "action": "request_contact",
+            "email": email,
+        ])
+        if let error = dto.error { throw Self.mapError(error, status: nil) }
+        guard dto.status == "code_sent" else { throw TrialStartError.malformedResponse }
+    }
+
+    /// Record verified contact/consent, but deliberately defer trial activation
+    /// until the user chooses Zerro Cloud on the next screen.
+    func verifyOnboardingCode(
+        email: String,
+        code: String,
+        marketingEmailOptIn: Bool
+    ) async throws {
+        let dto = try await postTrialStart([
+            "action": "verify_contact",
+            "email": email,
+            "code": code,
+            "marketing_email_opt_in": marketingEmailOptIn,
+        ])
+        if let error = dto.error { throw Self.mapError(error, status: nil) }
+        guard dto.status == "email_verified",
+              let token = dto.contactToken,
+              let expiresAt = ManagedBackend.parseISODate(dto.contactExpiresAt),
+              expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway else {
+            throw TrialStartError.malformedResponse
+        }
+        let cachedToken = CachedToken(token: token, expiresAt: expiresAt)
+        contactCached = cachedToken
+        persistToken(cachedToken, to: contactTokenSlot)
+        emailSlot.write(email)
+    }
+
+    /// Activate the server-funded Managed trial after the user explicitly picks
+    /// Zerro Cloud. Email verification alone never reaches this method.
+    @discardableResult
+    func activateManagedOnboardingTrial() async throws -> Int {
+        guard let verifiedContact = contactCached,
+              verifiedContact.expiresAt.timeIntervalSince(clock()) > Self.refreshLeeway else {
+            self.contactCached = nil
+            contactTokenSlot.delete()
+            throw TrialStartError.invalidContactToken
+        }
+        let dto = try await postTrialStart(
+            ["action": "activate_managed"],
+            bearer: verifiedContact.token
+        )
+        if let error = dto.error { throw Self.mapError(error, status: nil) }
+        if dto.status == "device_trial_used" { throw TrialStartError.deviceTrialUsed }
+        if dto.status == "already_used" { throw TrialStartError.alreadyUsed }
+        guard let token = dto.token, let remaining = dto.trialCreditsRemaining else {
+            throw TrialStartError.malformedResponse
+        }
+        let expiresAt = ManagedBackend.parseISODate(dto.expiresAt)
+            ?? clock().addingTimeInterval(Self.refreshLeeway)
+        let trialToken = CachedToken(token: token, expiresAt: expiresAt)
+        cached = trialToken
+        persistToken(trialToken)
+        setCreditsRemaining(remaining)
+        setCreditsLimit(dto.trialCreditsLimit)
+        setGrantId(dto.trialGrantId)
+        contactTokenSlot.delete()
+        contactCached = nil
+        Log.billing.notice("managed onboarding trial activated — credits=\(remaining, privacy: .public)")
+        return remaining
+    }
+
     /// Verify a code (`action: "verify"`). On success caches the trial token,
     /// remembers the email, records the credit balance, and returns the credits
     /// remaining. Throws a typed `TrialStartError` otherwise.
     @discardableResult
-    func verifyCode(email: String, code: String) async throws -> Int {
-        let dto = try await postTrialStart(["action": "verify", "email": email, "code": code])
+    func verifyCode(
+        email: String,
+        code: String,
+        marketingEmailOptIn: Bool? = nil
+    ) async throws -> Int {
+        var payload: [String: Any] = [
+            "action": "verify",
+            "email": email,
+            "code": code,
+        ]
+        if let marketingEmailOptIn {
+            payload["marketing_email_opt_in"] = marketingEmailOptIn
+        }
+        let dto = try await postTrialStart(payload)
         if let error = dto.error {
             throw Self.mapError(error, status: nil)
         }
@@ -410,6 +508,8 @@ final class TrialCreditsManager: ProxyTokenProviding {
         defaults.removeObject(forKey: Self.limitKey)
         defaults.removeObject(forKey: Self.grantIdKey)
         emailSlot.delete()
+        contactCached = nil
+        contactTokenSlot.delete()
     }
 
     private func setCreditsRemaining(_ remaining: Int) {
@@ -436,9 +536,9 @@ final class TrialCreditsManager: ProxyTokenProviding {
     // separator is unambiguous). Low-sensitivity short-lived bearer; see the
     // `KeychainStore.trialToken` header.
 
-    private func persistToken(_ token: CachedToken) {
+    private func persistToken(_ token: CachedToken, to slot: KeychainSlot? = nil) {
         let epoch = Int(token.expiresAt.timeIntervalSince1970)
-        tokenSlot.write("\(token.token)|\(epoch)")
+        (slot ?? tokenSlot).write("\(token.token)|\(epoch)")
     }
 
     private static func loadToken(from slot: KeychainSlot) -> CachedToken? {
@@ -452,11 +552,17 @@ final class TrialCreditsManager: ProxyTokenProviding {
 
     // MARK: - Networking
 
-    private func postTrialStart(_ payload: [String: String]) async throws -> TrialStartResponseDTO {
+    private func postTrialStart(
+        _ payload: [String: Any],
+        bearer: String? = nil
+    ) async throws -> TrialStartResponseDTO {
         var request = URLRequest(url: ManagedBackend.trialStartURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearer {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        }
 
         // Trial device binding: attach the hashed hardware id so the backend can
         // cap one grant per physical Mac. Sent on every action (request/verify
@@ -504,6 +610,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         case "invalid_code":      return .invalidCode
         case "code_expired":      return .codeExpired
         case "too_many_attempts": return .tooManyAttempts
+        case "invalid_contact_token": return .invalidContactToken
         default:
             if let status { return .server(status: status) }
             return .malformedResponse
@@ -518,6 +625,7 @@ final class TrialCreditsManager: ProxyTokenProviding {
         TrialCreditsManager(
             emailSlot: InMemoryKeychainSlot(nil),
             tokenSlot: InMemoryKeychainSlot(nil),
+            contactTokenSlot: InMemoryKeychainSlot(nil),
             transport: OfflineManagedTransport(),
             defaults: .ephemeralPreview()
         )

@@ -381,7 +381,8 @@ final class AreaSelectorState {
     // is the free model (Gemini 3.5 Flash) — every other model is "premium" and
     // gated behind upgrade (Cursor's free-vs-premium pattern). The chip then
     // shows the free model + a lock glyph, and tapping it opens the upgrade
-    // popup instead of the model list. `.byok`/`.managed` users are never locked.
+    // popup instead of the model list. BYOK trial/BYOK/Managed users are never
+    // locked (BYOK provider availability is enforced per row instead).
 
     /// The long-lived entitlement store, injected at present time. It's
     /// `@Observable`, so reading `entitlements?.state` through the lock flag

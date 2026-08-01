@@ -15,9 +15,9 @@
 //  license section simultaneously (it read as a checklist, not a choice, and
 //  showed contradictory states like "Plan: Expired" next to a working key).
 //
-//  MODE SOURCE OF TRUTH (6D/F6): `EntitlementState` — `.byok` shows the BYOK
-//  pane; `.managed`/`.trial`/`.expired` are all server-credit-side states and
-//  show the Managed pane. The "switch" link is a VIEW override only: it
+//  MODE SOURCE OF TRUTH (6D/F6): `EntitlementState` — paid BYOK and the
+//  anonymous BYOK trial show the BYOK pane; Managed/trial/expired states show
+//  the Managed pane. The "switch" link is a VIEW override only: it
 //  reveals the other mode's setup so the user can complete it (add keys /
 //  activate a license / subscribe); the entitlement actually flips when that
 //  setup succeeds, at which point the override resets and the pane follows
@@ -40,7 +40,7 @@ struct AccountBillingPane: View {
     @State private var overrideMode: BillingMode?
 
     private var entitlementMode: BillingMode {
-        entitlements.state == .byok ? .byok : .managed
+        entitlements.state.usesOwnProviderKeys ? .byok : .managed
     }
 
     private var mode: BillingMode { overrideMode ?? entitlementMode }

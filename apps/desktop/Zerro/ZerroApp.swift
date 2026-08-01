@@ -299,6 +299,22 @@ struct ZerroApp: App {
                     pillController: pillCtrl
                 )
             }
+            // Final onboarding CTA: open the existing area-selector entry point
+            // after completion instead of maintaining a second tutorial path.
+            // `handleHotkey` preserves the same live permission, entitlement,
+            // busy-state, and first-use toolbar-walkthrough behavior as the
+            // global shortcut and menu-bar action.
+            AppDelegate.requestOpenAreaSelector = { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
+                Self.handleHotkey(
+                    state: state,
+                    preferences: prefs,
+                    permissions: perms,
+                    onboarding: onb,
+                    entitlements: ent,
+                    areaSelector: selectorCtrl,
+                    pillController: pillCtrl
+                )
+            }
             // Phase 8 launch-sweep + M2 recovery: clear orphaned zerro-*
             // artifacts from prior crashes / force-quits, BUT first salvage a
             // recording a prior session abandoned for sleep —
@@ -991,6 +1007,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// revoked.
     nonisolated(unsafe) static var requestOpenOnboarding: (() -> Void)?
 
+    /// Set by `ZerroApp`'s one-shot bootstrap to the same gated overlay route
+    /// used by the global shortcut. The final onboarding CTA invokes this only
+    /// after completion has been persisted and the setup window is closing.
+    nonisolated(unsafe) static var requestOpenAreaSelector: (() -> Void)?
+
     /// Set by `PaywallOpenerRegistrar` (mounted in the always-present
     /// MenuBarExtra label). Used by `openPaywall` to bring the paywall
     /// window forward from the hotkey gate. Mirrors `requestOpenOnboarding`.
@@ -1379,6 +1400,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ever happens — this exact silent-no-op was the bug that
             // made hotkey presses look like they did nothing.
             Log.onboarding.error("openOnboarding() called but requestOpenOnboarding is nil — registrar didn't mount")
+        }
+    }
+
+    /// Opens the capture overlay through the app's canonical recording-start
+    /// gate. Keeping this as a captured hook avoids exposing ZerroApp's private
+    /// service graph to the onboarding view.
+    @MainActor
+    static func openAreaSelector() {
+        if let opener = requestOpenAreaSelector {
+            opener()
+        } else {
+            Log.onboarding.error("openAreaSelector() called but requestOpenAreaSelector is nil — app bootstrap didn't wire it")
         }
     }
 

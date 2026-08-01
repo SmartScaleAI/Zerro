@@ -54,13 +54,51 @@ final class AreaSelectorModelLockTests: XCTestCase {
     }
 
     func testManagedAndByokAreUnlocked() {
-        for entitlement in [EntitlementState.managed(creditsRemaining: 300, resetDate: Date()), .byok] {
+        for entitlement in [
+            EntitlementState.managed(creditsRemaining: 300, resetDate: Date()),
+            .byok,
+            .byokTrial(generationsRemaining: 9),
+        ] {
             let state = makeState()
             state.setEntitlements(.preview(entitlement))
             XCTAssertFalse(state.isModelPickerLocked)
             XCTAssertEqual(state.effectiveModelID, "claude-opus-4-7")
             XCTAssertEqual(state.selectedModelName, "Claude Opus 4.7")
         }
+    }
+
+    func testBYOKTrialGatesProvidersWithoutKeys() throws {
+        let items = AreaSelectorWindowController.modelMenuItems(
+            entitlementState: .byokTrial(generationsRemaining: 9),
+            availableProviders: [.anthropic]
+        )
+
+        XCTAssertTrue(items.filter { $0.id.hasPrefix("gemini-") }.allSatisfy(\.gated))
+        XCTAssertTrue(items.filter { $0.id.hasPrefix("gpt-") }.allSatisfy(\.gated))
+        XCTAssertTrue(items.filter { $0.id.hasPrefix("claude-") }.allSatisfy { !$0.gated })
+        XCTAssertEqual(
+            try XCTUnwrap(items.first { $0.id == "gemini-3.5-flash" }).detail,
+            "Add Gemini key"
+        )
+    }
+
+    func testBYOKTrialSeedsPickerWithAUsableProviderModel() {
+        let selected = AreaSelectorWindowController.initialModelID(
+            persistedModelID: "gemini-3.5-flash",
+            entitlementState: .byokTrial(generationsRemaining: 9),
+            availableProviders: [.anthropic]
+        )
+
+        XCTAssertEqual(selected, "claude-sonnet-4-6")
+    }
+
+    func testBYOKModeClassificationIncludesTrialAndExpiredTrial() {
+        XCTAssertTrue(EntitlementState.byok.usesOwnProviderKeys)
+        XCTAssertTrue(EntitlementState.byokTrial(generationsRemaining: 9).usesOwnProviderKeys)
+        XCTAssertTrue(EntitlementState.byokTrialExpired.usesOwnProviderKeys)
+        XCTAssertFalse(EntitlementState.trial(creditsRemaining: 30).usesOwnProviderKeys)
+        XCTAssertFalse(EntitlementState.expired.usesOwnProviderKeys)
+        XCTAssertFalse(EntitlementState.managed(creditsRemaining: 30, resetDate: .now).usesOwnProviderKeys)
     }
 
     func testNoEntitlementStoreIsUnlocked() {

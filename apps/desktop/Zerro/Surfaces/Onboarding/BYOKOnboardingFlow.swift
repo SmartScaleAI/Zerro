@@ -2,7 +2,9 @@
 //  BYOKOnboardingFlow.swift
 //  Zerro
 //
-//  Three-screen own-key trial setup nested inside the email onboarding step.
+//  Legacy nested own-key renderer retained only for persisted-route migration
+//  and debug previews. The production flow now uses OnboardingSetupView and
+//  always configures BYOK with local transcription.
 //
 
 import SwiftUI
@@ -20,7 +22,7 @@ struct BYOKOnboardingFlowView: View {
     @Environment(LocalModelManager.self) private var modelManager
     @Environment(ProviderKeyPresence.self) private var keyPresence
 
-    @AppStorage("vf.onboarding.byokSetupStep") private var persistedStep = 0
+    @AppStorage(OnboardingPersistenceKeys.legacyBYOKSetupStep) private var persistedStep = 0
     let onCancel: () -> Void
 
     private var step: BYOKSetupStep {
@@ -35,22 +37,35 @@ struct BYOKOnboardingFlowView: View {
                 onBack: {
                     persistedStep = BYOKSetupStep.intro.rawValue
                     trial.deselectIfUnstarted()
+                    onboarding.selectPath(.free)
                     onCancel()
                 }
             )
         case .keys:
             BYOKKeysStepView(
-                onContinue: { persistedStep = BYOKSetupStep.transcription.rawValue },
-                onBack: { persistedStep = BYOKSetupStep.intro.rawValue }
+                onContinue: {
+                    onboarding.move(to: .transcription)
+                    persistedStep = BYOKSetupStep.transcription.rawValue
+                },
+                onBack: {
+                    onboarding.move(to: .setup)
+                    persistedStep = BYOKSetupStep.intro.rawValue
+                }
             )
         case .transcription:
             BYOKTranscriptionStepView(
-                onAddOpenAIKey: { persistedStep = BYOKSetupStep.keys.rawValue },
-                onBack: { persistedStep = BYOKSetupStep.keys.rawValue },
+                onAddOpenAIKey: {
+                    onboarding.move(to: .setup)
+                    persistedStep = BYOKSetupStep.keys.rawValue
+                },
+                onBack: {
+                    onboarding.move(to: .setup)
+                    persistedStep = BYOKSetupStep.keys.rawValue
+                },
                 onComplete: {
                     trial.select()
                     persistedStep = BYOKSetupStep.intro.rawValue
-                    UserDefaults.standard.removeObject(forKey: "vf.onboarding.byokPathActive")
+                    UserDefaults.standard.removeObject(forKey: OnboardingPersistenceKeys.legacyBYOKPathActive)
                     onboarding.advance()
                 }
             )
@@ -405,7 +420,54 @@ private struct ProviderLogo: View {
     }
 }
 
-private struct BYOKTranscriptionStepView: View {
+enum BYOKTranscriptionPolicy {
+    static func isSelectable(_ engine: STTEngine, openAIKeyPresent: Bool) -> Bool {
+        switch engine {
+        case .local: return true
+        case .cloud: return openAIKeyPresent
+        case .auto: return false
+        }
+    }
+
+    static func canContinue(selection: STTEngine?, openAIKeyPresent: Bool) -> Bool {
+        guard let selection else { return false }
+        return isSelectable(selection, openAIKeyPresent: openAIKeyPresent)
+    }
+
+    static func restoredSelection(
+        preference: STTEngine,
+        openAIKeyPresent: Bool
+    ) -> STTEngine? {
+        guard preference != .auto,
+              isSelectable(preference, openAIKeyPresent: openAIKeyPresent)
+        else { return nil }
+        return preference
+    }
+}
+
+/// Route-level host for the redesigned BYOK transcription step.
+struct BYOKTranscriptionRouteView: View {
+    @Environment(OnboardingState.self) private var onboarding
+    @Environment(BYOKTrialManager.self) private var trial
+
+    @AppStorage(OnboardingPersistenceKeys.legacyBYOKSetupStep) private var persistedStep = 0
+    @AppStorage(OnboardingPersistenceKeys.legacyBYOKPathActive) private var legacyBYOKPathActive = false
+
+    var body: some View {
+        BYOKTranscriptionStepView(
+            onAddOpenAIKey: { onboarding.returnToPathSelection() },
+            onBack: { onboarding.returnToPathSelection() },
+            onComplete: {
+                trial.select()
+                persistedStep = BYOKSetupStep.intro.rawValue
+                legacyBYOKPathActive = false
+                onboarding.finishSetup()
+            }
+        )
+    }
+}
+
+struct BYOKTranscriptionStepView: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(LocalModelManager.self) private var modelManager
     @Environment(ProviderKeyPresence.self) private var keyPresence
@@ -417,64 +479,74 @@ private struct BYOKTranscriptionStepView: View {
     @State private var selection: STTEngine?
 
     var body: some View {
-        OnboardingStepLayout {
-            OnboardingIconTile(systemName: "waveform")
-        } content: {
-            VStack(spacing: VFSpacing.md) {
-                VStack(spacing: VFSpacing.xs) {
-                    Text("Choose transcription")
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(Color.vfTextPrimary)
-                    Text("Generation always uses your provider keys. Choose where Zerro turns your narration into text.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .multilineTextAlignment(.center)
-                }
+        VStack(spacing: 24) {
+            OnboardingSetupHero(
+                systemName: "captions.bubble.fill",
+                title: "Choose transcription",
+                description: "Choose where Zerro turns your narration into text."
+            )
 
-                VStack(spacing: VFSpacing.sm) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Transcription method")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+
+                HStack(alignment: .top, spacing: 12) {
                     transcriptionCard(
                         engine: .local,
-                        title: "On-device",
+                        title: "Local transcription",
+                        detail: "Downloads a model so transcription runs on this Mac.",
+                        footnote: "One-time download · about 1 GB",
+                        systemImage: "desktopcomputer",
                         badge: "Recommended",
-                        detail: "Audio stays on this Mac. Requires a one-time ~1 GB download.",
                         enabled: true
                     )
                     transcriptionCard(
                         engine: .cloud,
-                        title: "OpenAI cloud",
+                        title: "Cloud transcription",
+                        detail: keyPresence.openAIKeyPresent
+                            ? "No model download. Your audio is transcribed by OpenAI."
+                            : "Requires an OpenAI API key. Add one on the previous step to use cloud transcription.",
+                        footnote: keyPresence.openAIKeyPresent ? "No model download" : "OpenAI key required",
+                        systemImage: keyPresence.openAIKeyPresent ? "cloud" : "lock.fill",
                         badge: nil,
-                        detail: "No local model. Audio goes directly to OpenAI and requires an OpenAI API key.",
                         enabled: keyPresence.openAIKeyPresent
                     )
                 }
 
-                if selection == .local {
-                    localModelStatus
-                } else if !keyPresence.openAIKeyPresent {
-                    Button("Add an OpenAI key for cloud transcription", action: onAddOpenAIKey)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.vfTextSecondary)
-                }
+                statusArea
+                    .frame(minHeight: 42)
+
+                OnboardingPrimaryButton(
+                    "Continue",
+                    systemImage: "arrow.right",
+                    isEnabled: BYOKTranscriptionPolicy.canContinue(
+                        selection: selection,
+                        openAIKeyPresent: keyPresence.openAIKeyPresent
+                    ),
+                    action: continueToPermissions
+                )
+
+                Button("Back", action: onBack)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.vfTextSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 2)
             }
-        } actions: {
-            OnboardingPrimaryButton("Continue Setup", isEnabled: selection != nil) {
-                guard let selection else { return }
-                preferences.sttEngine = selection
-                if selection == .local, !localModelReady, !localModelDownloading {
-                    modelManager.download()
-                }
-                Analytics.capture("stt_engine_changed", ["engine": selection.rawValue, "surface": "onboarding"])
-                onComplete()
-            }
-            Button("Back", action: onBack)
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.vfTextSecondary)
+            .frame(maxWidth: 520)
         }
+        .frame(maxWidth: .infinity)
         .onAppear {
             keyPresence.refresh()
-            if preferences.sttEngine == .local || preferences.sttEngine == .cloud {
-                selection = preferences.sttEngine
+            selection = BYOKTranscriptionPolicy.restoredSelection(
+                preference: preferences.sttEngine,
+                openAIKeyPresent: keyPresence.openAIKeyPresent
+            )
+        }
+        .onChange(of: keyPresence.openAIKeyPresent) { _, hasOpenAIKey in
+            if selection == .cloud, !hasOpenAIKey {
+                selection = nil
             }
         }
     }
@@ -482,8 +554,10 @@ private struct BYOKTranscriptionStepView: View {
     private func transcriptionCard(
         engine: STTEngine,
         title: String,
-        badge: String?,
         detail: String,
+        footnote: String,
+        systemImage: String,
+        badge: String?,
         enabled: Bool
     ) -> some View {
         Button {
@@ -493,72 +567,184 @@ private struct BYOKTranscriptionStepView: View {
                 modelManager.download()
             }
         } label: {
-            HStack(spacing: VFSpacing.md) {
-                Image(systemName: selection == engine ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(
-                        enabled
-                            ? (selection == engine ? Color.vfBrandAccent : Color.vfTextSecondary)
-                            : Color.vfTextTertiary
-                    )
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: VFSpacing.sm) {
-                        Text(title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(enabled ? Color.vfTextPrimary : Color.vfTextTertiary)
-                        if let badge {
-                            Text(badge)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Color.vfBrandAccent)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(Color.vfBrandAccent.opacity(0.12), in: Capsule())
-                        }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: selection == engine ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(radioColor(engine: engine, enabled: enabled))
+
+                    Spacer(minLength: 0)
+
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color.zerroTranscriptionGreen)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.zerroTranscriptionGreen.opacity(0.12), in: Capsule())
                     }
+                }
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(enabled ? Color.vfTextPrimary : Color.vfTextTertiary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(enabled ? Color.vfTextPrimary : Color.vfTextTertiary)
                     Text(detail)
                         .font(.system(size: 11))
                         .foregroundStyle(enabled ? Color.vfTextSecondary : Color.vfTextTertiary)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+
                 Spacer(minLength: 0)
+
+                Text(footnote)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(enabled ? Color.vfTextSecondary : Color.vfTextTertiary)
             }
-            .padding(VFSpacing.md)
-            .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: VFRadius.md))
+            .padding(15)
+            .frame(maxWidth: .infinity, minHeight: 174, alignment: .topLeading)
+            .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: 14))
             .overlay(
-                RoundedRectangle(cornerRadius: VFRadius.md)
+                RoundedRectangle(cornerRadius: 14)
                     .strokeBorder(
-                        selection == engine ? Color.vfBrandAccent.opacity(0.7) : Color.vfHairline,
-                        lineWidth: 1
+                        cardBorder(engine: engine, enabled: enabled),
+                        lineWidth: selection == engine ? 1.5 : 1
                     )
+            )
+            .shadow(
+                color: selection == engine ? Color.zerroTranscriptionBlue.opacity(0.12) : .clear,
+                radius: 10
             )
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityValue(selection == engine ? "Selected" : enabled ? "Not selected" : "Unavailable")
+    }
+
+    @ViewBuilder
+    private var statusArea: some View {
+        if selection == .local {
+            localModelStatus
+        } else if !keyPresence.openAIKeyPresent {
+            HStack(spacing: 10) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(Color.vfTextTertiary)
+                Text("Cloud transcription needs an OpenAI API key.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.vfTextSecondary)
+                Spacer(minLength: 0)
+                Button("Add OpenAI key", action: onAddOpenAIKey)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 38)
+            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            )
+        } else {
+            Text("Select a transcription method to continue.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.vfTextTertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
     }
 
     @ViewBuilder
     private var localModelStatus: some View {
         switch modelManager.state {
         case .notDownloaded:
-            Text("The download will start when you continue.")
-        case .downloading(let progress, _, _):
-            VStack(spacing: 4) {
+            statusMessage(
+                "The on-device model download starts automatically.",
+                systemImage: "arrow.down.circle"
+            )
+        case let .downloading(progress, downloaded, total):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Downloading local transcription model\u{2026}")
+                    Spacer(minLength: 0)
+                    Text("\(Self.megabytes(downloaded)) / \(Self.megabytes(total))")
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(Color.vfTextSecondary)
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .tint(Color.vfBrandAccent)
-                Text("Downloading the on-device transcription model\u{2026}")
+                    .tint(Color.zerroTranscriptionBlue)
             }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 42)
         case .ready:
-            Label("On-device model ready", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(Color.vfSuccessGreen)
+            statusMessage(
+                "Local transcription is ready.",
+                systemImage: "checkmark.circle.fill",
+                color: Color.vfSuccessGreen
+            )
         case .failed(let reason):
-            VStack(spacing: 4) {
-                Text(reason)
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.circle.fill")
                     .foregroundStyle(Color.vfRecordingRed)
-                Button("Retry download") { modelManager.download() }
-                    .buttonStyle(.plain)
+                Text(reason)
+                    .font(.system(size: 11))
                     .foregroundStyle(Color.vfTextSecondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button("Retry", action: modelManager.download)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
             }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 42)
         }
+    }
+
+    private func statusMessage(
+        _ text: String,
+        systemImage: String,
+        color: Color = Color.vfTextTertiary
+    ) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.system(size: 11))
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+            .padding(.horizontal, 12)
+    }
+
+    private func continueToPermissions() {
+        guard BYOKTranscriptionPolicy.canContinue(
+            selection: selection,
+            openAIKeyPresent: keyPresence.openAIKeyPresent
+        ), let selection else { return }
+
+        preferences.sttEngine = selection
+        if selection == .local, !localModelReady, !localModelDownloading {
+            modelManager.download()
+        }
+        Analytics.capture("stt_engine_changed", [
+            "engine": selection.rawValue,
+            "surface": "onboarding",
+        ])
+        onComplete()
+    }
+
+    private func radioColor(engine: STTEngine, enabled: Bool) -> Color {
+        guard enabled else { return Color.vfTextTertiary }
+        return selection == engine ? Color.zerroTranscriptionBlue : Color.vfTextSecondary
+    }
+
+    private func cardBorder(engine: STTEngine, enabled: Bool) -> Color {
+        guard enabled else { return Color.white.opacity(0.07) }
+        return selection == engine
+            ? Color.zerroTranscriptionBlue.opacity(0.8)
+            : Color.white.opacity(0.11)
     }
 
     private var localModelReady: Bool {
@@ -570,6 +756,15 @@ private struct BYOKTranscriptionStepView: View {
         if case .downloading = modelManager.state { return true }
         return false
     }
+
+    private static func megabytes(_ bytes: Int64) -> String {
+        String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    }
+}
+
+private extension Color {
+    static let zerroTranscriptionBlue = Color(red: 0.55, green: 0.66, blue: 1.0)
+    static let zerroTranscriptionGreen = Color(red: 0.56, green: 0.84, blue: 0.68)
 }
 
 #if DEBUG
@@ -619,6 +814,19 @@ private func previewKeyModel(
     OnboardingPreviewHost(
         step: .email,
         providerKeys: [.openai, .gemini, .anthropic]
+    ) {
+        BYOKTranscriptionStepView(
+            onAddOpenAIKey: {},
+            onBack: {},
+            onComplete: {}
+        )
+    }
+}
+
+#Preview("3D · Transcription without OpenAI") {
+    OnboardingPreviewHost(
+        step: .email,
+        providerKeys: [.gemini, .anthropic]
     ) {
         BYOKTranscriptionStepView(
             onAddOpenAIKey: {},
