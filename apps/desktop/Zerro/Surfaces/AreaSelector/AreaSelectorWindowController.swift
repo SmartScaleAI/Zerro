@@ -37,7 +37,6 @@
 //
 
 import AppKit
-import AVFoundation
 import os
 import SwiftUI
 
@@ -82,6 +81,7 @@ final class AreaSelectorWindowController {
     /// overlay window per NSScreen plus cross-window drag state —
     /// meaningful weight without a Phase 6 user need.
     func present(
+        launchMode: RecordingLaunchMode,
         preferences: PreferencesStore,
         entitlements: EntitlementStore? = nil,
         offerToolbarWalkthrough: Bool = false,
@@ -112,51 +112,14 @@ final class AreaSelectorWindowController {
         let state = AreaSelectorState()
         self.state = state
 
-        // Seed the toolbar's mic picker from the connected devices and
-        // the persisted selection so the chip shows the right label
-        // immediately and a change here writes straight back to prefs.
-        state.setMicrophones(
-            Self.enumerateMicrophones(),
-            selectedID: preferences.microphoneDeviceID
-        )
-
-        // Multi-model: seed the model chip from the last model the user
-        // recorded with (PreferencesStore.selectedModelID). The toolbar is
-        // the ONLY model picker now; the pick lives in `state` until confirm,
-        // where it is written back as the new last-used (see state.onConfirm).
-        // Holding it in state until then means abandoning the overlay (ESC)
-        // leaves the persisted last-used model untouched.
-        let entitlementState = entitlements?.state
-        let availableProviders = entitlementState?.usesOwnProviderKeys == true
-            ? ProviderKeys.availableProviders()
-            : []
-        state.setModels(
-            Self.modelMenuItems(
-                entitlementState: entitlementState,
-                availableProviders: availableProviders
-            ),
-            selectedID: Self.initialModelID(
-                persistedModelID: preferences.selectedModelID,
-                entitlementState: entitlementState,
-                availableProviders: availableProviders
-            )
-        )
-        // Trial model-lock: hand the (observable) entitlement store to the state
-        // so the chip can show the free model + lock glyph and tapping it opens
-        // the upgrade popup. nil (tests) → never locked, full picker as before.
-        state.setEntitlements(entitlements)
-        // The model button shows the model name, so its width is dynamic — keep
-        // the shared geometry width in sync with the current selection (mirrors
-        // `fullScreenBottomInset`). Read by the frame helpers on render + hit-test.
-        AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
-
-        // Dev Mode (Phase 1): seed the mode switch + remembered folder WITHOUT
+        // Dev Mode: the invoking shortcut fixes the mode for this presentation.
+        // Seed the remembered folder WITHOUT
         // probing for the agent — detection runs a slow login-shell PATH lookup
         // and must stay off the hotkey→overlay path. The agent is resolved
         // asynchronously, and only when Dev Mode is (or becomes) active, so a
         // normal-mode user never triggers the shell probe.
         state.setDevState(
-            isDevMode: preferences.devModeEnabled,
+            isDevMode: launchMode == .dev,
             agentID: nil,
             agentName: "Claude Code",
             projectURL: preferences.devProjectURL
@@ -164,9 +127,9 @@ final class AreaSelectorWindowController {
         // Seed the dev-settings "Auto-Detect Project" toggle (default OFF) so the
         // menu's switch reflects the persisted opt-in.
         state.setAutoDetectProjectEnabled(preferences.devAutoDetectProject)
-        // Seed the Permissions section's checkmark from the persisted mode.
+        // Seed the Permissions section's checkmark from the persisted tier.
         state.setDevPermissionTier(preferences.devPermissionTier)
-        if preferences.devModeEnabled {
+        if launchMode == .dev {
             beginAgentDetection(for: state)
             // Verify the remembered folder is still a git repo (Milestone 7).
             if let folder = preferences.devProjectURL {
@@ -177,31 +140,20 @@ final class AreaSelectorWindowController {
         }
 
         state.onConfirm = { [weak self] rect in
-            // Read the toolbar's model pick BEFORE dismiss() nils the
-            // state. Fallback can only fire if confirm raced dismiss.
-            //
-            // Two distinct ids: the RAW pick (what becomes last-used) and the
-            // EFFECTIVE id generation runs (forced to the free model while the
-            // trial model-lock is active). Persisting only the RAW pick means a
-            // locked trial user's prior preference is never overwritten — it's
-            // restored the moment they upgrade.
-            let rawModelID = self?.state?.selectedModelID ?? preferences.selectedModelID
-            let effectiveModelID = self?.state?.effectiveModelID ?? rawModelID
-            // Persist as the last-used model so the next recording (and the
-            // chip seed) starts here. Persisted at confirm (record-start), not
-            // on every dropdown tap — only models actually used to record
-            // become last-used. Tier 4 analytics parity with the removed
-            // Settings / menu-bar pickers: fire `model_changed` only on a real
-            // change, before the write.
-            if rawModelID != preferences.selectedModelID {
-                Analytics.capture("model_changed", [
-                    "from_model": preferences.selectedModelID,
-                    "to_model": rawModelID,
-                    "surface": "capture_toolbar",
-                ])
-                preferences.selectedModelID = rawModelID
-            }
-            // Dev Mode: carry the agent + folder when the mode switch is on and
+            // Model selection now lives in the menu bar. Trial recordings use
+            // the free model without overwriting the user's persisted paid/BYOK
+            // selection, so upgrading restores their prior choice.
+            let entitlementState = entitlements?.state
+            let availableProviders = entitlementState?.usesOwnProviderKeys == true
+                ? ProviderKeys.availableProviders()
+                : []
+            let effectiveModelID = ModelSelectionPolicy.effectiveModelID(
+                persistedModelID: preferences.selectedModelID,
+                entitlement: entitlementState,
+                availableProviders: availableProviders
+            )
+            // Dev Mode: carry the agent + folder when the Dev shortcut selected
+            // this mode and
             // both are set (record-time validation guarantees this — Record is
             // blocked otherwise). nil → a normal clipboard recording.
             let devSelection: DevModeSelection? = {
@@ -282,12 +234,22 @@ final class AreaSelectorWindowController {
         // a custom region once the tour ends. The seen flag is written on
         // complete or Esc dismiss (finishToolbarWalkthrough), NOT here, so an
         // interrupted first open still teaches next time.
-        if offerToolbarWalkthrough, preferences.toolbarWalkthroughSeen == false {
+        let hasSeenWalkthrough = launchMode == .dev
+            ? preferences.devToolbarWalkthroughSeen
+            : preferences.askToolbarWalkthroughSeen
+        if offerToolbarWalkthrough, hasSeenWalkthrough == false {
             state.enterFullScreenMode(overlaySize: win.contentView?.bounds.size ?? screen.frame.size)
             state.startToolbarWalkthrough()
             Analytics.capture("area_toolbar_walkthrough_started")
-            Analytics.capture("area_toolbar_walkthrough_step_viewed",
-                              ["step": ToolbarWalkthroughStep.mode.analyticsName])
+            if let step = state.toolbarWalkthroughStep {
+                Analytics.capture("area_toolbar_walkthrough_step_viewed",
+                                  ["step": step.analyticsName])
+            }
+        } else if launchMode == .dev {
+            // A Dev shortcut is an explicit mode entry. Offer the consolidated
+            // agent/project setup immediately once its walkthrough is out of the
+            // way; the state keeps it closed on subsequent entries when ready.
+            state.handleDevModeEntered()
         }
     }
 
@@ -380,8 +342,8 @@ final class AreaSelectorWindowController {
     // MARK: - Event monitors
 
     private func installEventMonitors(for window: NSWindow, state: AreaSelectorState) {
-        // .mouseMoved drives the toolbar hover feedback (Record button,
-        // mic/model chips, open dropdown rows); the window has to accept
+        // .mouseMoved drives the toolbar hover feedback (Record and Dev
+        // settings, including its open rows); the window has to accept
         // moved events for the monitor to see them while not tracking a drag.
         window.acceptsMouseMovedEvents = true
         let mouseTypes: NSEvent.EventTypeMask = [
@@ -409,9 +371,8 @@ final class AreaSelectorWindowController {
             // so the controller owns clicks + hover by re-deriving each control's
             // frame from the same static helpers the view renders with. Handled
             // before the per-mode drag/settle logic so a toolbar click acts on the
-            // toolbar rather than re-dragging underneath it. The mode switch is two
-            // separate hit regions (Ask | Dev), present in both modes; the
-            // dev-settings icon exists only in Dev Mode.
+            // toolbar rather than re-dragging underneath it. The invoking shortcut
+            // fixes the mode; the dev-settings icon exists only in Dev Mode.
             let size = contentView.bounds.size
             let fullScreen = state.mode == .fullScreen
             let devMode = state.isDevMode
@@ -419,24 +380,12 @@ final class AreaSelectorWindowController {
             let recordFrame = selectionRect.map {
                 AreaSelectorView.recordButtonFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
-            let micFrame = selectionRect.map {
-                AreaSelectorView.micChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
-            }
-            let modelFrame = selectionRect.map {
-                AreaSelectorView.modelChipFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
-            }
-            let askFrame = selectionRect.map {
-                AreaSelectorView.modeAskSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
-            }
-            let devSegmentFrame = selectionRect.map {
-                AreaSelectorView.modeDevSegmentFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
-            }
             let devSettingsFrame = (devMode ? selectionRect : nil).map {
                 AreaSelectorView.devSettingsIconFrame(forSelection: $0, in: size, fullScreen: fullScreen)
             }
             // The whole container, so a click on toolbar chrome that misses a
-            // specific control (inter-icon gaps, the divider, the padding, the
-            // mode-switch well) is inert rather than starting a selection drag.
+            // specific control (inter-icon gaps or padding) is inert rather than
+            // starting a selection drag.
             let toolbarContainerFrame = selectionRect.map {
                 AreaSelectorView.toolbarFrame(forSelection: $0, in: size, fullScreen: fullScreen, devMode: devMode)
             }
@@ -457,29 +406,7 @@ final class AreaSelectorWindowController {
 
             if event.type == .mouseMoved {
                 state.setRecordButtonHovered(recordFrame?.contains(point) ?? false)
-                state.setMicChipHovered(micFrame?.contains(point) ?? false)
-                state.setModelChipHovered(modelFrame?.contains(point) ?? false)
-                state.setModeAskHovered(askFrame?.contains(point) ?? false)
-                state.setModeDevHovered(devSegmentFrame?.contains(point) ?? false)
                 state.setDevSettingsHovered(devSettingsFrame?.contains(point) ?? false)
-                if state.isMicMenuOpen, let rect = selectionRect {
-                    state.setHighlightedMicIndex(AreaSelectorView.micMenuRowIndex(
-                        at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count, fullScreen: fullScreen, devMode: devMode
-                    ))
-                }
-                if state.isModelMenuOpen, let rect = selectionRect {
-                    state.setHighlightedModelIndex(AreaSelectorView.modelMenuRowIndex(
-                        at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
-                    ))
-                }
-                if state.isUpgradePopupOpen, let rect = selectionRect {
-                    let buttonFrame = AreaSelectorView.upgradeButtonFrame(
-                        forSelection: rect, in: size, fullScreen: fullScreen, devMode: devMode
-                    )
-                    state.setUpgradeButtonHovered(buttonFrame.contains(point))
-                }
                 if state.isDevSettingsMenuOpen, let rect = selectionRect {
                     let agentCount = state.devAgentMenuItems.count
                     let modelCount = state.devModelMenuItems.count
@@ -586,21 +513,8 @@ final class AreaSelectorWindowController {
                 // Record (and the other controls) trigger "through" the open agent
                 // & project menu. Suppress the toolbar-control handlers here; the
                 // menu-open blocks further down do the routing.
-                let anyMenuOpen = state.isModelMenuOpen || state.isMicMenuOpen
-                    || state.isUpgradePopupOpen || state.isDevSettingsMenuOpen
+                let anyMenuOpen = state.isDevSettingsMenuOpen
 
-                // Mode switch — two segments, each maps to a mode (Ask = off,
-                // Dev = on). Clicking the already-active segment is a no-op (the
-                // state guards it). Handled first since the switch leads the
-                // cluster. Present in BOTH modes (it's how you enter/leave Dev).
-                if !anyMenuOpen, let askFrame, askFrame.contains(point) {
-                    self?.setDevMode(false, state: state)
-                    return nil
-                }
-                if !anyMenuOpen, let devSegmentFrame, devSegmentFrame.contains(point) {
-                    self?.setDevMode(true, state: state)
-                    return nil
-                }
                 // Dev-settings icon (Dev Mode) — open/close the agent+project menu.
                 if !anyMenuOpen, let devSettingsFrame, devSettingsFrame.contains(point) {
                     state.toggleDevSettingsMenu()
@@ -609,84 +523,6 @@ final class AreaSelectorWindowController {
                 // Record button — start recording.
                 if !anyMenuOpen, let recordFrame, recordFrame.contains(point) {
                     self?.confirmCurrentSelection(window: window, state: state)
-                    return nil
-                }
-                // Model icon — when the trial model-lock is active, open the
-                // upgrade popup instead of the (premium) model list. Otherwise
-                // open/close the model dropdown (one surface at a time; the state
-                // closes the others).
-                if !anyMenuOpen, let modelFrame, modelFrame.contains(point) {
-                    if state.isModelPickerLocked {
-                        state.toggleUpgradePopup()
-                    } else {
-                        state.toggleModelMenu()
-                    }
-                    return nil
-                }
-                // Mic icon — open/close the device dropdown.
-                if !anyMenuOpen, let micFrame, micFrame.contains(point) {
-                    state.toggleMicMenu()
-                    return nil
-                }
-                // Model dropdown open — a click selects the (non-gated) row
-                // under the cursor or, if outside, dismisses. The pick lands
-                // in `state` only; it's persisted as last-used at confirm
-                // (state.onConfirm), not here — so a pick the user backs out
-                // of never changes the stored last-used model.
-                if state.isModelMenuOpen {
-                    if let rect = selectionRect,
-                       let idx = AreaSelectorView.modelMenuRowIndex(
-                        at: point, forSelection: rect, in: size,
-                        itemCount: state.models.count, fullScreen: fullScreen, devMode: devMode
-                       ) {
-                        let item = state.models[idx]
-                        if !item.gated {
-                            state.selectModel(id: item.id)
-                            // New model name → re-measure the model button so the
-                            // toolbar reflows around the new label.
-                            AreaSelectorView.modelButtonWidth = AreaSelectorView.measuredModelButtonWidth(forName: state.selectedModelName)
-                        } else {
-                            // Gated row (BYOK, keyless provider): ignore the
-                            // click but keep the menu open — mirrors the
-                            // menu-bar picker's disabled rows.
-                            return nil
-                        }
-                    }
-                    state.closeModelMenu()
-                    return nil
-                }
-                // Upgrade popup open (trial model-lock) — a click on the Upgrade
-                // button opens the voluntary-upgrade paywall; anywhere else
-                // dismisses. The click is always consumed so it never starts a
-                // new drag.
-                if state.isUpgradePopupOpen {
-                    if let rect = selectionRect {
-                        let buttonFrame = AreaSelectorView.upgradeButtonFrame(
-                            forSelection: rect, in: size, fullScreen: fullScreen, devMode: devMode
-                        )
-                        if buttonFrame.contains(point) {
-                            self?.openUpgradePaywall()
-                            state.closeUpgradePopup()
-                            return nil
-                        }
-                    }
-                    state.closeUpgradePopup()
-                    return nil
-                }
-                // Mic dropdown open — a click selects the row under the cursor
-                // (persisting to prefs) or, if outside, dismisses. Either way
-                // the click is consumed so it never starts a new drag.
-                if state.isMicMenuOpen {
-                    if let rect = selectionRect,
-                       let idx = AreaSelectorView.micMenuRowIndex(
-                        at: point, forSelection: rect, in: size,
-                        itemCount: state.micMenuItems.count, fullScreen: fullScreen, devMode: devMode
-                       ) {
-                        let id = state.micMenuItems[idx].id
-                        self?.preferences?.microphoneDeviceID = id
-                        state.selectMicrophone(id: id)
-                    }
-                    state.closeMicMenu()
                     return nil
                 }
                 // Dev-settings menu open. Compact accordion: a section's SUMMARY row
@@ -765,8 +601,8 @@ final class AreaSelectorWindowController {
                     return nil
                 }
                 // No control was hit and no menu was open. If the press landed
-                // anywhere on the toolbar container (a gap, the divider, the
-                // padding, the mode-switch well), consume it so toolbar chrome
+                // anywhere on the toolbar container (a gap or padding), consume
+                // it so toolbar chrome
                 // never starts a selection drag. Clicks on the dimmed capture
                 // area below fall through to begin a new drag.
                 if let toolbarContainerFrame, toolbarContainerFrame.contains(point) {
@@ -858,21 +694,7 @@ final class AreaSelectorWindowController {
                     self?.dismissWalkthrough(state: state)
                     return nil
                 }
-                // ESC closes an open toolbar dropdown first (mic, model, or
-                // dev-settings), so the first press dismisses the menu and only a
-                // second press cancels the whole overlay.
-                if state.isMicMenuOpen {
-                    state.closeMicMenu()
-                    return nil
-                }
-                if state.isModelMenuOpen {
-                    state.closeModelMenu()
-                    return nil
-                }
-                if state.isUpgradePopupOpen {
-                    state.closeUpgradePopup()
-                    return nil
-                }
+                // ESC closes Dev settings before cancelling the overlay.
                 if state.isDevSettingsMenuOpen {
                     // ESC first collapses an expanded accordion section, then (next
                     // press) closes the menu, then cancels the overlay.
@@ -925,8 +747,7 @@ final class AreaSelectorWindowController {
         // toolbar container, controls read as controls (plain arrow). The
         // first-run walkthrough owns it the same way — every press is inert
         // under the tour, so no draw/resize/move affordance may show.
-        let anyMenuOpen = state.isModelMenuOpen || state.isMicMenuOpen
-            || state.isUpgradePopupOpen || state.isDevSettingsMenuOpen
+        let anyMenuOpen = state.isDevSettingsMenuOpen
         if anyMenuOpen || state.toolbarWalkthroughStep != nil {
             NSCursor.arrow.set()
             return
@@ -980,9 +801,8 @@ final class AreaSelectorWindowController {
 
     // MARK: - Toolbar walkthrough (first-run tour)
     //
-    // The state machine (Phase 1) owns the step cursor and the Dev Mode
-    // display borrow/restore; the controller owns exactly what the model
-    // must not (its unit-testability contract): the seen-flag write and
+    // The state machine owns the mode-specific step cursor; the controller owns
+    // exactly what the model must not (its unit-testability contract): the seen-flag write and
     // analytics. Next/Back arrive from the mouse monitor above — the
     // callout's SwiftUI buttons are visual-only, hit-tested against the same
     // static frames they render at — and Esc from the key monitor.
@@ -1014,7 +834,11 @@ final class AreaSelectorWindowController {
     /// (per plan §6, a deliberate dismissal shouldn't re-run forever; only an
     /// interrupted open, which never reaches this, re-offers next time).
     private func finishToolbarWalkthrough(completed: Bool) {
-        preferences?.toolbarWalkthroughSeen = true
+        if state?.isDevMode == true {
+            preferences?.devToolbarWalkthroughSeen = true
+        } else {
+            preferences?.askToolbarWalkthroughSeen = true
+        }
         Analytics.capture(completed
             ? "area_toolbar_walkthrough_completed"
             : "area_toolbar_walkthrough_dismissed")
@@ -1114,8 +938,8 @@ final class AreaSelectorWindowController {
 
     // MARK: - Dev Mode (Phase 1)
     //
-    // The mode switch + folder picker mirror how the controller owns the
-    // mic/model pickers: state holds the selection, the controller persists it
+    // The Dev folder picker mirrors how the controller owns the mic/model
+    // pickers: state holds the selection, the controller persists it
     // to PreferencesStore and runs the native panel. Milestone 2 replaces the
     // hard-coded agent default with live `DevAgentRegistry` detection.
 
@@ -1130,39 +954,6 @@ final class AreaSelectorWindowController {
         case DevAgentRegistry.codexID:  return codexInstallURL
         case DevAgentRegistry.cursorID: return cursorInstallURL
         default:                        return claudeCodeInstallURL
-        }
-    }
-
-    /// Set the mode from a mode-switch segment click. Clicking the already-active
-    /// segment is a no-op (the state guards it) — so persistence, analytics, and
-    /// detection only fire on a real change. Turning Dev ON resolves the agent
-    /// off-main and verifies a remembered folder's git status. The user's explicit
-    /// Dev click also offers the setup menu via `handleDevModeEntered` (its
-    /// auto-open guard decides whether it actually opens) — this is the ONLY
-    /// auto-open trigger; seeding/present never calls it.
-    private func setDevMode(_ on: Bool, state: AreaSelectorState) {
-        let changed = state.isDevMode != on
-        state.setDevMode(on)
-        // Clicking the already-active segment is a no-op — no persistence,
-        // analytics, detection, or auto-open re-fires.
-        guard changed else { return }
-        // The mode change resizes + re-centers the container, so the controls
-        // move out from under the cursor; clear the now-stale hover highlights
-        // (the next mouse-move re-establishes them).
-        state.resetToolbarHovers()
-        preferences?.devModeEnabled = on
-        Analytics.capture("dev_mode_toggled", ["enabled": on])
-        if on {
-            beginAgentDetection(for: state)
-            if let folder = state.projectURL {
-                beginGitRepoCheck(for: folder, state: state)
-            }
-            // The user's Dev ENTRY offers the setup menu (the auto-open guard
-            // decides whether it actually opens — first entry this session, or
-            // folder unset). Re-opening later is done via the dev-settings icon.
-            state.handleDevModeEntered()
-            // Phase 3: try to auto-match the folder to the browser's localhost port.
-            beginLocalhostFolderDetection(for: state)
         }
     }
 
@@ -1601,96 +1392,6 @@ final class AreaSelectorWindowController {
                 state.setProjectGitRepo(isRepo)
             }
         }
-    }
-
-    // MARK: - Trial model-lock upgrade
-
-    /// Open the voluntary-upgrade paywall window from the trial model-lock
-    /// upgrade popup (rather than jumping straight to the LemonSqueezy checkout).
-    /// The paywall is where a trial user reviews plans and starts checkout, so
-    /// the model-lock "Upgrade" button routes through the same surface as the
-    /// menu-bar "Upgrade" row: set the `.voluntaryUpgrade` trigger (so the copy
-    /// reads "Upgrade your plan") and present the window.
-    private func openUpgradePaywall() {
-        Log.billing.notice("model-lock: opening voluntary-upgrade paywall")
-        Analytics.capture("paywall_opened", [
-            "trigger": EntitlementStore.PaywallTrigger.voluntaryUpgrade.rawValue,
-            "placement": "capture_toolbar"
-        ])
-        // Set the trigger on the shared EntitlementStore BEFORE teardown
-        // (dismiss() nils `state`, but the store is long-lived so the
-        // trigger persists for the paywall to read).
-        state?.entitlements?.paywallTrigger = .voluntaryUpgrade
-        // Tear down the .screenSaver-level overlay so it stops intercepting
-        // mouse events / rendering above the paywall window. Without this,
-        // the paywall opens BELOW the overlay and is un-clickable. The
-        // overlay is rebuilt fresh on every present(), so dismissing is safe.
-        dismiss()
-        AppDelegate.openPaywall()
-    }
-
-    // MARK: - Model picker rows
-    //
-    // Display data for the toolbar's model dropdown, computed once at
-    // present time (same lifecycle as the mic list). Rows are model names
-    // only — NO per-model cost anywhere (metered-credits Phase 4). BYOK
-    // key-gates by provider, carrying an "add key" hint as the only detail
-    // text; every other mode renders plain names.
-    static func modelMenuItems(
-        entitlementState: EntitlementState?,
-        availableProviders: Set<ModelProvider>
-    ) -> [AreaSelectorState.ModelMenuItem] {
-        // Only BYOK needs per-provider key-gating; every other mode renders
-        // plain names with no detail.
-        var gatedProviders: Set<ModelProvider> = []
-        if entitlementState?.usesOwnProviderKeys == true {
-            gatedProviders = Set(ModelProvider.allCases).subtracting(availableProviders)
-        }
-
-        return ModelRegistry.enabled.map { model in
-            let gated = gatedProviders.contains(model.provider)
-            return .init(
-                id: model.id,
-                name: model.displayName,
-                detail: gated ? "Add \(model.provider.displayName) key" : nil,
-                recommended: model.recommended,
-                gated: gated
-            )
-        }
-    }
-
-    /// Keep the chip, the selectable rows, and the provider used for generation
-    /// in agreement. A persisted selection can belong to a provider whose key is
-    /// no longer present (or to Gemini on a fresh Anthropic-only setup); seed the
-    /// picker with the same usable fallback `BYOKRouting` will execute.
-    static func initialModelID(
-        persistedModelID: String,
-        entitlementState: EntitlementState?,
-        availableProviders: Set<ModelProvider>
-    ) -> String {
-        guard entitlementState?.usesOwnProviderKeys == true else {
-            return persistedModelID
-        }
-        return BYOKRouting.effectiveEntry(
-            selectedModelID: persistedModelID,
-            availableProviders: availableProviders
-        )?.id ?? persistedModelID
-    }
-
-    // MARK: - Microphone picker
-    //
-    // Mirrors GeneralSettingsView's discovery (.microphone + .external,
-    // audio). The empty-string id is the "System Default" sentinel that
-    // PreferencesStore persists. We don't filter to currently-resolvable
-    // devices here — the chip label falls back to "System Default" when
-    // the stored id no longer resolves, same as Settings.
-    private static func enumerateMicrophones() -> [AreaSelectorState.AudioInputDevice] {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
-        return session.devices.map { .init(id: $0.uniqueID, name: $0.localizedName) }
     }
 
     // MARK: - Window construction

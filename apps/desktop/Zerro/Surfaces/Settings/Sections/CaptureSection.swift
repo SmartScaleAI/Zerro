@@ -4,14 +4,12 @@
 //
 //  Created by Colin Breeding on 5/30/26.
 //
-//  Phase 11 — Capture section of the redesigned Settings layout. Two rows:
+//  Phase 11 — Capture section of the redesigned Settings layout:
 //    1. Microphone Source — popup over the live device list, persisted
 //       by uniqueID through PreferencesStore. Falls back visually to
 //       "System Default" when the stored ID isn't connected, without
 //       overwriting the stored value (matches the prior Phase 3 contract).
-//    2. Global Hotkey — KeyboardShortcuts.Recorder bound to the existing
-//       `.toggleRecording` name. The library handles persistence + the
-//       resting/recording visual states natively.
+//    2. Secret redaction. Global shortcuts live in their own Settings pane.
 //
 //  Mic-permission hint: when the user hasn't granted Microphone TCC,
 //  the picker would show an empty device list with no explanation. We
@@ -20,15 +18,12 @@
 //
 
 import AVFoundation
-import KeyboardShortcuts
 import SwiftUI
 
 struct CaptureSection: View {
     var body: some View {
         SettingsSection("Capture") {
             MicrophoneRow()
-            SettingsRowDivider()
-            HotkeyRow()
             SettingsRowDivider()
             RedactSecretsRow()
         }
@@ -188,31 +183,6 @@ private struct MicrophoneRow: View {
             },
             set: { preferences.microphoneDeviceID = $0 }
         )
-    }
-}
-
-// MARK: - Hotkey
-//
-// Verified working in Phase 11: the Recorder and the global hotkey are
-// coupled through the `.toggleRecording` shortcut NAME (see
-// AppShortcuts.swift); when the user records a new binding here the
-// library swaps the underlying Carbon HotKey registration in place, and
-// the `onKeyDown(for: .toggleRecording)` handler registered in
-// ZerroApp.init stays bound. No restart, no extra wiring.
-//
-// Revision 2 swapped the library's default pill out for HotkeyDisplay,
-// which renders one dark keycap per modifier + key at rest and only
-// surfaces the library's native "Type a shortcut..." UI while the user
-// is actively rebinding.
-
-private struct HotkeyRow: View {
-    var body: some View {
-        SettingsRow(
-            label: "Global Hotkey",
-            description: "Press anywhere to start a recording."
-        ) {
-            HotkeyDisplay(name: .toggleRecording)
-        }
     }
 }
 

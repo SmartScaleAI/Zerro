@@ -2,8 +2,8 @@
 //  AreaSelectorDevModeTests.swift
 //  ZerroTests
 //
-//  Dev Mode — the compact toolbar's Dev affordances: the mode switch's Dev
-//  segment, the single dev-settings icon it grows (folding the old agent +
+//  Dev Mode — the compact toolbar's Dev affordances: the single dev-settings
+//  icon it grows (folding the old agent +
 //  folder chips into one menu), the consolidated agent/project menu geometry,
 //  and the state semantics (explicit set-mode, the dev-settings menu, the
 //  auto-open guard, readiness, and the record-time validation gate). Like the
@@ -11,7 +11,7 @@
 //  comes from static frame helpers the view renders with AND the controller
 //  hit-tests against. These tests pin:
 //    • the cluster grows by exactly ONE icon button (dev-settings) in Dev Mode;
-//    • cluster order model → mic → dev-settings → record, all disjoint;
+//    • cluster order dev-settings → record, both disjoint;
 //    • the dev-settings menu's agent rows + project row hit-test back;
 //    • normal-mode geometry is byte-identical to Ask mode;
 //    • the state-level set-mode / menu / auto-open / validation semantics.
@@ -26,6 +26,15 @@ final class AreaSelectorDevModeTests: XCTestCase {
     private let selection = CGRect(x: 300, y: 200, width: 700, height: 400)
     private let bounds = CGSize(width: 1728, height: 1080)
 
+    private func enableDev(_ state: AreaSelectorState) {
+        state.setDevState(
+            isDevMode: true,
+            agentID: state.selectedAgentID,
+            agentName: state.selectedAgentName,
+            projectURL: state.projectURL
+        )
+    }
+
     // MARK: - Cluster width + order
 
     func testDevModeClusterAddsExactlyOneIconButton() {
@@ -33,30 +42,24 @@ final class AreaSelectorDevModeTests: XCTestCase {
         let dev = AreaSelectorView.toolbarClusterWidth(devMode: true)
         XCTAssertGreaterThan(dev, normal)
         let added = dev - normal
-        // One new icon button + its leading gap (== the model→mic gap).
-        let model = AreaSelectorView.modelChipFrame(forSelection: selection, in: bounds)
-        let mic = AreaSelectorView.micChipFrame(forSelection: selection, in: bounds)
-        let gap = mic.minX - model.maxX
+        // One new icon button + the gap before Record.
+        let devSettings = AreaSelectorView.devSettingsIconFrame(forSelection: selection, in: bounds)
+        let record = AreaSelectorView.recordButtonFrame(forSelection: selection, in: bounds, devMode: true)
+        let gap = record.minX - devSettings.maxX
         XCTAssertEqual(added, AreaSelectorView.iconButtonWidth + gap, accuracy: 0.001)
     }
 
-    func testClusterOrderModelMicDevSettingsRecord() {
-        let model = AreaSelectorView.modelChipFrame(forSelection: selection, in: bounds, devMode: true)
-        let mic = AreaSelectorView.micChipFrame(forSelection: selection, in: bounds, devMode: true)
+    func testClusterOrderDevSettingsRecord() {
         let devSettings = AreaSelectorView.devSettingsIconFrame(forSelection: selection, in: bounds)
         let record = AreaSelectorView.recordButtonFrame(forSelection: selection, in: bounds, devMode: true)
         let toolbar = AreaSelectorView.toolbarFrame(forSelection: selection, in: bounds, devMode: true)
-        let modeSwitch = AreaSelectorView.devToggleFrame(forSelection: selection, in: bounds, devMode: true)
 
-        let gap = mic.minX - model.maxX
-        XCTAssertLessThan(modeSwitch.maxX, model.minX, "the mode switch leads the cluster")
-        XCTAssertEqual(devSettings.minX, mic.maxX + gap, accuracy: 0.001)
         XCTAssertLessThan(devSettings.maxX, record.minX, "record sits after dev-settings")
-        XCTAssertEqual(record.maxX, toolbar.maxX - (modeSwitch.minX - toolbar.minX), accuracy: 0.001,
-                       "Record is inset from the trailing edge by the same margin the switch is from the leading edge")
+        XCTAssertEqual(record.maxX, toolbar.maxX - (devSettings.minX - toolbar.minX), accuracy: 0.001,
+                       "Record and Dev settings have symmetric outer insets")
 
         // Every control is disjoint and inside the toolbar.
-        let frames = [modeSwitch, model, mic, devSettings, record]
+        let frames = [devSettings, record]
         for (i, a) in frames.enumerated() {
             XCTAssertTrue(toolbar.contains(a), "control \(i) escapes the toolbar")
             for (j, b) in frames.enumerated() where i < j {
@@ -65,29 +68,11 @@ final class AreaSelectorDevModeTests: XCTestCase {
         }
     }
 
-    func testModeSwitchSitsInsideToolbarInBothModes() {
-        // The mode switch is now an in-container control (not floating left); it
-        // must resolve inside the toolbar in both modes since it's how you enter
-        // and leave Dev Mode.
-        for devMode in [false, true] {
-            let toolbar = AreaSelectorView.toolbarFrame(forSelection: selection, in: bounds, devMode: devMode)
-            let modeSwitch = AreaSelectorView.devToggleFrame(forSelection: selection, in: bounds, devMode: devMode)
-            XCTAssertTrue(toolbar.contains(modeSwitch), "mode switch must sit inside the toolbar (devMode: \(devMode))")
-            XCTAssertEqual(modeSwitch.width, AreaSelectorView.modeSwitchWidth)
-        }
-    }
-
-    // MARK: - Normal-mode geometry is unchanged by the devMode param
-
-    func testAskModeHasNoDevSettingsBetweenMicAndRecord() {
-        let mic = AreaSelectorView.micChipFrame(forSelection: selection, in: bounds, devMode: false)
+    func testAskModeContainsOnlyRecord() {
         let record = AreaSelectorView.recordButtonFrame(forSelection: selection, in: bounds, devMode: false)
-        // In Ask mode Record butts up right after mic (one gap), with no
-        // dev-settings icon between them.
-        let gap = record.minX - mic.maxX
-        XCTAssertGreaterThan(gap, 0)
-        XCTAssertLessThan(gap, AreaSelectorView.iconButtonWidth,
-                          "no icon-button-sized control sits between mic and Record in Ask mode")
+        let toolbar = AreaSelectorView.toolbarFrame(forSelection: selection, in: bounds, devMode: false)
+        XCTAssertEqual(record.midX, toolbar.midX, accuracy: 0.001)
+        XCTAssertEqual(record.midY, toolbar.midY, accuracy: 0.001)
     }
 
     // MARK: - Dev-settings accordion geometry (compact summary rows)
@@ -208,7 +193,7 @@ final class AreaSelectorDevModeTests: XCTestCase {
     /// icon (multi-line). Not hovering → nothing.
     func testDevMenuPermissionSafetyTooltipPerTier() {
         let state = AreaSelectorState()
-        state.setDevMode(true)
+        enableDev(state)
         state.toggleDevSettingsMenu()
         let view = AreaSelectorView(state: state)
         let v = AreaSelectorView.self
@@ -233,7 +218,7 @@ final class AreaSelectorDevModeTests: XCTestCase {
     /// with the summary safety icon and (b) resolves ITS OWN tier's tooltip on hover.
     func testDevMenuExpandedOptionSafetyIconsAlignAndTooltip() {
         let state = AreaSelectorState()
-        state.setDevMode(true)
+        enableDev(state)
         state.toggleDevSettingsMenu()
         state.toggleDevSection(.permissions)
         let view = AreaSelectorView(state: state)
@@ -276,7 +261,7 @@ final class AreaSelectorDevModeTests: XCTestCase {
     /// collapsed.
     func testDevMenuAccordionTogglesOneSectionAtATime() {
         let state = AreaSelectorState()
-        state.setDevMode(true)
+        enableDev(state)
         state.toggleDevSettingsMenu()
         XCTAssertNil(state.expandedDevSection, "menu opens collapsed")
         state.toggleDevSection(.agent)
@@ -311,7 +296,7 @@ final class AreaSelectorDevModeTests: XCTestCase {
     /// Hovering the Auto-Detect info icon resolves its copy anchored to the icon.
     func testAutoDetectInfoTooltipResolvesWhenHoveredInOpenMenu() {
         let state = AreaSelectorState()
-        state.setDevMode(true)
+        enableDev(state)
         state.toggleDevSettingsMenu()
         state.setAutoDetectInfoHovered(true)
         let view = AreaSelectorView(state: state)
@@ -427,54 +412,14 @@ final class AreaSelectorDevModeTests: XCTestCase {
         XCTAssertEqual(state.devModelScrollOffset, count - cap, "reopening reveals the selected model")
     }
 
-    // MARK: - State: explicit set-mode
-
-    func testSetDevModeMapsSegmentsToModeAndClearsOnOff() {
-        let state = AreaSelectorState()
-        XCTAssertFalse(state.isDevMode)
-
-        state.setDevMode(true)
-        XCTAssertTrue(state.isDevMode)
-        state.setDevMode(true) // re-clicking the active segment is a no-op
-        XCTAssertTrue(state.isDevMode)
-
-        state.setDevValidationMessage("blocked")
-        state.toggleDevSettingsMenu()
-        XCTAssertTrue(state.isDevSettingsMenuOpen)
-
-        state.setDevMode(false)
-        XCTAssertFalse(state.isDevMode)
-        XCTAssertNil(state.devValidationMessage, "turning Dev off clears the validation message")
-        XCTAssertFalse(state.isDevSettingsMenuOpen, "turning Dev off closes the dev-settings menu")
-    }
-
-    func testToggleDevModeFlipsAndClearsMessageWhenOff() {
-        let state = AreaSelectorState()
-        XCTAssertFalse(state.isDevMode)
-        state.setDevValidationMessage("blocked")
-
-        state.toggleDevMode() // on — keeps any message (Dev Mode is now active)
-        XCTAssertTrue(state.isDevMode)
-
-        state.setDevValidationMessage("blocked again")
-        state.toggleDevMode() // off — message is irrelevant, cleared
-        XCTAssertFalse(state.isDevMode)
-        XCTAssertNil(state.devValidationMessage)
-    }
-
     // MARK: - State: dev-settings menu + auto-open
 
-    func testDevSettingsMenuIsOneOfAtMostOneOpenDropdown() {
+    func testDevSettingsMenuToggles() {
         let state = AreaSelectorState()
-        state.toggleModelMenu()
-        XCTAssertTrue(state.isModelMenuOpen)
         state.toggleDevSettingsMenu()
         XCTAssertTrue(state.isDevSettingsMenuOpen)
-        XCTAssertFalse(state.isModelMenuOpen, "opening dev-settings closes the model menu")
-
-        state.toggleMicMenu()
-        XCTAssertTrue(state.isMicMenuOpen)
-        XCTAssertFalse(state.isDevSettingsMenuOpen, "opening the mic menu closes dev-settings")
+        state.toggleDevSettingsMenu()
+        XCTAssertFalse(state.isDevSettingsMenuOpen)
     }
 
     func testDevSettingsAutoOpensFirstEntryOrWhenFolderUnset() {

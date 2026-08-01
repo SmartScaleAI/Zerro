@@ -185,7 +185,8 @@ private struct ResetToolbarWalkthroughRow: View {
             description: "DEBUG only — replay the capture-toolbar tour on the next overlay open."
         ) {
             Button("Reset Tour") {
-                preferences.toolbarWalkthroughSeen = false
+                preferences.askToolbarWalkthroughSeen = false
+                preferences.devToolbarWalkthroughSeen = false
             }
             .buttonStyle(SettingsSecondaryButtonStyle())
         }

@@ -109,27 +109,13 @@ final class AreaSelectorFullScreenTests: XCTestCase {
         XCTAssertEqual(viaFlag, direct)
     }
 
-    func testFullScreenSegmentsAreDisjointAndCentered() {
+    func testFullScreenRecordButtonIsCenteredInsideToolbar() {
         let full = CGRect(origin: .zero, size: overlay)
-        let modeSwitch = AreaSelectorView.devToggleFrame(forSelection: full, in: overlay, fullScreen: true)
-        let model = AreaSelectorView.modelChipFrame(forSelection: full, in: overlay, fullScreen: true)
-        let mic = AreaSelectorView.micChipFrame(forSelection: full, in: overlay, fullScreen: true)
         let record = AreaSelectorView.recordButtonFrame(forSelection: full, in: overlay, fullScreen: true)
         let toolbar = AreaSelectorView.fullScreenToolbarFrame(in: overlay)
 
-        // Compact order: mode switch → model → mic → record, gap-separated, all
-        // inside the toolbar. The mode switch is leftmost (inset by the same
-        // margin Record is inset from the trailing edge).
-        let gap = mic.minX - model.maxX
-        XCTAssertGreaterThan(gap, 0)
-        XCTAssertLessThan(modeSwitch.maxX, model.minX, "mode switch leads the cluster")
-        let leadingInset = modeSwitch.minX - toolbar.minX
-        XCTAssertEqual(record.maxX, toolbar.maxX - leadingInset, accuracy: 0.001, "symmetric insets")
-        for frame in [modeSwitch, model, mic, record] {
-            XCTAssertTrue(toolbar.contains(frame))
-        }
-        XCTAssertFalse(modeSwitch.intersects(model))
-        XCTAssertFalse(model.intersects(mic))
-        XCTAssertFalse(mic.intersects(record))
+        XCTAssertTrue(toolbar.contains(record))
+        XCTAssertEqual(record.midX, toolbar.midX, accuracy: 0.001)
+        XCTAssertEqual(record.midY, toolbar.midY, accuracy: 0.001)
     }
 }

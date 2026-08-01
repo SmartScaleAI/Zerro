@@ -38,10 +38,9 @@ final class PreferencesStore {
         static let pulsingRingEnabled = "pulsingRingEnabled"
         static let devCursorEnabled = "devCursorEnabled"
 
-        // Dev Mode (Phase 1) — the mode switch + its two remembered
-        // selections. Non-sandboxed, so the project folder is persisted as a
-        // plain path (no security-scoped bookmark needed).
-        static let devModeEnabled = "vf.dev.modeEnabled"
+        // Dev Mode selections. The active mode is chosen by the invoking
+        // shortcut and is deliberately not persisted. Non-sandboxed, so the
+        // project folder is persisted as a plain path.
         static let devProjectPath = "vf.dev.projectPath"
         static let devAgentID = "vf.dev.agentID"
         /// Phase 2 — the remembered `--model` pick PER agent (agent wire id →
@@ -111,12 +110,12 @@ final class PreferencesStore {
         /// Transcription settings section still offers a manual download).
         static let localModelPromptShown = "vf.stt.localModelPromptShown"
 
-        // Area Selector — first-run toolbar walkthrough.
-        /// One-time: the capture toolbar's first-run walkthrough has been seen
-        /// (set on complete or Esc dismiss — not on mere appearance, so an
-        /// interrupted first open still teaches next time). Resettable so QA
-        /// can re-trigger the tour.
+        // Area Selector — first-run toolbar walkthroughs.
+        /// Legacy combined flag. Read only to migrate users who completed the
+        /// old five-step tour; retained in resettable so QA reset clears it.
         static let toolbarWalkthroughSeen = "vf.areaSelector.toolbarWalkthroughSeen"
+        static let askToolbarWalkthroughSeen = "vf.areaSelector.askToolbarWalkthroughSeen"
+        static let devToolbarWalkthroughSeen = "vf.areaSelector.devToolbarWalkthroughSeen"
 
         // What's New (changelog window).
         /// The window's footer checkbox — "Show changelog after each update".
@@ -140,7 +139,6 @@ final class PreferencesStore {
             selectedModelID,
             pulsingRingEnabled,
             devCursorEnabled,
-            devModeEnabled,
             devProjectPath,
             devAgentID,
             devModelByAgent,
@@ -155,6 +153,8 @@ final class PreferencesStore {
             devNetworkFilterDisabled,
             sttEngine,
             toolbarWalkthroughSeen,
+            askToolbarWalkthroughSeen,
+            devToolbarWalkthroughSeen,
             showWhatsNewOnUpdate,
             // NOTE: `localModelVersion` / `localModelDownloadedAt` are deliberately
             // NOT here. They track an on-disk file (~547 MB) that a settings reset
@@ -188,11 +188,9 @@ final class PreferencesStore {
         didSet { defaults.set(redactSecrets, forKey: Keys.redactSecrets) }
     }
 
-    /// Phase 6 (multi-model) — the last model the user recorded with, by
-    /// registry wire id. Seeds the capture toolbar's model chip (the only
-    /// model picker) and is read by the generation path, which sends it as the
-    /// `model` field of `/generate`. Written back at record-start when the
-    /// toolbar pick differs. Defaults to `ModelRegistry.defaultModelID` (the
+    /// Phase 6 (multi-model) — the model selected from the menu bar, by registry
+    /// wire id. Read by the generation path and sent as the `model` field of
+    /// `/generate`. Defaults to `ModelRegistry.defaultModelID` (the
     /// recommended model), and re-defaults if a persisted id ever drops out of
     /// the registry (kill-switched model), so the app never sends an id the
     /// server would 400.
@@ -222,12 +220,6 @@ final class PreferencesStore {
     }
 
     // MARK: - Dev Mode (Phase 1)
-
-    /// Whether Dev Mode was last left engaged. Seeds the toolbar's mode
-    /// switch so a returning user lands back in the mode they were using.
-    var devModeEnabled: Bool {
-        didSet { defaults.set(devModeEnabled, forKey: Keys.devModeEnabled) }
-    }
 
     /// Last-used project folder for Dev Mode (globally remembered in v1;
     /// port-keyed in a later phase). Persisted as a path; nil when unset.
@@ -387,11 +379,12 @@ final class PreferencesStore {
 
     // MARK: - Area Selector — first-run toolbar walkthrough
 
-    /// Whether the capture toolbar's first-run walkthrough has been seen.
-    /// Set on complete or Esc dismiss — not on mere appearance, so an
-    /// interrupted first open still teaches next time. Default false.
-    var toolbarWalkthroughSeen: Bool {
-        didSet { defaults.set(toolbarWalkthroughSeen, forKey: Keys.toolbarWalkthroughSeen) }
+    var askToolbarWalkthroughSeen: Bool {
+        didSet { defaults.set(askToolbarWalkthroughSeen, forKey: Keys.askToolbarWalkthroughSeen) }
+    }
+
+    var devToolbarWalkthroughSeen: Bool {
+        didSet { defaults.set(devToolbarWalkthroughSeen, forKey: Keys.devToolbarWalkthroughSeen) }
     }
 
     // MARK: - What's New (changelog window)
@@ -442,7 +435,6 @@ final class PreferencesStore {
         // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
         // the ON default instead of UserDefaults' false-for-missing.
         self.devCursorEnabled = defaults.object(forKey: Keys.devCursorEnabled) as? Bool ?? true
-        self.devModeEnabled = defaults.bool(forKey: Keys.devModeEnabled)
         if let path = defaults.string(forKey: Keys.devProjectPath), !path.isEmpty {
             self.devProjectURL = URL(fileURLWithPath: path, isDirectory: true)
         } else {
@@ -497,9 +489,13 @@ final class PreferencesStore {
         // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
         // (the prompt hasn't been shown on a fresh install).
         self.localModelPromptShown = defaults.bool(forKey: Keys.localModelPromptShown)
-        // Default false: `bool(forKey:)`'s false-for-missing IS the desired default
-        // (the walkthrough hasn't been seen on a fresh install).
-        self.toolbarWalkthroughSeen = defaults.bool(forKey: Keys.toolbarWalkthroughSeen)
+        // Completing the legacy tour taught both layouts, so migrate that one
+        // flag into both fixed-mode tours without re-nagging existing users.
+        let legacyToolbarWalkthroughSeen = defaults.bool(forKey: Keys.toolbarWalkthroughSeen)
+        self.askToolbarWalkthroughSeen = legacyToolbarWalkthroughSeen
+            || defaults.bool(forKey: Keys.askToolbarWalkthroughSeen)
+        self.devToolbarWalkthroughSeen = legacyToolbarWalkthroughSeen
+            || defaults.bool(forKey: Keys.devToolbarWalkthroughSeen)
         // `object(forKey:)` (not `bool(forKey:)`) so an unset key falls back to
         // the ON default instead of UserDefaults' false-for-missing.
         self.showWhatsNewOnUpdate = defaults.object(forKey: Keys.showWhatsNewOnUpdate) as? Bool ?? true
@@ -524,7 +520,6 @@ final class PreferencesStore {
         selectedModelID = ModelRegistry.defaultModelID
         pulsingRingEnabled = true
         devCursorEnabled = true
-        devModeEnabled = false
         devProjectURL = nil
         selectedAgentID = nil
         selectedModelByAgent = [:]
@@ -536,7 +531,8 @@ final class PreferencesStore {
         devSeatbeltWrapperDisabled = false
         devNetworkFilterDisabled = false
         sttEngine = .auto
-        toolbarWalkthroughSeen = false
+        askToolbarWalkthroughSeen = false
+        devToolbarWalkthroughSeen = false
         showWhatsNewOnUpdate = true
         // `localModelVersion` / `localModelDownloadedAt` are intentionally left
         // untouched here — they mirror the on-disk model file, which a settings

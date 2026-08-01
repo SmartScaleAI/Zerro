@@ -924,7 +924,7 @@ struct DevModeStepView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text("Normally Zerro copies a ready-to-paste result (a prompt, draft, snippet, or doc) to your clipboard. Flip the green </> Dev switch in the selector toolbar and Zerro instead hands your narrated recording to a local coding agent, like Claude Code, that edits the files in your project for you.")
+                Text("Normally Zerro copies a ready-to-paste result (a prompt, draft, snippet, or doc) to your clipboard. Use the Dev Mode shortcut and Zerro instead hands your narrated recording to a local coding agent, like Claude Code, that edits the files in your project for you.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -932,9 +932,9 @@ struct DevModeStepView: View {
             }
         } accessory: {
             VStack(spacing: VFSpacing.sm) {
-                DevModeToolbarIllustration()
+                DevModeShortcutIllustration()
 
-                Text("Look for it on the left of the toolbar after you select a region.")
+                Text("You can change the Ask and Dev Mode shortcuts anytime in Settings → Shortcuts.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.vfTextTertiary)
                     .multilineTextAlignment(.center)
@@ -946,8 +946,7 @@ struct DevModeStepView: View {
     }
 }
 
-/// Small icon tile echoing the real Dev switch: the `</>` glyph in the same
-/// green (`vfDevAccent`) the toolbar segment shows when active.
+/// Small icon tile for the Dev Mode concept.
 private struct DevModeGlyphTile: View {
     var body: some View {
         RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
@@ -961,95 +960,25 @@ private struct DevModeGlyphTile: View {
     }
 }
 
-// MARK: - Dev Mode toolbar illustration
+// MARK: - Dev Mode shortcut illustration
 
-/// A static, non-interactive picture of the selector toolbar with the Dev mode
-/// switch turned ON — so the onboarding step shows users exactly what to look
-/// for and where. Mirrors `AreaSelectorView.modeSegment` styling (same SF
-/// Symbols + `vfDevAccent`) but is fully self-contained: no `AreaSelectorState`,
-/// no geometry/hit-testing, no animation. Hand-kept mock — if the real mode
-/// switch is restyled, update this to match.
-private struct DevModeToolbarIllustration: View {
+private struct DevModeShortcutIllustration: View {
     var body: some View {
-        miniToolbar
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("The selector toolbar, with the Dev mode switch turned on at its left end.")
-    }
-
-    private var miniToolbar: some View {
         HStack(spacing: VFSpacing.sm) {
-            modeSwitch
-            Rectangle()
-                .fill(Color.white.opacity(0.10))
-                .frame(width: 1, height: 18)
-            ghostChip(system: "slider.horizontal.3")   // model (representative)
-            ghostChip(system: "mic.fill")               // mic
-            recordPill                                  // record affordance
+            OnboardingKeyCapLarge(label: "⌥")
+            plus
+            OnboardingKeyCapLarge(label: "⇧")
+            plus
+            OnboardingKeyCapLarge(label: "Space")
         }
-        .padding(.horizontal, VFSpacing.sm)
-        .padding(.vertical, VFSpacing.xs + 2)
-        .background(
-            RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                .fill(Color.black.opacity(0.45))
-                .overlay(
-                    RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Option Shift Space opens Dev Mode")
     }
 
-    /// Two-segment mode switch in a recessed well: Ask (dimmed, inactive) |
-    /// Dev (active, green). A soft green ring rings the well to pull the eye.
-    private var modeSwitch: some View {
-        HStack(spacing: 0) {
-            segment(system: "wand.and.stars", active: false, isDev: false)
-            segment(system: "chevron.left.forwardslash.chevron.right", active: true, isDev: true)
-        }
-        .padding(3)
-        .background(Capsule(style: .continuous).fill(Color.black.opacity(0.18)))
-        .overlay(
-            Capsule(style: .continuous)
-                .strokeBorder(Color.vfDevAccent.opacity(0.55), lineWidth: 1.5)
-        )
-    }
-
-    private func segment(system: String, active: Bool, isDev: Bool) -> some View {
-        let fill: Color = active
-            ? (isDev ? Color.vfDevAccent.opacity(0.22) : Color.white.opacity(0.12))
-            : .clear
-        let iconColor: Color = active
-            ? (isDev ? Color.vfDevAccent : Color.vfTextPrimary)
-            : Color.vfTextTertiary
-        return Image(systemName: system)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(iconColor)
-            .frame(width: 30, height: 26)
-            .background(Circle().fill(fill))
-    }
-
-    private func ghostChip(system: String) -> some View {
-        Image(systemName: system)
-            .font(.system(size: 12, weight: .medium))
+    private var plus: some View {
+        Text("+")
+            .font(.system(size: 15, weight: .medium))
             .foregroundStyle(Color.vfTextTertiary)
-            .frame(width: 26, height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: VFRadius.sm, style: .continuous)
-                    .fill(Color.vfControlBackground)
-            )
-    }
-
-    /// The trailing Record pill — a fully-rounded `vfRecordingRed` capsule with
-    /// a white dot + white label, matching `AreaSelectorView.recordPill`.
-    private var recordPill: some View {
-        HStack(spacing: 5) {
-            Circle().fill(Color.white).frame(width: 9, height: 9)
-            Text("Record")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.white)
-        }
-        .padding(.horizontal, VFSpacing.sm)
-        .frame(height: 26)
-        .background(Capsule(style: .continuous).fill(Color.vfRecordingRed))
     }
 }
 

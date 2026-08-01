@@ -952,7 +952,6 @@ private struct ManageDevicesLink: View {
 /// renders them and owns the dismiss / route-to-Settings actions.
 private struct PurchaseSuccessView: View {
     @Environment(\.dismissWindow) private var dismissWindow
-    @Environment(\.openWindow) private var openWindow
     @Environment(EntitlementStore.self) private var entitlements
     let info: PurchaseSuccessInfo
 
@@ -1003,8 +1002,7 @@ private struct PurchaseSuccessView: View {
     /// success screen if it's reopened later.
     private func openSettings() {
         entitlements.purchaseSuccess = nil
-        AppDelegate.pendingSettingsCategory = .accountBilling
-        openWindow(id: SettingsScene.windowID)
+        AppDelegate.openSettings(to: .accountBilling)
         dismissWindow(id: PaywallScene.windowID)
     }
 }

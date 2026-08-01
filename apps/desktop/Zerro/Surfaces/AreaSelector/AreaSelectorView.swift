@@ -46,11 +46,6 @@ struct AreaSelectorView: View {
             let bounds = geo.size
 
             ZStack(alignment: .topLeading) {
-                // Keep the dynamic model-button width current with the selected
-                // model BEFORE any frame helper reads it this pass (the model
-                // button carries the model name). Plain static, not observed
-                // state — covers previews too, where no controller runs.
-                let _ = (Self.modelButtonWidth = Self.measuredModelButtonWidth(forName: state.selectedModelName))
                 switch state.mode {
                 case .area:
                     areaModeContent(bounds: bounds)
@@ -69,9 +64,6 @@ struct AreaSelectorView: View {
                     instructionPill(in: bounds)
                 }
                 floatingToolbar(in: bounds)
-                modelMenu(in: bounds)
-                upgradeMenu(in: bounds)
-                micMenu(in: bounds)
                 devSettingsMenu(in: bounds)
                 devValidationBanner(in: bounds)
                 devLocalhostNoticeBanner(in: bounds)
@@ -462,8 +454,7 @@ struct AreaSelectorView: View {
     //
     // CleanShot-style toolbar anchored just below the settled selection
     // so the user has an obvious click target to start recording (Enter
-    // still works, but isn't discoverable) plus a mic picker to choose
-    // the input device without opening Settings. Rendered only when
+    // still works, but isn't discoverable). Rendered only when
     // `state.confirmableSelectionRect` is non-nil — i.e. a finished area
     // drag meeting the minimum size, or a settled window.
     //
@@ -495,32 +486,13 @@ struct AreaSelectorView: View {
 
     // MARK: Compact icon-toolbar metrics
     //
-    // The whole toolbar is now ONE rounded container (replacing the old
-    // two-container chip layout): a two-segment mode switch (Ask | Dev), a
-    // vertical hairline divider, the model/mic/(dev-settings) icon buttons, then
-    // the Record pill. Icons are far narrower than the old labeled chips, which
-    // also resolves the narrow-selection overflow we'd deferred.
-    static let modeSegmentWidth: CGFloat = 34 * toolbarScale   // each mode-switch segment
-    static let modeSwitchWidth: CGFloat = modeSegmentWidth * 2   // 68 (pre-scale)
-    static let iconButtonWidth: CGFloat = 46 * toolbarScale     // icon + chevron control
-    // The MODEL control is NOT a bare icon button — it shows the selected model
-    // name between the sparkles icon and the chevron, so its width is dynamic.
-    static let modelLabelFont = NSFont.systemFont(ofSize: scaledGlyph(12), weight: .medium)
-    private static let modelButtonHPad: CGFloat = 9 * toolbarScale   // each side of the button
-    private static let modelLabelGap: CGFloat = 5 * toolbarScale     // icon→label and label→chevron
-    private static let modelIconWidth: CGFloat = 14 * toolbarScale   // sparkles glyph
-    private static let modelChevronWidth: CGFloat = 8 * toolbarScale // chevron glyph
-    /// Fixed chrome around the model label (pads + icon + two gaps + chevron);
-    /// the measured label width is added to this to size the model button.
-    private static let modelButtonChromeWidth: CGFloat =
-        modelButtonHPad * 2 + modelIconWidth + modelLabelGap * 2 + modelChevronWidth
+    // Ask Mode contains only Record. Dev Mode adds its agent/project settings
+    // control before Record. Model and microphone selection live in the menu bar.
+    static let iconButtonWidth: CGFloat = 46 * toolbarScale
     // container edge → first/last control. Matched to the components' vertical
     // inset (`scaled(4)`) so the gap to the toolbar edge is uniform on all four
     // sides; with the capsule container this nests the controls concentrically.
     private static let containerHPad: CGFloat = 4 * toolbarScale
-    private static let dividerGap: CGFloat = 8 * toolbarScale        // breathing room each side of the divider
-    private static let dividerWidth: CGFloat = 1 * toolbarScale
-    private static let controlGap: CGFloat = 4 * toolbarScale        // gap between adjacent icon buttons
     private static let recordGap: CGFloat = 8 * toolbarScale         // gap before the Record pill
     private static let toolbarGap: CGFloat = 14 * toolbarScale       // vertical gap, selection → toolbar
     private static let toolbarMargin: CGFloat = 8 * toolbarScale
@@ -539,63 +511,25 @@ struct AreaSelectorView: View {
     /// if multi-display lands (deferred), move this onto the per-overlay state.
     nonisolated(unsafe) static var fullScreenBottomInset: CGFloat = 0
 
-    /// Current width of the model button (icon + selected-model name + chevron),
-    /// stashed by `AreaSelectorWindowController` whenever the model list/selection
-    /// changes. Same single-source-of-truth pattern as `fullScreenBottomInset`:
-    /// the geometry helpers are static (shared by render + hit-test), so the
-    /// controller updates this once per model change and both sides reflow in
-    /// lockstep. Defaults to a bare icon button until the model name is known.
-    nonisolated(unsafe) static var modelButtonWidth: CGFloat = iconButtonWidth
-
-    /// Compute the model button's width for `name`: fixed chrome + the measured
-    /// label width, capped so a very long name can't blow out the toolbar (it
-    /// truncates instead). Floored at a bare icon button for an empty name.
-    static func measuredModelButtonWidth(forName name: String) -> CGFloat {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return iconButtonWidth }
-        let labelW = (trimmed as NSString)
-            .size(withAttributes: [.font: modelLabelFont]).width
-        let capped = min(labelW.rounded(.up), modelLabelMaxWidth)
-        return modelButtonChromeWidth + capped
-    }
-
-    /// Hard cap on the rendered model label so an unexpectedly long name
-    /// truncates rather than growing the toolbar past the overlay.
-    private static let modelLabelMaxWidth: CGFloat = 150 * toolbarScale
-
     /// X-offsets (relative to the container's leading edge) of every control in
     /// the compact toolbar, computed once so the frame helpers and the renderer
     /// share one source of truth. Dev-settings exists only in Dev Mode; in
     /// Ask mode `devSettingsX` is unused and Record slides left into its
     /// place.
     struct CompactLayout {
-        let modeSwitchX: CGFloat
-        let dividerX: CGFloat        // x of the 1pt divider line
-        let modelX: CGFloat
-        let micX: CGFloat
         let devSettingsX: CGFloat    // valid only when devMode == true
         let recordX: CGFloat
         let totalWidth: CGFloat
     }
 
     static func compactLayout(devMode: Bool) -> CompactLayout {
-        let modeSwitchX = containerHPad
-        let afterMode = modeSwitchX + modeSwitchWidth
-        let dividerX = afterMode + dividerGap
-        let modelX = dividerX + dividerWidth + dividerGap
-        // The model control is wider than a bare icon button (it carries the
-        // model name), so mic + everything after it shift by its dynamic width.
-        let micX = modelX + modelButtonWidth + controlGap
-        let devSettingsX = micX + iconButtonWidth + controlGap
-        let afterControls = devMode
-            ? devSettingsX + iconButtonWidth
-            : micX + iconButtonWidth
-        let recordX = afterControls + recordGap
+        let devSettingsX = containerHPad
+        let recordX = devMode
+            ? devSettingsX + iconButtonWidth + recordGap
+            : containerHPad
         let totalWidth = recordX + recordButtonWidth + containerHPad
         return CompactLayout(
-            modeSwitchX: modeSwitchX, dividerX: dividerX, modelX: modelX,
-            micX: micX, devSettingsX: devSettingsX, recordX: recordX,
-            totalWidth: totalWidth
+            devSettingsX: devSettingsX, recordX: recordX, totalWidth: totalWidth
         )
     }
 
@@ -659,44 +593,6 @@ struct AreaSelectorView: View {
         let bottomGap = max(bottomInset + fullScreenDockGap, toolbarMargin)
         let originY = bounds.height - size.height - bottomGap
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
-    }
-
-    /// The mode switch as a whole (both segments): the leading control inside
-    /// the container. Kept under the historical `devToggleFrame` name so the
-    /// controller's existing hit-test still resolves; Part 5 splits it into the
-    /// two per-segment frames below for precise mode mapping.
-    static func devToggleFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        let L = compactLayout(devMode: devMode)
-        return CGRect(x: t.minX + L.modeSwitchX, y: t.minY, width: modeSwitchWidth, height: t.height)
-    }
-
-    /// Ask segment (left half of the mode switch). Clicking sets Dev OFF.
-    static func modeAskSegmentFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let s = devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        return CGRect(x: s.minX, y: s.minY, width: modeSegmentWidth, height: s.height)
-    }
-
-    /// Dev segment (right half of the mode switch). Clicking sets Dev ON.
-    static func modeDevSegmentFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let s = devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        return CGRect(x: s.minX + modeSegmentWidth, y: s.minY, width: modeSegmentWidth, height: s.height)
-    }
-
-    /// Model-picker button: sparkles + the selected model name + chevron, opens
-    /// the model dropdown. Width is dynamic (`modelButtonWidth`). Kept under the
-    /// historical `modelChipFrame` name for the controller's hit-test.
-    static func modelChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        let L = compactLayout(devMode: devMode)
-        return CGRect(x: t.minX + L.modelX, y: t.minY, width: modelButtonWidth, height: t.height)
-    }
-
-    /// Mic-picker icon button: mic + chevron, opens the device dropdown.
-    static func micChipFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let t = toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        let L = compactLayout(devMode: devMode)
-        return CGRect(x: t.minX + L.micX, y: t.minY, width: iconButtonWidth, height: t.height)
     }
 
     /// Dev-settings icon button (Dev Mode only): terminal + chevron + readiness
@@ -764,12 +660,6 @@ struct AreaSelectorView: View {
         fullScreen: Bool, devMode: Bool
     ) -> CGRect {
         switch step {
-        case .mode:
-            return devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        case .model:
-            return modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        case .mic:
-            return micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         case .agent:
             return devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fullScreen)
         case .record:
@@ -857,7 +747,7 @@ struct AreaSelectorView: View {
         forSelection rect: CGRect, in bounds: CGSize,
         fullScreen: Bool, devMode: Bool
     ) -> CGRect {
-        guard step != .mode else { return .zero }
+        guard ToolbarWalkthroughStep.steps(isDevMode: devMode).first != step else { return .zero }
         let panel = walkthroughCalloutFrame(for: step, forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
         let w = ceil(("Back" as NSString)
             .size(withAttributes: [.font: walkthroughBackFont]).width) + walkthroughBackHPad * 2
@@ -875,8 +765,7 @@ struct AreaSelectorView: View {
     /// THE dispatch decision for a press while the walkthrough is active —
     /// the controller's mouse monitor routes on exactly this. Pure + static
     /// so the routing is testable without driving NSEvent. Back is only
-    /// hittable past the first step (it's hidden at `.mode`, where its frame
-    /// is `.zero` anyway — the explicit step guard keeps the intent legible).
+    /// hittable past the mode-specific first step.
     static func walkthroughHit(
         at point: CGPoint, for step: ToolbarWalkthroughStep,
         forSelection rect: CGRect, in bounds: CGSize,
@@ -888,7 +777,7 @@ struct AreaSelectorView: View {
         ).contains(point) {
             return .next
         }
-        if step != .mode,
+        if ToolbarWalkthroughStep.steps(isDevMode: devMode).first != step,
            walkthroughBackButtonFrame(
             for: step, forSelection: rect, in: bounds,
             fullScreen: fullScreen, devMode: devMode
@@ -900,24 +789,15 @@ struct AreaSelectorView: View {
 
     // MARK: - Dropdown geometry (CleanShot-style menus)
     //
-    // The model/mic/dev-settings dropdowns share one shape: a dark rounded
-    // panel anchored UNDER its icon button (caret pointing up at the icon),
+    // The Dev-settings dropdown is a dark rounded panel anchored under its icon
+    // button (caret pointing up at the icon),
     // flipped above if there isn't room, clamped inside the overlay. Each opens
     // with a small gray section header above its rows. Frames + per-row
     // hit-tests live in static helpers so the controller's mouse monitor and
     // this view agree on the exact rects (the SwiftUI tree is hit-test-disabled).
 
-    static let micMenuRowHeight: CGFloat = 34
-    static let modelMenuRowHeight: CGFloat = 34
-    static let modelMenuWidth: CGFloat = 286
-    static let micMenuWidth: CGFloat = 220
     /// Height reserved above the rows for a section header ("Model" / etc.).
     static let menuSectionHeaderHeight: CGFloat = 26
-    /// Fixed height of the static credit-cost notice at the very top of the
-    /// toolbar model menu (above the "Model" header). FIXED so the row hit-test
-    /// math (`modelMenuRowIndex`) stays exact — the wrapping text + divider are
-    /// pinned into this band. Only the standard model menu carries it.
-    static let modelMenuNoticeHeight: CGFloat = 72
     /// Top/bottom inset inside the menu panel.
     static let menuVPad: CGFloat = 6
     /// Gap between the icon button and the menu panel (room for the caret).
@@ -942,90 +822,6 @@ struct AreaSelectorView: View {
     /// flipped above (caret points down).
     static func menuOpensDownward(menuFrame: CGRect, iconFrame: CGRect) -> Bool {
         menuFrame.minY >= iconFrame.maxY
-    }
-
-    static func micMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let icon = micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        let height = menuSectionHeaderHeight + CGFloat(itemCount) * micMenuRowHeight + menuVPad * 2
-        return anchoredMenuFrame(under: icon, width: micMenuWidth, height: height, in: bounds)
-    }
-
-    static func micMenuRowIndex(
-        at point: CGPoint,
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        itemCount: Int,
-        fullScreen: Bool = false,
-        devMode: Bool = false
-    ) -> Int? {
-        let frame = micMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen, devMode: devMode)
-        guard frame.contains(point) else { return nil }
-        let localY = point.y - frame.minY - menuVPad - menuSectionHeaderHeight
-        guard localY >= 0 else { return nil }
-        let idx = Int(localY / micMenuRowHeight)
-        guard idx >= 0, idx < itemCount else { return nil }
-        return idx
-    }
-
-    static func modelMenuFrame(forSelection rect: CGRect, in bounds: CGSize, itemCount: Int, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let icon = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        // The notice band sits above the "Model" header, so it adds to the panel
-        // height (and shifts the rows down — mirrored in `modelMenuRowIndex`).
-        let height = modelMenuNoticeHeight + menuSectionHeaderHeight + CGFloat(itemCount) * modelMenuRowHeight + menuVPad * 2
-        return anchoredMenuFrame(under: icon, width: modelMenuWidth, height: height, in: bounds)
-    }
-
-    static func modelMenuRowIndex(
-        at point: CGPoint,
-        forSelection rect: CGRect,
-        in bounds: CGSize,
-        itemCount: Int,
-        fullScreen: Bool = false,
-        devMode: Bool = false
-    ) -> Int? {
-        let frame = modelMenuFrame(forSelection: rect, in: bounds, itemCount: itemCount, fullScreen: fullScreen, devMode: devMode)
-        guard frame.contains(point) else { return nil }
-        // Skip the top inset, the static notice band, AND the "Model" header to
-        // land on row 0 (the notice + header are non-interactive).
-        let localY = point.y - frame.minY - menuVPad - modelMenuNoticeHeight - menuSectionHeaderHeight
-        guard localY >= 0 else { return nil }
-        let idx = Int(localY / modelMenuRowHeight)
-        guard idx >= 0, idx < itemCount else { return nil }
-        return idx
-    }
-
-    // MARK: - Upgrade popup geometry (trial model-lock)
-    //
-    // A small card anchored to the model chip exactly like the model dropdown
-    // (shared `anchoredMenuFrame` → flips above when there's no room below,
-    // clamps horizontally), drawn through `menuPanel` + `menuCaret` so it wears
-    // the same panel fill / hairline / shadow / caret. Fixed height so the
-    // Upgrade button's hit-rect (bottom-anchored, computed below) matches where
-    // the view renders it.
-
-    static let upgradeMenuWidth: CGFloat = 264
-    static let upgradeMenuHeight: CGFloat = 152
-    /// Inset inside the popup panel (matches the button's left/right inset).
-    static let upgradeMenuPad: CGFloat = 14
-    static let upgradeButtonHeight: CGFloat = 34
-
-    /// Panel frame for the upgrade popup, anchored under the model chip.
-    static func upgradeMenuFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let icon = modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        return anchoredMenuFrame(under: icon, width: upgradeMenuWidth, height: upgradeMenuHeight, in: bounds)
-    }
-
-    /// The Upgrade button's hit-rect: full-width (inset `upgradeMenuPad` each
-    /// side) and pinned to the panel's bottom inset — the same place the view's
-    /// bottom-aligned button renders, so render == hit-test.
-    static func upgradeButtonFrame(forSelection rect: CGRect, in bounds: CGSize, fullScreen: Bool = false, devMode: Bool = false) -> CGRect {
-        let panel = upgradeMenuFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-        return CGRect(
-            x: panel.minX + upgradeMenuPad,
-            y: panel.maxY - upgradeMenuPad - upgradeButtonHeight,
-            width: panel.width - upgradeMenuPad * 2,
-            height: upgradeButtonHeight
-        )
     }
 
     // MARK: - Dev-settings menu geometry
@@ -1379,40 +1175,6 @@ struct AreaSelectorView: View {
         .position(x: x, y: pointingUp ? edgeY - h / 2 + 0.5 : edgeY + h / 2 - 0.5)
     }
 
-    /// Static, non-interactive disclaimer at the top of the toolbar model menu:
-    /// pricier models burn credits / usage limits faster. Pinned into a FIXED
-    /// `modelMenuNoticeHeight` band (text top-aligned, a hairline divider pinned
-    /// to the bottom) so the row hit-test geometry stays exact regardless of how
-    /// the copy wraps. Muted tertiary text + smaller font, mirroring the section
-    /// header treatment so it reads as helper text, not a selectable row.
-    private var modelMenuNotice: some View {
-        VStack(spacing: 0) {
-            Text(modelMenuNoticeText)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
-            Spacer(minLength: 6)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 5)
-        }
-        .frame(height: Self.modelMenuNoticeHeight)
-    }
-
-    private var modelMenuNoticeText: String {
-        if state.entitlements?.state.usesOwnProviderKeys == true {
-            return "Models are available when their provider key is connected. Usage is billed directly by that provider."
-        }
-        return "More capable models produce more thorough responses, but use more credits and reach your usage limits faster."
-    }
-
     /// Gray section header ("Model" / "Microphone" / "Agent" / "Project").
     /// The bottom inset is applied BEFORE the fixed-height frame so the header's
     /// total height stays exactly `menuSectionHeaderHeight` (the row hit-test
@@ -1446,148 +1208,6 @@ struct AreaSelectorView: View {
             .fill(fill)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
-    private func modelMenu(in bounds: CGSize) -> some View {
-        if state.isModelMenuOpen, let rect = state.confirmableSelectionRect {
-            let items = state.models
-            let icon = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let frame = Self.modelMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
-
-            menuPanel(frame: frame) {
-                VStack(spacing: 0) {
-                    modelMenuNotice
-                    menuSectionHeader("Model")
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        let selected = item.id == state.selectedModelID
-                        let hovered = state.highlightedModelIndex == index && !item.gated
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.vfTextPrimary)   // neutral white check
-                                .opacity(selected ? 1 : 0)
-                                .frame(width: 14)
-                            Text(item.name)
-                                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                                .foregroundStyle(selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            if item.recommended {
-                                Text("Recommended")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(Color.vfTextSecondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.white.opacity(0.10)))
-                                    .fixedSize()
-                            }
-                            Spacer(minLength: 6)
-                            if let detail = item.detail {
-                                Text(detail)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Color.vfTextSecondary)
-                                    .fixedSize()
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: Self.modelMenuRowHeight)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(menuRowHighlight(selected: selected, hovered: hovered))
-                        .opacity(item.gated ? 0.45 : 1)
-                    }
-                }
-                .padding(.vertical, Self.menuVPad)
-            }
-
-            menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
-        }
-    }
-
-    /// The trial model-lock upgrade popup: a small card (title + one line of body
-    /// + a white Upgrade button) anchored to the model chip, drawn with the same
-    /// panel chrome + caret as the model dropdown. Opening is intercepted by the
-    /// controller in place of the model list while `isModelPickerLocked`; the
-    /// button opens the voluntary-upgrade paywall (always presentable).
-    @ViewBuilder
-    private func upgradeMenu(in bounds: CGSize) -> some View {
-        if state.isUpgradePopupOpen, let rect = state.confirmableSelectionRect {
-            let icon = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let frame = Self.upgradeMenuFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
-
-            menuPanel(frame: frame) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Upgrade to unlock premium models")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Premium models are only available on paid plans.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 8)
-
-                    Text("Upgrade")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.vfOnBrand)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: Self.upgradeButtonHeight)
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Color.vfBrandAccent)
-                        )
-                        // Subtle press/hover feedback on the accent fill.
-                        .opacity(state.isUpgradeButtonHovered ? 0.9 : 1)
-                }
-                .padding(.horizontal, Self.upgradeMenuPad)
-                .padding(.vertical, Self.upgradeMenuPad)
-            }
-
-            menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
-        }
-    }
-
-    @ViewBuilder
-    private func micMenu(in bounds: CGSize) -> some View {
-        if state.isMicMenuOpen, let rect = state.confirmableSelectionRect {
-            let items = state.micMenuItems
-            let icon = Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let frame = Self.micMenuFrame(forSelection: rect, in: bounds, itemCount: items.count, fullScreen: state.mode == .fullScreen, devMode: state.isDevMode)
-            let down = Self.menuOpensDownward(menuFrame: frame, iconFrame: icon)
-
-            menuPanel(frame: frame) {
-                VStack(spacing: 0) {
-                    menuSectionHeader("Microphone")
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        let selected = item.id == state.selectedMicrophoneID
-                        let hovered = state.highlightedMicIndex == index
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.vfTextPrimary)
-                                .opacity(selected ? 1 : 0)
-                                .frame(width: 14)
-                            Text(item.name)
-                                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                                .foregroundStyle(selected || hovered ? Color.vfTextPrimary : Color.vfTextSecondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: Self.micMenuRowHeight)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(menuRowHighlight(selected: selected, hovered: hovered))
-                    }
-                }
-                .padding(.vertical, Self.menuVPad)
-            }
-
-            menuCaret(centerX: icon.midX, edgeY: down ? frame.minY : frame.maxY, pointingUp: down, panel: frame)
-        }
     }
 
     // MARK: - Dev-settings menu (agent + project, Dev Mode only)
@@ -1988,8 +1608,7 @@ struct AreaSelectorView: View {
             .frame(height: Self.devMenuDividerBand)
     }
 
-    /// The compact icon toolbar: one rounded container holding the mode switch,
-    /// a divider, the model/mic/(dev-settings) icon buttons, and the Record pill.
+    /// The compact toolbar: Record, plus Dev settings when Dev Mode is active.
     /// Each control is positioned at the exact static frame the controller
     /// hit-tests against (the SwiftUI tree is hit-test-disabled).
     @ViewBuilder
@@ -1998,42 +1617,11 @@ struct AreaSelectorView: View {
             let fullScreen = state.mode == .fullScreen
             let devMode = state.isDevMode
             let container = Self.toolbarFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-            let switchFrame = Self.devToggleFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-            let modelFrame = Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-            let micFrame = Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
             let recFrame = Self.recordButtonFrame(forSelection: rect, in: bounds, fullScreen: fullScreen, devMode: devMode)
-            let layout = Self.compactLayout(devMode: devMode)
-            let dividerLineX = container.minX + layout.dividerX
-
             // One shared container wearing the recording-pill chrome.
             toolbarContainerChrome
                 .frame(width: container.width, height: container.height)
                 .position(x: container.midX, y: container.midY)
-
-            // Mode switch (Ask | Dev) — the leading control.
-            modeSwitchControl
-                .frame(width: switchFrame.width, height: switchFrame.height)
-                .position(x: switchFrame.midX, y: switchFrame.midY)
-
-            // Vertical hairline separating the switch from the controls — inset
-            // to the same vertical band as the well + icon buttons (4pt top/
-            // bottom) so nothing spans the full container height.
-            Rectangle()
-                .fill(Color.white.opacity(0.12))
-                .frame(width: Self.dividerWidth, height: container.height - Self.scaled(8))
-                .position(x: dividerLineX, y: container.midY)
-
-            // Model button (sparkles + model name + chevron) + mic icon button.
-            // Tooltips are drawn by `toolbarTooltip` (controller-driven hover)
-            // rather than `.help`, which can't fire through the overlay's
-            // hit-test-disabled SwiftUI tree.
-            modelButton
-                .frame(width: modelFrame.width, height: modelFrame.height)
-                .position(x: modelFrame.midX, y: modelFrame.midY)
-
-            iconButton(system: "mic", menuOpen: state.isMicMenuOpen, hovered: state.isMicChipHovered)
-                .frame(width: micFrame.width, height: micFrame.height)
-                .position(x: micFrame.midX, y: micFrame.midY)
 
             // Dev-settings icon (Dev Mode only).
             if devMode {
@@ -2181,24 +1769,6 @@ struct AreaSelectorView: View {
             return (Self.autoDetectInfoTooltip, anchor, 240)
         }
 
-        // Any other dropdown / the upgrade popup open → no toolbar tooltips
-        // (they'd collide with the open surface).
-        if state.isModelMenuOpen || state.isMicMenuOpen || state.isUpgradePopupOpen { return nil }
-
-        if state.isModeAskHovered {
-            return ("Ask", Self.modeAskSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
-        }
-        if state.isModeDevHovered {
-            return ("Dev Mode", Self.modeDevSegmentFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
-        }
-        if state.isModelChipHovered {
-            // The model name is shown in the button itself, so the tooltip is
-            // just the control's purpose.
-            return ("Model", Self.modelChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
-        }
-        if state.isMicChipHovered {
-            return ("Microphone: \(state.selectedMicrophoneName)", Self.micChipFrame(forSelection: rect, in: bounds, fullScreen: fs, devMode: dev), nil)
-        }
         if dev, state.isDevSettingsHovered {
             return ("Agent & project", Self.devSettingsIconFrame(forSelection: rect, in: bounds, fullScreen: fs), nil)
         }
@@ -2210,8 +1780,8 @@ struct AreaSelectorView: View {
     // One rounded container holds every control. Its background matches the
     // instruction pill (solid `vfPillBackground` + `vfOverlayBorder` stroke)
     // so the overlay chrome reads as one cohesive family. Green (`vfDevAccent`)
-    // appears ONLY on the active Dev segment, the dev-settings readiness dot, and
-    // inside the dev-settings menu; everything else is neutral and Record red.
+    // appears only in Dev-specific status and settings; everything else is
+    // neutral and Record remains red.
 
     /// Shared opaque chrome for the toolbar container — same treatment as the
     /// instruction pill, with a soft drop shadow for legibility over arbitrary
@@ -2224,110 +1794,6 @@ struct AreaSelectorView: View {
                     .strokeBorder(Color.vfOverlayBorder, lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.35), radius: Self.scaled(18), y: Self.scaled(6))
-    }
-
-    // MARK: Mode switch
-
-    /// The two-segment mode switch: Ask (wand) | Dev (`</>`), inside a
-    /// recessed well. The active segment is highlighted — Ask → neutral
-    /// neutral control fill, Dev → green `vfDevAccent` tint + green icon — and the inactive
-    /// segment's icon is dimmed. Clicking maps to the mode (Part 5 hit-tests the
-    /// two halves separately).
-    private var modeSwitchControl: some View {
-        HStack(spacing: Self.scaled(0)) {
-            modeSegment(
-                system: "wand.and.stars",
-                active: !state.isDevMode, isDev: false,
-                hovered: state.isModeAskHovered
-            )
-            modeSegment(
-                system: "chevron.left.forwardslash.chevron.right",
-                active: state.isDevMode, isDev: true,
-                hovered: state.isModeDevHovered
-            )
-        }
-        .padding(Self.scaled(3))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.black.opacity(0.18))
-        )
-        // Match the icon buttons' vertical inset so the recessed well doesn't
-        // touch the container's top/bottom — equal breathing room on every
-        // component. The hit-test frame stays full-height (rendering only).
-        .padding(.vertical, Self.scaled(4))
-    }
-
-    private func modeSegment(system: String, active: Bool, isDev: Bool, hovered: Bool) -> some View {
-        let fill: Color = active
-            ? (isDev ? Color.vfDevAccent.opacity(0.22) : Color.vfControlBackground)
-            : (hovered ? Color.white.opacity(0.06) : .clear)
-        let iconColor: Color = active
-            ? (isDev ? Color.vfDevAccent : Color.vfTextPrimary)
-            : Color.vfTextTertiary
-        // The active/hover highlight is a circular knob so the capsule well +
-        // round knob read as a toggle switch.
-        return Image(systemName: system)
-            .font(.system(size: Self.scaledGlyph(14), weight: .medium))
-            .foregroundStyle(iconColor)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                Circle().fill(fill)
-            )
-    }
-
-    // MARK: Icon buttons
-
-    /// A neutral icon + chevron button (model / mic). The chevron flips when its
-    /// dropdown is open; a subtle rounded fill brightens on hover/open.
-    private func iconButton(system: String, menuOpen: Bool, hovered: Bool) -> some View {
-        HStack(spacing: Self.scaled(3)) {
-            Image(systemName: system)
-                .font(.system(size: Self.scaledGlyph(14), weight: .medium))
-                .foregroundStyle(Color.vfTextSecondary)
-            Image(systemName: "chevron.down")
-                .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
-                .foregroundStyle(Color.vfTextTertiary)
-                .rotationEffect(.degrees(menuOpen ? 180 : 0))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(iconButtonFill(active: menuOpen, hovered: hovered))
-    }
-
-    /// The model picker: sparkles + the selected model NAME + chevron (the name
-    /// reads in the toolbar, so the hover tooltip just says "Model"). The button
-    /// width tracks the name via `Self.modelButtonWidth` (kept current by the
-    /// controller), so the SwiftUI label here never needs to negotiate width —
-    /// it sits in the frame the geometry already reserved.
-    private var modelButton: some View {
-        HStack(spacing: Self.modelLabelGap) {
-            Image(systemName: "sparkles")
-                .font(.system(size: Self.scaledGlyph(14), weight: .medium))
-                .foregroundStyle(Color.vfTextSecondary)
-            Text(state.selectedModelName)
-                .font(Font(Self.modelLabelFont))
-                .foregroundStyle(Color.vfTextPrimary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .fixedSize()
-            // Locked (trial): a lock glyph where the dropdown chevron would be —
-            // tapping opens the upgrade popup, not the model list. Same muted
-            // tertiary treatment + ~8pt size as the chevron so the chip baseline
-            // is unchanged.
-            if state.isModelPickerLocked {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
-                    .foregroundStyle(Color.vfTextTertiary)
-            } else {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: Self.scaledGlyph(8), weight: .semibold))
-                    .foregroundStyle(Color.vfTextTertiary)
-                    .rotationEffect(.degrees(state.isModelMenuOpen ? 180 : 0))
-            }
-        }
-        .padding(.horizontal, Self.modelButtonHPad)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(iconButtonFill(active: state.isModelMenuOpen || state.isUpgradePopupOpen, hovered: state.isModelChipHovered))
     }
 
     /// Dev-settings icon (Dev Mode only): terminal + chevron with a readiness
@@ -2372,8 +1838,8 @@ struct AreaSelectorView: View {
     // MARK: Record pill
 
     /// The labeled Record button — a fully-rounded red capsule, inset slightly
-    /// within the container. Its vertical inset (`scaled(4)`) matches the model/
-    /// mic/dev dropdown buttons so it reads the same height as them. Always
+    /// within the container. Its vertical inset (`scaled(4)`) matches the Dev
+    /// settings button so it reads the same height. Always
     /// `vfRecordingRed`, never green; a subtle white tint on hover.
     private var recordPill: some View {
         ZStack {
@@ -2568,7 +2034,7 @@ struct AreaSelectorView: View {
             menuPanel(frame: panel) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .center, spacing: 0) {
-                        Text("\(step.rawValue + 1) of \(ToolbarWalkthroughStep.allCases.count)")
+                        Text("\((state.toolbarWalkthroughPosition ?? 0) + 1) of \(state.toolbarWalkthroughCount)")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.vfTextTertiary)
                         Spacer(minLength: 8)
@@ -2600,7 +2066,7 @@ struct AreaSelectorView: View {
             }
 
             // Back — hidden on the first step; quiet text button.
-            if step != .mode {
+            if state.toolbarWalkthroughPosition != 0 {
                 Text("Back")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.vfTextSecondary)
@@ -2790,26 +2256,12 @@ private struct PulseLoginBackdrop: View {
 }
 
 /// Settled-selection variant: the drag has ENDED, so the full floating
-/// toolbar renders — model chip, mic chip, Record — the state to eyeball
-/// after any frame-math change (the controls must not overlap and the
-/// cluster must stay centered under the selection).
+/// toolbar renders — Record in Ask Mode — the state to eyeball after any
+/// frame-math change.
 #Preview("Settled — toolbar") {
     ZStack {
         PulseLoginBackdrop()
         AreaSelectorView(state: makeSettledPreviewState())
-    }
-    .frame(width: 1000, height: 640)
-}
-
-/// Settled + the model dropdown open.
-#Preview("Settled — model menu open") {
-    ZStack {
-        PulseLoginBackdrop()
-        AreaSelectorView(state: {
-            let s = makeSettledPreviewState()
-            s.toggleModelMenu()
-            return s
-        }())
     }
     .frame(width: 1000, height: 640)
 }
@@ -2829,8 +2281,8 @@ private struct PulseLoginBackdrop: View {
     .frame(width: 1000, height: 640)
 }
 
-/// Dev Mode on: the Dev segment of the mode switch is active (green) and the
-/// dev-settings icon appears with an amber readiness dot (folder unset).
+/// Dev Mode launched from its shortcut: the dev-settings icon appears with an
+/// amber readiness dot (folder unset).
 #Preview("Dev Mode — folder unset") {
     ZStack {
         PulseLoginBackdrop()
@@ -2909,9 +2361,8 @@ private struct PulseLoginBackdrop: View {
     .frame(width: 1200, height: 700)
 }
 
-/// Walkthrough step 1 (mode switch): scrim + spotlight on the whole mode
-/// switch, callout above with no Back button.
-#Preview("Walkthrough — 1 mode") {
+/// Ask walkthrough: Record is the only step, with no Back button.
+#Preview("Walkthrough — Ask record") {
     ZStack {
         PulseLoginBackdrop()
         AreaSelectorView(state: {
@@ -2923,33 +2374,25 @@ private struct PulseLoginBackdrop: View {
     .frame(width: 1000, height: 640)
 }
 
-/// Walkthrough step 4 (agent settings): the state machine borrows Dev Mode
-/// for display, so the toolbar grows the dev-settings icon and the spotlight
-/// lands on it. Back + Next both visible.
-#Preview("Walkthrough — 4 agent (Dev revealed)") {
+/// Dev walkthrough step 1: agent settings, with no Back button.
+#Preview("Walkthrough — Dev agent") {
     ZStack {
         PulseLoginBackdrop()
         AreaSelectorView(state: {
             let s = makeWalkthroughPreviewState()
-            s.advanceToolbarWalkthrough() // model
-            s.advanceToolbarWalkthrough() // mic
-            s.advanceToolbarWalkthrough() // agent — Dev layout revealed
             return s
         }())
     }
     .frame(width: 1000, height: 640)
 }
 
-/// Walkthrough step 5 (record): still in the Dev layout, spotlight on the
+/// Dev walkthrough step 2 (record): spotlight on the
 /// Record pill, and the primary button reads "Got it".
-#Preview("Walkthrough — 5 record (Got it)") {
+#Preview("Walkthrough — Dev record (Got it)") {
     ZStack {
         PulseLoginBackdrop()
         AreaSelectorView(state: {
             let s = makeWalkthroughPreviewState()
-            s.advanceToolbarWalkthrough() // model
-            s.advanceToolbarWalkthrough() // mic
-            s.advanceToolbarWalkthrough() // agent
             s.advanceToolbarWalkthrough() // record — "Got it"
             return s
         }())
@@ -2957,15 +2400,12 @@ private struct PulseLoginBackdrop: View {
     .frame(width: 1000, height: 640)
 }
 
-/// Settled state + agent/folder seeded (green readiness dot once the tour
-/// reveals the Dev layout) with the walkthrough started at step 1.
+/// Settled Dev state + agent/folder seeded with the walkthrough at step 1.
 @MainActor
 private func makeWalkthroughPreviewState() -> AreaSelectorState {
     let s = makeSettledPreviewState()
-    // Dev OFF pre-tour (the walkthrough borrows it for display); agent +
-    // folder chosen so the dev-settings icon's readiness dot shows green.
     s.setDevState(
-        isDevMode: false, agentID: "claude-code", agentName: "Claude Code",
+        isDevMode: true, agentID: "claude-code", agentName: "Claude Code",
         projectURL: URL(fileURLWithPath: "/Users/you/dev/my-site", isDirectory: true)
     )
     seedDevAgents(s)
@@ -2987,23 +2427,6 @@ private func makeSettledPreviewState() -> AreaSelectorState {
     s.beginDrag(at: CGPoint(x: 160, y: 110))
     s.updateDrag(to: CGPoint(x: 840, y: 420))
     s.endDrag(at: CGPoint(x: 840, y: 420))
-    s.setMicrophones(
-        [.init(id: "mic-1", name: "MacBook Pro Microphone")],
-        selectedID: "mic-1"
-    )
-    // Production rows carry no per-model credit detail (detail is nil unless
-    // BYOK key-gated), so the preview mirrors that for a faithful menu snapshot.
-    s.setModels(
-        [
-            .init(id: "gpt-5.4-mini", name: "GPT-5.4 mini", detail: nil, recommended: false, gated: false),
-            .init(id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", detail: nil, recommended: true, gated: false),
-            .init(id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", detail: nil, recommended: false, gated: false),
-            .init(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", detail: nil, recommended: false, gated: false),
-            .init(id: "claude-opus-4-7", name: "Claude Opus 4.7", detail: nil, recommended: false, gated: false),
-            .init(id: "gpt-5.5", name: "GPT-5.5", detail: nil, recommended: false, gated: false),
-        ],
-        selectedID: "gemini-3.5-flash"
-    )
     return s
 }
 
