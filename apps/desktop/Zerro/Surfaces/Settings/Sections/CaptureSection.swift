@@ -56,7 +56,7 @@ final class MicDeviceList {
 
     /// The two fields the picker renders — decoupled from AVCaptureDevice
     /// so tests can inject a fake source.
-    struct Device: Equatable {
+    struct Device: Equatable, Sendable {
         let id: String
         let name: String
     }
@@ -78,7 +78,7 @@ final class MicDeviceList {
 
     /// The production device source — the same discovery session the row
     /// has always used.
-    static func liveDevices() -> [Device] {
+    nonisolated static func liveDevices() -> [Device] {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .external],
             mediaType: .audio,

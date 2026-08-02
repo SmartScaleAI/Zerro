@@ -21,13 +21,13 @@ export const FUNCTIONS_BASE_URL =
   "https://wjxqmurgwyxwkezncxke.supabase.co/functions/v1";
 
 /**
- * Direct LemonSqueezy subscription checkout link for the Managed plan.
+ * Direct LemonSqueezy subscription checkout link for Zerro Cloud.
  *
  * Not used yet: every pricing CTA currently points to DOWNLOAD_URL, since users
  * download the app, get 30 free credits, then subscribe in-app. This is a
- * placeholder for if/when the Managed card links straight to checkout.
+ * placeholder for if/when the Zerro Cloud card links straight to checkout.
  *
  * TODO(Colin): paste the LemonSqueezy checkout URL (the same one used in the
- * app's BillingLinks) and wire the Managed CTA in pricing.tsx to it.
+ * app's BillingLinks) and wire the Zerro Cloud CTA in pricing.tsx to it.
  */
-export const MANAGED_CHECKOUT_URL = ""; // TODO: LemonSqueezy Managed checkout
+export const CLOUD_CHECKOUT_URL = ""; // TODO: LemonSqueezy Zerro Cloud checkout

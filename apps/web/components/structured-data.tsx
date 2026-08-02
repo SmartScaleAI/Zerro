@@ -75,8 +75,8 @@ export function SoftwareApplicationJsonLd() {
           "Returns the right output for the task: agent prompt, message, snippet, document, or a plain-language answer",
           "Native Swift & SwiftUI menu-bar app built on ScreenCaptureKit",
           "Local-first processing: your recording is prepared locally on your machine",
-          "Managed plan handles the AI for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
-          "30 free credits to start: no card, no key, no time limit",
+          "Zerro Cloud handles model access for you, or bring your own OpenAI, Gemini & Anthropic keys stored in macOS Keychain",
+          "Choose 30 Zerro Cloud Trial credits or 10 BYOK Trial generations: no card or time limit",
           "3-minute recording cap keeps each request fast and predictable",
           "Signed & notarized .dmg distribution",
           "Sparkle auto-updates",
@@ -84,10 +84,10 @@ export function SoftwareApplicationJsonLd() {
         offers: [
           {
             "@type": "Offer",
-            name: "Managed",
+            name: "Zerro Cloud",
             price: "15",
             priceCurrency: "USD",
-            description: `Managed plan: we handle the AI, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across ${SELECTABLE_MODEL_COUNT} models (${MODEL_VENDORS}); credit cost per generation varies by model, with top-ups available.`,
+            description: `Zerro Cloud: we handle model access, no keys or setup. $15/mo or $12/mo billed yearly ($144/yr). 300 credits per month across ${SELECTABLE_MODEL_COUNT} models (${MODEL_VENDORS}); credit cost per generation varies by model, with top-ups available.`,
             availability: "https://schema.org/InStock",
           },
           {

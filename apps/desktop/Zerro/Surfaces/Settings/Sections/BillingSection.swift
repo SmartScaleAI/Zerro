@@ -34,6 +34,11 @@ import SwiftUI
 struct BillingSection: View {
     @Environment(EntitlementStore.self) private var entitlements
     @State private var model = BillingLicenseModel(expectedProduct: .managed)
+    let isCloudSetupPreview: Bool
+
+    init(isCloudSetupPreview: Bool = false) {
+        self.isCloudSetupPreview = isCloudSetupPreview
+    }
 
     var body: some View {
         SettingsSection("Plan & Credits") {
@@ -45,7 +50,7 @@ struct BillingSection: View {
                 UsageMeterRow()
                 SettingsRowDivider()
             }
-            CurrentPlanRow()
+            CurrentPlanRow(isCloudSetupPreview: isCloudSetupPreview)
             // Phase F: persistent "verify your email to start your free trial"
             // affordance for trial users who haven't verified yet (existing
             // users from before the required onboarding step, or anyone who took
@@ -237,6 +242,7 @@ final class BillingLicenseModel {
 
 private struct CurrentPlanRow: View {
     @Environment(EntitlementStore.self) private var entitlements
+    let isCloudSetupPreview: Bool
 
     var body: some View {
         SettingsRow(
@@ -252,22 +258,28 @@ private struct CurrentPlanRow: View {
         switch entitlements.state {
         case .trial(let creditsRemaining):
             // §1.5: the unit is CREDITS, never a flat generation count.
-            guard let creditsRemaining else { return "Your free trial is active." }
+            guard let creditsRemaining else { return "Your Zerro Cloud Trial is active." }
             return creditsRemaining == 1
-                ? "1 trial credit left."
-                : "\(creditsRemaining) trial credits left."
+                ? "Your Zerro Cloud Trial has 1 credit left."
+                : "Your Zerro Cloud Trial has \(creditsRemaining) credits left."
         case .expired:
-            return "You\u{2019}ve used your trial credits. Subscribe below to keep going."
+            return "Your Zerro Cloud Trial is complete. Subscribe below to keep going."
         case .byokTrial(let generationsRemaining):
+            if isCloudSetupPreview {
+                return "Your BYOK Trial remains active while you set up Zerro Cloud. A second free trial is not included."
+            }
             return generationsRemaining == 1
                 ? "Your own-key trial has 1 successful generation left."
                 : "Your own-key trial has \(generationsRemaining) successful generations left."
         case .byokTrialExpired:
+            if isCloudSetupPreview {
+                return "Your BYOK Trial is complete. Subscribe and activate Zerro Cloud to switch."
+            }
             return "You completed 10 own-key trial generations. Get a BYOK license to keep using your keys."
         case .byok:
             // Shown only transiently (a `.byok` user previewing the Managed
             // pane via the switch link); never the lifetime-license framing.
-            return "You\u{2019}re on BYOK. Subscribe below to switch to Zerro-hosted credits."
+            return "BYOK remains active until you subscribe and activate Zerro Cloud."
         case .managed:
             return managedDescription
         }
@@ -285,8 +297,10 @@ private struct CurrentPlanRow: View {
     /// known, or a bare "Trial" before the user has been granted any
     /// (the "Free Trial Credits" verify row sits below for that case).
     private func trialPillText(creditsRemaining: Int?) -> String {
-        guard let creditsRemaining else { return "Trial" }
-        return creditsRemaining == 1 ? "Trial \u{00B7} 1 left" : "Trial \u{00B7} \(creditsRemaining) left"
+        guard let creditsRemaining else { return "Zerro Cloud Trial" }
+        return creditsRemaining == 1
+            ? "Zerro Cloud Trial \u{00B7} 1 left"
+            : "Zerro Cloud Trial \u{00B7} \(creditsRemaining) left"
     }
 
     @ViewBuilder
@@ -298,7 +312,7 @@ private struct CurrentPlanRow: View {
                 tint: Color.vfWarningAmber
             )
         case .expired:
-            PlanPill(text: "Expired", tint: Color.vfRecordingRed)
+            PlanPill(text: "Zerro Cloud Trial \u{00B7} Complete", tint: Color.vfRecordingRed)
         case .byokTrial(let generationsRemaining):
             PlanPill(
                 text: "BYOK Trial \u{00B7} \(generationsRemaining) left",
@@ -312,7 +326,7 @@ private struct CurrentPlanRow: View {
             // Past-due tints amber (a soft warning, not a block); active is green.
             let pastDue = entitlements.managedSnapshot?.isPastDue == true
             PlanPill(
-                text: pastDue ? "Managed \u{00B7} Past due" : "Managed",
+                text: pastDue ? "Zerro Cloud \u{00B7} Past due" : "Zerro Cloud",
                 tint: pastDue ? Color.vfWarningAmber : Color.vfSuccessGreen
             )
         }
@@ -328,8 +342,8 @@ private struct CurrentPlanRow: View {
 private struct TrialVerifyRow: View {
     var body: some View {
         SettingsRow(
-            label: "Free Trial Credits",
-            description: "Verify your email to start your free trial: server-funded credits, no API key needed."
+            label: "Zerro Cloud Trial",
+            description: "Verify your email to start your Zerro Cloud Trial. No API key is required."
         ) {
             Button("Verify email") {
                 AppDelegate.openTrialEmailCapture()
@@ -751,7 +765,7 @@ private struct UsageMeterRow: View {
             Text(CreditDisplay.creditsHeadline(credits))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.vfTextPrimary)
-            Text("left in your free trial")
+            Text("left in your Zerro Cloud Trial")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.vfTextSecondary)
             Spacer(minLength: 0)
@@ -768,7 +782,7 @@ private struct UsageMeterRow: View {
                 Text("Running low. Upgrade to keep going")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.vfWarningAmber)
-                Button("Upgrade to Managed") {
+                Button("Upgrade to Zerro Cloud") {
                     openCheckout(BillingLinks.proCheckoutURL, product: .subscriptionPro,
                                  trialGrantId: entitlements.trialGrantIdForCheckout)
                 }

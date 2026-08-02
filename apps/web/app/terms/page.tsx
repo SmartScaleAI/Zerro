@@ -52,7 +52,7 @@ export default function TermsPage() {
         <P>
           The anonymous BYOK trial does not require an account or email. If you
           create an account, you must provide accurate information. We do not
-          use passwords: Managed trial access is tied to your verified email
+          use passwords: Zerro Cloud Trial access is tied to your verified email
           address and paid access uses your Lemon Squeezy license key. Keep
           your email account, license key, and provider API keys secure; you are
           responsible for activity through them. You must be at least 13 years
@@ -63,7 +63,7 @@ export default function TermsPage() {
       <LegalSection title="Plans, billing, and credits">
         <UL>
           <li>
-            <Strong>Managed plan.</Strong> A recurring subscription billed
+            <Strong>Zerro Cloud.</Strong> A recurring subscription billed
             through Lemon Squeezy, our merchant of record. Generations consume
             credits that vary by model; unused credits do not roll over unless
             stated otherwise. Optional top-up packs may be available.
@@ -79,7 +79,7 @@ export default function TermsPage() {
           </li>
           <li>
             <Strong>Trials.</Strong> You may choose either 30 server-funded
-            Managed trial credits, which require email verification, or 10
+            Zerro Cloud Trial credits, which require email verification, or 10
             successful BYOK trial generations using your own provider keys,
             which require no email. The two trial types cannot be combined and
             are limited to one free trial per Mac. Failed generations and

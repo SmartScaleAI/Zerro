@@ -14,7 +14,6 @@
 //
 
 import AppKit
-import AVFoundation
 import SwiftUI
 
 // MARK: - MenuBarBillingAction
@@ -104,6 +103,11 @@ struct MenuBarPanelView: View {
     @State private var showMicrophonePicker = false
     @State private var micRowHovered = false
     @State private var micPanelHovered = false
+    /// Prefetched off the main actor when the menu opens. Keeping discovery out
+    /// of `MicrophonePicker.onAppear` prevents AVFoundation enumeration from
+    /// blocking the hover presentation and gives the flyout its full row count
+    /// before its first size measurement in the common case.
+    @State private var microphoneDevices: [MicDeviceList.Device] = []
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
@@ -131,6 +135,10 @@ struct MenuBarPanelView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        // Read the prefetched list while building this view so its arrival
+        // invalidates the presenter and supplies a new, fully sized root view.
+        let prefetchedMicrophoneDevices = microphoneDevices
+
         VStack(spacing: 0) {
             header
 
@@ -155,13 +163,11 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
-            // Phase A library-stays-readable rule: "Copy last result" and
-            // "Recent Results" read RecentPromptStore directly and never
-            // consult EntitlementStore.canGenerate — reading/copying past
+            // Recent Results reads RecentPromptStore directly and never
+            // consults EntitlementStore.canGenerate — reading/copying past
             // prompts stays open in every entitlement state, `.expired`
             // included. Only the recording START path (handleHotkey) gates;
-            // do not add an entitlement check to these rows.
-            CopyLastPromptRow()
+            // do not add an entitlement check to this row.
             MenuRow(
                 label: "Recent Results",
                 trailing: .submenu,
@@ -253,7 +259,7 @@ struct MenuBarPanelView: View {
             // Same hover-opened trailing flyout as Recent Prompts — the
             // input device list with the current selection checked.
             .submenuFlyout(isPresented: $showMicrophonePicker) {
-                MicrophonePicker()
+                MicrophonePicker(devices: prefetchedMicrophoneDevices)
                     .environment(preferences)
                     .onHover { hovering in
                         micPanelHovered = hovering
@@ -433,6 +439,9 @@ struct MenuBarPanelView: View {
                 openWindow(id: OnboardingScene.windowID)
             }
         }
+        .task {
+            await refreshMicrophoneDevices()
+        }
     }
 
     // MARK: - Header row
@@ -506,7 +515,7 @@ struct MenuBarPanelView: View {
             let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
             return "Ready \u{00B7} \(credits)"
         case .expired:
-            return "Trial ended"
+            return "Zerro Cloud Trial complete"
         case .byokTrialExpired:
             return "Trial complete"
         }
@@ -548,7 +557,7 @@ struct MenuBarPanelView: View {
     /// verification window and closes the dropdown.
     private func trialVerifyBanner() -> some View {
         HStack(spacing: 0) {
-            Text("Verify your email to start your free trial")
+            Text("Verify your email to start your Zerro Cloud Trial")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfBrandAccent)
                 .fixedSize()
@@ -579,8 +588,8 @@ struct MenuBarPanelView: View {
         HStack(spacing: 0) {
             Text(
                 generationsRemaining == 1
-                    ? "Own-key trial \u{00B7} 1 generation left"
-                    : "Own-key trial \u{00B7} \(generationsRemaining) generations left"
+                    ? "BYOK Trial \u{00B7} 1 generation left"
+                    : "BYOK Trial \u{00B7} \(generationsRemaining) generations left"
             )
             .font(.system(size: 11))
             .foregroundStyle(
@@ -599,8 +608,8 @@ struct MenuBarPanelView: View {
     /// cost varies by model, so "N generations" would mislead.
     private static func trialLineText(credits: Int) -> String {
         credits == 1
-            ? "1 free trial credit left"
-            : "\(credits) free trial credits left"
+            ? "Zerro Cloud Trial \u{00B7} 1 credit left"
+            : "Zerro Cloud Trial \u{00B7} \(credits) credits left"
     }
 
     // MARK: - Low-balance top-up / upgrade (multi-model 6B.4)
@@ -627,7 +636,7 @@ struct MenuBarPanelView: View {
     /// the row doesn't flash the panel open; the (shorter) close delay lets
     /// the cursor cross the arrow gap from the row into the panel without it
     /// snapping shut.
-    private static let panelOpenDelayMS = 250
+    private static let panelOpenDelayMS = 100
     private static let panelCloseDelayMS = 180
 
     /// Debounced show/hide for a hover side panel. `hovered` is the desired
@@ -647,6 +656,17 @@ struct MenuBarPanelView: View {
                 setVisible(hovered)
             }
         }
+    }
+
+    /// AVFoundation device discovery can occasionally take long enough to make
+    /// a hover-opened menu feel stuck. Run it away from the main actor and only
+    /// publish the small Sendable display values back into SwiftUI.
+    private func refreshMicrophoneDevices() async {
+        let devices = await Task.detached(priority: .userInitiated) {
+            MicDeviceList.liveDevices()
+        }.value
+        guard !Task<Never, Never>.isCancelled else { return }
+        microphoneDevices = devices
     }
 
     private var menuDivider: some View {
@@ -875,10 +895,10 @@ struct MenuRow: View {
 
 // MARK: - BillingActionRow
 //
-// The single consolidated billing row's view. Like CopyLastPromptRow it can
-// carry a smaller secondary line below the label (the folded-in past-due
-// warning), so it breaks the uniform tight row height only when there's a
-// nudge to show; otherwise it reads as an ordinary MenuRow.
+// The single consolidated billing row's view. It can carry a smaller secondary
+// line below the label (the folded-in past-due warning), so it breaks the
+// uniform tight row height only when there's a nudge to show; otherwise it
+// reads as an ordinary MenuRow.
 
 private struct BillingActionRow: View {
     let label: String
@@ -915,71 +935,6 @@ private struct BillingActionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-    }
-}
-
-// MARK: - CopyLastPromptRow
-//
-// The one row that breaks the uniform tight row height — main label
-// plus a smaller dimmer secondary preview line below showing which
-// prompt will be copied. Phase 11: reads the most-recent entry from the
-// RecentPromptStore in the environment; clicking copies that prompt's
-// full body to the clipboard. When the history is empty the row renders
-// disabled with a "No results yet" preview line.
-
-private struct CopyLastPromptRow: View {
-    @Environment(RecentPromptStore.self) private var recentPrompts
-    @State private var isHovered = false
-
-    private var entry: RecentPrompt? { recentPrompts.mostRecent }
-
-    private var isDisabled: Bool { entry == nil }
-    private var isActive: Bool { isHovered && !isDisabled }
-
-    private var primaryColor: Color {
-        isDisabled ? Color.vfTextTertiary : Color.vfTextPrimary
-    }
-
-    private var secondaryColor: Color {
-        if isDisabled { return Color.vfTextTertiary.opacity(0.7) }
-        return isActive ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary
-    }
-
-    var body: some View {
-        Button(action: copyToClipboard) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Copy last result")
-                    .font(.system(size: 13))
-                    .foregroundStyle(primaryColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry?.title ?? "No results yet")
-                    .font(.system(size: 11))
-                    .foregroundStyle(secondaryColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
-            .padding(.vertical, MenuMetrics.rowVerticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
-                    .fill(isActive ? Color.vfMenuRowHover : Color.clear)
-            )
-            .contentShape(Rectangle())
-            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .onHover { isHovered = $0 }
-    }
-
-    private func copyToClipboard() {
-        guard let entry else { return }
-        // Phase 5: per-type payload, same semantics as the live pill —
-        // artifact body / chat text / raw fallback.
-        Pasteboard.copy(entry.copyPayload)
-        // Close the dropdown once the prompt is on the clipboard.
-        MenuBarExtraDismiss.dismiss()
     }
 }
 
@@ -1251,17 +1206,17 @@ private struct MicrophonePicker: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(\.submenuDismiss) private var dismiss
 
-    @State private var devices: [AVCaptureDevice] = []
+    let devices: [MicDeviceList.Device]
 
     var body: some View {
         VStack(spacing: 0) {
             row(id: "", name: "System Default")
-            ForEach(devices, id: \.uniqueID) { device in
-                row(id: device.uniqueID, name: device.localizedName)
+            ForEach(devices, id: \.id) { device in
+                row(id: device.id, name: device.name)
             }
         }
         .frame(width: 260)
-        .onAppear(perform: refreshDevices)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func row(id: String, name: String) -> some View {
@@ -1276,17 +1231,8 @@ private struct MicrophonePicker: View {
     /// matching the Settings picker's behavior.
     private func isSelected(_ id: String) -> Bool {
         let stored = preferences.microphoneDeviceID
-        let effective = devices.contains(where: { $0.uniqueID == stored }) ? stored : ""
+        let effective = devices.contains(where: { $0.id == stored }) ? stored : ""
         return effective == id
-    }
-
-    private func refreshDevices() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
-        devices = session.devices
     }
 }
 
@@ -1356,7 +1302,7 @@ private struct EntitlementDebugPicker: View {
             // Phase E: overlay a `past_due` snapshot on the current Managed
             // state so the "update your card" nudge (§9.1) is testable.
             EntitlementDebugRow(
-                name: "Managed · Past due",
+                name: "Zerro Cloud \u{00B7} Past due",
                 isSelected: entitlements.managedSnapshot?.isPastDue == true
             ) {
                 entitlements.devForceManagedPastDue()

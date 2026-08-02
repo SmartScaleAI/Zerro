@@ -75,9 +75,9 @@ export default function PrivacyPage() {
       <LegalSection title="Information we collect">
         <P>
           <Strong>Account information.</Strong> We collect your email address
-          if you choose the Managed free trial or create a paid account. The
-          anonymous BYOK trial does not require an email or account. Managed
-          trial users verify their email with a one-time 6-digit code; paid
+          if you choose the Zerro Cloud Trial or create a paid account. The
+          anonymous BYOK trial does not require an email or account. Zerro Cloud
+          Trial users verify their email with a one-time 6-digit code; paid
           access uses a license key issued by Lemon Squeezy. We do not offer
           social sign-in (such as Apple or Google), and there is no password to
           manage. Authentication and our database are handled by Supabase.
@@ -89,9 +89,9 @@ export default function PrivacyPage() {
           and billing events needed to operate your account.
         </P>
         <P>
-          <Strong>Recordings (Managed and Trial plans).</Strong> When you start
-          a recording, the app captures the screen region you select and your
-          voice. Your Mac first prepares the recording locally and masks
+          <Strong>Recordings (Zerro Cloud and Zerro Cloud Trial).</Strong> When
+          you start a recording, the app captures the screen region you select
+          and your voice. Your Mac first prepares the recording locally and masks
           detected secrets before upload. This masking is best-effort: it scans
           on-screen text for common structured secrets (such as API keys and
           tokens), so it can miss things, and it does not apply to your spoken
@@ -143,7 +143,7 @@ export default function PrivacyPage() {
           its own terms to carry out the work you request.
         </P>
         <P>
-          <Strong>Usage data.</Strong> For Managed generations, we record
+          <Strong>Usage data.</Strong> For Zerro Cloud generations, we record
           per-generation metadata (token counts, estimated cost, model,
           provider, and success) to operate credits and billing. For the
           anonymous BYOK trial, Zerro sends only the one-way device hash and a
@@ -154,7 +154,7 @@ export default function PrivacyPage() {
           and session identifiers for rate limiting and abuse prevention.
         </P>
         <P>
-          <Strong>Trial verification.</Strong> The Managed free trial requires
+          <Strong>Trial verification.</Strong> The Zerro Cloud Trial requires
           an email verified with a one-time code sent via Resend. We store only
           a hashed version of the code, never the raw code. The anonymous BYOK
           trial requires no email. To prevent trial abuse, both paths use a
@@ -222,8 +222,8 @@ export default function PrivacyPage() {
           needed to run Zerro: <Strong>Supabase</Strong> (authentication,
           database, and generation service), <Strong>OpenAI</Strong>,{" "}
           <Strong>Google (Gemini)</Strong>, and <Strong>Anthropic</Strong> (AI
-          model processing of recordings on Managed/Trial plans, direct model
-          processing on BYOK, and optional BYOK cloud transcription through
+          model processing of recordings on Zerro Cloud and the Zerro Cloud
+          Trial, direct model processing on BYOK, and optional BYOK cloud transcription through
           OpenAI), <Strong>Anthropic (Claude Code)</Strong>{" "}
           (the local coding agent that powers Dev Mode, a role separate from
           Anthropic&rsquo;s model API above), <Strong>Lemon Squeezy</Strong>{" "}
@@ -247,7 +247,7 @@ export default function PrivacyPage() {
             during generation only.
           </li>
           <li>
-            <Strong>Managed generated output:</Strong> cached up to 15 minutes
+            <Strong>Zerro Cloud generated output:</Strong> cached up to 15 minutes
             for retry safety, then purged. BYOK output is returned directly by
             your AI provider and is never cached by Zerro.
           </li>

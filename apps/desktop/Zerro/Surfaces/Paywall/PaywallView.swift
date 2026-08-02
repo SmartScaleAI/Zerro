@@ -106,7 +106,7 @@ struct PaywallCopy: Equatable {
     /// reassure the trial still works.
     static let upgrade = PaywallCopy(
         headline: "Upgrade your plan",
-        subheadline: "Your free trial is still active, so upgrade whenever you\u{2019}re ready. Managed gives you 300 credits a month across all \(ModelRegistry.selectableCountWord) models, with no API keys to manage.",
+        subheadline: "Your Zerro Cloud Trial is still active, so upgrade whenever you\u{2019}re ready. Zerro Cloud gives you 300 credits a month across all \(ModelRegistry.selectableCountWord) models, with no API keys required.",
         windowTitle: "Upgrade"
     )
     /// Managed user adding credits — point straight at the top-up packs.
@@ -127,7 +127,7 @@ struct PaywallCopy: Equatable {
     /// The Managed plan card's subtitle. Hoisted out of `PaywallView.body` so the
     /// model-count copy guard can assert on it like the other copy constants.
     static let managedCardSubtitle =
-        "We handle the AI. 300 credits a month across all \(ModelRegistry.selectableCountWord) models, no API key to manage. $12/mo if you choose yearly billing."
+        "Zerro handles model access. 300 credits a month across all \(ModelRegistry.selectableCountWord) models, no API key required. $12/mo if you choose yearly billing."
 }
 
 struct PaywallView: View {
@@ -290,7 +290,7 @@ struct PaywallView: View {
                     // yearly ($12/mo billed annually) is chosen on the
                     // LemonSqueezy page.
                     SubscriptionOptionCard(
-                        title: "Managed",
+                        title: "Zerro Cloud",
                         subtitle: PaywallCopy.managedCardSubtitle
                     )
 
@@ -638,7 +638,7 @@ private struct SubscriptionOptionCard: View {
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
 private struct ManagedPrivacyNote: View {
     var body: some View {
-        Text("Managed sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers and goes straight to that provider on your own key.")
+        Text("Zerro Cloud sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers and goes straight to that provider on your own key.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)
