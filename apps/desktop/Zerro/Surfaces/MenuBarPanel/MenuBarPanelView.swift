@@ -5,18 +5,15 @@
 //  Created by Colin Breeding on 5/27/26.
 //
 //  Configuration shelf hosted by `MenuBarExtra(.window)`. The panel reads
-//  `AppState` so the primary action row can flip between "Start Recording"
-//  and "Stop Recording" (and grey out during processing) without holding
-//  any local state of its own. Active timer / spinner UI still lives in
-//  the pill, not here. Styling targets a native-looking NSMenu: tight
+//  Recording starts only from the dedicated Ask/Dev global shortcuts; this
+//  panel links directly to their Settings pane. Active timer / spinner UI
+//  still lives in the pill. Styling targets a native-looking NSMenu: tight
 //  rows, full-row accent-blue fill with white text on hover (instant, no
 //  animation), hotkey hints as plain dimmed trailing text, hairline
 //  dividers.
 //
 
 import AppKit
-import AVFoundation
-import KeyboardShortcuts
 import SwiftUI
 
 // MARK: - MenuBarBillingAction
@@ -83,12 +80,6 @@ struct MenuBarPanelView: View {
     /// highlighted while the submenu is open.
     var highlightRecentPrompts: Bool = false
 
-    /// Begins the recording flow — same entry point as the global hotkey, so
-    /// it presents the area-selector overlay first (gating on onboarding /
-    /// permissions) rather than recording immediately. Wired by ZerroApp;
-    /// defaults to a no-op so previews compile.
-    var onStartRecording: () -> Void = {}
-
     @Environment(AppState.self) private var appState
     @Environment(PreferencesStore.self) private var preferences
     @Environment(RecentPromptStore.self) private var recentPrompts
@@ -103,20 +94,20 @@ struct MenuBarPanelView: View {
     @State private var showRecentPrompts = false
     @State private var recentRowHovered = false
     @State private var recentPanelHovered = false
+    /// Drives the Model picker side panel beside the Microphone picker.
+    @State private var showModelPicker = false
+    @State private var modelRowHovered = false
+    @State private var modelPanelHovered = false
     /// Drives the Microphone picker side panel (a trailing flyout). Opened
     /// on hover via `micRowHovered` / `micPanelHovered`.
     @State private var showMicrophonePicker = false
     @State private var micRowHovered = false
     @State private var micPanelHovered = false
-    /// Bumped when the Settings recorder finishes a rebind so the
-    /// Start/Stop Recording hotkey hint re-reads the current shortcut
-    /// from KeyboardShortcuts (which persists to UserDefaults — there's
-    /// no SwiftUI binding to subscribe to). Same mechanism as
-    /// HotkeyDisplay, including its caveat: the notification name is
-    /// the library's internal one, and the worst case if a future
-    /// version renames it is a stale hint until the panel reopens.
-    @State private var hotkeyRefreshTick: Int = 0
-
+    /// Prefetched off the main actor when the menu opens. Keeping discovery out
+    /// of `MicrophonePicker.onAppear` prevents AVFoundation enumeration from
+    /// blocking the hover presentation and gives the flyout its full row count
+    /// before its first size measurement in the common case.
+    @State private var microphoneDevices: [MicDeviceList.Device] = []
     #if DEBUG
     @Environment(OnboardingState.self) private var onboarding
     @Environment(PermissionsManager.self) private var permissions
@@ -144,6 +135,10 @@ struct MenuBarPanelView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        // Read the prefetched list while building this view so its arrival
+        // invalidates the presenter and supplies a new, fully sized root view.
+        let prefetchedMicrophoneDevices = microphoneDevices
+
         VStack(spacing: 0) {
             header
 
@@ -168,13 +163,11 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
-            // Phase A library-stays-readable rule: "Copy last result" and
-            // "Recent Results" read RecentPromptStore directly and never
-            // consult EntitlementStore.canGenerate — reading/copying past
+            // Recent Results reads RecentPromptStore directly and never
+            // consults EntitlementStore.canGenerate — reading/copying past
             // prompts stays open in every entitlement state, `.expired`
             // included. Only the recording START path (handleHotkey) gates;
-            // do not add an entitlement check to these rows.
-            CopyLastPromptRow()
+            // do not add an entitlement check to this row.
             MenuRow(
                 label: "Recent Results",
                 trailing: .submenu,
@@ -213,10 +206,40 @@ struct MenuBarPanelView: View {
 
             menuDivider
 
-            primaryRecordingRow
-            // The model is chosen on the capture toolbar's model chip (which
-            // now persists the pick as the last-used model) — there is no
-            // menu-bar Model row.
+            MenuRow(label: "Shortcuts…") {
+                MenuBarExtraDismiss.dismiss()
+                AppDelegate.openSettings(to: .shortcuts)
+            }
+            MenuRow(
+                label: "Model",
+                trailing: .submenu,
+                forceSelected: showModelPicker
+            ) {
+                showMicrophonePicker = false
+                showModelPicker = true
+            }
+            .onHover { hovering in
+                modelRowHovered = hovering
+                if hovering { showMicrophonePicker = false }
+                updatePanelVisibility(
+                    hovered: modelRowHovered || modelPanelHovered,
+                    isStillHovered: { modelRowHovered || modelPanelHovered },
+                    setVisible: { showModelPicker = $0 }
+                )
+            }
+            .submenuFlyout(isPresented: $showModelPicker) {
+                ModelPicker()
+                    .environment(preferences)
+                    .environment(entitlements)
+                    .onHover { hovering in
+                        modelPanelHovered = hovering
+                        updatePanelVisibility(
+                            hovered: modelRowHovered || modelPanelHovered,
+                            isStillHovered: { modelRowHovered || modelPanelHovered },
+                            setVisible: { showModelPicker = $0 }
+                        )
+                    }
+            }
             MenuRow(
                 label: "Microphone",
                 trailing: .submenu,
@@ -226,6 +249,7 @@ struct MenuBarPanelView: View {
             }
             .onHover { hovering in
                 micRowHovered = hovering
+                if hovering { showModelPicker = false }
                 updatePanelVisibility(
                     hovered: micRowHovered || micPanelHovered,
                     isStillHovered: { micRowHovered || micPanelHovered },
@@ -235,7 +259,7 @@ struct MenuBarPanelView: View {
             // Same hover-opened trailing flyout as Recent Prompts — the
             // input device list with the current selection checked.
             .submenuFlyout(isPresented: $showMicrophonePicker) {
-                MicrophonePicker()
+                MicrophonePicker(devices: prefetchedMicrophoneDevices)
                     .environment(preferences)
                     .onHover { hovering in
                         micPanelHovered = hovering
@@ -298,7 +322,7 @@ struct MenuBarPanelView: View {
             // hover-driven submenu (same shape as Recent Prompts /
             // Microphone) to keep the debug block compact. Force "Expired"
             // in the side panel, then the recording hotkey (⌥Space by
-            // default, or Start Recording) to drive the
+            // default) to drive the
             // paywall gate; the paywall window's own dev panel can flip
             // between states once it's open.
             MenuRow(
@@ -415,64 +439,8 @@ struct MenuBarPanelView: View {
                 openWindow(id: OnboardingScene.windowID)
             }
         }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: Notification.Name(rawValue: "KeyboardShortcuts_recorderActiveStatusDidChange")
-            )
-        ) { note in
-            // Recorder finished (success or cancel) — re-read the binding
-            // so the hotkey hint reflects a rebind made while this panel
-            // is alive, without waiting for a relaunch.
-            if let isActive = note.userInfo?["isActive"] as? Bool, !isActive {
-                hotkeyRefreshTick &+= 1
-            }
-        }
-    }
-
-    // MARK: - Primary action row
-    //
-    // Single row that flips between "Start Recording" / "Stop Recording"
-    // based on `AppState.isRecordingActive`, and disables itself during
-    // `.processing` so the user can't kick off a new session while one
-    // is in flight. The hotkey hint stays put — the toggleRecording
-    // binding (⌥Space by default, user-rebindable) covers both halves of
-    // the toggle.
-
-    /// Trailing hint for the Start/Stop Recording rows, derived from the
-    /// user's current toggleRecording binding rather than a hardcoded
-    /// string. `.none` (no hint) when the user has cleared the shortcut.
-    private var recordingHotkeyTrailing: RowTrailing {
-        // Read the tick so a recorder-finished bump invalidates this view
-        // and the hint re-reads the new binding.
-        _ = hotkeyRefreshTick
-        guard let shortcut = KeyboardShortcuts.getShortcut(for: .toggleRecording) else {
-            return .none
-        }
-        return .hotkey(shortcut.symbolsDisplay)
-    }
-
-    @ViewBuilder
-    private var primaryRecordingRow: some View {
-        if appState.isRecordingActive {
-            MenuRow(label: "Stop Recording", trailing: recordingHotkeyTrailing) {
-                appState.stopRecording()
-            }
-        } else if appState.state == .processing {
-            MenuRow(
-                label: "Processing\u{2026}",
-                trailing: recordingHotkeyTrailing,
-                isDisabled: true
-            )
-        } else {
-            MenuRow(label: "Start Recording", trailing: recordingHotkeyTrailing) {
-                // Route through the same entry point as the global hotkey so
-                // the area-selector overlay (with its mode toggle + mic
-                // picker) is presented first — recording starts on confirm,
-                // not on this click. Close the dropdown so the overlay isn't
-                // behind it.
-                MenuBarExtraDismiss.dismiss()
-                onStartRecording()
-            }
+        .task {
+            await refreshMicrophoneDevices()
         }
     }
 
@@ -547,7 +515,7 @@ struct MenuBarPanelView: View {
             let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
             return "Ready \u{00B7} \(credits)"
         case .expired:
-            return "Trial ended"
+            return "Zerro Cloud Trial complete"
         case .byokTrialExpired:
             return "Trial complete"
         }
@@ -589,7 +557,7 @@ struct MenuBarPanelView: View {
     /// verification window and closes the dropdown.
     private func trialVerifyBanner() -> some View {
         HStack(spacing: 0) {
-            Text("Verify your email to start your free trial")
+            Text("Verify your email to start your Zerro Cloud Trial")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.vfBrandAccent)
                 .fixedSize()
@@ -620,8 +588,8 @@ struct MenuBarPanelView: View {
         HStack(spacing: 0) {
             Text(
                 generationsRemaining == 1
-                    ? "Own-key trial \u{00B7} 1 generation left"
-                    : "Own-key trial \u{00B7} \(generationsRemaining) generations left"
+                    ? "BYOK Trial \u{00B7} 1 generation left"
+                    : "BYOK Trial \u{00B7} \(generationsRemaining) generations left"
             )
             .font(.system(size: 11))
             .foregroundStyle(
@@ -640,8 +608,8 @@ struct MenuBarPanelView: View {
     /// cost varies by model, so "N generations" would mislead.
     private static func trialLineText(credits: Int) -> String {
         credits == 1
-            ? "1 free trial credit left"
-            : "\(credits) free trial credits left"
+            ? "Zerro Cloud Trial \u{00B7} 1 credit left"
+            : "Zerro Cloud Trial \u{00B7} \(credits) credits left"
     }
 
     // MARK: - Low-balance top-up / upgrade (multi-model 6B.4)
@@ -664,11 +632,11 @@ struct MenuBarPanelView: View {
     }
 
     /// Open/close delays for the hover-driven side panels (Recent Prompts,
-    /// Microphone). The open delay is a hover-intent guard so brushing past
+    /// Model, Microphone). The open delay is a hover-intent guard so brushing past
     /// the row doesn't flash the panel open; the (shorter) close delay lets
     /// the cursor cross the arrow gap from the row into the panel without it
     /// snapping shut.
-    private static let panelOpenDelayMS = 250
+    private static let panelOpenDelayMS = 100
     private static let panelCloseDelayMS = 180
 
     /// Debounced show/hide for a hover side panel. `hovered` is the desired
@@ -688,6 +656,17 @@ struct MenuBarPanelView: View {
                 setVisible(hovered)
             }
         }
+    }
+
+    /// AVFoundation device discovery can occasionally take long enough to make
+    /// a hover-opened menu feel stuck. Run it away from the main actor and only
+    /// publish the small Sendable display values back into SwiftUI.
+    private func refreshMicrophoneDevices() async {
+        let devices = await Task.detached(priority: .userInitiated) {
+            MicDeviceList.liveDevices()
+        }.value
+        guard !Task<Never, Never>.isCancelled else { return }
+        microphoneDevices = devices
     }
 
     private var menuDivider: some View {
@@ -916,10 +895,10 @@ struct MenuRow: View {
 
 // MARK: - BillingActionRow
 //
-// The single consolidated billing row's view. Like CopyLastPromptRow it can
-// carry a smaller secondary line below the label (the folded-in past-due
-// warning), so it breaks the uniform tight row height only when there's a
-// nudge to show; otherwise it reads as an ordinary MenuRow.
+// The single consolidated billing row's view. It can carry a smaller secondary
+// line below the label (the folded-in past-due warning), so it breaks the
+// uniform tight row height only when there's a nudge to show; otherwise it
+// reads as an ordinary MenuRow.
 
 private struct BillingActionRow: View {
     let label: String
@@ -956,71 +935,6 @@ private struct BillingActionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-    }
-}
-
-// MARK: - CopyLastPromptRow
-//
-// The one row that breaks the uniform tight row height — main label
-// plus a smaller dimmer secondary preview line below showing which
-// prompt will be copied. Phase 11: reads the most-recent entry from the
-// RecentPromptStore in the environment; clicking copies that prompt's
-// full body to the clipboard. When the history is empty the row renders
-// disabled with a "No results yet" preview line.
-
-private struct CopyLastPromptRow: View {
-    @Environment(RecentPromptStore.self) private var recentPrompts
-    @State private var isHovered = false
-
-    private var entry: RecentPrompt? { recentPrompts.mostRecent }
-
-    private var isDisabled: Bool { entry == nil }
-    private var isActive: Bool { isHovered && !isDisabled }
-
-    private var primaryColor: Color {
-        isDisabled ? Color.vfTextTertiary : Color.vfTextPrimary
-    }
-
-    private var secondaryColor: Color {
-        if isDisabled { return Color.vfTextTertiary.opacity(0.7) }
-        return isActive ? Color.vfTextPrimary.opacity(0.85) : Color.vfTextSecondary
-    }
-
-    var body: some View {
-        Button(action: copyToClipboard) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Copy last result")
-                    .font(.system(size: 13))
-                    .foregroundStyle(primaryColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry?.title ?? "No results yet")
-                    .font(.system(size: 11))
-                    .foregroundStyle(secondaryColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
-            .padding(.vertical, MenuMetrics.rowVerticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
-                    .fill(isActive ? Color.vfMenuRowHover : Color.clear)
-            )
-            .contentShape(Rectangle())
-            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .onHover { isHovered = $0 }
-    }
-
-    private func copyToClipboard() {
-        guard let entry else { return }
-        // Phase 5: per-type payload, same semantics as the live pill —
-        // artifact body / chat text / raw fallback.
-        Pasteboard.copy(entry.copyPayload)
-        // Close the dropdown once the prompt is on the clipboard.
-        MenuBarExtraDismiss.dismiss()
     }
 }
 
@@ -1133,6 +1047,153 @@ private struct RecentPromptSubmenuRow: View {
     }
 }
 
+// MARK: - ModelPicker
+
+/// Global generation-model picker. Selection persists immediately so the next
+/// Ask or Dev recording uses it without needing an overlay-local control.
+private struct ModelPicker: View {
+    @Environment(PreferencesStore.self) private var preferences
+    @Environment(EntitlementStore.self) private var entitlements
+    @Environment(\.submenuDismiss) private var dismiss
+
+    var body: some View {
+        let availableProviders = ProviderKeys.availableProviders()
+
+        VStack(spacing: 0) {
+            ForEach(ModelRegistry.enabled) { model in
+                ModelPickerRow(
+                    name: model.displayName,
+                    secondary: secondaryText(for: model, availableProviders: availableProviders),
+                    isSelected: effectiveSelectedModelID(
+                        availableProviders: availableProviders
+                    ) == model.id,
+                    isDisabled: isBYOKGated(model, availableProviders: availableProviders),
+                    showsLock: isTrialLocked(model)
+                ) {
+                    if isTrialLocked(model) {
+                        openUpgrade()
+                    } else {
+                        select(model)
+                    }
+                }
+            }
+        }
+        .frame(width: 286)
+    }
+
+    private func effectiveSelectedModelID(
+        availableProviders: Set<ModelProvider>
+    ) -> String {
+        ModelSelectionPolicy.effectiveModelID(
+            persistedModelID: preferences.selectedModelID,
+            entitlement: entitlements.state,
+            availableProviders: availableProviders
+        )
+    }
+
+    private func isTrialLocked(_ model: ModelEntry) -> Bool {
+        ModelSelectionPolicy.isTrialLocked(model, entitlement: entitlements.state)
+    }
+
+    private func isBYOKGated(
+        _ model: ModelEntry,
+        availableProviders: Set<ModelProvider>
+    ) -> Bool {
+        ModelSelectionPolicy.isBYOKGated(
+            model,
+            entitlement: entitlements.state,
+            availableProviders: availableProviders
+        )
+    }
+
+    private func secondaryText(
+        for model: ModelEntry,
+        availableProviders: Set<ModelProvider>
+    ) -> String? {
+        if isTrialLocked(model) { return "Upgrade to use this model" }
+        if isBYOKGated(model, availableProviders: availableProviders) {
+            return "Add \(model.provider.displayName) key"
+        }
+        return model.recommended ? "Recommended" : nil
+    }
+
+    private func select(_ model: ModelEntry) {
+        let previous = preferences.selectedModelID
+        if previous != model.id {
+            Analytics.capture("model_changed", [
+                "from_model": previous,
+                "to_model": model.id,
+                "surface": "menu_bar",
+            ])
+            preferences.selectedModelID = model.id
+        }
+        dismiss()
+    }
+
+    private func openUpgrade() {
+        entitlements.paywallTrigger = .voluntaryUpgrade
+        dismiss()
+        MenuBarExtraDismiss.dismiss()
+        AppDelegate.openPaywall()
+    }
+}
+
+private struct ModelPickerRow: View {
+    let name: String
+    let secondary: String?
+    let isSelected: Bool
+    let isDisabled: Bool
+    let showsLock: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: VFSpacing.sm) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.vfTextPrimary)
+                    .opacity(isSelected ? 1 : 0)
+                    .frame(width: 12)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.system(size: 13))
+                        .foregroundStyle(isDisabled ? Color.vfTextTertiary : Color.vfTextPrimary)
+                        .lineLimit(1)
+                    if let secondary {
+                        Text(secondary)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.vfTextTertiary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: VFSpacing.sm)
+
+                if showsLock {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.vfTextTertiary)
+                }
+            }
+            .padding(.horizontal, MenuMetrics.rowHorizontalPadding)
+            .padding(.vertical, MenuMetrics.rowVerticalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: MenuMetrics.rowCornerRadius, style: .continuous)
+                    .fill(isHovered && !isDisabled ? Color.vfMenuRowHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .padding(.horizontal, MenuMetrics.rowHorizontalInset)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .onHover { isHovered = $0 }
+    }
+}
+
 // MARK: - MicrophonePicker
 //
 // Input-device picker presented as the Microphone row's trailing popover.
@@ -1145,17 +1206,17 @@ private struct MicrophonePicker: View {
     @Environment(PreferencesStore.self) private var preferences
     @Environment(\.submenuDismiss) private var dismiss
 
-    @State private var devices: [AVCaptureDevice] = []
+    let devices: [MicDeviceList.Device]
 
     var body: some View {
         VStack(spacing: 0) {
             row(id: "", name: "System Default")
-            ForEach(devices, id: \.uniqueID) { device in
-                row(id: device.uniqueID, name: device.localizedName)
+            ForEach(devices, id: \.id) { device in
+                row(id: device.id, name: device.name)
             }
         }
         .frame(width: 260)
-        .onAppear(perform: refreshDevices)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func row(id: String, name: String) -> some View {
@@ -1170,17 +1231,8 @@ private struct MicrophonePicker: View {
     /// matching the Settings picker's behavior.
     private func isSelected(_ id: String) -> Bool {
         let stored = preferences.microphoneDeviceID
-        let effective = devices.contains(where: { $0.uniqueID == stored }) ? stored : ""
+        let effective = devices.contains(where: { $0.id == stored }) ? stored : ""
         return effective == id
-    }
-
-    private func refreshDevices() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
-        devices = session.devices
     }
 }
 
@@ -1250,7 +1302,7 @@ private struct EntitlementDebugPicker: View {
             // Phase E: overlay a `past_due` snapshot on the current Managed
             // state so the "update your card" nudge (§9.1) is testable.
             EntitlementDebugRow(
-                name: "Managed · Past due",
+                name: "Zerro Cloud \u{00B7} Past due",
                 isSelected: entitlements.managedSnapshot?.isPastDue == true
             ) {
                 entitlements.devForceManagedPastDue()

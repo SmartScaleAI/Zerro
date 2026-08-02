@@ -172,7 +172,7 @@ private struct FocusedRecorder: NSViewRepresentable {
 
 #Preview {
     VStack(spacing: VFSpacing.lg) {
-        HotkeyDisplay(name: .toggleRecording)
+        HotkeyDisplay(name: .askRecording)
             .padding()
             .background(Color.vfCardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

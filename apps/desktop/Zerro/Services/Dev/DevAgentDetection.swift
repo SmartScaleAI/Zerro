@@ -10,7 +10,7 @@
 //
 //  Usage contract:
 //    • Only ever warmed when Dev Mode is (or becomes) active — a normal-mode
-//      user (devModeEnabled == false who never toggles it on) never triggers
+//      Ask-only user never triggers
 //      the shell probe, so the overlay path stays allocation-cheap for them.
 //    • `warm(completion:)` is idempotent: the first call kicks the probe, later
 //      calls (and calls after it finishes) get the cached result; a completion

@@ -1076,10 +1076,10 @@ final class EntitlementStore {
     static var devStates: [(label: String, state: EntitlementState)] {
         let resetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
         return [
-            ("Trial", .trial(creditsRemaining: 15)),
-            ("Expired", .expired),
+            ("Zerro Cloud Trial", .trial(creditsRemaining: 15)),
+            ("Zerro Cloud Trial Complete", .expired),
             ("BYOK", .byok),
-            ("Managed", .managed(creditsRemaining: 300, resetDate: resetDate)),
+            ("Zerro Cloud", .managed(creditsRemaining: 300, resetDate: resetDate)),
         ]
     }
 

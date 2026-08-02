@@ -20,7 +20,7 @@ const items: Item[] = [
         icon: Lock,
         title: "Local-first processing",
         description:
-            "Your Mac prepares the recording and redacts sensitive info before anything leaves. Managed sends it to an AI provider; BYOK sends it straight with your key. No Zerro servers.",
+            "Your Mac prepares the recording and redacts sensitive info before anything leaves. Zerro Cloud sends it to an AI provider; BYOK sends it straight with your key. No Zerro servers.",
     },
     {
         icon: KeyRound,

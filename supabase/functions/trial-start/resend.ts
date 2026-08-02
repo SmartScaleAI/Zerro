@@ -37,8 +37,7 @@ export class ResendEmailSender implements EmailSender {
     // Short, plain, transactional. No links (a code-only email is harder to
     // weaponize for phishing and renders cleanly everywhere).
     const subject = "Your Zerro verification code";
-    const text =
-      `Your Zerro verification code is ${code}\n\n` +
+    const text = `Your Zerro verification code is ${code}\n\n` +
       `Enter it in Zerro to start your trial. It expires in 10 minutes.\n\n` +
       `If you didn't request this, you can ignore this email.`;
 
@@ -62,7 +61,14 @@ export class ResendEmailSender implements EmailSender {
       try {
         detail = (await res.text()).slice(0, 200);
       } catch { /* ignore */ }
-      console.error(JSON.stringify({ fn: "trial-start", op: "resend", status: res.status, detail }));
+      console.error(
+        JSON.stringify({
+          fn: "trial-start",
+          op: "resend",
+          status: res.status,
+          detail,
+        }),
+      );
       throw new EmailSendError(`resend_${res.status}`, res.status);
     }
   }

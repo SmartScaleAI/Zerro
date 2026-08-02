@@ -15,9 +15,9 @@
 //  license section simultaneously (it read as a checklist, not a choice, and
 //  showed contradictory states like "Plan: Expired" next to a working key).
 //
-//  MODE SOURCE OF TRUTH (6D/F6): `EntitlementState` — `.byok` shows the BYOK
-//  pane; `.managed`/`.trial`/`.expired` are all server-credit-side states and
-//  show the Managed pane. The "switch" link is a VIEW override only: it
+//  MODE SOURCE OF TRUTH (6D/F6): `EntitlementState` — paid BYOK and the
+//  anonymous BYOK trial show the BYOK pane; Managed/trial/expired states show
+//  the Managed pane. The "switch" link is a VIEW override only: it
 //  reveals the other mode's setup so the user can complete it (add keys /
 //  activate a license / subscribe); the entitlement actually flips when that
 //  setup succeeds, at which point the override resets and the pane follows
@@ -40,7 +40,7 @@ struct AccountBillingPane: View {
     @State private var overrideMode: BillingMode?
 
     private var entitlementMode: BillingMode {
-        entitlements.state == .byok ? .byok : .managed
+        entitlements.state.usesOwnProviderKeys ? .byok : .managed
     }
 
     private var mode: BillingMode { overrideMode ?? entitlementMode }
@@ -57,7 +57,7 @@ struct AccountBillingPane: View {
 
             switch mode {
             case .managed:
-                BillingSection()
+                BillingSection(isCloudSetupPreview: isPreviewingOtherMode)
             case .byok:
                 APIAuthSection()
                 TranscriptionSection()
@@ -87,8 +87,11 @@ struct AccountBillingPane: View {
     }
 
     private var modeTitle: String {
+        if isPreviewingOtherMode, mode == .managed {
+            return "Set Up Zerro Cloud"
+        }
         switch mode {
-        case .managed: return "Managed: Zerro\u{2019}s plan + credits"
+        case .managed: return "Zerro Cloud"
         case .byok: return "Bring your own API keys (BYOK)"
         }
     }
@@ -97,14 +100,14 @@ struct AccountBillingPane: View {
         if isPreviewingOtherMode {
             switch mode {
             case .managed:
-                return "Finish setup below to switch: subscribe, then activate the key from your purchase email."
+                return AccountBillingCopy.cloudSetupDescription(for: entitlements.state)
             case .byok:
                 return "Finish setup below to switch: activate a BYOK license and add your API keys."
             }
         }
         switch mode {
         case .managed:
-            return "Generation runs on Zerro-hosted credits, the simplest way to use Zerro."
+            return "Zerro handles model access and includes credits. No API keys required."
         case .byok:
             return "You pay your providers directly for usage, with no credits involved."
         }
@@ -114,11 +117,37 @@ struct AccountBillingPane: View {
     /// mode's setup, or back, without touching the entitlement itself.
     private var switchLabel: String {
         if isPreviewingOtherMode {
-            return entitlementMode == .managed ? "Back to Managed" : "Back to BYOK"
+            return AccountBillingCopy.backToActiveModeLabel(for: entitlements.state)
         }
         switch mode {
         case .managed: return "Switch to BYOK"
-        case .byok: return "Switch to Managed"
+        case .byok: return "Switch to Zerro Cloud"
+        }
+    }
+}
+
+enum AccountBillingCopy {
+    static func cloudSetupDescription(for state: EntitlementState) -> String {
+        switch state {
+        case .byokTrial:
+            return "You are currently using the BYOK Trial. Subscribe and activate your key below to switch to Zerro Cloud. A second free trial is not included."
+        case .byokTrialExpired:
+            return "Your BYOK Trial is complete. Subscribe and activate your key below to switch to Zerro Cloud. A second free trial is not included."
+        case .byok:
+            return "Subscribe and activate your key below to switch from BYOK to Zerro Cloud."
+        case .managed, .trial, .expired:
+            return "Subscribe and activate the key from your purchase email to switch to Zerro Cloud."
+        }
+    }
+
+    static func backToActiveModeLabel(for state: EntitlementState) -> String {
+        switch state {
+        case .byokTrial, .byokTrialExpired:
+            return "Back to BYOK Trial"
+        case .byok:
+            return "Back to BYOK"
+        case .managed, .trial, .expired:
+            return "Back to Zerro Cloud"
         }
     }
 }
@@ -130,7 +159,7 @@ struct AccountBillingPane: View {
 // compile in Release too and would fail on the missing symbol.
 
 #if DEBUG
-#Preview("Managed") {
+#Preview("Zerro Cloud") {
     AccountBillingPane()
         .environment(EntitlementStore.preview(
             .managed(creditsRemaining: 248, resetDate: .now.addingTimeInterval(86_400 * 12))

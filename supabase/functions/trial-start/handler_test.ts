@@ -9,6 +9,7 @@ import {
 } from "./ratelimit.ts";
 import { type EmailSender, EmailSendError } from "./resend.ts";
 import type {
+  OnboardingContactRow,
   TrialCodeRow,
   TrialGrantRow,
   TrialStore,
@@ -25,16 +26,25 @@ interface Grant {
   limit: number;
   used: number;
   deviceIdHash?: string | null;
+  marketingEmailOptIn?: boolean;
+  marketingEmailConsentVersion?: string;
 }
 interface Code {
   codeHash: string;
   expiresAt: number; // epoch ms
   attempts: number;
 }
+interface Contact {
+  id: string;
+  email: string;
+  marketingEmailOptIn: boolean;
+  marketingEmailConsentVersion: string | null;
+}
 
 class InMemoryTrialStore implements TrialStore {
   grants = new Map<string, Grant>(); // email → grant
   codes = new Map<string, Code>(); // email → code
+  contacts = new Map<string, Contact>(); // email → verified contact
   rateOk = true;
   /** Per-key call counts — rateLimitOk models a real fixed-window counter so
    * the C-05 send sub-limit is exercisable (the window is ignored: every test
@@ -86,10 +96,41 @@ class InMemoryTrialStore implements TrialStore {
     this.codes.delete(email);
     return Promise.resolve();
   }
+  upsertOnboardingContact(
+    email: string,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
+  ): Promise<OnboardingContactRow> {
+    let contact = this.contacts.get(email);
+    if (!contact) {
+      contact = {
+        id: `00000000-0000-4000-8000-${
+          String(this.nextId++).padStart(12, "0")
+        }`,
+        email,
+        marketingEmailOptIn: false,
+        marketingEmailConsentVersion: null,
+      };
+      this.contacts.set(email, contact);
+    }
+    if (marketingEmailOptIn !== null) {
+      contact.marketingEmailOptIn = marketingEmailOptIn;
+      contact.marketingEmailConsentVersion = marketingEmailConsentVersion;
+    }
+    return Promise.resolve(this.contactRow(contact));
+  }
+  loadOnboardingContact(
+    contactId: string,
+  ): Promise<OnboardingContactRow | null> {
+    const contact = [...this.contacts.values()].find((c) => c.id === contactId);
+    return Promise.resolve(contact ? this.contactRow(contact) : null);
+  }
   verifyGrant(
     email: string,
     limit: number,
     deviceIdHash: string | null,
+    marketingEmailOptIn: boolean | null,
+    marketingEmailConsentVersion: string,
   ): Promise<VerifyGrantResult> {
     // Device already burned by a DIFFERENT email → hard block (mirrors
     // verify_trial_grant's pre-check + the partial unique index race backstop).
@@ -111,6 +152,10 @@ class InMemoryTrialStore implements TrialStore {
       g.verified = true; // backfill, never reset credits
       if (g.deviceIdHash == null && deviceIdHash) g.deviceIdHash = deviceIdHash; // coalesce
     }
+    if (marketingEmailOptIn !== null) {
+      g.marketingEmailOptIn = marketingEmailOptIn;
+      g.marketingEmailConsentVersion = marketingEmailConsentVersion;
+    }
     return Promise.resolve({
       deviceBlocked: false,
       grantId: g.id,
@@ -125,6 +170,15 @@ class InMemoryTrialStore implements TrialStore {
       if (g.deviceIdHash === deviceIdHash && addr !== email) return true;
     }
     return false;
+  }
+  private contactRow(contact: Contact): OnboardingContactRow {
+    return {
+      id: contact.id,
+      email_normalized: contact.email,
+      verified_at: "2026-08-01T00:00:00.000Z",
+      marketing_email_opt_in: contact.marketingEmailOptIn,
+      marketing_email_consent_version: contact.marketingEmailConsentVersion,
+    };
   }
   rateLimitOk(
     key: string,
@@ -163,13 +217,15 @@ function deps(
   return { store, email, jwtSecret: SECRET, nowSeconds: NOW };
 }
 
-function req(body: unknown) {
+function req(body: unknown, bearer?: string) {
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-forwarded-for": "203.0.113.7",
+  });
+  if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
   return new Request("http://local/trial-start", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-forwarded-for": "203.0.113.7",
-    },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -430,6 +486,113 @@ Deno.test("request: Resend failure → 502 send_failed", async () => {
   assertEquals((await res.json()).error, "send_failed");
 });
 
+// ---- shared onboarding contact ---------------------------------------------
+Deno.test("request_contact sends a code without claiming or pre-blocking a trial path", async () => {
+  const store = new InMemoryTrialStore();
+  store.grants.set("someone-else@b.com", {
+    id: "existing-managed-grant",
+    verified: true,
+    limit: 30,
+    used: 1,
+    deviceIdHash: "a".repeat(64),
+  });
+  const email = new StubEmailSender();
+
+  const res = await handleTrialStart(
+    req({
+      action: "request_contact",
+      email: "new@b.com",
+      device_id_hash: "a".repeat(64),
+    }),
+    deps(store, email),
+  );
+
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).status, "code_sent");
+  assertEquals(email.sent.at(-1)?.to, "new@b.com");
+  assertEquals(store.contacts.size, 0);
+});
+
+Deno.test("verify_contact records consent and returns mailbox proof without creating a grant", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  await handleTrialStart(
+    req({ action: "request_contact", email: "a@b.com" }),
+    deps(store, email),
+  );
+  const code = email.sent.at(-1)!.code;
+
+  const res = await handleTrialStart(
+    req({
+      action: "verify_contact",
+      email: "a@b.com",
+      code,
+      marketing_email_opt_in: true,
+    }),
+    deps(store, email),
+  );
+  const body = await res.json();
+
+  assertEquals(res.status, 200);
+  assertEquals(body.status, "email_verified");
+  assert(typeof body.contact_token === "string");
+  assert(typeof body.contact_expires_at === "string");
+  assertEquals(store.grants.size, 0);
+  assertEquals(store.contacts.get("a@b.com")?.marketingEmailOptIn, true);
+  assertEquals(
+    store.contacts.get("a@b.com")?.marketingEmailConsentVersion,
+    "onboarding-2026-08-01",
+  );
+});
+
+Deno.test("activate_managed requires contact proof and claims Managed only after selection", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  await handleTrialStart(
+    req({ action: "request_contact", email: "a@b.com" }),
+    deps(store, email),
+  );
+  const code = email.sent.at(-1)!.code;
+  const verified = await handleTrialStart(
+    req({
+      action: "verify_contact",
+      email: "a@b.com",
+      code,
+      marketing_email_opt_in: true,
+    }),
+    deps(store, email),
+  );
+  const contactToken = (await verified.json()).contact_token as string;
+
+  const missingProof = await handleTrialStart(
+    req({ action: "activate_managed", device_id_hash: "a".repeat(64) }),
+    deps(store, email),
+  );
+  assertEquals(missingProof.status, 401);
+  assertEquals(store.grants.size, 0);
+
+  const activated = await handleTrialStart(
+    req(
+      { action: "activate_managed", device_id_hash: "a".repeat(64) },
+      contactToken,
+    ),
+    deps(store, email),
+  );
+  const body = await activated.json();
+
+  assertEquals(activated.status, 200);
+  assertEquals(body.trial_credits_remaining, 30);
+  assertEquals(body.trial_credits_limit, 30);
+  assert(typeof body.token === "string");
+  assertEquals(store.grants.size, 1);
+  assertEquals(store.grants.get("a@b.com")?.deviceIdHash, "a".repeat(64));
+  assertEquals(store.grants.get("a@b.com")?.marketingEmailOptIn, true);
+  assertEquals(
+    store.grants.get("a@b.com")?.marketingEmailConsentVersion,
+    "onboarding-2026-08-01",
+  );
+});
+
 // ---- verify-code ------------------------------------------------------------
 async function sendAndGetCode(
   store: InMemoryTrialStore,
@@ -471,6 +634,54 @@ Deno.test("verify: correct code creates a grant ONCE and mints a trial token", a
 
   // The code is single-use (deleted on success).
   assertEquals(store.codes.has("a@b.com"), false);
+});
+
+Deno.test("verify: records an explicit marketing email choice after mailbox proof", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  const code = await sendAndGetCode(store, email, "a@b.com");
+
+  const res = await handleTrialStart(
+    req({
+      action: "verify",
+      email: "a@b.com",
+      code,
+      marketing_email_opt_in: true,
+    }),
+    deps(store, email),
+  );
+
+  assertEquals(res.status, 200);
+  const grant = store.grants.get("a@b.com")!;
+  assertEquals(grant.marketingEmailOptIn, true);
+  assertEquals(
+    grant.marketingEmailConsentVersion,
+    "onboarding-2026-08-01",
+  );
+});
+
+Deno.test("verify: an omitted marketing choice preserves prior consent", async () => {
+  const store = new InMemoryTrialStore();
+  const email = new StubEmailSender();
+  const firstCode = await sendAndGetCode(store, email, "a@b.com");
+  await handleTrialStart(
+    req({
+      action: "verify",
+      email: "a@b.com",
+      code: firstCode,
+      marketing_email_opt_in: true,
+    }),
+    deps(store, email),
+  );
+
+  const secondCode = await sendAndGetCode(store, email, "a@b.com");
+  const res = await handleTrialStart(
+    req({ action: "verify", email: "a@b.com", code: secondCode }),
+    deps(store, email),
+  );
+
+  assertEquals(res.status, 200);
+  assertEquals(store.grants.get("a@b.com")!.marketingEmailOptIn, true);
 });
 
 Deno.test("verify: a SECOND verify for the same email does not double-grant / reset credits", async () => {

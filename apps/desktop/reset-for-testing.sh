@@ -9,14 +9,49 @@
 # intentionally built to persist across delete+reinstall. This script deletes
 # them explicitly — that's the only way to get a true "new user" trial state.
 #
-# Usage:  bash reset-for-testing.sh
-#         bash reset-for-testing.sh --delete-app   # also removes /Applications/Zerro.app
+# Usage:  bash reset-for-testing.sh [--environment local|staging|production]
+#         bash reset-for-testing.sh --delete-app   # also removes the selected app
 set -uo pipefail
 
-BUNDLE_ID="com.cbreeding.Zerro"
-APP_NAME="Zerro"
+ENVIRONMENT="local"
 DELETE_APP=false
-[[ "${1:-}" == "--delete-app" ]] && DELETE_APP=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --environment)
+      [[ $# -ge 2 ]] || { echo "Missing value for --environment" >&2; exit 2; }
+      ENVIRONMENT="$2"
+      shift 2
+      ;;
+    --delete-app)
+      DELETE_APP=true
+      shift
+      ;;
+    --help|-h)
+      sed -n '1,14p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$ENVIRONMENT" in
+  local|production)
+    BUNDLE_ID="com.cbreeding.Zerro"
+    APP_NAME="Zerro"
+    ;;
+  staging)
+    BUNDLE_ID="com.cbreeding.Zerro.staging"
+    APP_NAME="Zerro Staging"
+    ;;
+  *)
+    echo "Environment must be local, staging, or production." >&2
+    exit 2
+    ;;
+esac
 
 echo "==> Quitting $APP_NAME"
 osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null
@@ -32,8 +67,11 @@ tccutil reset All "$BUNDLE_ID" 2>/dev/null
 # tccutil reset Accessibility "$BUNDLE_ID"
 
 echo "==> Removing application support / caches / prefs / logs / state"
+# Application Support/Zerro is intentionally shared by all current build
+# channels (LocalModelManager hard-codes it), so resetting any environment also
+# removes the shared Whisper model and recent local artifacts.
 rm -rf \
-  "$HOME/Library/Application Support/$APP_NAME" \
+  "$HOME/Library/Application Support/Zerro" \
   "$HOME/Library/Caches/$BUNDLE_ID" \
   "$HOME/Library/HTTPStorages/$BUNDLE_ID" \
   "$HOME/Library/HTTPStorages/$BUNDLE_ID.binarycookies" \
@@ -57,7 +95,7 @@ echo "==> Deleting Keychain items (these survive reinstall by design)"
 for acct in \
   openai_api_key gemini_api_key anthropic_api_key \
   byok_license_key byok_instance_id byok_last_validated byok_license_created_at \
-  license_product_kind trial_email trial_token
+  license_product_kind trial_email trial_token onboarding_contact_token byok_trial_token
 do
   security delete-generic-password -s "$BUNDLE_ID" -a "$acct" >/dev/null 2>&1 \
     && echo "    deleted: $acct"

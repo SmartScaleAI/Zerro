@@ -13,12 +13,24 @@
 import AppKit
 import KeyboardShortcuts
 
+/// The recording flow a shortcut opens. This is an invocation choice, not a
+/// persisted preference: Ask and Dev each have their own global shortcut.
+enum RecordingLaunchMode: Equatable, Sendable {
+    case ask
+    case dev
+}
+
 extension KeyboardShortcuts.Name {
-    /// Global shortcut that toggles a recording session. Defaults to ⌥Space;
-    /// users may rebind via the Settings recorder, which writes through to
-    /// UserDefaults automatically.
-    static let toggleRecording = Self(
+    /// Ask Mode keeps the original storage name so existing custom bindings
+    /// migrate without any UserDefaults copy and ⌥Space remains the default.
+    static let askRecording = Self(
         "toggleRecording",
         default: .init(.space, modifiers: [.option])
+    )
+
+    /// Dev Mode has its own independent global shortcut.
+    static let devRecording = Self(
+        "devRecording",
+        default: .init(.space, modifiers: [.option, .shift])
     )
 }

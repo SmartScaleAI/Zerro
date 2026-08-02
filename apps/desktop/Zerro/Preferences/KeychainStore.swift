@@ -316,6 +316,16 @@ extension KeychainStore {
         accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     )
 
+    /// Mailbox proof collected before the user chooses Managed or BYOK during
+    /// onboarding. It cannot authorize generation; it can only activate the
+    /// Managed trial for the verified contact. Persisted so quitting between
+    /// email verification and path selection does not force another code.
+    static let onboardingContactToken = KeychainStore(
+        service: defaultService,
+        account: "onboarding_contact_token",
+        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    )
+
     /// Short-lived bearer for the anonymous BYOK-trial counter. It authorizes
     /// only the `byok-trial` endpoint; it cannot be used for generation and
     /// carries no email, API key, prompt, or recording content.

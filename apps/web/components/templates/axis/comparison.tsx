@@ -64,7 +64,7 @@ function ColumnCard({
     <div
       className={
         featured
-          ? // Featured-lane treatment: teal accent ring (pricing Managed card),
+          ? // Featured-lane treatment: teal accent ring (pricing Zerro Cloud card),
             // with the glow split into four directional shadows whose hues
             // mirror the GradientField's corner blobs (blue top-left, teal
             // top-right, purple bottom-left, green bottom-right) — so the glow

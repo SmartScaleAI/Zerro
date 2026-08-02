@@ -1,5 +1,5 @@
 // =============================================================================
-// trial-start — email-gated, server-funded trial credits (Phase F).
+// trial-start — shared onboarding email proof and server-funded trial credits.
 // =============================================================================
 // An UNAUTHENTICATED public endpoint (deployed --no-verify-jwt): there's no
 // Supabase JWT and no license key yet — the user is mid-trial and has nothing
@@ -14,7 +14,11 @@
 // tolerated-missing (old builds / unreadable UUID degrade to the email cap) and
 // kill-switchable via TRIAL_DEVICE_BINDING_ENABLED.
 //
-// Two actions on one function (dispatched on the `action` field):
+// Five actions on one function (dispatched on the `action` field):
+//   request_contact / verify_contact — verify mailbox ownership and return a
+//             short-lived contact token without creating or claiming a trial.
+//   activate_managed — exchange verified contact proof for a Managed trial
+//             only after the user explicitly selects Zerro Cloud.
 //   request — { action:"request", email } → normalize, block disposables,
 //             rate-limit, generate a 6-digit code, store its HASH with a short
 //             TTL, and email it via Resend. Returns { status:"code_sent" }
@@ -48,12 +52,17 @@
 import { json } from "../_shared/http.ts";
 import { sha256Hex, timingSafeEqual } from "../_shared/crypto.ts";
 import { signSessionToken } from "../_shared/jwt.ts";
+import {
+  signOnboardingContactToken,
+  verifyOnboardingContactToken,
+} from "./contact-token.ts";
 import { type EmailSender, EmailSendError } from "./resend.ts";
 import { generateCode, isDisposableEmail, normalizeEmail } from "./email.ts";
 import type { TrialStore } from "./store.ts";
 import {
   CODE_MAX_ATTEMPTS,
   CODE_TTL_SECONDS,
+  ONBOARDING_CONTACT_TOKEN_TTL_SECONDS,
   TRIAL_CREDITS,
   TRIAL_DEVICE_BINDING_ENABLED,
   TRIAL_RATE_LIMIT_PER_EMAIL,
@@ -63,6 +72,8 @@ import {
   TRIAL_SEND_WINDOW_SECONDS,
   TRIAL_TOKEN_TTL_SECONDS,
 } from "./config.ts";
+
+const MARKETING_EMAIL_CONSENT_VERSION = "onboarding-2026-08-01";
 
 export interface TrialStartDeps {
   store: TrialStore;
@@ -130,8 +141,18 @@ export async function handleTrialStart(
   const isVerify = action === "verify" ||
     (action === "" && body.code !== undefined);
   const isResume = action === "resume";
-  if (!isVerify && !isResume && action !== "request") {
+  const isContactRequest = action === "request_contact";
+  const isContactVerify = action === "verify_contact";
+  const isManagedActivation = action === "activate_managed";
+  if (
+    !isVerify && !isResume && !isContactRequest && !isContactVerify &&
+    !isManagedActivation && action !== "request"
+  ) {
     return json({ error: "invalid_action" }, 400);
+  }
+
+  if (isManagedActivation) {
+    return await handleManagedActivation(req, deps, body);
   }
 
   const email = normalizeEmail(String(body.email ?? ""));
@@ -150,9 +171,15 @@ export async function handleTrialStart(
   // resume grants nothing new and is email-keyed, so the device hash is
   // telemetry-only there — handled inside handleResume (no behavioral change).
   if (isResume) return await handleResume(deps, email);
+  if (isContactVerify) return await handleContactVerify(deps, email, body);
   return isVerify
     ? await handleVerify(deps, email, body, deviceIdHash)
-    : await handleRequest(deps, email, deviceIdHash);
+    : await handleRequest(
+      deps,
+      email,
+      deviceIdHash,
+      !isContactRequest,
+    );
 }
 
 /** Read + sanitize the optional `device_id_hash` from the body. Returns null
@@ -200,6 +227,7 @@ async function handleRequest(
   deps: TrialStartDeps,
   email: string,
   deviceIdHash: string | null,
+  enforceTrialEligibility = true,
 ): Promise<Response> {
   if (isDisposableEmail(email)) {
     return json({ error: "disposable_email" }, 422);
@@ -210,6 +238,7 @@ async function handleRequest(
   // instant UX). A grant under the SAME email is a legitimate reinstall and
   // falls through to the normal re-verify path below.
   if (
+    enforceTrialEligibility &&
     deviceIdHash && (await deps.store.deviceAlreadyGranted(deviceIdHash, email))
   ) {
     logRequestOutcome("different_email_device_used");
@@ -224,8 +253,10 @@ async function handleRequest(
   // a real code and learn `already_used` only after proving mailbox control at
   // verify. A grant with credits remaining also gets a real code so reinstalling
   // can re-mint a token without resetting its persisted balance.
-  const grant = await deps.store.loadGrantByEmail(email);
-  if (grant && grant.verified_at) {
+  const grant = enforceTrialEligibility
+    ? await deps.store.loadGrantByEmail(email)
+    : null;
+  if (grant?.verified_at) {
     const remaining = Math.max(
       0,
       grant.trial_credits_limit - grant.trial_credits_used,
@@ -294,6 +325,35 @@ async function handleVerify(
   body: Record<string, unknown>,
   deviceIdHash: string | null,
 ): Promise<Response> {
+  const verificationError = await consumeVerificationCode(deps, email, body);
+  if (verificationError) return verificationError;
+
+  const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const result = await deps.store.verifyGrant(
+    email,
+    TRIAL_CREDITS,
+    deviceIdHash,
+    readMarketingEmailOptIn(body),
+    MARKETING_EMAIL_CONSENT_VERSION,
+  );
+
+  return await managedGrantResponse(
+    deps,
+    result,
+    email,
+    deviceIdHash,
+    nowSeconds,
+  );
+}
+
+/** Validate and consume one pending email code. A returned Response is the
+ * exact typed failure the caller should forward; null means mailbox proof was
+ * established and the single-use code has been deleted. */
+async function consumeVerificationCode(
+  deps: TrialStartDeps,
+  email: string,
+  body: Record<string, unknown>,
+): Promise<Response | null> {
   const code = String(body.code ?? "").trim();
   if (!/^\d{6}$/.test(code)) return json({ error: "invalid_code" }, 400);
 
@@ -323,16 +383,95 @@ async function handleVerify(
     return json({ error: "invalid_code" }, 400);
   }
 
-  // Correct code — consume it (single use) and establish the grant, atomically
-  // enforcing the one-grant-per-device cap (the partial unique index is the race
-  // backstop behind verify_trial_grant).
+  // Correct code — consume it before either recording a contact or activating
+  // the legacy direct-to-Managed flow.
   await deps.store.deleteCode(email);
-  const result = await deps.store.verifyGrant(
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Shared onboarding email — verify first, choose a trial path second.
+// -----------------------------------------------------------------------------
+async function handleContactVerify(
+  deps: TrialStartDeps,
+  email: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const verificationError = await consumeVerificationCode(deps, email, body);
+  if (verificationError) return verificationError;
+
+  const contact = await deps.store.upsertOnboardingContact(
     email,
-    TRIAL_CREDITS,
-    deviceIdHash,
+    readMarketingEmailOptIn(body),
+    MARKETING_EMAIL_CONSENT_VERSION,
+  );
+  const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const { token, exp } = await signOnboardingContactToken(
+    contact.id,
+    deps.jwtSecret,
+    ONBOARDING_CONTACT_TOKEN_TTL_SECONDS,
+    nowSeconds,
   );
 
+  return json({
+    status: "email_verified",
+    contact_token: token,
+    contact_expires_at: new Date(exp * 1000).toISOString(),
+  });
+}
+
+async function handleManagedActivation(
+  req: Request,
+  deps: TrialStartDeps,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const bearer = readBearer(req);
+  const nowSeconds = deps.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const claims = bearer
+    ? await verifyOnboardingContactToken(bearer, deps.jwtSecret, nowSeconds)
+    : null;
+  if (!claims) return json({ error: "invalid_contact_token" }, 401);
+
+  const contact = await deps.store.loadOnboardingContact(claims.sub);
+  if (!contact?.verified_at) {
+    return json({ error: "invalid_contact_token" }, 401);
+  }
+  if (
+    !(await withinRate(deps.store, contact.email_normalized, clientIp(req)))
+  ) {
+    return json({ error: "rate_limited" }, 429);
+  }
+
+  const deviceIdHash = readDeviceIdHash(body);
+  const result = await deps.store.verifyGrant(
+    contact.email_normalized,
+    TRIAL_CREDITS,
+    deviceIdHash,
+    contact.marketing_email_opt_in,
+    contact.marketing_email_consent_version ?? MARKETING_EMAIL_CONSENT_VERSION,
+  );
+
+  return await managedGrantResponse(
+    deps,
+    result,
+    contact.email_normalized,
+    deviceIdHash,
+    nowSeconds,
+  );
+}
+
+function readBearer(req: Request): string | null {
+  const raw = req.headers.get("authorization") ?? "";
+  return raw.toLowerCase().startsWith("bearer ") ? raw.slice(7).trim() : null;
+}
+
+async function managedGrantResponse(
+  deps: TrialStartDeps,
+  result: Awaited<ReturnType<TrialStore["verifyGrant"]>>,
+  email: string,
+  deviceIdHash: string | null,
+  nowSeconds: number,
+): Promise<Response> {
   // This Mac already trialed under a different email → hard block (mirrors the
   // `request` early-block for the race where two emails verify near-simultaneously
   // or the app skipped straight to verify).
@@ -360,6 +499,22 @@ async function handleVerify(
     creditsLimit,
     nowSeconds,
   );
+}
+
+/** Optional marketing consent is deliberately read only after mailbox proof.
+ * Older app builds omit the field and therefore remain opted out. */
+function readMarketingEmailOptIn(
+  body: Record<string, unknown>,
+): boolean | null {
+  if (
+    body.marketing_email_opt_in === true ||
+    body.marketing_email_opt_in === "true"
+  ) return true;
+  if (
+    body.marketing_email_opt_in === false ||
+    body.marketing_email_opt_in === "false"
+  ) return false;
+  return null;
 }
 
 // -----------------------------------------------------------------------------

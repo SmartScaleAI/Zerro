@@ -2,18 +2,7 @@
 //  ToolbarWalkthroughStateTests.swift
 //  ZerroTests
 //
-//  Phase 1 of the first-run toolbar walkthrough — the step model + state
-//  machine in `AreaSelectorState` and the one-time seen flag in
-//  `PreferencesStore`. Pins (mirroring OnboardingStepTests):
-//    • step ORDER + count are a shipped contract (advance/back are rawValue
-//      arithmetic; `analyticsName` is the funnel step id and must stay
-//      constant across releases);
-//    • the Dev Mode display borrow: the agent/record steps force `isDevMode`
-//      ON for display, stepping back out drops it, and end (complete OR Esc)
-//      restores the user's real pre-tour value — the model itself never
-//      touches preferences (it holds no store, by design);
-//    • Back clamps at the first step;
-//    • the seen flag defaults false, persists, and is resettable.
+//  Mode-specific first-run toolbar walkthrough state and preference migration.
 //
 
 import XCTest
@@ -22,180 +11,86 @@ import XCTest
 @MainActor
 final class ToolbarWalkthroughStateTests: XCTestCase {
 
-    // MARK: - Step model
-
-    /// Toolbar order (left→right) is a shipped contract — advance/back are
-    /// `rawValue ± 1`, so an out-of-order insert silently skips a control.
-    func testStepOrderAndCount() {
-        XCTAssertEqual(
-            ToolbarWalkthroughStep.allCases,
-            [.mode, .model, .mic, .agent, .record]
-        )
+    func testStepOrderAndModeSequences() {
+        XCTAssertEqual(ToolbarWalkthroughStep.allCases, [.agent, .record])
+        XCTAssertEqual(ToolbarWalkthroughStep.steps(isDevMode: false), [.record])
+        XCTAssertEqual(ToolbarWalkthroughStep.steps(isDevMode: true), [.agent, .record])
     }
 
-    /// Stable analytics ids — must never change once shipped.
-    func testAnalyticsNames() {
-        XCTAssertEqual(ToolbarWalkthroughStep.mode.analyticsName, "mode")
-        XCTAssertEqual(ToolbarWalkthroughStep.model.analyticsName, "model")
-        XCTAssertEqual(ToolbarWalkthroughStep.mic.analyticsName, "mic")
+    func testAnalyticsNamesAndCopy() {
         XCTAssertEqual(ToolbarWalkthroughStep.agent.analyticsName, "agent")
         XCTAssertEqual(ToolbarWalkthroughStep.record.analyticsName, "record")
-    }
-
-    func testEveryStepHasCopy() {
         for step in ToolbarWalkthroughStep.allCases {
-            XCTAssertFalse(step.title.isEmpty, "\(step.analyticsName) needs a title")
-            XCTAssertFalse(step.body.isEmpty, "\(step.analyticsName) needs body copy")
+            XCTAssertFalse(step.title.isEmpty)
+            XCTAssertFalse(step.body.isEmpty)
         }
     }
 
-    /// Only the agent + record steps borrow the Dev layout (the
-    /// agent-settings icon exists only in Dev Mode).
-    func testShowsDevControlsSplit() {
-        XCTAssertFalse(ToolbarWalkthroughStep.mode.showsDevControls)
-        XCTAssertFalse(ToolbarWalkthroughStep.model.showsDevControls)
-        XCTAssertFalse(ToolbarWalkthroughStep.mic.showsDevControls)
-        XCTAssertTrue(ToolbarWalkthroughStep.agent.showsDevControls)
-        XCTAssertTrue(ToolbarWalkthroughStep.record.showsDevControls)
-    }
-
-    /// Only the agent step's control is genuinely Dev-only — record borrows
-    /// the Dev layout for continuity but works in Ask mode too.
-    func testIsDevModeOnly() {
-        XCTAssertFalse(ToolbarWalkthroughStep.mode.isDevModeOnly)
-        XCTAssertFalse(ToolbarWalkthroughStep.model.isDevModeOnly)
-        XCTAssertFalse(ToolbarWalkthroughStep.mic.isDevModeOnly)
-        XCTAssertTrue(ToolbarWalkthroughStep.agent.isDevModeOnly)
-        XCTAssertFalse(ToolbarWalkthroughStep.record.isDevModeOnly)
-    }
-
-    // MARK: - State machine
-
-    func testStartEntersFirstStep() {
-        let state = AreaSelectorState()
-        XCTAssertNil(state.toolbarWalkthroughStep, "inactive before start")
-        state.startToolbarWalkthrough()
-        XCTAssertEqual(state.toolbarWalkthroughStep, .mode)
-        XCTAssertFalse(state.isDevMode, "the first step teaches the Artifact layout")
-    }
-
-    /// The snapshot is taken at start: a dev-on user sees the Artifact layout
-    /// on step 1 (display borrow), and end hands the real value back.
-    func testStartSnapshotsPreWalkthroughDevValue() {
-        let state = AreaSelectorState()
-        state.setDevMode(true)
-        state.startToolbarWalkthrough()
-        XCTAssertFalse(state.isDevMode, "step 1 displays Artifact even for a dev-on user")
-        state.endToolbarWalkthrough(completed: false)
-        XCTAssertTrue(state.isDevMode, "end restores the value captured at start")
-    }
-
-    /// "Next" walks mode → model → mic → agent → record; "Got it" (advance
-    /// from the last step) ends the tour.
-    func testAdvanceWalksAllStepsThenEnds() {
+    func testAskWalkthroughSkipsDevSettingsAndKeepsModeFixed() {
         let state = AreaSelectorState()
         state.startToolbarWalkthrough()
-        var visited: [ToolbarWalkthroughStep] = [state.toolbarWalkthroughStep!]
-        for _ in 1..<ToolbarWalkthroughStep.allCases.count {
+        XCTAssertEqual(state.toolbarWalkthroughStep, .record)
+        XCTAssertEqual(state.toolbarWalkthroughCount, 1)
+        XCTAssertFalse(state.isDevMode)
+        state.advanceToolbarWalkthrough()
+        XCTAssertNil(state.toolbarWalkthroughStep)
+        XCTAssertFalse(state.isDevMode)
+    }
+
+    func testDevWalkthroughIncludesSettingsAndKeepsModeFixed() {
+        let state = AreaSelectorState()
+        state.setDevState(isDevMode: true, agentID: nil, agentName: "Claude Code", projectURL: nil)
+        state.startToolbarWalkthrough()
+        XCTAssertEqual(state.toolbarWalkthroughCount, 2)
+
+        var visited: [ToolbarWalkthroughStep] = [.agent]
+        while state.toolbarWalkthroughStep != .record {
             state.advanceToolbarWalkthrough()
             visited.append(state.toolbarWalkthroughStep!)
         }
-        XCTAssertEqual(visited, ToolbarWalkthroughStep.allCases)
-
-        state.advanceToolbarWalkthrough()
-        XCTAssertNil(state.toolbarWalkthroughStep, "advancing from .record ends the walkthrough")
-        XCTAssertFalse(state.isDevMode, "completion restores the pre-tour (off) mode")
+        XCTAssertEqual(visited, [.agent, .record])
+        XCTAssertTrue(state.isDevMode)
+        state.endToolbarWalkthrough(completed: false)
+        XCTAssertNil(state.toolbarWalkthroughStep)
+        XCTAssertTrue(state.isDevMode)
     }
 
-    /// Stepping into the dev steps flips the display mode on; stepping back
-    /// out flips it off — all without a controller in sight.
-    func testDevStepsForceDevModeForDisplay() {
+    func testBackClampsAtFirstStepAndReturnsToAgentInDevMode() {
         let state = AreaSelectorState()
-        state.startToolbarWalkthrough()   // .mode
-        state.advanceToolbarWalkthrough() // .model
-        state.advanceToolbarWalkthrough() // .mic
-        XCTAssertFalse(state.isDevMode)
-        state.advanceToolbarWalkthrough() // .agent
-        XCTAssertEqual(state.toolbarWalkthroughStep, .agent)
-        XCTAssertTrue(state.isDevMode, "the agent step needs the dev-settings icon on screen")
-        state.advanceToolbarWalkthrough() // .record
-        XCTAssertTrue(state.isDevMode, "record is taught in the Dev layout it just revealed")
-
-        state.toolbarWalkthroughBack()    // .agent
-        state.toolbarWalkthroughBack()    // .mic
-        XCTAssertEqual(state.toolbarWalkthroughStep, .mic)
-        XCTAssertFalse(state.isDevMode, "backing out of the dev steps drops the display borrow")
-    }
-
-    /// End from a dev-displayed step restores a dev-OFF user — for both the
-    /// "Got it" completion and the Esc dismiss.
-    func testEndRestoresDevOffUser() {
-        for completed in [true, false] {
-            let state = AreaSelectorState()
-            state.startToolbarWalkthrough()
-            state.advanceToolbarWalkthrough() // .model
-            state.advanceToolbarWalkthrough() // .mic
-            state.advanceToolbarWalkthrough() // .agent
-            XCTAssertTrue(state.isDevMode)
-            state.endToolbarWalkthrough(completed: completed)
-            XCTAssertNil(state.toolbarWalkthroughStep)
-            XCTAssertFalse(state.isDevMode, "end(completed: \(completed)) restores dev OFF")
-        }
-    }
-
-    /// End from an Artifact-displayed step restores a dev-ON user — again for
-    /// both completion and Esc dismiss.
-    func testEndRestoresDevOnUser() {
-        for completed in [true, false] {
-            let state = AreaSelectorState()
-            state.setDevMode(true)
-            state.startToolbarWalkthrough() // .mode displays Artifact
-            XCTAssertFalse(state.isDevMode)
-            state.endToolbarWalkthrough(completed: completed)
-            XCTAssertNil(state.toolbarWalkthroughStep)
-            XCTAssertTrue(state.isDevMode, "end(completed: \(completed)) restores dev ON")
-        }
-    }
-
-    /// Back clamps at the first step — never negative, never ends the tour.
-    func testBackClampsAtFirstStep() {
-        let state = AreaSelectorState()
+        state.setDevState(isDevMode: true, agentID: nil, agentName: "Claude Code", projectURL: nil)
         state.startToolbarWalkthrough()
         state.toolbarWalkthroughBack()
-        XCTAssertEqual(state.toolbarWalkthroughStep, .mode, "back at the first step is a no-op")
-
-        state.advanceToolbarWalkthrough() // .model
-        state.toolbarWalkthroughBack()    // .mode
-        state.toolbarWalkthroughBack()    // still .mode
-        XCTAssertEqual(state.toolbarWalkthroughStep, .mode)
+        XCTAssertEqual(state.toolbarWalkthroughStep, .agent)
+        state.advanceToolbarWalkthrough()
+        XCTAssertEqual(state.toolbarWalkthroughStep, .record)
+        state.toolbarWalkthroughBack()
+        XCTAssertEqual(state.toolbarWalkthroughStep, .agent)
     }
 
-    // MARK: - Seen flag (PreferencesStore)
-
-    func testSeenFlagDefaultsFalse() {
-        let prefs = PreferencesStore(defaults: .ephemeralPreview())
-        XCTAssertFalse(prefs.toolbarWalkthroughSeen, "fresh install → walkthrough not yet seen")
-    }
-
-    func testSeenFlagPersistsAcrossStores() {
+    func testModeSpecificSeenFlagsDefaultPersistAndReset() {
         let defaults = UserDefaults.ephemeralPreview()
         let prefs = PreferencesStore(defaults: defaults)
-        prefs.toolbarWalkthroughSeen = true
-        XCTAssertTrue(
-            PreferencesStore(defaults: defaults).toolbarWalkthroughSeen,
-            "seen persists to a new store over the same defaults"
-        )
+        XCTAssertFalse(prefs.askToolbarWalkthroughSeen)
+        XCTAssertFalse(prefs.devToolbarWalkthroughSeen)
+
+        prefs.askToolbarWalkthroughSeen = true
+        prefs.devToolbarWalkthroughSeen = true
+        let reloaded = PreferencesStore(defaults: defaults)
+        XCTAssertTrue(reloaded.askToolbarWalkthroughSeen)
+        XCTAssertTrue(reloaded.devToolbarWalkthroughSeen)
+
+        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.askToolbarWalkthroughSeen))
+        XCTAssertTrue(PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.devToolbarWalkthroughSeen))
+        reloaded.resetToDefaults()
+        XCTAssertFalse(reloaded.askToolbarWalkthroughSeen)
+        XCTAssertFalse(reloaded.devToolbarWalkthroughSeen)
     }
 
-    func testSeenFlagResettable() {
-        XCTAssertTrue(
-            PreferencesStore.Keys.resettable.contains(PreferencesStore.Keys.toolbarWalkthroughSeen),
-            "the key is wiped by Reset to Defaults (QA re-trigger path)"
-        )
-
-        let prefs = PreferencesStore(defaults: .ephemeralPreview())
-        prefs.toolbarWalkthroughSeen = true
-        prefs.resetToDefaults()
-        XCTAssertFalse(prefs.toolbarWalkthroughSeen, "reset re-arms the walkthrough")
+    func testLegacySeenFlagMigratesToBothModes() {
+        let defaults = UserDefaults.ephemeralPreview()
+        defaults.set(true, forKey: PreferencesStore.Keys.toolbarWalkthroughSeen)
+        let prefs = PreferencesStore(defaults: defaults)
+        XCTAssertTrue(prefs.askToolbarWalkthroughSeen)
+        XCTAssertTrue(prefs.devToolbarWalkthroughSeen)
     }
 }

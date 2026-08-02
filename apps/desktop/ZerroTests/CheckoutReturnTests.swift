@@ -397,7 +397,7 @@ final class CheckoutReturnTests: XCTestCase {
         let reset = Date(timeIntervalSince1970: 1_750_000_000)
         XCTAssertEqual(
             PurchaseSuccessInfo.managed(credits: 300, resetDate: reset).detailLine { _ in "Jul 1, 2026" },
-            "Managed is active. 300 credits available, resets Jul 1, 2026."
+            "Zerro Cloud is active. 300 credits available, resets Jul 1, 2026."
         )
         XCTAssertEqual(
             PurchaseSuccessInfo.byok.detailLine { _ in "" },
