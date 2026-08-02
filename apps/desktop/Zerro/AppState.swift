@@ -2883,9 +2883,9 @@ final class AppState {
                         // transcript round-trip — and composes from
                         // frames/OCR/clicks alone.
                         hasSpeech: processed.hasSpeech,
-                        // Multi-model 6B: the toolbar's per-recording pick when
-                        // the recording came through the overlay, else the user's
-                        // persisted picker selection (registry-validated in
+                        // Multi-model 6B: the menu-bar selection captured when
+                        // recording began, else the user's persisted selection
+                        // (registry-validated in
                         // PreferencesStore). Selects the provider adapter
                         // SERVER-side (charging is metered on real cost); never
                         // steers the prompt. (Dev mode routes through
@@ -4402,8 +4402,7 @@ final class AppState {
     /// `openWindow` environment. `SettingsView.onAppear` consumes
     /// `pendingSettingsCategory` to land on the pane.
     func openSettings(to category: SettingsCategory) {
-        AppDelegate.pendingSettingsCategory = category
-        AppDelegate.openSettings()
+        AppDelegate.openSettings(to: category)
         dismissFailure()
     }
 

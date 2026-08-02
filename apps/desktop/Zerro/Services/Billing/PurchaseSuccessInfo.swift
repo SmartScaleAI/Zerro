@@ -70,7 +70,7 @@ enum PurchaseSuccessInfo: Equatable {
     func detailLine(formatDate: (Date) -> String) -> String {
         switch self {
         case .managed(let credits, let resetDate):
-            return "Managed is active. \(credits) credits available, resets \(formatDate(resetDate))."
+            return "Zerro Cloud is active. \(credits) credits available, resets \(formatDate(resetDate))."
         case .byok:
             return "Bring-your-own-key is active. Add your provider API key in Settings to start generating."
         case .topup(let added, let total):

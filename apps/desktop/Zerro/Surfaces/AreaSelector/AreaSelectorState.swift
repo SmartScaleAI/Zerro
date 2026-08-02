@@ -195,274 +195,19 @@ final class AreaSelectorState {
         if isRecordButtonHovered != hovered { isRecordButtonHovered = hovered }
     }
 
-    // MARK: - Microphone selection
-    //
-    // The overlay toolbar carries a mic picker so the input device can
-    // be chosen right before recording without opening Settings. The
-    // controller owns enumeration (AVCaptureDevice) and persistence
-    // (PreferencesStore); this model just holds the display list +
-    // current selection so the view can render the chip, and the
-    // controller pops an NSMenu on click.
-
-    /// A selectable audio input. `id` is the `AVCaptureDevice.uniqueID`
-    /// (empty string is the "System Default" sentinel, matching
-    /// PreferencesStore.microphoneDeviceID).
-    struct AudioInputDevice: Identifiable, Equatable {
-        let id: String
-        let name: String
-    }
-
-    /// Connected input devices, set by the controller at present time.
-    private(set) var microphones: [AudioInputDevice] = []
-
-    /// Currently selected device id ("" = System Default). Mirrors the
-    /// persisted preference; the controller keeps the two in sync.
-    private(set) var selectedMicrophoneID: String = ""
-
-    /// Label for the toolbar chip: the selected device's name, or
-    /// "System Default" when the selection is empty or no longer resolves
-    /// to a connected device.
-    var selectedMicrophoneName: String {
-        if let match = microphones.first(where: { $0.id == selectedMicrophoneID }) {
-            return match.name
-        }
-        return "System Default"
-    }
-
-    private(set) var isMicChipHovered: Bool = false
-
-    func setMicChipHovered(_ hovered: Bool) {
-        if isMicChipHovered != hovered { isMicChipHovered = hovered }
-    }
-
-    func setMicrophones(_ devices: [AudioInputDevice], selectedID: String) {
-        microphones = devices
-        selectedMicrophoneID = selectedID
-    }
-
-    func selectMicrophone(id: String) {
-        selectedMicrophoneID = id
-    }
-
-    // MARK: - Mic dropdown
-    //
-    // The picker is rendered inside the overlay's SwiftUI tree (not a
-    // native NSMenu) because the overlay window sits at `.screenSaver`
-    // level — above the pop-up-menu window level — so an NSMenu would
-    // draw on top but never receive the clicks (the overlay swallows
-    // them). Rendering in-tree lets the controller's existing mouse
-    // monitor hit-test the rows the same way it does the chip and the
-    // Record button.
-
-    /// Ordered dropdown rows: "System Default" first, then each
-    /// connected device. Index 0 is always System Default.
-    var micMenuItems: [AudioInputDevice] {
-        [AudioInputDevice(id: "", name: "System Default")] + microphones
-    }
-
-    private(set) var isMicMenuOpen: Bool = false
-
-    /// Row currently under the cursor while the dropdown is open, for the
-    /// hover highlight. nil when nothing is hovered.
-    private(set) var highlightedMicIndex: Int?
-
-    func toggleMicMenu() {
-        isMicMenuOpen.toggle()
-        if isMicMenuOpen {
-            // Only one toolbar dropdown at a time (see toggleModelMenu).
-            closeModelMenu()
-            closeDevSettingsMenu()
-            closeUpgradePopup()
-        } else {
-            highlightedMicIndex = nil
-        }
-    }
-
-    func closeMicMenu() {
-        isMicMenuOpen = false
-        highlightedMicIndex = nil
-    }
-
-    func setHighlightedMicIndex(_ index: Int?) {
-        if highlightedMicIndex != index { highlightedMicIndex = index }
-    }
-
-    // MARK: - Model selection (multi-model — last-used model)
-    //
-    // The toolbar's model chip is the only model picker. It seeds from
-    // `PreferencesStore.selectedModelID` (the last model the user recorded
-    // with) and a pick is held in this state until record-start, where the
-    // controller writes it back as the new last-used (see
-    // AreaSelectorWindowController.onConfirm) — so picking a model and
-    // recording makes it stick, while abandoning the overlay leaves the
-    // stored model untouched. Like the mode toggle, the pick persists at
-    // record-start (the mic dropdown, by contrast, persists immediately).
-    // Rendering + row hit-testing mirror the mic dropdown (in-tree menu,
-    // controller-owned monitor) for the same .screenSaver window-level reason.
-
-    /// One row of the model dropdown — display data precomputed by the
-    /// controller at present time (the view stays free of registry +
-    /// entitlement reads).
-    struct ModelMenuItem: Identifiable, Equatable {
-        /// Registry wire id (`ModelEntry.id`).
-        let id: String
-        /// `ModelEntry.displayName`.
-        let name: String
-        /// Trailing detail: "4 cr · ~62 left" (Managed/Trial), "Add
-        /// Gemini key" (BYOK key-gated), or nil (BYOK with key — credits
-        /// are meaningless, no column).
-        let detail: String?
-        /// True for the registry's recommended entry (badge).
-        let recommended: Bool
-        /// BYOK key-gating: rendered dimmed + unselectable.
-        let gated: Bool
-    }
-
-    /// Dropdown rows, cheapest-first (registry order). Set by the
-    /// controller at present time.
-    private(set) var models: [ModelMenuItem] = []
-
-    /// The model THIS recording will use. Seeded from the last-used model; a
-    /// dropdown pick changes only this copy until the controller persists it
-    /// back as last-used at record-start.
-    private(set) var selectedModelID: String = ""
-
-    /// Label for the toolbar chip — the EFFECTIVE model's name, so a locked
-    /// trial user always reads "Gemini 3.5 Flash" regardless of any prior pick.
-    var selectedModelName: String {
-        models.first { $0.id == effectiveModelID }?.name ?? effectiveModelID
-    }
-
-    private(set) var isModelChipHovered: Bool = false
-
-    func setModelChipHovered(_ hovered: Bool) {
-        if isModelChipHovered != hovered { isModelChipHovered = hovered }
-    }
-
-    private(set) var isModelMenuOpen: Bool = false
-
-    /// Row under the cursor while the dropdown is open (hover highlight).
-    private(set) var highlightedModelIndex: Int?
-
-    func setModels(_ items: [ModelMenuItem], selectedID: String) {
-        models = items
-        selectedModelID = selectedID
-    }
-
-    func selectModel(id: String) {
-        selectedModelID = id
-    }
-
-    /// Open/close the model dropdown. Only one toolbar dropdown may be
-    /// open at a time, so opening this one closes the mic menu.
-    func toggleModelMenu() {
-        isModelMenuOpen.toggle()
-        if isModelMenuOpen {
-            closeMicMenu()
-            closeDevSettingsMenu()
-            closeUpgradePopup()
-        } else {
-            highlightedModelIndex = nil
-        }
-    }
-
-    func closeModelMenu() {
-        isModelMenuOpen = false
-        highlightedModelIndex = nil
-    }
-
-    func setHighlightedModelIndex(_ index: Int?) {
-        if highlightedModelIndex != index { highlightedModelIndex = index }
-    }
-
-    // MARK: - Trial model-picker lock (premium-model gating)
-    //
-    // While the user is on the `.trial` entitlement, the ONLY model they may use
-    // is the free model (Gemini 3.5 Flash) — every other model is "premium" and
-    // gated behind upgrade (Cursor's free-vs-premium pattern). The chip then
-    // shows the free model + a lock glyph, and tapping it opens the upgrade
-    // popup instead of the model list. BYOK trial/BYOK/Managed users are never
-    // locked (BYOK provider availability is enforced per row instead).
-
-    /// The long-lived entitlement store, injected at present time. It's
-    /// `@Observable`, so reading `entitlements?.state` through the lock flag
-    /// below makes the chip + popup react to a plan change (trial → managed)
-    /// without a relaunch. nil in tests/previews → never locked (existing
-    /// behavior), so the picker keeps the full model list.
-    private(set) var entitlements: EntitlementStore?
-
-    func setEntitlements(_ store: EntitlementStore?) {
-        entitlements = store
-    }
-
-    /// The only model a trial user may use; matches `ModelRegistry`'s recommended
-    /// free model. Generation is forced to this id while locked.
-    static let lockedModelID = "gemini-3.5-flash"
-
-    /// True while the model picker is locked to the free model — i.e. the user is
-    /// on `.trial`. Drives the chip's lock glyph, the tap interception, and the
-    /// forced effective model below.
-    var isModelPickerLocked: Bool {
-        if case .trial = entitlements?.state { return true }
-        return false
-    }
-
-    /// The model id generation must actually use: forced to the free model while
-    /// locked, otherwise the user's persisted pick. Computed at the point of use
-    /// so the stored preference is NEVER overwritten — upgrading restores it.
-    var effectiveModelID: String {
-        isModelPickerLocked ? Self.lockedModelID : selectedModelID
-    }
-
-    // MARK: - Upgrade popup (trial model-lock)
-    //
-    // Rendered in-tree like the model/mic dropdowns (same `.screenSaver`
-    // window-level reason) and anchored to the model chip. Mutually exclusive
-    // with every toolbar dropdown.
-
-    private(set) var isUpgradePopupOpen: Bool = false
-
-    /// Hover state for the popup's Upgrade button (the overlay is hit-test-
-    /// disabled, so the controller sets this on mouse-move and the view reflects
-    /// it as a subtle brighten).
-    private(set) var isUpgradeButtonHovered: Bool = false
-
-    func setUpgradeButtonHovered(_ hovered: Bool) {
-        if isUpgradeButtonHovered != hovered { isUpgradeButtonHovered = hovered }
-    }
-
-    /// Open/close the upgrade popup. Only one toolbar surface at a time, so
-    /// opening it closes every dropdown.
-    func toggleUpgradePopup() {
-        isUpgradePopupOpen.toggle()
-        if isUpgradePopupOpen {
-            closeModelMenu()
-            closeMicMenu()
-            closeDevSettingsMenu()
-        } else {
-            isUpgradeButtonHovered = false
-        }
-    }
-
-    func closeUpgradePopup() {
-        isUpgradePopupOpen = false
-        isUpgradeButtonHovered = false
-    }
-
     // MARK: - Dev Mode (Phase 1)
     //
-    // Dev Mode is a standalone mode switch on the toolbar's left — not a
-    // setting. When on, the recording is handed to a local coding agent
+    // Dev Mode is selected by its dedicated global shortcut. When active, the
+    // recording is handed to a local coding agent
     // (Claude Code in Phase 1) that edits files in `projectURL`, instead of
-    // the normal clipboard hand-off. This state holds the toggle + the two
-    // Dev-Mode-critical selections (agent + folder); the controller owns
+    // the normal clipboard hand-off. This state holds the fixed launch mode +
+    // the two Dev-Mode-critical selections (agent + folder); the controller owns
     // persistence (PreferencesStore) and the folder picker, mirroring how it
-    // owns the mic/model pickers. Everything here is inert in normal mode
+    // owns the agent/project picker. Everything here is inert in normal mode
     // (`isDevMode == false`), so non-Dev recordings behave exactly as today.
 
-    /// Whether Dev Mode is engaged for this recording. Flipping it on grows
-    /// the toolbar cluster from `model · mic · record` to
-    /// `model · mic · agent · folder · record`.
+    /// Whether the Dev shortcut opened this recording flow. Dev Mode adds the
+    /// consolidated agent/project settings control to the toolbar.
     private(set) var isDevMode: Bool = false
 
     /// The coding agent this recording will dispatch to (registry wire id,
@@ -550,10 +295,6 @@ final class AreaSelectorState {
     func toggleDevSettingsMenu() {
         isDevSettingsMenuOpen.toggle()
         if isDevSettingsMenuOpen {
-            // Only one toolbar dropdown at a time.
-            closeModelMenu()
-            closeMicMenu()
-            closeUpgradePopup()
             // Compact by default: all three sections (Agent / Model / Permissions)
             // start collapsed to summary rows.
             expandedDevSection = nil
@@ -676,15 +417,13 @@ final class AreaSelectorState {
         devModelScrollOffset = min(idx, maxDevModelScrollOffset)
     }
 
-    /// Called when Dev Mode is entered (Dev segment clicked, or seeded-on at
-    /// present time). Auto-opens the dev-settings menu the first time this
-    /// session, or any time the folder is still unset, so the user can finish
+    /// Called when a Dev shortcut presents the overlay. Auto-opens the
+    /// dev-settings menu the first time this overlay presentation, or any time
+    /// the folder is still unset, so the user can finish
     /// setup; otherwise leaves it closed.
     func handleDevModeEntered() {
         if !hasAutoOpenedDevSettings || projectURL == nil {
             isDevSettingsMenuOpen = true
-            closeModelMenu()
-            closeMicMenu()
             resetDevModelScrollToSelection()
         }
         hasAutoOpenedDevSettings = true
@@ -735,68 +474,21 @@ final class AreaSelectorState {
         projectIsGitRepo = isRepo
     }
 
-    /// Hover state for the compact mode switch's two segments + the dev-settings
-    /// icon. Mirror the chip-hover pattern: the controller hit-tests the frames
-    /// on mouse-move and the view reflects these (fill highlight + tooltip).
-    private(set) var isModeAskHovered: Bool = false
-    private(set) var isModeDevHovered: Bool = false
+    /// Hover state for the Dev-settings icon. The controller hit-tests its frame
+    /// on mouse-move and the view reflects the highlight + tooltip.
     private(set) var isDevSettingsHovered: Bool = false
-
-    func setModeAskHovered(_ hovered: Bool) {
-        if isModeAskHovered != hovered { isModeAskHovered = hovered }
-    }
-
-    func setModeDevHovered(_ hovered: Bool) {
-        if isModeDevHovered != hovered { isModeDevHovered = hovered }
-    }
 
     func setDevSettingsHovered(_ hovered: Bool) {
         if isDevSettingsHovered != hovered { isDevSettingsHovered = hovered }
     }
 
-    /// Clear every toolbar control-hover flag. Used when a click relocates the
-    /// toolbar (the mode switch resizes the container) and no mouse-move fires to
-    /// refresh them — the next move re-establishes hover.
-    func resetToolbarHovers() {
-        isModeAskHovered = false
-        isModeDevHovered = false
-        isDevSettingsHovered = false
-        isModelChipHovered = false
-        isMicChipHovered = false
-        isRecordButtonHovered = false
-        isUpgradeButtonHovered = false
-    }
-
-    /// Seed the Dev Mode selections at present time from persisted prefs +
-    /// agent detection (mirrors `setMicrophones`/`setModels`).
+    /// Seed the Dev Mode selections at presentation time from persisted prefs
+    /// and agent detection.
     func setDevState(isDevMode: Bool, agentID: String?, agentName: String, projectURL: URL?) {
         self.isDevMode = isDevMode
         self.selectedAgentID = agentID
         self.selectedAgentName = agentName
         self.projectURL = projectURL
-    }
-
-    /// Flip the mode switch. Toggling on while requirements are already met
-    /// leaves the chips as-is; toggling off clears any inline validation
-    /// message (it only applies to Dev Mode).
-    func toggleDevMode() {
-        setDevMode(!isDevMode)
-    }
-
-    /// Set the mode explicitly — the compact mode switch maps each segment to a
-    /// mode (Ask = off, Dev = on) rather than flipping, so clicking the
-    /// already-active segment is a no-op. Turning Dev off clears any inline
-    /// validation message and closes the dev-settings menu (both Dev-only);
-    /// either change closes the model/mic dropdowns.
-    func setDevMode(_ on: Bool) {
-        guard isDevMode != on else { return }
-        isDevMode = on
-        if !on {
-            devValidationMessage = nil
-            closeDevSettingsMenu()
-        }
-        closeMicMenu()
-        closeModelMenu()
     }
 
     func setProjectURL(_ url: URL?) {
@@ -943,8 +635,8 @@ final class AreaSelectorState {
 
     // MARK: - Toolbar walkthrough (first-run coach-marks — state machine)
     //
-    // First-run tour of the toolbar's five controls. This model owns ONLY the
-    // step cursor + the Dev Mode display snapshot; rendering, Back/Next
+    // First-run tour of the controls available in the shortcut-selected mode.
+    // This model owns only the step cursor; rendering, Back/Next
     // hit-testing, the seen-flag write, and analytics are controller/view
     // work in later phases. Deliberately free of preference writes and
     // analytics calls so the machine stays unit-testable in isolation.
@@ -954,68 +646,47 @@ final class AreaSelectorState {
     /// changes the same way they react to hover flags.
     private(set) var toolbarWalkthroughStep: ToolbarWalkthroughStep? = nil
 
-    /// The user's real Dev Mode value, snapshotted at walkthrough start — the
-    /// agent/record steps borrow Dev Mode for display, and end restores this.
-    private var devModeBeforeWalkthrough: Bool? = nil
+    private var toolbarWalkthroughSteps: [ToolbarWalkthroughStep] {
+        ToolbarWalkthroughStep.steps(isDevMode: isDevMode)
+    }
 
-    /// Begin the walkthrough at the first step, snapshotting the current
-    /// Dev Mode so `endToolbarWalkthrough` can hand it back.
+    var toolbarWalkthroughPosition: Int? {
+        guard let step = toolbarWalkthroughStep else { return nil }
+        return toolbarWalkthroughSteps.firstIndex(of: step)
+    }
+
+    var toolbarWalkthroughCount: Int { toolbarWalkthroughSteps.count }
+
+    /// Begin the walkthrough at the first control for this fixed mode.
     func startToolbarWalkthrough() {
-        devModeBeforeWalkthrough = isDevMode
-        toolbarWalkthroughStep = .mode
-        applyWalkthroughStepMode()
+        toolbarWalkthroughStep = toolbarWalkthroughSteps.first
     }
 
     /// Advance one step ("Next"). From the last step ("Got it") this ends
     /// the walkthrough as completed.
     func advanceToolbarWalkthrough() {
         guard let step = toolbarWalkthroughStep else { return }
-        if let next = ToolbarWalkthroughStep(rawValue: step.rawValue + 1) {
-            toolbarWalkthroughStep = next
-            applyWalkthroughStepMode()
+        guard let index = toolbarWalkthroughSteps.firstIndex(of: step) else { return }
+        let nextIndex = index + 1
+        if toolbarWalkthroughSteps.indices.contains(nextIndex) {
+            toolbarWalkthroughStep = toolbarWalkthroughSteps[nextIndex]
         } else {
             endToolbarWalkthrough(completed: true)
         }
     }
 
-    /// Step back one ("Back" — hidden on the first step). Clamped at
-    /// `.mode`: backing out of the first step is a no-op.
+    /// Step back one ("Back" — hidden on the first step).
     func toolbarWalkthroughBack() {
         guard let step = toolbarWalkthroughStep,
-              let previous = ToolbarWalkthroughStep(rawValue: step.rawValue - 1)
+              let index = toolbarWalkthroughSteps.firstIndex(of: step), index > 0
         else { return }
-        toolbarWalkthroughStep = previous
-        applyWalkthroughStepMode()
+        toolbarWalkthroughStep = toolbarWalkthroughSteps[index - 1]
     }
 
-    /// End the walkthrough, restoring the user's real Dev Mode. `completed`
-    /// distinguishes "Got it" (true) from an Esc dismiss (false) — both end
-    /// identically in state; the controller uses the flag for the seen-flag
-    /// write + analytics in a later phase.
+    /// End the walkthrough. `completed` distinguishes "Got it" from Esc for
+    /// analytics; both clear the cursor identically.
     func endToolbarWalkthrough(completed: Bool) {
-        if let restored = devModeBeforeWalkthrough {
-            setDevModeForDisplay(restored)
-        }
-        devModeBeforeWalkthrough = nil
         toolbarWalkthroughStep = nil
-    }
-
-    /// Render the toolbar in the mode the current step teaches (Dev for the
-    /// agent/record steps, Ask otherwise) — display-only, never persisted.
-    private func applyWalkthroughStepMode() {
-        guard let step = toolbarWalkthroughStep else { return }
-        setDevModeForDisplay(step.showsDevControls)
-    }
-
-    /// Set the in-memory `isDevMode` for DISPLAY only. Unlike `setDevMode`
-    /// (whose controller callers persist `preferences.devModeEnabled`), this
-    /// must never reach a code path that writes the preference — the
-    /// walkthrough borrows Dev Mode to put the agent-settings icon on screen
-    /// and hands the real value back on end. It also skips `setDevMode`'s
-    /// menu-closing side effects: a walkthrough step change isn't a user
-    /// mode click.
-    func setDevModeForDisplay(_ on: Bool) {
-        if isDevMode != on { isDevMode = on }
     }
 
     // MARK: - Mutations driven by AreaSelectorEventView
@@ -1156,26 +827,20 @@ final class AreaSelectorState {
 
 // MARK: - Toolbar walkthrough steps
 
-/// The five stops of the first-run toolbar walkthrough, one per toolbar
-/// control, ordered left→right to match the toolbar layout. Ordered via
-/// `Int` raw value so advance/back are trivial arithmetic, and
-/// `CaseIterable` so tests and any step indicator iterate the same
-/// source-of-truth ordering (mirrors `OnboardingStep`).
+/// Stops used by the mode-specific first-run toolbar walkthrough.
 enum ToolbarWalkthroughStep: Int, CaseIterable {
-    case mode = 0
-    case model
-    case mic
-    case agent
+    case agent = 0
     case record
+
+    static func steps(isDevMode: Bool) -> [ToolbarWalkthroughStep] {
+        isDevMode ? [.agent, .record] : [.record]
+    }
 
     /// Stable identifier for analytics — decoupled from `rawValue` (an index
     /// that shifts if steps are reordered/inserted), so it must stay constant
     /// across releases (mirrors `OnboardingStep.analyticsName`).
     var analyticsName: String {
         switch self {
-        case .mode:   return "mode"
-        case .model:  return "model"
-        case .mic:    return "mic"
         case .agent:  return "agent"
         case .record: return "record"
         }
@@ -1184,9 +849,6 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
     /// Callout headline.
     var title: String {
         switch self {
-        case .mode:   return "Choose what Zerro makes"
-        case .model:  return "Pick the AI model"
-        case .mic:    return "Choose your mic"
         case .agent:  return "Set up your coding agent"
         case .record: return "Start recording"
         }
@@ -1195,12 +857,6 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
     /// Callout body copy.
     var body: String {
         switch self {
-        case .mode:
-            return "Ask turns your recording into a ready-to-use output, like a prompt or snippet. Dev Mode sends it straight to a coding agent to make the change for you."
-        case .model:
-            return "This model reads your screen and voice. Tap to switch. The current model's name shows here."
-        case .mic:
-            return "Zerro records what you say while you point and talk. Pick your input device here."
         case .agent:
             return "In Dev Mode, choose which agent runs and which project folder it edits."
         case .record:
@@ -1208,25 +864,12 @@ enum ToolbarWalkthroughStep: Int, CaseIterable {
         }
     }
 
-    /// Whether this step needs the toolbar rendered in Dev Mode — the
-    /// agent-settings icon only exists there, and Record is taught in the
-    /// same (Dev) layout it was just revealed in.
-    var showsDevControls: Bool {
-        switch self {
-        case .mode, .model, .mic: return false
-        case .agent, .record:     return true
-        }
-    }
-
-    /// Whether the control this step points at exists ONLY in the Dev-Mode
-    /// toolbar layout — drives the "Dev Mode only" callout badge. Distinct
-    /// from `showsDevControls`: the record step is *displayed* in the Dev
-    /// layout for continuity, but the Record button works in Ask mode too,
-    /// so only `.agent` is genuinely Dev-only.
+    /// Whether the control exists only in the Dev toolbar. Drives the
+    /// "Dev Mode only" callout badge.
     var isDevModeOnly: Bool {
         switch self {
-        case .agent:                        return true
-        case .mode, .model, .mic, .record:  return false
+        case .agent:  return true
+        case .record: return false
         }
     }
 }

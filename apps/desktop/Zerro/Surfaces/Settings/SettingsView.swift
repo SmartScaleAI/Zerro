@@ -39,6 +39,10 @@
 
 import SwiftUI
 
+extension Notification.Name {
+    static let zerroSettingsCategoryRequested = Notification.Name("zerro.settings.categoryRequested")
+}
+
 // MARK: - Route
 
 enum SettingsRoute: Equatable {
@@ -52,6 +56,7 @@ enum SettingsRoute: Equatable {
 /// section view(s) it shows in the detail pane (see `SettingsView.pane`).
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
+    case shortcuts
     case history
     case advanced
     case accountBilling
@@ -62,6 +67,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general:        return "General"
+        case .shortcuts:      return "Shortcuts"
         case .history:        return "History"
         case .advanced:       return "Advanced"
         case .accountBilling: return "Account & Billing"
@@ -73,6 +79,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general:        return "slider.horizontal.3"
+        case .shortcuts:      return "keyboard"
         case .history:        return "clock.arrow.circlepath"
         case .advanced:       return "gearshape.2"
         case .accountBilling: return "person.crop.circle"
@@ -80,7 +87,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    static let settingsGroup: [SettingsCategory] = [.general, .history, .advanced]
+    static let settingsGroup: [SettingsCategory] = [.general, .shortcuts, .history, .advanced]
     static let accountGroup: [SettingsCategory] = [.accountBilling, .about]
 }
 
@@ -135,6 +142,12 @@ struct SettingsView: View {
                 selection = pending
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .zerroSettingsCategoryRequested)) { note in
+            guard let rawValue = note.userInfo?["category"] as? String,
+                  let category = SettingsCategory(rawValue: rawValue) else { return }
+            AppDelegate.pendingSettingsCategory = nil
+            selection = category
+        }
     }
 
     // MARK: Detail pane
@@ -167,6 +180,8 @@ struct SettingsView: View {
                 case .general:
                     CaptureSection()
                     AppearanceSection()
+                case .shortcuts:
+                    ShortcutsSection()
                 case .history:
                     HistorySection(onOpenRecentPrompts: { route = .recentPrompts })
                 case .advanced:

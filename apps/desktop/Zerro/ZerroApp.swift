@@ -288,8 +288,21 @@ struct ZerroApp: App {
             // KeychainStore header.
             KeychainStore.debugLogTrialSlotDisposition()
             #endif
-            KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
+            KeyboardShortcuts.onKeyDown(for: .askRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
+                    launchMode: .ask,
+                    state: state,
+                    preferences: prefs,
+                    permissions: perms,
+                    onboarding: onb,
+                    entitlements: ent,
+                    areaSelector: selectorCtrl,
+                    pillController: pillCtrl
+                )
+            }
+            KeyboardShortcuts.onKeyDown(for: .devRecording) { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
+                Self.handleHotkey(
+                    launchMode: .dev,
                     state: state,
                     preferences: prefs,
                     permissions: perms,
@@ -306,6 +319,7 @@ struct ZerroApp: App {
             // global shortcut and menu-bar action.
             AppDelegate.requestOpenAreaSelector = { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
+                    launchMode: .ask,
                     state: state,
                     preferences: prefs,
                     permissions: perms,
@@ -354,6 +368,7 @@ struct ZerroApp: App {
             // permissions/entitlement before presenting the selector.
             state.requestAreaSelector = { [weak state, weak prefs, weak perms, weak onb, weak ent, weak selectorCtrl, weak pillCtrl] in
                 Self.handleHotkey(
+                    launchMode: state?.recordingIsDevMode == true ? .dev : .ask,
                     state: state,
                     preferences: prefs,
                     permissions: perms,
@@ -434,18 +449,6 @@ struct ZerroApp: App {
                 }
             }
 
-            // Dev Mode (Phase 1): for a returning Dev Mode user, warm agent
-            // detection now (background) so the agent chip is resolved by the
-            // time they open the overlay — no "checking" flicker. Gated on the
-            // persisted toggle so normal-mode users never spawn the shell probe.
-            if prefs.devModeEnabled {
-                DevAgentDetection.shared.warm()
-                // Phase 2: refresh the server-fetched model manifest (cache→disk)
-                // so the dev-settings Model section shows the current pinned list.
-                // Fail-open: offline keeps the cached/bundled list, never empty.
-                Task { await AgentModelManifestStore.shared.warm() }
-            }
-
             // Phase C: throttled background re-validation of a cached BYOK
             // license. No-ops unless a license is present AND the ~weekly
             // throttle window has elapsed, so it's offline-first and never
@@ -480,22 +483,7 @@ struct ZerroApp: App {
         // `.task` on this content view, so pill updates keep flowing
         // while the dropdown is closed and while the app is backgrounded.
         MenuBarExtra {
-            MenuBarPanelView(
-                // Menu "Start Recording" runs the same path as the global
-                // hotkey: present the area selector first (gated on
-                // onboarding / permissions), record on confirm.
-                onStartRecording: {
-                    Self.handleHotkey(
-                        state: appState,
-                        preferences: preferences,
-                        permissions: permissions,
-                        onboarding: onboarding,
-                        entitlements: entitlements,
-                        areaSelector: areaSelectorController,
-                        pillController: pillController
-                    )
-                }
-            )
+            MenuBarPanelView()
                 .environment(appState)
                 .environment(preferences)
                 .environment(permissions)
@@ -768,6 +756,7 @@ struct ZerroApp: App {
     ///      idle first so a new recording can begin.
     @MainActor
     private static func handleHotkey(
+        launchMode: RecordingLaunchMode,
         state: AppState?,
         preferences: PreferencesStore?,
         permissions: PermissionsManager?,
@@ -941,9 +930,10 @@ struct ZerroApp: App {
         // Settings change between recordings takes effect on the next one
         // without restarting the app.
         areaSelector.present(
+            launchMode: launchMode,
             preferences: preferences,
-            // Multi-model: feeds the toolbar model dropdown's credit detail
-            // (Managed/Trial) and BYOK key-gating.
+            // Multi-model: lets recording start apply the trial's free-model
+            // override without overwriting the menu-bar selection.
             entitlements: entitlements,
             // First-run toolbar walkthrough: only offer once onboarding is
             // complete (the controller's seen-flag check makes it one-time).
@@ -962,9 +952,8 @@ struct ZerroApp: App {
                     // Phase 3: read the redaction pref fresh (same pattern) so a
                     // Settings change takes effect on the next recording.
                     redactSecrets: preferences?.redactSecrets ?? ProcessingConfig.redactSecretsDefault,
-                    // Multi-model: the toolbar chip's pick, a PER-RECORDING
-                    // override — handed through here, never persisted (unlike
-                    // the mic above, by design).
+                    // Multi-model: the current menu-bar selection, with any
+                    // entitlement override already applied.
                     modelID: modelID,
                     // Dev Mode (Phase 1): the toolbar's agent + folder, or nil
                     // for a normal clipboard recording.
@@ -1445,6 +1434,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             Log.ui.error("openSettings() called but requestOpenSettings is nil — registrar didn't mount")
         }
+    }
+
+    /// Opens Settings and selects a specific category. The pending value covers
+    /// a newly-created window; the notification updates an already-visible one.
+    @MainActor
+    static func openSettings(to category: SettingsCategory) {
+        pendingSettingsCategory = category
+        openSettings()
+        NotificationCenter.default.post(
+            name: .zerroSettingsCategoryRequested,
+            object: nil,
+            userInfo: ["category": category.rawValue]
+        )
     }
 
     /// Brings the trial email-capture window forward (Phase F). Mirrors

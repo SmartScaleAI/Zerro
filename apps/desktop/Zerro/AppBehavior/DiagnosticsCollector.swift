@@ -44,7 +44,8 @@ enum DiagnosticsCollector {
         lines.append("")
         lines.append("Capture:")
         lines.append("  Microphone: \(selectedMicrophoneDescription(deviceID: preferences.microphoneDeviceID))")
-        lines.append("  Hotkey:     \(currentHotkeyDescription())")
+        lines.append("  Ask shortcut: \(hotkeyDescription(for: .askRecording))")
+        lines.append("  Dev shortcut: \(hotkeyDescription(for: .devRecording))")
         lines.append("")
         lines.append("Output:")
         // Phase 13 (Part B) — include the most recent error-tracker diagnostic ID
@@ -184,8 +185,8 @@ enum DiagnosticsCollector {
         return "Not connected (stored: \(deviceID))"
     }
 
-    private static func currentHotkeyDescription() -> String {
-        if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleRecording) {
+    private static func hotkeyDescription(for name: KeyboardShortcuts.Name) -> String {
+        if let shortcut = KeyboardShortcuts.getShortcut(for: name) {
             return shortcut.description
         }
         return "(none)"

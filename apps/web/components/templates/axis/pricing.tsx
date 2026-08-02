@@ -15,8 +15,8 @@ import { AnimatePresence, motion } from "motion/react";
 
 type Billing = "monthly" | "yearly";
 
-// ─── Highlighted (Managed) card styling ──────────────────────────────────────
-// The Managed card used to be solid white, which was blinding on the dark site.
+// ─── Highlighted (Zerro Cloud) card styling ──────────────────────────────────
+// The Zerro Cloud card used to be solid white, which was blinding on the dark site.
 // Instead it's a lifted dark-gray card that draws the eye through a teal accent
 // ring + soft colored glow rather than brightness, with accents pulled from the
 // pricing section's blue→teal→purple gradient so nothing clashes. Collected here
@@ -100,7 +100,7 @@ type Tier = {
 };
 
 // Order matters: cards render left-to-right in array order. Free is the entry
-// point on the left, the highlighted Managed plan (the primary, recommended
+// point on the left, the highlighted Zerro Cloud plan (the primary, recommended
 // path) sits in the middle, and BYOK closes on the right.
 const tiers: Tier[] = [
     {
@@ -109,7 +109,7 @@ const tiers: Tier[] = [
         price: "$0",
         cadence: "to start",
         features: [
-            "30 Managed credits or 10 BYOK generations",
+            "30 Zerro Cloud Trial credits or 10 BYOK generations",
             "Use our AI or your OpenAI, Gemini & Anthropic keys",
             "No card or time limit",
         ],
@@ -117,8 +117,8 @@ const tiers: Tier[] = [
         placement: "pricing_free",
     },
     {
-        name: "Managed",
-        blurb: "We handle the AI. No keys, no setup.",
+        name: "Zerro Cloud",
+        blurb: "Zerro handles model access. No keys, no setup.",
         monthly: {
             price: "$15",
             yearlyMonthly: "$12",
@@ -295,7 +295,7 @@ const Pricing = () => {
                                         // the section gradient reads through, a strong backdrop
                                         // blur, and a soft light border + inset top highlight for
                                         // the frosted-pane look. Distinct from the solid-black
-                                        // Managed card without competing with it.
+                                        // Zerro Cloud card without competing with it.
                                         : "border-white/10 bg-black/40 backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_24px_60px_-24px_rgba(0,0,0,0.6)]"
                                 )}
                             >
@@ -333,7 +333,7 @@ const Pricing = () => {
                                 <p className={cn("text-sm -mt-3", tier.highlight ? HIGHLIGHT_STYLE.blurb : "text-muted-foreground")}>{tier.blurb}</p>
 
                                 {/* Monthly / yearly toggle — lives inside the subscription
-                                    (Managed) card, directly above its price, so it clearly
+                                    Zerro Cloud card, directly above its price, so it clearly
                                     controls only this card. BYOK ($69 one-time) renders no
                                     toggle. The "Save ~20%" badge applies to yearly only. */}
                                 {isSubscription && (
@@ -457,7 +457,7 @@ const Pricing = () => {
             {/* Honest privacy distinction — a genuine selling point, not buried.
                 Bumped to foreground/75 so it clears AA contrast over the gradient surface. */}
             <p className="relative z-10 mt-8 mx-auto max-w-2xl text-center text-sm text-foreground/75">
-                Managed sends your recording to Zerro&apos;s server, which forwards it to a
+                Zerro Cloud sends your recording to Zerro&apos;s server, which forwards it to a
                 third-party AI provider to generate the result. Bring-your-own-key skips our
                 servers; recordings go straight to that provider on your own key.
             </p>

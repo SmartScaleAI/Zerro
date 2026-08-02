@@ -119,6 +119,56 @@ enum ModelRegistry {
     /// model.
     static let defaultModelID: String =
         (all.first { $0.recommended && $0.enabled } ?? enabled[0]).id
+
+    /// The only generation model available during the free managed trial.
+    /// Kept separate from the user's persisted paid/BYOK selection so upgrading
+    /// restores their prior choice.
+    static let trialModelID = "gemini-3.5-flash"
+}
+
+// MARK: - Selection policy
+
+/// Shared rules for the menu-bar picker and recording start. Keeping the trial
+/// override and BYOK provider gating here prevents the configuration surface
+/// from drifting from the model that generation actually receives.
+enum ModelSelectionPolicy {
+    static func effectiveModelID(
+        persistedModelID: String,
+        entitlement: EntitlementState?,
+        availableProviders: Set<ModelProvider>
+    ) -> String {
+        if isTrial(entitlement) {
+            return ModelRegistry.trialModelID
+        }
+        guard entitlement?.usesOwnProviderKeys == true else {
+            return persistedModelID
+        }
+        return BYOKRouting.effectiveEntry(
+            selectedModelID: persistedModelID,
+            availableProviders: availableProviders
+        )?.id ?? persistedModelID
+    }
+
+    static func isTrialLocked(
+        _ model: ModelEntry,
+        entitlement: EntitlementState?
+    ) -> Bool {
+        isTrial(entitlement) && model.id != ModelRegistry.trialModelID
+    }
+
+    static func isBYOKGated(
+        _ model: ModelEntry,
+        entitlement: EntitlementState?,
+        availableProviders: Set<ModelProvider>
+    ) -> Bool {
+        guard entitlement?.usesOwnProviderKeys == true else { return false }
+        return !availableProviders.contains(model.provider)
+    }
+
+    private static func isTrial(_ entitlement: EntitlementState?) -> Bool {
+        if case .trial = entitlement { return true }
+        return false
+    }
 }
 
 // MARK: - Copy derivation

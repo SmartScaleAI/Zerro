@@ -399,7 +399,7 @@ final class LocalhostAutoMatchTests: XCTestCase {
 
     func testAutoDetectInfoHoverClearsWhenMenuCloses() {
         let state = AreaSelectorState()
-        state.setDevMode(true)
+        state.setDevState(isDevMode: true, agentID: nil, agentName: "Claude Code", projectURL: nil)
         state.toggleDevSettingsMenu()
         state.setAutoDetectInfoHovered(true)
         XCTAssertTrue(state.isAutoDetectInfoHovered)
