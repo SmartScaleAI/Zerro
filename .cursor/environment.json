@@ -1,0 +1,27 @@
+{
+  // Cloud Agent dev environment for the Zerro monorepo.
+  //
+  // Scope: the runnable target on a Linux Cloud Agent is the Next.js
+  // marketing site (apps/web). The macOS desktop app (apps/desktop) needs
+  // Xcode/Swift and can only build on a macOS runner, and the Supabase
+  // backend (supabase/) needs Docker + the Supabase CLI + third-party API
+  // secrets, so neither is provisioned here.
+  //
+  // The default Cursor image already ships Node 22 + npm, so no custom
+  // Dockerfile is required — `install` just restores the web app's deps.
+  "name": "Zerro Web",
+  "install": "cd apps/web && npm install",
+  "terminals": [
+    {
+      "name": "web-dev",
+      "command": "cd apps/web && npm run dev",
+      "description": "Next.js dev server for the marketing site (apps/web), served on http://localhost:3000"
+    }
+  ],
+  "ports": [
+    {
+      "name": "web",
+      "port": 3000
+    }
+  ]
+}
