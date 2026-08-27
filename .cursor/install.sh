@@ -11,6 +11,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Make the image's nvm-managed Node/npm available even when this script runs in
+# a non-login shell that has not sourced ~/.bashrc (where nvm is normally set
+# up). Without this, `npm` may be missing depending on how `install` is invoked.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if ! command -v npm >/dev/null 2>&1 && [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh"
+fi
+
 # --- Deno: runtime for the supabase/functions test suite ---------------------
 # Installed to /usr/local (binary lands in /usr/local/bin/deno) so it is on PATH
 # for every shell without touching any shell profile. Skip the download when a
