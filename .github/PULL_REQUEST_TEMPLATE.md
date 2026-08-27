@@ -27,7 +27,7 @@
 ## Checklist
 
 - [ ] All commits are signed off (`git commit -s`) certifying the
-      [DCO](https://github.com/SmartScaleAI/smartscale-zerro/blob/staging/DCO).
+      [DCO](https://github.com/SmartScaleAI/Zerro/blob/staging/DCO).
       I retain my copyright; my contribution is licensed
       under GPL-3.0-or-later. No copyright assignment is required.
 - [ ] Unrelated behavior is preserved; this PR contains no unrelated

@@ -69,7 +69,7 @@ Official releases are built from this repository:
 
 - Pushing a production tag (`app-v<version>`) makes GitHub Actions build,
   sign, notarize, and staple the official DMG.
-- [GitHub Releases](https://github.com/SmartScaleAI/smartscale-zerro/releases)
+- [GitHub Releases](https://github.com/SmartScaleAI/Zerro/releases)
   are the canonical public source for official artifacts. Each production
   release contains `Zerro-<build>.dmg` (immutable, used by Sparkle
   updates), `Zerro.dmg` (the stable latest-download asset), and
@@ -119,7 +119,7 @@ for setup, branch, test, and privacy expectations, and
 ## Security
 
 Report vulnerabilities privately via
-[GitHub private vulnerability reporting](https://github.com/SmartScaleAI/smartscale-zerro/security/advisories/new)
+[GitHub private vulnerability reporting](https://github.com/SmartScaleAI/Zerro/security/advisories/new)
 or, as a fallback, [support@getzerro.app](mailto:support@getzerro.app).
 Do not open public issues for security problems, and never include real
 API keys, license keys, or recordings in a report. See

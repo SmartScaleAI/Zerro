@@ -5,7 +5,7 @@ staging → main promotion PR (`auto-release.yml` tags `app-v<version>` on merge
 and `release-app.yml` builds it) — or, as a manual fallback,
 `git tag app-vX.Y.Z && git push origin app-vX.Y.Z`.
 
-Everything lives in **this** repository (`SmartScaleAI/smartscale-zerro`): the
+Everything lives in **this** repository (`SmartScaleAI/Zerro`): the
 workflows under `.github/workflows/`, the secrets, the version tags, and the
 GitHub Releases that publish the artifacts. The getzerro.app site is `apps/web`
 in the same repo; it redirects `getzerro.app/appcast.xml` and
@@ -115,7 +115,7 @@ the push uses a personal access token.
    Fine-grained tokens → Generate new token**.
 2. Configure:
    - **Resource owner:** **SmartScaleAI** (the org — not your personal account).
-   - **Repository access:** Only select repositories → **smartscale-zerro**
+   - **Repository access:** Only select repositories → **Zerro**
    - **Permissions:** Repository permissions → **Contents: Read and write**
    - **Expiration:** your call (e.g. 1 year; set a rotation reminder)
 3. Generate and copy the token (approve it under the org's pending PAT requests

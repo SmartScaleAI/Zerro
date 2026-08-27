@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE))
 import appcast_github_feed as feed  # noqa: E402
 
 SPARKLE = feed.SPARKLE_NS
-REPO = "SmartScaleAI/smartscale-zerro"
+REPO = "SmartScaleAI/Zerro"
 STORAGE = "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
 
 

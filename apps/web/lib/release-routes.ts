@@ -27,18 +27,18 @@
  */
 
 /** Owner/name of the repository whose GitHub Releases publish official builds. */
-export const RELEASE_REPOSITORY = "SmartScaleAI/smartscale-zerro"
+export const RELEASE_REPOSITORY = "SmartScaleAI/Zerro"
 
 /** Base URL that resolves an asset name on the latest published release. */
 export const RELEASE_ASSET_BASE_URL = `https://github.com/${RELEASE_REPOSITORY}/releases/latest/download/`
 
 /** Canonical public URL of the Sparkle appcast on the latest release. */
 export const APPCAST_ASSET_URL =
-  "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/appcast.xml"
+  "https://github.com/SmartScaleAI/Zerro/releases/latest/download/appcast.xml"
 
 /** Canonical public URL of the stable latest-download DMG on the latest release. */
 export const DMG_ASSET_URL =
-  "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/Zerro.dmg"
+  "https://github.com/SmartScaleAI/Zerro/releases/latest/download/Zerro.dmg"
 
 /** Stable getzerro.app path installed apps use as their Sparkle feed URL. */
 export const APPCAST_PATH = "/appcast.xml"

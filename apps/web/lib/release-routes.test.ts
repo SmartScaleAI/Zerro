@@ -28,9 +28,9 @@ import nextConfig from "../next.config.ts"
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 const EXPECTED_APPCAST_URL =
-  "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/appcast.xml"
+  "https://github.com/SmartScaleAI/Zerro/releases/latest/download/appcast.xml"
 const EXPECTED_DMG_URL =
-  "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/Zerro.dmg"
+  "https://github.com/SmartScaleAI/Zerro/releases/latest/download/Zerro.dmg"
 
 /** Hosts that must never appear in the public release routing. */
 const FORBIDDEN_HOST_FRAGMENTS = ["supabase.co", "storage/v1"]
@@ -55,10 +55,10 @@ async function resolvedRewrites(): Promise<Route[]> {
 }
 
 test("release asset URLs point at the latest GitHub Release of the app repository", () => {
-  assert.equal(RELEASE_REPOSITORY, "SmartScaleAI/smartscale-zerro")
+  assert.equal(RELEASE_REPOSITORY, "SmartScaleAI/Zerro")
   assert.equal(
     RELEASE_ASSET_BASE_URL,
-    "https://github.com/SmartScaleAI/smartscale-zerro/releases/latest/download/"
+    "https://github.com/SmartScaleAI/Zerro/releases/latest/download/"
   )
   assert.equal(APPCAST_ASSET_URL, EXPECTED_APPCAST_URL)
   assert.equal(DMG_ASSET_URL, EXPECTED_DMG_URL)

@@ -17,7 +17,7 @@ git tag app-v1.0.2 && git push origin app-v1.0.2   # only app-v* tags trigger a 
 
 ## Where the artifacts live
 
-**GitHub Releases on `SmartScaleAI/smartscale-zerro` are the canonical public
+**GitHub Releases on `SmartScaleAI/Zerro` are the canonical public
 source for every official artifact.** Each production release (`app-v<version>`)
 carries exactly three assets:
 
@@ -25,7 +25,7 @@ carries exactly three assets:
 |---|---|
 | `Zerro-<build>.dmg` | The immutable archive. It is the only enclosure the Sparkle feed references, so every past release's recorded `edSignature`/`length` stays valid and old builds remain downloadable. |
 | `Zerro.dmg` | A byte-identical stable "download latest" copy. |
-| `appcast.xml` | The cumulative, signed Sparkle feed. Every release appends its `<item>` and preserves all prior ones; each enclosure is a tag-specific `https://github.com/SmartScaleAI/smartscale-zerro/releases/download/app-v<version>/Zerro-<build>.dmg` URL. |
+| `appcast.xml` | The cumulative, signed Sparkle feed. Every release appends its `<item>` and preserves all prior ones; each enclosure is a tag-specific `https://github.com/SmartScaleAI/Zerro/releases/download/app-v<version>/Zerro-<build>.dmg` URL. |
 
 The website (`apps/web`, deployed by Vercel) owns the two stable public URLs
 and redirects each to the matching asset on the latest release

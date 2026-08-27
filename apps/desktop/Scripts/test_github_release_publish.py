@@ -26,7 +26,7 @@ sys.path.insert(0, str(HERE))
 
 import github_release_publish as pub  # noqa: E402
 
-REPO = "SmartScaleAI/smartscale-zerro"
+REPO = "SmartScaleAI/Zerro"
 TAG = "app-v1.4.36"
 SHA = "a" * 40
 OTHER_SHA = "b" * 40

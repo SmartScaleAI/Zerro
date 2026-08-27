@@ -5,9 +5,9 @@ report issues, set up the repository, and submit changes.
 
 ## Reporting bugs and requesting features
 
-- **Bugs:** open a [bug report](https://github.com/SmartScaleAI/smartscale-zerro/issues/new?template=bug_report.yml)
+- **Bugs:** open a [bug report](https://github.com/SmartScaleAI/Zerro/issues/new?template=bug_report.yml)
   with your Zerro version, macOS version, and reproduction steps.
-- **Features:** open a [feature request](https://github.com/SmartScaleAI/smartscale-zerro/issues/new?template=feature_request.yml)
+- **Features:** open a [feature request](https://github.com/SmartScaleAI/Zerro/issues/new?template=feature_request.yml)
   describing the problem before the solution.
 - **Security vulnerabilities:** never open a public issue. Follow
   [SECURITY.md](SECURITY.md) instead.

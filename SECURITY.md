@@ -7,7 +7,7 @@
 Please report vulnerabilities privately through GitHub's private
 vulnerability reporting:
 
-- <https://github.com/SmartScaleAI/smartscale-zerro/security/advisories/new>
+- <https://github.com/SmartScaleAI/Zerro/security/advisories/new>
 
 If that is unavailable to you, email
 [support@getzerro.app](mailto:support@getzerro.app) with "SECURITY" in the
