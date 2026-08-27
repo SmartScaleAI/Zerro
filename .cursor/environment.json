@@ -1,0 +1,30 @@
+{
+  // Cloud Agent dev environment for the Zerro monorepo.
+  //
+  // The default Cursor image already ships an nvm-managed Node (>= 22.22, which
+  // meets apps/web's engine requirement and runs its `node --test` TypeScript
+  // suites) plus git/curl and a browser for UI testing, so no custom Dockerfile
+  // is needed. `install` just refreshes dependencies and adds Deno for the
+  // Supabase edge-function tests.
+  //
+  // Scope note: only the Linux-runnable targets are provisioned — the Next.js
+  // marketing site (apps/web) and the Deno edge functions (supabase/functions).
+  // The macOS desktop app (apps/desktop) requires Xcode/macOS and the Supabase
+  // local database stack requires Docker + third-party API secrets; neither
+  // runs on a Linux Cloud Agent.
+  "name": "Zerro Web + Edge Functions",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "web-dev",
+      "command": "cd apps/web && npm run dev",
+      "description": "Next.js 16 dev server for the marketing site (apps/web), served on http://localhost:3000"
+    }
+  ],
+  "ports": [
+    {
+      "name": "web",
+      "port": 3000
+    }
+  ]
+}
