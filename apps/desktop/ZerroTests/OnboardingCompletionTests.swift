@@ -8,33 +8,12 @@ import XCTest
 
 @MainActor
 final class OnboardingCompletionTests: XCTestCase {
-    func testReadyCopyKeepsManagedAndBYOKTrialsDistinct() {
+    func testReadyCopyNamesTheLocalTrialLength() {
         XCTAssertEqual(
-            OnboardingReadyCopy.trialMessage(
-                for: .free,
-                managedCreditsLimit: 30,
-                managedCreditsRemaining: 30
-            ),
-            "Your 30 free credits are ready."
+            OnboardingReadyCopy.trialMessage,
+            "Your \(TrialManager.trialLengthDays)-day free trial is ready."
         )
-        XCTAssertEqual(
-            OnboardingReadyCopy.trialMessage(
-                for: .byok,
-                managedCreditsLimit: 30,
-                managedCreditsRemaining: 30
-            ),
-            "Your 10-generation trial is ready."
-        )
-    }
-
-    func testManagedReadyCopyDoesNotPromiseAnUnavailableTrial() {
-        XCTAssertNil(
-            OnboardingReadyCopy.trialMessage(
-                for: .free,
-                managedCreditsLimit: nil,
-                managedCreditsRemaining: nil
-            )
-        )
+        XCTAssertEqual(OnboardingReadyCopy.trialMessage, "Your 14-day free trial is ready.")
     }
 
     func testCompletionPersistsAndDismissesBeforeOpeningOverlay() async {

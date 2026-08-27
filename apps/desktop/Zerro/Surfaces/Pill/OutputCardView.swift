@@ -21,7 +21,7 @@
 //       nested scroll regions in a pill this narrow hijacked the wheel and
 //       hid content, so header/footer stay pinned and everything between
 //       them scrolls together.
-//    3. footer — credits charge line bottom-left (when managed); the "Copy"
+//    3. footer — the "Copy"
 //       capsule bottom-right, copying the WHOLE response (summary +
 //       artifact, snippet fenced). The artifact well carries its own corner
 //       copy icon for the artifact body alone (per-type tooltip:
@@ -42,9 +42,6 @@ struct OutputCardView: View {
     /// Conversational summary above the prompt box. May be empty when the
     /// model led straight into the artifact.
     let chatText: String
-    /// "−N credits · M left" (Managed results); nil leaves the footer's
-    /// left side empty (BYOK/local).
-    let chargeLine: String?
     /// Amber heads-up: the result was generated from the screen alone.
     let noNarration: Bool
     /// Neutral heads-up: recovered from a sleep-interrupted recording.
@@ -68,7 +65,7 @@ struct OutputCardView: View {
     /// green check badge becomes the amber caution icon, the title reads
     /// "Generation failed", the body shows the underlying error as prose, and
     /// the footer Copy button is replaced with Retry. All success-only chrome
-    /// (chat text, body well, charge line, notes) is
+    /// (chat text, body well, notes) is
     /// suppressed. nil → the normal success card. Defaulted so the success
     /// call site (ResultPillContent) is unchanged.
     var failure: FailureConfig? = nil
@@ -83,9 +80,7 @@ struct OutputCardView: View {
     /// in the body well (monospace), and a destructive "Undo" + green "Accept"
     /// pair in the footer (the Copy slot). The X dismiss + Hide/expand chrome are
     /// kept; the success-only chat text and copy are
-    /// suppressed — exactly as `failure` suppresses them. The charge line is NOT
-    /// suppressed (managed Dev Mode meters its prompt generation like ask
-    /// mode), so it still renders bottom-left from the shared `chargeLine`. nil → the normal card.
+    /// suppressed — exactly as `failure` suppresses them. nil → the normal card.
     /// Mutually exclusive with `failure`. Defaulted so existing call sites are
     /// unchanged.
     var devResult: DevResultConfig? = nil
@@ -96,8 +91,8 @@ struct OutputCardView: View {
     /// The failure card's content + footer. The two strings (the short bold
     /// `headline` and the wrapped `detail` prose) are shared by every error-
     /// family pill; the optional button config lets the SAME card render
-    /// `.failureExpanded`'s lone Retry, `.error`'s Cancel + Retry pair, and
-    /// `.paidBlockResume`'s Discard + Upgrade/Generate pair. Not `Equatable`
+    /// `.failureExpanded`'s lone Retry and `.error`'s Cancel + Retry pair.
+    /// Not `Equatable`
     /// (it carries action closures); never compared.
     struct FailureConfig {
         let headline: String
@@ -112,8 +107,7 @@ struct OutputCardView: View {
         var primaryIcon: String? = "arrow.clockwise"
         var primaryRole: PillPrimaryButton.Role = .warning
         /// Leading badge tint + glyph. Defaults to the amber caution every
-        /// failure card shows; the entitled `.paidBlockResume` overrides them to
-        /// a blue checkmark ("you're all set" confirmation).
+        /// failure card shows.
         var badgeTint: Color = .vfWarningAmber
         var badgeSymbol: String = "exclamationmark.triangle.fill"
         /// Forces the header `×` dismiss to stay even when a secondary button is
@@ -314,17 +308,6 @@ struct OutputCardView: View {
 
     private var footer: some View {
         HStack(spacing: VFSpacing.md) {
-            // The charge line is a success-only readout — suppressed in the
-            // failure configuration, but shown for the dev-result card too
-            // (managed Dev Mode meters its prompt generation just like artifact
-            // mode). `.devFailed` routes through `failure`, so it's still hidden
-            // there.
-            if let chargeLine, failure == nil {
-                Text(chargeLine)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .fixedSize()
-            }
             Spacer(minLength: VFSpacing.md)
             if let failure {
                 failureFooter(failure)
@@ -670,7 +653,6 @@ struct ChatProseText: View {
     OutputCardView(
         artifact: nil,
         chatText: "",
-        chargeLine: nil,
         noNarration: false,
         stoppedBySleep: false,
         onCopy: {},

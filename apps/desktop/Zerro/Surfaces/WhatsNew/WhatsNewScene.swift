@@ -3,7 +3,7 @@
 //  Zerro
 //
 //  Window-scene constants + chrome for the "What's New" changelog window.
-//  Mirrors `FeedbackScene`: a fixed, non-resizable, chromeless window whose
+//  A fixed, non-resizable, chromeless window whose
 //  dark surface bleeds up under the floating traffic-light buttons. The id
 //  is shared by the Window scene declaration (ZerroApp), the launch-time
 //  auto-pop, the Settings About "What's New" row, and
@@ -34,7 +34,7 @@ enum WhatsNewScene {
 // MARK: - Window chrome
 
 extension View {
-    /// Chromeless, fixed-size treatment matching `applyFeedbackWindowChrome()`
+    /// Chromeless, fixed-size treatment (the Settings-window style)
     /// — locked on BOTH axes. Reuses the `WindowConfigurator` defined
     /// alongside the Settings chrome to reach the hosting NSWindow once per
     /// mount.

@@ -1,21 +1,54 @@
-# Next.js template
+# Zerro website
 
-This is a Next.js template with shadcn/ui.
+The marketing and download site at [getzerro.app](https://getzerro.app),
+built with Next.js, React, and Tailwind CSS. Deployed by Vercel.
 
-## Adding components
+## Development
 
-To add components to your app, run the following command:
+```bash
+npm install
+npm run dev        # local dev server
+```
+
+## Checks
+
+```bash
+npm run typecheck  # TypeScript
+npm run lint       # ESLint
+npm test           # unit tests (node --test over lib/**/*.test.ts)
+npm run build      # production build
+```
+
+## Structure
+
+```
+app/                  Routes: home, /privacy, /terms, /checkout-complete,
+                      plus sitemap, robots, manifest, and OG/Twitter images
+components/
+  marketing/          Home-page sections (hero, features, pricing, FAQ,
+                      navbar, footer, ...)
+  legal/              Shared shell for the privacy and terms pages
+  ui/                 Reusable primitives (shadcn/ui-style)
+  theme/              Theme provider and toggles
+lib/                  Site config, analytics, and shared utilities
+public/               Static assets (logo, videos, favicons, llms.txt)
+```
+
+## Adding UI components
+
+shadcn/ui components can be generated into `components/ui`:
 
 ```bash
 npx shadcn@latest add button
 ```
 
-This will place the ui components in the `components` directory.
+## Third-party notices
 
-## Using components
+The licenses of the site's production dependencies are reproduced in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), generated from the
+dependency tree:
 
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button";
+```bash
+npm run notices        # regenerate after dependency changes
+npm run notices:check  # verify the file matches the lockfile
 ```

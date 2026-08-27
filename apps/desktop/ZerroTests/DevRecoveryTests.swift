@@ -299,8 +299,8 @@ final class DevRecoveryTests: XCTestCase {
         let (repo, checkpoint) = try makeDirtyCheckpoint()
         write(repo, "tracked.txt", "agent-edit\n")
         let app = makeApp(savingMarker: marker(checkpoint, repo: repo))
-        // Not idle (e.g. a restored paid-block recording) → no-op, marker kept.
-        app.state = .failed(reason: .outOfCredits)
+        // Not idle (e.g. a failure pill still on screen) → no-op, marker kept.
+        app.state = .failed(reason: .apiKeyMissing)
 
         let offered = await app.recoverInterruptedDevCheckpointIfAny()
 

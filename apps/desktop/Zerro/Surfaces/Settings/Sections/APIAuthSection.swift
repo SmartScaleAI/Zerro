@@ -31,7 +31,6 @@ struct APIAuthSection: View {
     // on Keychain/validation; this section owns the decision (it has the stores).
     @Environment(PreferencesStore.self) private var preferences
     @Environment(LocalModelManager.self) private var modelManager
-    @Environment(EntitlementStore.self) private var entitlements
     // UX-C: refreshed on every key write/delete so the Transcription engine
     // picker (which reads it) re-renders when an OpenAI key is added/removed.
     @Environment(ProviderKeyPresence.self) private var keyPresence
@@ -69,12 +68,11 @@ struct APIAuthSection: View {
     /// environment stores, which aren't available when the @State models init.
     /// Captures the (reference-type) stores explicitly rather than the View self.
     private func wireKeyVerifiedHandlers() {
-        let handler: (Bool) -> Void = { [preferences, modelManager, entitlements] wasFirstKey in
+        let handler: (Bool) -> Void = { [preferences, modelManager] wasFirstKey in
             Self.handleKeyVerified(
                 wasFirstKey: wasFirstKey,
                 preferences: preferences,
-                manager: modelManager,
-                entitlements: entitlements
+                manager: modelManager
             )
         }
         openAIModel.onKeyVerified = handler
@@ -94,18 +92,14 @@ struct APIAuthSection: View {
     private static func handleKeyVerified(
         wasFirstKey: Bool,
         preferences: PreferencesStore,
-        manager: LocalModelManager,
-        entitlements: EntitlementStore
+        manager: LocalModelManager
     ) {
         let modelReady: Bool = { if case .ready = manager.state { return true } else { return false } }()
-        // Managed users transcribe server-side — never prompt them.
-        let isManaged: Bool = { if case .managed = entitlements.state { return true } else { return false } }()
 
         guard LocalModelConsent.shouldPrompt(
             isFirstKey: wasFirstKey,
             alreadyShown: preferences.localModelPromptShown,
-            modelReady: modelReady,
-            isManaged: isManaged
+            modelReady: modelReady
         ) else { return }
 
         // Set BEFORE presenting so the prompt fires at most once on EITHER choice.
@@ -405,7 +399,6 @@ private struct RevalidateRow: View {
     return APIAuthSection()
         .environment(prefs)
         .environment(LocalModelManager(preferences: prefs))
-        .environment(EntitlementStore(licenseService: .inMemory()))
         .environment(ProviderKeyPresence())
         .padding()
         .frame(width: 720)

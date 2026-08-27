@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# release.sh — Phase 1 local release script for Zerro (Sparkle, direct download)
+# release.sh — local release diagnostic for Zerro (Sparkle, direct download)
 #
 # Builds, signs (Developer ID), notarizes, staples, packages a .dmg, and
 # regenerates the signed Sparkle appcast — all locally so you can debug the
-# fiddly bits (notarization!) fast. It deliberately STOPS before uploading;
-# it prints the exact files to publish and the git tag command to run.
+# fiddly bits (notarization!) fast. It deliberately STOPS before uploading:
+# official publication happens through the automated release workflow
+# (.github/workflows/release-app.yml). It prints the local artifacts to test.
 #
 # Usage:
 #   ./Scripts/release.sh <marketing_version> <build_number>
@@ -13,7 +14,7 @@
 #
 #   <marketing_version>  human version, e.g. 1.0.2  -> MARKETING_VERSION
 #   <build_number>       integer Sparkle compares,  -> CURRENT_PROJECT_VERSION
-#                        MUST be higher than the last shipped build (currently 2).
+#                        MUST exceed the latest published build; see the GitHub Releases page or Scripts/README-release.md.
 #
 # Prereqs (see Scripts/README-release.md for full setup):
 #   - Xcode + command line tools
@@ -266,9 +267,9 @@ info "Appcast preview:"
 sed 's/^/      /' "$APPCAST_PATH"
 
 # ----------------------------------------------------------------------------
-# 7. Done — print publish instructions (intentionally NOT automated in Phase 1)
+# 7. Done — local artifacts ready for testing (official publication is CI's job)
 # ----------------------------------------------------------------------------
-step "Release built successfully — finish publishing manually"
+step "Local release artifacts built — ready for testing (official publication happens through CI)"
 cat <<EOF
 
   ${c_bold}Artifacts ready in dist/:${c_rst}
@@ -282,10 +283,11 @@ cat <<EOF
        - Temporarily host the new dmg + appcast somewhere (or a staging path).
        - In the app: "Check for Updates…" → confirm it finds, verifies, installs.
 
-  2. PUBLISH to getzerro.app so these URLs serve the new files:
-       ${DOWNLOAD_URL_PREFIX}$APP_NAME.dmg
-       ${DOWNLOAD_URL_PREFIX}appcast.xml
-     (Upload via your site repo / Vercel deploy — whatever serves getzerro.app.)
+  2. SHIP THROUGH CI, not by uploading these files: the official artifacts are
+     the GitHub Release assets that .github/workflows/release-app.yml publishes
+     (getzerro.app/$APP_NAME.dmg and getzerro.app/appcast.xml redirect to the
+     latest release). Bump apps/desktop/VERSION in the staging → main promotion
+     PR, or run Scripts/cut-release.sh <version> from main.
 
   3. COMMIT the version bump and TAG the release:
        git add -A

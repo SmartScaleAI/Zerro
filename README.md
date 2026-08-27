@@ -1,30 +1,45 @@
 # Zerro
 
-Monorepo for Zerro — the macOS app and its marketing/download website.
+Zerro is an open-source, bring-your-own-key (BYOK) AI assistant for macOS.
+This monorepo contains the macOS app and the website at
+[getzerro.app](https://getzerro.app).
 
-## Layout
+## What Zerro does
+
+You talk to Zerro while showing it your screen, and it turns what it saw
+and heard into results. Zerro is BYOK: you supply your own API keys from
+supported AI providers (Anthropic, OpenAI, and Google), and Zerro uses
+your accounts to do the work.
+
+## Repository layout
 
 ```
 apps/
   desktop/   macOS app (Swift / Xcode). Open apps/desktop/Zerro.xcodeproj
-  web/       Marketing site at getzerro.app (Next.js). Deployed by Vercel
-supabase/    Shared backend: edge functions, migrations, config
-docs/        Cross-cutting docs (backend, SEO checklist)
-.github/     CI — release-app.yml builds, signs & publishes the macOS app
+  web/       Website at getzerro.app (Next.js). Deployed by Vercel
+supabase/    Archived legacy backend material. Not required to build or use Zerro
+docs/        Cross-cutting docs
+.github/     CI and release automation
 ```
 
-## Desktop app
+## Building from source
+
+Anyone may build and run Zerro from this source code under the GPL, free
+of charge. No purchase is required to use, modify, or redistribute the
+source code.
+
+### macOS app
 
 ```bash
 open apps/desktop/Zerro.xcodeproj
 ```
 
-Releases are automated: push a tag like `app-v1.0.7` and GitHub Actions
-builds, signs, notarizes, publishes the dmg as a GitHub Release asset, and
-commits the updated Sparkle `appcast.xml` to `apps/web/public/` (which Vercel
-then deploys). See `apps/desktop/Scripts/RELEASE-AUTOMATION.md`.
+Build the Zerro scheme with a current Xcode. A self-built app is not
+signed or notarized by SmartScale Solutions LLC and does not receive
+official updates. Building for your own use requires no changes; if you
+distribute builds to others, see [TRADEMARKS.md](TRADEMARKS.md).
 
-## Website
+### Website
 
 ```bash
 cd apps/web
@@ -32,12 +47,80 @@ npm install
 npm run dev
 ```
 
-Vercel deploys `apps/web` (Root Directory setting) on pushes to `main` that
-touch web files. The `/Zerro.dmg` download URL is a rewrite to the latest
-GitHub Release asset — the dmg is not stored in this repo.
+## Official builds
 
-## History
+SmartScale Solutions LLC publishes the official signed and notarized
+Zerro build:
 
-Merged from two repos on 2026-06-05 with full history
-(`smartscale-zerro` → `apps/desktop`, `smartscale-zerro-website` → `apps/web`).
-The original repos are archived.
+- **$39 one-time.** A purchase covers all Zerro 1.x.x releases. A future
+  Zerro 2.0 may require a new major-version purchase.
+- **14-day trial**, no payment card required.
+- **Two active Macs** per license. Lost-device activation resets are
+  handled through [support@getzerro.app](mailto:support@getzerro.app).
+
+The purchase pays for the official signed and notarized distribution,
+updates, and support. It is never a legal requirement for using or
+compiling the GPL-licensed source; self-built versions are always
+permitted.
+
+## Releases and updates
+
+Official releases are built from this repository:
+
+- Pushing a production tag (`app-v<version>`) makes GitHub Actions build,
+  sign, notarize, and staple the official DMG.
+- [GitHub Releases](https://github.com/SmartScaleAI/smartscale-zerro/releases)
+  are the canonical public source for official artifacts. Each production
+  release contains `Zerro-<build>.dmg` (immutable, used by Sparkle
+  updates), `Zerro.dmg` (the stable latest-download asset), and
+  `appcast.xml` (the signed Sparkle feed).
+- [getzerro.app/Zerro.dmg](https://getzerro.app/Zerro.dmg) and
+  getzerro.app/appcast.xml are the stable public URLs for the latest
+  download and the Sparkle feed; each redirects to the matching asset on
+  the latest GitHub Release. No DMG or appcast is stored in the repo.
+
+## License
+
+The source code in this repository is free software, licensed under the
+**GNU General Public License, version 3 or (at your option) any later
+version** (SPDX: `GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full
+license text.
+
+Copyright © 2026 SmartScale Solutions LLC.
+
+Third-party components and assets remain subject to their respective
+licenses and terms; the Zerro GPL license does not replace those terms.
+The licenses of the third-party components the app uses are reproduced
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Trademarks
+
+"Zerro", the Zerro logos and icons, official branding, the getzerro.app
+identity, the official bundle identifiers (including
+`com.cbreeding.Zerro`), the `zerro://` URL scheme, and the official
+signing and update identities are trademarks and brand assets of
+SmartScale Solutions LLC. They are not covered by the GPL license for the
+code, and the trademark policy does not limit your GPL rights to use,
+modify, and build the code.
+
+Private builds for your own use need no rebranding. Builds you
+distribute to others must use their own name, icons, bundle identifiers,
+URL scheme, signing identity, and update feed. Truthful references such
+as "a fork of Zerro" are always fine. See [TRADEMARKS.md](TRADEMARKS.md).
+
+## Contributing
+
+Contributions are welcome under GPL-3.0-or-later with [DCO](DCO)
+sign-off (`git commit -s`); this project does not currently require a
+Contributor License Agreement. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup, branch, test, and privacy expectations, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
+
+## Security
+
+Report vulnerabilities privately via
+[GitHub private vulnerability reporting](https://github.com/SmartScaleAI/smartscale-zerro/security/advisories/new)
+or, as a fallback, [support@getzerro.app](mailto:support@getzerro.app).
+Do not open public issues for security problems, and never include real
+API keys, license keys, or recordings in a report. See
+[SECURITY.md](SECURITY.md).

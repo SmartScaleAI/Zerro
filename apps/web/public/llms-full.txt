@@ -17,6 +17,8 @@ Mac app: lightweight, lives in your menu bar
 
 Record your screen, explain what you want, and get it done faster.
 
+14-day free trial. No card or Zerro account. Bring your own provider API key.
+
 ---
 
 ## What is Zerro?
@@ -28,12 +30,13 @@ just want to understand something. You frame a region of your screen, dictate wh
 you want in plain language, and Zerro returns ready-to-use text. Paste it into
 Cursor, ChatGPT, Claude, or any tool that takes text, or send it to a person.
 
-Processing is local-first: your recording is prepared on your machine before the AI
-step turns it into a prompt. You can let Zerro handle model access on Zerro Cloud,
-where your prepped (redacted) recording and audio are sent to a third-party AI
-provider, or bring your own OpenAI, Google, or
-Anthropic keys, stored in the macOS Keychain, so the request goes straight to the
-provider with no Zerro servers in the middle and no account required.
+Zerro is open source and bring-your-own-key. Processing is local-first: your Mac
+prepares the recording, transcribes your narration (locally by default, or
+directly with OpenAI on your own key), and redacts detected secrets. It then
+sends the prepared frames and transcript straight to the AI provider you chose,
+on your own OpenAI, Google, or Anthropic key, stored in the macOS Keychain. Zerro
+never receives recordings, frames, audio, transcripts, prompts, or results; there
+are no Zerro servers in the middle and no account required.
 
 Think of it as voice dictation that can see your screen: instead of raw transcribed
 text, you get the artifact that fits what you asked for. There's no new app to
@@ -47,10 +50,10 @@ learn; the whole flow runs from the menu bar.
    want Zerro to see. Native macOS crosshair, no window switching.
 2. **Dictate what you want.** Talk it through like you'd explain it to a teammate.
    Point at things, change your mind, ramble. Zerro records up to 3 minutes.
-3. **Your Mac preps it, then AI.** The recording is prepared locally on your
-   machine, with detected on-screen secrets masked. Then an AI call (in the
-   cloud with Zerro Cloud, or on your own key with BYOK) turns it into the
-   artifact you asked for.
+3. **Your Mac preps it, then AI.** The recording is prepared and transcribed on
+   your machine, with detected on-screen secrets masked. Then a single API call
+   on your own key sends the frames and transcript to your provider, which turns
+   them into the artifact you asked for.
 4. **Paste it anywhere.** The result lands on your clipboard (an agent prompt, a
    ready-to-send message, a snippet, a document, or a plain-language answer),
    ready to drop into Cursor, ChatGPT, Claude, or any tool that takes text, or
@@ -81,14 +84,18 @@ Zerro is built the way you'd build it if it were your tool.
 
 - **Native Swift & SwiftUI.** A real menu-bar app, built on ScreenCaptureKit. Not
   an Electron tab pretending to be a Mac app.
-- **Local-first processing.** Your recording is prepared on your machine before
-  anything leaves it.
-- **Bring your own keys.** Your OpenAI, Gemini & Anthropic keys, stored in macOS Keychain.
-  No servers handling your data.
+- **Local-first processing.** Your Mac prepares the recording, transcribes it, and
+  redacts detected secrets before anything leaves. The frames and transcript then
+  go straight to your AI provider on your own key. No Zerro servers.
+- **Bring your own key.** Zerro is bring-your-own-key only. Your OpenAI, Gemini &
+  Anthropic keys live in the macOS Keychain, and every generation request goes
+  straight from your Mac to your provider on your key, never through Zerro's
+  servers.
 - **Cost-bounded by design.** A 3-minute hard cap on every recording keeps each
   request fast, cheap, and predictable.
-- **Signed & notarized.** Distributed direct as a code-signed .dmg. macOS
-  Gatekeeper will not complain.
+- **Signed & notarized.** The official build ships as a code-signed, notarized
+  .dmg, so Gatekeeper will not complain. The source is open under
+  GPL-3.0-or-later if you'd rather build it yourself.
 - **Sparkle auto-updates.** Updates ship through Sparkle, the standard for indie
   Mac apps. You stay current without thinking about it.
 
@@ -106,33 +113,33 @@ type. Zerro is built for that future: less typing, more talking.
 
 ---
 
-## Pricing: pay once, or let us handle it
+## Pricing: one license, your keys, no subscription
 
-Both BYOK and Zerro Cloud are available now. Start with either 30 Zerro Cloud
-Trial credits or 10 successful BYOK generations, with no card or time limit.
+Try the official build free for 14 days, then pay once. Your AI provider bills you
+directly for usage.
 
-### BYOK: $69 one-time (available now)
+### Zerro License: $39 one-time
 
-Pay once. Bring your own keys.
+The official signed and notarized Zerro build. Pay once, use your own keys.
 
-- Includes 1 year of updates; your installed version keeps working after
-- Bring your own OpenAI, Gemini & Anthropic keys
-- Keys stored in your macOS Keychain
-- No subscription, no account required
-- No servers handling your data
+- 14-day free trial: no card, no account. Starts the first time an official build runs on your Mac.
+- Use on up to 2 Macs at once
+- All Zerro 1.x.x updates included
+- Bring your own OpenAI, Gemini & Anthropic API keys
+- All 5 models (Claude, GPT & Gemini)
+- Keys stay in your macOS Keychain
+- Frames and transcript go straight to your provider, never through Zerro's servers
+- No subscription, no account
 
-### Zerro Cloud: $15/month, or $12/month billed yearly ($144/year)
+Zerro never receives your recordings. Your Mac prepares them, then sends the frames
+and transcript straight to the AI provider you choose on your own API key, and that
+provider bills you for the usage.
 
-We handle the tokens: no keys, no setup.
-
-- No API keys required
-- 300 credits per month across 5 models (Claude, GPT & Gemini)
-- Top up anytime with packs from $5 (50 credits) to $300 (10,000 credits)
-- We manage all token usage
-- Cancel anytime
-
-Prices listed in USD. The one-time BYOK purchase includes 1 year of updates;
-your installed version keeps working after that.
+Prices listed in USD. The license covers every Zerro 1.x.x release; a future 2.0
+major release may be sold separately. Zerro is free software under
+GPL-3.0-or-later: build it from the source yourself and no Zerro license is
+required. The $39 pays for the official signed and notarized build, its 1.x.x
+update service, and support.
 
 ---
 
@@ -171,27 +178,47 @@ notes as it is for coding. Plenty of people never touch a coding agent at all. T
 have Zerro turn a confusing screen into a plain-language document, draft a message,
 or pull out the exact snippet they need, no code involved.
 
+**Is there a free trial?**
+Yes. The first time an official build runs on a Mac it begins a 14-day free trial,
+and reinstalling doesn't reset it. No card and no Zerro account are needed; you add
+your own OpenAI, Gemini, or Anthropic API key and use everything Zerro does, and
+your provider bills you for the usage as it always does.
+
 **How much does Zerro cost?**
-Start with either 30 Zerro Cloud Trial credits or 10 successful BYOK generations,
-with no card or time limit. After that, BYOK is a one-time $69 purchase that
-includes 1 year of updates; your installed version keeps working after that.
-Zerro Cloud, where Zerro handles model access and no API keys are required, is
-available now at $15/month, or $12/month billed yearly ($144/year), with 300
-credits per month.
+After the 14-day free trial, a Zerro license is $39 one time. It activates on up to
+2 Macs at once and includes every Zerro 1.x.x update; a future 2.0 major release
+may be sold separately. There is no subscription, no credit balance, and no Zerro
+account. You bring your own API keys and pay your AI provider directly for usage.
+
+**Do I need my own API keys?**
+Yes. Zerro is bring-your-own-key: add one, two, or all three OpenAI, Gemini, and
+Anthropic keys, stored securely in the macOS Keychain, and choose from 5 models
+(Claude, GPT & Gemini). Local transcription needs no extra key; optional OpenAI
+transcription uses your OpenAI key.
+
+**Is Zerro open source?**
+Yes. Zerro is free software under GPL-3.0-or-later, official builds included, so
+you can read it, change it, build it yourself, and redistribute it under that
+license, and a build you make yourself needs no Zerro license. The $39 pays for
+SmartScale's official signed and notarized distribution, its 1.x.x update service,
+and support; it doesn't buy or limit any GPL right. The Zerro name and logo are
+trademarks covered by a separate trademark policy.
 
 **Is my data private?**
-Your recording is prepared locally on your Mac, and a
-best-effort pass masks the on-screen secrets it detects (it can't catch everything)
-before anything leaves your machine. On Zerro Cloud and the Zerro Cloud Trial,
-that prepped,
-redacted recording and your spoken narration are sent to a third-party AI provider
-(OpenAI, Google, or Anthropic) to generate the result; audio is sent as recorded
-and isn't redacted. On BYOK, the request goes straight to the provider on your own
-key, so it never touches Zerro's servers.
+Processing starts on your Mac: the recording is prepared, your narration is
+transcribed, and best-effort secret redaction runs before anything leaves. Your Mac
+then sends the prepared screen frames and the transcript straight to the AI
+provider you chose (OpenAI, Google, or Anthropic) on your own key; your audio stays
+on your Mac with local transcription, or goes directly to OpenAI on your OpenAI key
+if you choose OpenAI transcription. Zerro has no server in that path and never
+receives your recordings, frames, audio, transcripts, prompts, or results.
+Redaction is best-effort and covers detected on-screen text, not what you say.
 
 **Does Zerro need an account?**
-No. The BYOK plan requires no account and no subscription. You bring your own API
-keys and pay once.
+No. Zerro doesn't require a Zerro account. The trial, your API keys, your license
+key, and the local activation credentials are stored on your Mac. Lemon Squeezy
+processes the purchase and keeps the purchase, activation, and device records it
+needs to run your license.
 
 **How long can a recording be?**
 Each recording is capped at 3 minutes. The hard cap keeps every request fast, cheap,

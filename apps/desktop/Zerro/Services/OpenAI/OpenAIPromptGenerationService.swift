@@ -192,8 +192,7 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     ///
     /// Each frame's JPEG is read off disk and base64-encoded here, at
     /// request-build time — the 33% overhead is dropped after the request,
-    /// never held on the in-memory timeline (mirrors the Managed path's
-    /// `ManagedProxyClient.encodeBody` discipline). `nonisolated` so it
+    /// never held on the in-memory timeline. `nonisolated` so it
     /// runs in a detached task off the main actor: under the project's
     /// MainActor-default isolation an unmarked static on this struct would
     /// be implicitly main-isolated and bounce the work right back to main.
@@ -219,8 +218,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
                 userContent.append(.imageURL(url: dataURL, detail: "high"))
                 // Phase 3: the frame's redacted on-screen text rides right AFTER
                 // its image block, only when OCR found something. Byte-identical
-                // to the Managed (interleave.ts) and eval (eval-models.mjs)
-                // renderings — KEEP IN SYNC if you touch this format.
+                // to the eval (eval-models.mjs)
+                // rendering — KEEP IN SYNC if you touch this format.
                 if let ocr = ocrText, !ocr.isEmpty {
                     userContent.append(.text("\n\(item.timestampTag) on-screen text: \(ocr)"))
                 }
@@ -230,8 +229,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
 
             case .click(_, let label):
                 // Phase 4: a click line — `\n[M:SS] clicked "<label>"`.
-                // Byte-identical to the Managed (interleave.ts) and eval
-                // (eval-models.mjs) renderings — KEEP IN SYNC if you touch this.
+                // Byte-identical to the eval
+                // (eval-models.mjs) rendering — KEEP IN SYNC if you touch this.
                 userContent.append(.text("\n\(item.timestampTag) clicked \"\(label)\""))
 
             case .rawText(let text):

@@ -140,7 +140,6 @@ final class OnboardingState {
                 legacyStepRawValue: rawStep,
                 legacyBYOKPathActive: defaults.bool(forKey: OnboardingPersistenceKeys.legacyBYOKPathActive),
                 legacyBYOKSetupStep: defaults.integer(forKey: OnboardingPersistenceKeys.legacyBYOKSetupStep),
-                legacyBYOKSelected: defaults.bool(forKey: BYOKTrialManager.selectedDefaultsKey),
                 hasCompletedOnboarding: completedOnboarding,
                 needsConsent: needsConsentNow
             )
@@ -180,13 +179,6 @@ final class OnboardingState {
         OnboardingRoute(path: onboardingPath, screen: currentScreen).progressIndex
     }
 
-    /// Select a product path while keeping the user on the explicit choice
-    /// screen until that path's activation/eligibility work completes.
-    func selectPath(_ path: OnboardingPath) {
-        onboardingPath = path
-        currentScreen = .mode
-    }
-
     func move(to screen: OnboardingScreen) {
         currentScreen = OnboardingRoute.normalized(screen: screen, for: onboardingPath)
     }
@@ -203,22 +195,12 @@ final class OnboardingState {
         currentScreen = previous
     }
 
-    /// Route transitions used by the redesigned renderer. They also update the
+    /// Route transition used by the redesigned renderer. It also updates the
     /// legacy step so Screen Recording's process restart remains recoverable.
-    func showPathSelection() {
-        currentStep = .email
-        currentScreen = .mode
-    }
-
     func beginBYOKKeys() {
         onboardingPath = .byok
         currentStep = .email
         currentScreen = .keys
-    }
-
-    func returnToPathSelection() {
-        currentStep = .email
-        currentScreen = .mode
     }
 
     func finishSetup() {
@@ -244,12 +226,9 @@ final class OnboardingState {
         }
     }
 
-    // Back-navigation is intentionally omitted (H-10): the flow is short and
-    // gate-driven — consent and email verification are one-way gates (the
-    // email step's verified state is view-local, so returning would force a
-    // re-verification), and the only gate-free hops (devMode → permissions,
-    // allSet → devMode) aren't worth the affordance. DEBUG builds navigate
-    // freely via the dev panel's `jump(to:)` buttons.
+    // Legacy-step back-navigation is intentionally omitted (H-10): consent is
+    // a one-way gate, and the redesigned route handles its own `moveBack()`.
+    // DEBUG builds navigate freely via the dev panel's `jump(to:)` buttons.
 
     func jump(to step: OnboardingStep) {
         currentStep = step
@@ -413,22 +392,8 @@ final class OnboardingState {
             startTelemetry()
         }
 
-        // DEFERRED Phase 22.1 — server-side acceptance record.
-        // Consent is collected BEFORE the email-verification step, so there is
-        // no authenticated session here to tie an acceptance to. To record
-        // server-side we need, end to end:
-        //   1. A Supabase migration adding a `terms_acceptances` table
-        //      (account/email key, terms_version, accepted_at, app_version).
-        //   2. A `/terms-accept` edge function (verify_jwt=false, Bearer the
-        //      trial/session token, matching the existing ManagedBackend
-        //      pattern — the app holds no anon key) that inserts a row.
-        //   3. A post-sign-in sync: after EmailStepView verification succeeds
-        //      (where the trial token first exists), POST the locally-stored
-        //      acceptance (version + termsAcceptedAt + app version) so the
-        //      account carries it. Re-runnable / idempotent on (account,
-        //      version) so a re-verify doesn't duplicate rows.
-        // Until that migration + function ship, the local record above is the
-        // authority and is synced opportunistically once 22.1 lands.
+        // The local record is the consent authority: Zerro has no account or
+        // session to tie an acceptance to, so nothing is recorded server-side.
     }
 
     // MARK: - Lifecycle

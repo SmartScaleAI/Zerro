@@ -2,9 +2,9 @@
 //  KeychainAccessibilityTests.swift
 //  ZerroTests
 //
-//  E-03 — per-slot Keychain protection classes: the TRIAL slots are
-//  …ThisDeviceOnly (excluded from encrypted backups / Migration Assistant —
-//  the grant is device-bound server-side), while every license/BYOK and
+//  E-03 — per-slot Keychain protection classes: the local trial-clock slots
+//  are …ThisDeviceOnly (excluded from encrypted backups / Migration Assistant
+//  — a migrated Mac gets its own trial), while every license and
 //  provider-key slot stays AfterFirstUnlock (must survive a backup restore).
 //  The InMemoryKeychainSlot fake doesn't model kSecAttrAccessible, so this
 //  pins the CONFIGURATION; write()'s use of it is review + build verified.
@@ -18,8 +18,8 @@ final class KeychainAccessibilityTests: XCTestCase {
 
     func testTrialSlotsAreThisDeviceOnly() {
         let expected = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String
-        XCTAssertEqual(KeychainStore.trialEmail.accessible as String, expected)
-        XCTAssertEqual(KeychainStore.trialToken.accessible as String, expected)
+        XCTAssertEqual(KeychainStore.trialStartDate.accessible as String, expected)
+        XCTAssertEqual(KeychainStore.trialMaxDateSeen.accessible as String, expected)
     }
 
     func testLicenseByokAndProviderSlotsStayAfterFirstUnlock() {
@@ -31,8 +31,8 @@ final class KeychainAccessibilityTests: XCTestCase {
             .byokLicenseKey,
             .byokInstanceID,
             .byokLastValidated,
-            .byokLicenseCreatedAt,
-            .licenseProductKind,
+            .licensedProductID,
+            .licensedMajor,
         ]
         for slot in restorableSlots {
             XCTAssertEqual(

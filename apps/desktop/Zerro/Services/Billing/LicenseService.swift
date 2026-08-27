@@ -6,15 +6,14 @@
 //
 //  Overview
 //  --------
-//  Phase C of the billing system — the BYOK ("bring your own key") one-time
-//  license layer. Wraps the three LemonSqueezy License API endpoints
-//  (activate / validate / deactivate) and owns the Keychain credentials that
-//  back a `.byok` entitlement: the raw license key, the activation instance
-//  ID, and the last-validated throttle stamp.
+//  The Zerro license layer. Wraps the three Lemon Squeezy License API
+//  endpoints (activate / validate / deactivate) and owns the Keychain
+//  credentials that back a `.byok` entitlement: the raw license key, the
+//  activation instance ID, the last-validated throttle stamp, and the
+//  confirmed product ID + licensed major.
 //
-//  This is the ONLY networked surface Phase C adds, and it talks to exactly
-//  one host: LemonSqueezy's License API over HTTPS. No Supabase, no proxy,
-//  no managed-subscription code — those are Phases D–F.
+//  This is the ONLY licensing network surface in the app, and it talks to
+//  exactly one host: Lemon Squeezy's License API over HTTPS.
 //
 //  Lifecycle the rest of the app drives through this type
 //  ------------------------------------------------------
@@ -91,6 +90,14 @@ enum LicenseError: Error, Equatable {
     /// the expected shape. Treated as inconclusive (never de-activates).
     case malformedResponse
 
+    /// The key activated, but Lemon Squeezy reports it belongs to a product
+    /// this build does not accept (`meta.product_id` missing or not in the
+    /// running `LicenseEditionPolicy`). A DEFINITIVE fail-closed: nothing is
+    /// persisted and access is never granted. The freshly created instance is
+    /// best-effort deactivated so the mismatched attempt doesn't consume a
+    /// device slot.
+    case wrongProduct
+
     /// The activation would have REPLACED a different license already on this
     /// device, and the user declined the "Replace your current license?"
     /// confirmation (E-01). Thrown BEFORE any network call or Keychain write, so
@@ -104,7 +111,7 @@ enum LicenseError: Error, Equatable {
     var userFacingMessage: String {
         switch self {
         case .atActivationLimit:
-            return "This license is already active on the maximum number of devices. Deactivate one from your account, then try again."
+            return "This license is already active on the maximum number of devices. Deactivate one in the Lemon Squeezy portal, then try again."
         case .keyInvalid:
             return "We couldn\u{2019}t find that license key. Double-check it and try again."
         case .keyDisabled:
@@ -115,6 +122,8 @@ enum LicenseError: Error, Equatable {
             return "Couldn\u{2019}t reach the licensing server. Check your connection and try again."
         case .malformedResponse:
             return "Something went wrong activating your license. Please try again."
+        case .wrongProduct:
+            return "This license key is for a different Zerro product or version."
         case .replaceCancelled:
             return "Kept your current license. Activation cancelled."
         }
@@ -155,6 +164,18 @@ struct ActivationResult: Equatable {
 struct ValidationResult: Equatable {
     let valid: Bool
     let status: LicenseKeyStatus?
+    /// Whether the response's `meta.product_id` is approved by the running
+    /// `LicenseEditionPolicy`. Checked on EVERY decoded validation response,
+    /// regardless of `valid`: a wrong or missing product ID is a definitive
+    /// incompatibility (fail closed), never a normal validation.
+    let productApproved: Bool
+
+    /// True when the completed round-trip definitively established that the
+    /// key does not belong to this build's product — the caller must drop the
+    /// `.byok` entitlement (the cached edition metadata is already cleared by
+    /// `validate()`; the key + instance stay unless `isDefinitiveRevocation`
+    /// also clears the whole license).
+    var isDefinitiveProductMismatch: Bool { !productApproved }
 
     /// Whether this result is a DEFINITIVE revocation that should clear the
     /// cached license and drop the user to the trial/expired computation.
@@ -183,22 +204,51 @@ struct LicenseSnapshot: Equatable {
     /// missing and NEITHER read failed (no license on file). `.indeterminate`
     /// — a genuine Keychain READ FAILURE left presence unknown.
     ///
-    /// The entitlement precedence treats `.present` and `.indeterminate` the
-    /// SAME (`grantsBYOK == true`): a flaky Keychain read must never drop a
-    /// licensed-past-trial user to `.expired`. The downside — wrongly granting
-    /// `.byok` to a brand-new user during a transient read failure — is the
-    /// fail-OPEN direction the billing contract explicitly prefers, and it is
-    /// transient.
+    /// Only `.present` can grant: the offline `.byok` unlock requires the
+    /// COMPLETE cached record to be readable and verified. `.indeterminate`
+    /// is kept as a diagnostic state but FAILS CLOSED — an unreadable record
+    /// is an unverifiable one, and nothing unverifiable unlocks an official
+    /// build. (The condition is transient: the next successful read, or an
+    /// online validation, restores access.)
     enum Presence: Equatable { case present, absent, indeterminate }
 
+    /// The cached license's edition standing against the RUNNING policy.
+    ///   • `.compatible`   — persisted product ID is approved AND the
+    ///     persisted licensed major equals the required major.
+    ///   • `.incompatible` — metadata is present but wrong (another product,
+    ///     or another major — e.g. a major-1 key read by a 2.x build).
+    ///     `licensedMajor` carries the cached major when parseable, for the
+    ///     upgrade-purchase copy. Fails closed; the key itself is preserved.
+    ///   • `.missingMetadata` — no persisted product/major (never confirmed
+    ///     against the current product). Fails closed until an online
+    ///     activate/validate succeeds.
+    ///   • `.readFailure` — a genuine Keychain READ FAILURE left the edition
+    ///     unknown. A diagnostic state that FAILS CLOSED, like every other
+    ///     unverifiable shape: only a fully readable, confirmed-compatible
+    ///     record unlocks offline.
+    enum Edition: Equatable {
+        case compatible
+        case incompatible(licensedMajor: Int?)
+        case missingMetadata
+        case readFailure
+    }
+
     let presence: Presence
+    let edition: Edition
     /// Epoch instant of the last successful validation, if any (drives the
     /// re-validation throttle). `nil` when never validated or unreadable.
     let lastValidated: Date?
 
     /// Whether the entitlement layer should treat the user as `.byok` WITHOUT
-    /// a network call. True unless we DEFINITIVELY saw no license.
-    var grantsBYOK: Bool { presence != .absent }
+    /// a network call. Exactly one shape grants: the key AND instance are
+    /// readable (`.present`) AND the persisted edition is confirmed
+    /// compatible. Everything else — read failures, missing or malformed
+    /// metadata, a wrong product, a wrong major — FAILS CLOSED. (Network
+    /// trouble still fails open, but only for a user who already holds this
+    /// complete, compatible cached record — see `revalidateLicenseIfNeeded`.)
+    var grantsBYOK: Bool {
+        presence == .present && edition == .compatible
+    }
 }
 
 // MARK: - LicenseTransport
@@ -252,18 +302,16 @@ final class LicenseService {
     private let licenseKeySlot: KeychainSlot
     private let instanceIDSlot: KeychainSlot
     private let lastValidatedSlot: KeychainSlot
-    /// E7: the license's `created_at` (epoch-seconds string), the start of the
-    /// BYOK 1-year update window. Display/update-gating only — never consulted
-    /// by activation, validation, or the generation gate.
-    private let licenseCreatedAtSlot: KeychainSlot
+    /// The confirmed Lemon Squeezy product ID / licensed major for the
+    /// on-file key (see `KeychainStore.licensedProductID` / `.licensedMajor`).
+    /// Written only after the License API confirmed the product identity;
+    /// gate offline access via `LicenseSnapshot.edition`.
+    private let licensedProductIDSlot: KeychainSlot
+    private let licensedMajorSlot: KeychainSlot
+    /// The product/major this build accepts. Injectable so tests exercise
+    /// wrong-product, wrong-major, and simulated future-major policies.
+    private let policy: LicenseEditionPolicy
     private let transport: LicenseTransport
-    /// True when no transport was injected (we built the real URLSession
-    /// one) — the ONLY configuration where the DEBUG local-stack bypass in
-    /// `activate` may fire. Unit tests inject stub transports and must stay
-    /// hermetic even though the shared Xcode scheme ships the ZERRO_* env
-    /// vars enabled — without this gate the bypass hijacked the stubs and
-    /// deterministically failed 3 LicenseServiceTests (Appendix E9).
-    private let usesRealTransport: Bool
     /// Injectable wall clock (throttle math + stamping). Production passes
     /// `Date.init`; tests pass a controllable closure.
     private let clock: () -> Date
@@ -289,7 +337,9 @@ final class LicenseService {
         licenseKeySlot: KeychainSlot? = nil,
         instanceIDSlot: KeychainSlot? = nil,
         lastValidatedSlot: KeychainSlot? = nil,
-        licenseCreatedAtSlot: KeychainSlot? = nil,
+        licensedProductIDSlot: KeychainSlot? = nil,
+        licensedMajorSlot: KeychainSlot? = nil,
+        policy: LicenseEditionPolicy? = nil,
         transport: LicenseTransport? = nil,
         clock: @escaping () -> Date = { Date() },
         instanceNameProvider: (() -> String)? = nil,
@@ -298,8 +348,9 @@ final class LicenseService {
         self.licenseKeySlot = licenseKeySlot ?? KeychainStore.byokLicenseKey
         self.instanceIDSlot = instanceIDSlot ?? KeychainStore.byokInstanceID
         self.lastValidatedSlot = lastValidatedSlot ?? KeychainStore.byokLastValidated
-        self.licenseCreatedAtSlot = licenseCreatedAtSlot ?? KeychainStore.byokLicenseCreatedAt
-        self.usesRealTransport = (transport == nil)
+        self.licensedProductIDSlot = licensedProductIDSlot ?? KeychainStore.licensedProductID
+        self.licensedMajorSlot = licensedMajorSlot ?? KeychainStore.licensedMajor
+        self.policy = policy ?? .current
         self.transport = transport ?? URLSessionLicenseTransport()
         self.clock = clock
         self.instanceNameProvider = instanceNameProvider ?? LicenseService.defaultInstanceName
@@ -309,11 +360,18 @@ final class LicenseService {
     // MARK: - Activate
 
     /// Activates `licenseKey` against LemonSqueezy with a generated
-    /// `instance_name` device label. On `activated: true`, writes the key +
-    /// returned instance ID to the Keychain and stamps `byokLastValidated`,
-    /// then returns the `ActivationResult`. On any non-activation outcome,
-    /// throws a typed `LicenseError` WITHOUT touching the Keychain (a failed
-    /// activation never clobbers an existing good license).
+    /// `instance_name` device label. On `activated: true` the response's
+    /// `meta.product_id` must be approved by the running
+    /// `LicenseEditionPolicy` — the product identity is the security
+    /// boundary, checked BEFORE anything is persisted. A mismatch throws
+    /// `.wrongProduct` after best-effort deactivating the instance the
+    /// attempt just created (so a mistaken paste doesn't consume one of the
+    /// key's device slots). On an approved activation, writes the key,
+    /// instance ID, validation stamp, and the confirmed product ID + licensed
+    /// major together, then returns the `ActivationResult`. On any
+    /// non-activation outcome, throws a typed `LicenseError` WITHOUT touching
+    /// the Keychain (a failed activation never clobbers an existing good
+    /// license).
     func activate(licenseKey: String) async throws -> ActivationResult {
         let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw LicenseError.keyInvalid }
@@ -334,37 +392,6 @@ final class LicenseService {
             }
         }
 
-        #if DEBUG
-        // Local-backend testing bypass — active ONLY when the debug build is
-        // pointed at a local stack via ZERRO_FUNCTIONS_BASE_URL (the same env
-        // var that overrides ManagedBackend.baseURL). Local test keys are
-        // seeded straight into the local DB and don't exist in LemonSqueezy,
-        // so the real /activate call would always refuse them. Skip it and do
-        // exactly what a successful activation does: write the key + a fake
-        // instance ID, stamp validation, return a normal ActivationResult.
-        // EntitlementStore's step-2 /session probe then runs unchanged against
-        // the LOCAL backend and resolves Managed vs BYOK from the local mirror.
-        // Compiled out of release builds; inert in debug unless the var is set.
-        // Gated on `usesRealTransport` so an injected stub transport (unit
-        // tests) is NEVER bypassed — the scheme ships the env var enabled,
-        // and without this gate every activation test silently "succeeded".
-        if usesRealTransport,
-           ProcessInfo.processInfo.environment["ZERRO_FUNCTIONS_BASE_URL"] != nil {
-            let instanceID = "local-dev-instance"
-            licenseKeySlot.write(key)
-            instanceIDSlot.write(instanceID)
-            stampValidated()
-            Log.billing.notice("license activated via LOCAL DEV BYPASS — LemonSqueezy not contacted")
-            return ActivationResult(
-                instanceID: instanceID,
-                status: .active,
-                storeID: nil,
-                productID: nil,
-                customerEmail: nil
-            )
-        }
-        #endif
-
         let response = try await perform(
             path: Self.activatePath,
             parameters: ["license_key": key, "instance_name": instanceNameProvider()]
@@ -377,16 +404,28 @@ final class LicenseService {
             throw error
         }
 
+        // Product identity gate: the key activated, but it only licenses
+        // THIS build if it belongs to an approved product. Checked before any
+        // Keychain write, so a wrong-product key leaves an existing good
+        // license untouched. The instance LemonSqueezy just created is freed
+        // best-effort — the user shouldn't lose a device slot on their real
+        // product to a mistaken paste here.
+        let rawProductID = response.body.meta?.productId
+        guard let productID = rawProductID, policy.isApproved(productID: productID) else {
+            Log.billing.error("license activate refused — product \(rawProductID.map(String.init) ?? "missing", privacy: .public) not approved")
+            await deactivateBestEffort(licenseKey: key, instanceID: instanceID)
+            throw LicenseError.wrongProduct
+        }
+
         let status = response.body.keyStatus ?? .active
-        // Order matters: write the credentials, THEN stamp validation, so a
-        // present license always has a fresh throttle stamp.
+        // Order matters: write the credentials, THEN the confirmed edition
+        // metadata, THEN stamp validation, so a present license always has a
+        // fresh throttle stamp and never sits keyed without its edition.
         licenseKeySlot.write(key)
         instanceIDSlot.write(instanceID)
+        persistEdition(productID: productID)
         stampValidated()
-        // E7: a fresh activation (incl. a pasted renewal key) carries the new
-        // license's created_at — the update window restarts from it.
-        persistCreatedAt(response.body.licenseKey?.createdAt)
-        Log.billing.notice("license activated — instance=\(instanceID, privacy: .public) status=\(status.rawValue, privacy: .public)")
+        Log.billing.notice("license activated — instance=\(instanceID, privacy: .public) status=\(status.rawValue, privacy: .public) product=\(productID, privacy: .public)")
 
         return ActivationResult(
             instanceID: instanceID,
@@ -399,11 +438,19 @@ final class LicenseService {
 
     // MARK: - Validate
 
-    /// Re-checks the stored license online. Reads the cached key + instance ID
-    /// and POSTs to /validate. On a completed round-trip returns the
-    /// `ValidationResult` (and refreshes the throttle stamp when `valid`). On
-    /// a transport failure throws `LicenseError.network` so the caller can
-    /// FAIL OPEN. Throws `.keyInvalid` if there's no stored key to validate.
+    /// Re-checks the stored license online, including its PRODUCT IDENTITY.
+    /// Reads the cached key + instance ID and POSTs to /validate. On a
+    /// completed round-trip returns the `ValidationResult`; the throttle
+    /// stamp and edition metadata refresh only when the key is both valid
+    /// AND for an approved product. The product check applies to EVERY
+    /// decoded response, regardless of `valid`: a wrong or MISSING
+    /// `meta.product_id` is definitive — the cached edition metadata is
+    /// deleted (so the snapshot fails closed offline) and the stamp is never
+    /// refreshed, while the key + instance stay on file for the user to see
+    /// and deactivate. On a transport failure throws `LicenseError.network`
+    /// so the caller can FAIL OPEN — for a user whose complete cached record
+    /// is already compatible. Throws `.keyInvalid` if there's no stored key
+    /// to validate.
     func validate() async throws -> ValidationResult {
         guard case .found(let key) = licenseKeySlot.readResult(), !key.isEmpty else {
             throw LicenseError.keyInvalid
@@ -418,15 +465,27 @@ final class LicenseService {
         let response = try await perform(path: Self.validatePath, parameters: parameters)
         let valid = response.body.valid ?? false
         let status = response.body.keyStatus
-        if valid {
+        let productID = response.body.meta?.productId
+        let approved = policy.isApproved(productID: productID)
+        if !approved {
+            // Definitive product mismatch — Lemon Squeezy answered and the
+            // response does not vouch for THIS build's product (wrong id, or
+            // no id at all), whatever `valid` says. Drop the edition metadata
+            // so the offline snapshot fails closed; keep the key + instance
+            // so Settings can still show and deactivate it (a definitive
+            // revocation verdict, handled by the caller, clears the rest).
+            // Never stamp — this is not a successful validation.
+            licensedProductIDSlot.delete()
+            licensedMajorSlot.delete()
+            Log.billing.error("license validate — product \(productID.map(String.init) ?? "missing", privacy: .public) not approved; edition metadata cleared")
+        } else if valid {
+            // A good validation re-confirms the edition, so a pre-edition
+            // cache (or one damaged by a partial write) heals here.
+            if let productID { persistEdition(productID: productID) }
             stampValidated()
-            // E7: refresh the update-window start on every good validation, so
-            // a pre-E7 activation backfills its window on the next throttled
-            // re-validation without re-activating.
-            persistCreatedAt(response.body.licenseKey?.createdAt)
         }
-        Log.billing.notice("license validate \u{2192} valid=\(valid, privacy: .public) status=\(status?.rawValue ?? "unknown", privacy: .public)")
-        return ValidationResult(valid: valid, status: status)
+        Log.billing.notice("license validate \u{2192} valid=\(valid, privacy: .public) status=\(status?.rawValue ?? "unknown", privacy: .public) productApproved=\(approved, privacy: .public)")
+        return ValidationResult(valid: valid, status: status, productApproved: approved)
     }
 
     // MARK: - Deactivate
@@ -454,6 +513,25 @@ final class LicenseService {
         Log.billing.notice("license deactivated — instance=\(instanceID, privacy: .public)")
     }
 
+    /// Best-effort deactivation with an EXPLICIT key — for the wrong-product
+    /// activation path, where the mismatched key was never persisted so
+    /// `deactivate(instanceID:)`'s Keychain read would find nothing (or the
+    /// user's real, different license). Failures are logged and swallowed:
+    /// freeing the slot is a courtesy, never a gate.
+    private func deactivateBestEffort(licenseKey: String, instanceID: String) async {
+        do {
+            let response = try await perform(
+                path: Self.deactivatePath,
+                parameters: ["license_key": licenseKey, "instance_id": instanceID]
+            )
+            if response.body.deactivated != true {
+                Log.billing.error("wrong-product cleanup deactivate refused — instance=\(instanceID, privacy: .public)")
+            }
+        } catch {
+            Log.billing.error("wrong-product cleanup deactivate failed — instance=\(instanceID, privacy: .public)")
+        }
+    }
+
     // MARK: - Synchronous local state
 
     /// Network-free snapshot of the stored license, for startup precedence
@@ -466,12 +544,38 @@ final class LicenseService {
         case (.found, .found):
             presence = .present
         case (.failure, _), (_, .failure):
-            // A genuine read failure on either slot → unknown, fail-open.
+            // A genuine read failure on either slot → unknown. Diagnostic
+            // only — an unverifiable record fails closed (see `grantsBYOK`).
             presence = .indeterminate
         default:
             presence = .absent
         }
-        return LicenseSnapshot(presence: presence, lastValidated: lastValidatedDate())
+
+        let productResult = licensedProductIDSlot.readResult()
+        let majorResult = licensedMajorSlot.readResult()
+        let edition: LicenseSnapshot.Edition
+        switch (productResult, majorResult) {
+        case (.failure, _), (_, .failure):
+            // Genuine read failure → unknown edition. Diagnostic only — an
+            // unverifiable edition fails closed (see `grantsBYOK`).
+            edition = .readFailure
+        case (.found(let rawProduct), .found(let rawMajor)):
+            // Unparseable stored values decode to nil and land in
+            // `.incompatible` — persisted-but-wrong fails closed.
+            let major = Int(rawMajor)
+            if policy.isApproved(productID: Int(rawProduct)), major == policy.requiredMajor {
+                edition = .compatible
+            } else {
+                edition = .incompatible(licensedMajor: major)
+            }
+        default:
+            // Definitively unconfirmed (a cache from before the edition
+            // metadata existed, or a cleared wrong-product record) → fail
+            // closed until an online activate/validate re-confirms.
+            edition = .missingMetadata
+        }
+
+        return LicenseSnapshot(presence: presence, edition: edition, lastValidated: lastValidatedDate())
     }
 
     /// The stored activation instance ID, if any (for the deactivate flow).
@@ -497,74 +601,28 @@ final class LicenseService {
         return clock().timeIntervalSince(last) >= Self.revalidationInterval
     }
 
-    /// Clears all four license slots. Used on a definitive revocation and on
+    /// Clears all five license slots (key, instance, validation stamp, and
+    /// both edition metadata slots). Used on a definitive revocation and on
     /// "deactivate this device". Idempotent.
     func clearLicense() {
         licenseKeySlot.delete()
         instanceIDSlot.delete()
         lastValidatedSlot.delete()
-        licenseCreatedAtSlot.delete()
+        licensedProductIDSlot.delete()
+        licensedMajorSlot.delete()
         Log.billing.notice("license cleared from keychain")
     }
 
-    // MARK: - Update window (E7 / Appendix F)
-    //
-    // The BYOK "1 year of updates" window: starts at the license's
-    // `created_at` (LemonSqueezy), ends one calendar year later. This is
-    // STRICTLY about which appcast items the Sparkle updater offers
-    // (`UpdateWindowPolicy`) — it never touches license validity, activation,
-    // or the generation gate, and it must NEVER be conflated with the LS
-    // key-expiry `expires_at` (the F.2 trap: that flips validate to
-    // `status:"expired"` → `isDefinitiveRevocation` → wrongly blocks
-    // generation). Out-of-window licenses activate, validate, and generate
-    // exactly like in-window ones.
+    // MARK: - Edition metadata
 
-    /// End of this license's update window (`created_at` + 1 year), or `nil`
-    /// when the window start was never persisted (pre-E7 activation that
-    /// hasn't re-validated yet, Keychain read failure) — callers FAIL OPEN on
-    /// `nil` per the F.0 decision.
-    func updateWindowEnd() -> Date? {
-        guard case .found(let raw) = licenseCreatedAtSlot.readResult(),
-              let seconds = TimeInterval(raw) else { return nil }
-        return Self.updateWindowEnd(createdAt: Date(timeIntervalSince1970: seconds))
-    }
-
-    /// `createdAt` + 1 calendar year (Gregorian, so leap years are exact);
-    /// 365 days as a defensive fallback if calendar math ever fails.
-    /// `nonisolated` so the (non-MainActor) updater policy can call it.
-    nonisolated static func updateWindowEnd(createdAt: Date) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
-        return calendar.date(byAdding: .year, value: 1, to: createdAt)
-            ?? createdAt.addingTimeInterval(365 * 24 * 60 * 60)
-    }
-
-    /// Parses the License API's `created_at` string. The documented shape is
-    /// ISO-8601 with fractional seconds ("2026-04-26T13:36:11.000000Z"), but
-    /// LS has historically also emitted plain ISO and the MySQL-style
-    /// "yyyy-MM-dd HH:mm:ss" — accept all three rather than silently dropping
-    /// the window start over a formatting change. `nil` on anything else
-    /// (the window then stays unset → fail-open).
-    nonisolated static func parseCreatedAt(_ raw: String?) -> Date? {
-        guard let raw, !raw.isEmpty else { return nil }
-        if let date = ManagedBackend.parseISODate(raw) { return date }
-        return mysqlStyle.date(from: raw)
-    }
-
-    private nonisolated static let mysqlStyle: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
-
-    /// Persists a parseable `created_at` as epoch seconds (the `lastValidated`
-    /// encoding). An absent/unparseable value KEEPS any previously-stored
-    /// window start — never erase good data over a response shape hiccup.
-    private func persistCreatedAt(_ raw: String?) {
-        guard let date = Self.parseCreatedAt(raw) else { return }
-        licenseCreatedAtSlot.write(String(Int(date.timeIntervalSince1970)))
+    /// Persists the CONFIRMED product ID and the policy's required major
+    /// together — always as a pair, only after the License API vouched for
+    /// the product. The stored major records which Zerro major this license
+    /// was confirmed for, so a future major's build can fail closed (and name
+    /// the licensed major) without a network call.
+    private func persistEdition(productID: Int) {
+        licensedProductIDSlot.write(String(productID))
+        licensedMajorSlot.write(String(policy.requiredMajor))
     }
 
     // MARK: - Throttle stamp
@@ -672,15 +730,20 @@ final class LicenseService {
     // Builds a service over in-memory slots + an offline transport so SwiftUI
     // previews never touch the real Keychain or network.
 
-    /// An in-memory license service. `licensed: true` seeds a present license
-    /// (key + instance) so previews can render the `.byok` Settings/paywall
-    /// states; the transport is offline (any network call fails open).
+    /// An in-memory license service. `licensed: true` seeds a present,
+    /// edition-compatible license (key + instance + confirmed product/major)
+    /// so previews can render the `.byok` Settings/paywall states; the
+    /// transport is offline (any network call fails open).
     static func inMemory(licensed: Bool = false) -> LicenseService {
-        LicenseService(
+        let policy = LicenseEditionPolicy.current
+        let productID = policy.approvedProductIDs.first
+        return LicenseService(
             licenseKeySlot: InMemoryKeychainSlot(licensed ? "PREVIEW-LICENSE-KEY" : nil),
             instanceIDSlot: InMemoryKeychainSlot(licensed ? "preview-instance-id" : nil),
             lastValidatedSlot: InMemoryKeychainSlot(licensed ? String(Int(Date().timeIntervalSince1970)) : nil),
-            licenseCreatedAtSlot: InMemoryKeychainSlot(nil),
+            licensedProductIDSlot: InMemoryKeychainSlot(licensed ? productID.map(String.init) : nil),
+            licensedMajorSlot: InMemoryKeychainSlot(licensed ? String(policy.requiredMajor) : nil),
+            policy: policy,
             transport: OfflineLicenseTransport(),
             instanceNameProvider: { "Preview-00000000" }
         )
@@ -689,7 +752,7 @@ final class LicenseService {
 
 // MARK: - LicenseAPIResponse (decoding)
 
-/// The subset of the LemonSqueezy License API response shape Phase C reads.
+/// The subset of the Lemon Squeezy License API response shape the app reads.
 /// One struct covers activate / validate / deactivate — each populates the
 /// fields relevant to it (`activated` / `valid` / `deactivated`), the rest
 /// decode to `nil`. Decoded with `.convertFromSnakeCase`, so e.g.
@@ -714,11 +777,6 @@ struct LicenseAPIResponse: Decodable {
         let status: String?
         let activationLimit: Int?
         let activationUsage: Int?
-        /// E7: the license's issue instant (`created_at`) — the update-window
-        /// start. Kept as the raw string here; `LicenseService.parseCreatedAt`
-        /// owns the tolerant parsing. NEVER decode `expires_at` for the
-        /// window — that's LS key-expiry, the F.2 revocation trap.
-        let createdAt: String?
     }
 
     struct InstanceObject: Decodable {

@@ -70,7 +70,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .shortcuts:      return "Shortcuts"
         case .history:        return "History"
         case .advanced:       return "Advanced"
-        case .accountBilling: return "Account & Billing"
+        case .accountBilling: return "API Keys & License"
         case .about:          return "About"
         }
     }
@@ -82,7 +82,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .shortcuts:      return "keyboard"
         case .history:        return "clock.arrow.circlepath"
         case .advanced:       return "gearshape.2"
-        case .accountBilling: return "person.crop.circle"
+        case .accountBilling: return "key.horizontal"
         case .about:          return "info.circle"
         }
     }
@@ -187,9 +187,8 @@ struct SettingsView: View {
                 case .advanced:
                     AppBehaviorSection()
                 case .accountBilling:
-                    // Multi-model 6E: ONE mode at a time (Managed or BYOK)
-                    // with a switch link — never the old API-key + license
-                    // stack. The pane owns its internal section rhythm.
+                    // Provider keys + transcription + the Zerro license. The
+                    // pane owns its internal section rhythm.
                     AccountBillingPane()
                 case .about:
                     AboutSupportSection()
@@ -223,7 +222,7 @@ private struct SettingsSidebar: View {
 
             group("Settings", items: SettingsCategory.settingsGroup)
 
-            group("Account", items: SettingsCategory.accountGroup)
+            group("License", items: SettingsCategory.accountGroup)
                 .padding(.top, 18)
 
             Spacer(minLength: 0)

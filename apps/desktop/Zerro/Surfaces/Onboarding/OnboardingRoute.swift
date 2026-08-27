@@ -7,21 +7,17 @@
 
 import Foundation
 
-/// The product path selected on the setup screen. Raw string values are
-/// persisted, so they must remain stable across releases.
+/// The product path. There is exactly one now — everyone runs on their own
+/// provider keys — but the type (and its persisted raw value) survives so
+/// older installs resume cleanly. Raw string values are persisted, so they
+/// must remain stable across releases.
 enum OnboardingPath: String, CaseIterable, Equatable, Hashable {
-    case free
     case byok
 
-    /// Production progress order for this path. Re-consent is deliberately not
+    /// Production progress order. Re-consent is deliberately not
     /// included: it is a focused returning-user gate, not first-run progress.
     var screens: [OnboardingScreen] {
-        switch self {
-        case .free:
-            return [.setup, .mode, .permissions, .complete]
-        case .byok:
-            return [.setup, .mode, .keys, .permissions, .complete]
-        }
+        [.setup, .keys, .permissions, .complete]
     }
 }
 
@@ -30,7 +26,6 @@ enum OnboardingPath: String, CaseIterable, Equatable, Hashable {
 /// step is inserted or removed.
 enum OnboardingScreen: String, CaseIterable, Equatable, Hashable {
     case setup
-    case mode
     case keys
     /// Retained only so a partially-completed pre-redesign route can migrate.
     case transcription
@@ -77,7 +72,7 @@ struct OnboardingRoute: Equatable {
         for path: OnboardingPath
     ) -> OnboardingScreen {
         if screen == .reconsent { return .reconsent }
-        if screen == .transcription, path == .byok { return .keys }
+        if screen == .transcription { return .keys }
         return path.screens.contains(screen) ? screen : .setup
     }
 }
@@ -109,17 +104,13 @@ enum OnboardingRouteMigration {
         var legacyStepRawValue: Int
         var legacyBYOKPathActive: Bool
         var legacyBYOKSetupStep: Int
-        var legacyBYOKSelected: Bool
         var hasCompletedOnboarding: Bool
         var needsConsent: Bool
     }
 
     static func resolve(_ input: Input) -> OnboardingRoute {
         if input.hasCompletedOnboarding, input.needsConsent {
-            let persistedPath = input.persistedSchemaVersion == currentSchemaVersion
-                ? input.persistedPath.flatMap(OnboardingPath.init(rawValue:))
-                : nil
-            return OnboardingRoute(path: persistedPath ?? legacyPath(from: input), screen: .reconsent)
+            return OnboardingRoute(path: .byok, screen: .reconsent)
         }
 
         if input.persistedSchemaVersion == currentSchemaVersion,
@@ -130,7 +121,6 @@ enum OnboardingRouteMigration {
             return OnboardingRoute(path: path, screen: screen)
         }
 
-        let path = legacyPath(from: input)
         let legacyStep = OnboardingStep(rawValue: input.legacyStepRawValue) ?? .welcome
 
         let screen: OnboardingScreen
@@ -138,8 +128,7 @@ enum OnboardingRouteMigration {
         case .welcome, .consent:
             screen = .setup
         case .email:
-            if path == .byok,
-               input.legacyBYOKPathActive,
+            if input.legacyBYOKPathActive,
                input.legacyBYOKSetupStep >= 1 {
                 screen = .keys
             } else {
@@ -151,10 +140,6 @@ enum OnboardingRouteMigration {
             screen = .complete
         }
 
-        return OnboardingRoute(path: path, screen: screen)
-    }
-
-    private static func legacyPath(from input: Input) -> OnboardingPath {
-        input.legacyBYOKPathActive || input.legacyBYOKSelected ? .byok : .free
+        return OnboardingRoute(path: .byok, screen: screen)
     }
 }

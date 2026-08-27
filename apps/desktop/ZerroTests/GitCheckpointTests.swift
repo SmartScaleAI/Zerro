@@ -18,9 +18,9 @@ final class GitCheckpointTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        // NOT a `zerro-` prefix: a parallel test worker running
-        // PendingPaidGenerationTests calls `WorkingDirectory.sweep()`, which
-        // deletes every `zerro-*` dir in the shared temp dir — that would yank
+        // NOT a `zerro-` prefix: a parallel test worker's
+        // `WorkingDirectory.sweep()` deletes every `zerro-*` dir in the
+        // shared temp dir — that would yank
         // this repo out from under the spawned git mid-test.
         repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("git-ckpt-test-\(UUID().uuidString)", isDirectory: true)

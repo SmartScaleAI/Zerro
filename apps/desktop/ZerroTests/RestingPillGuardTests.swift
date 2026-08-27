@@ -24,7 +24,7 @@ final class RestingPillGuardTests: XCTestCase {
         app.state = .done
         XCTAssertTrue(app.isShowingRestingPill, ".done (success result pill) must block")
 
-        app.state = .failed(reason: .outOfCredits)
+        app.state = .failed(reason: .apiKeyMissing)
         XCTAssertTrue(app.isShowingRestingPill, ".failed (error pill) must block")
 
         app.state = .devDone
@@ -37,9 +37,9 @@ final class RestingPillGuardTests: XCTestCase {
     func testFailedBlocksRegardlessOfReason() {
         let app = AppState()
         // Every `.failed` payload renders an error pill (compact, expanded, or
-        // paid-block resume) — the reason must not change the guard's verdict.
+        // open-settings) — the reason must not change the guard's verdict.
         for reason in [RecordingFailureReason.networkOffline,
-                       .trialCreditsExhausted,
+                       .apiKeyMissing,
                        .recordingTooShort] {
             app.state = .failed(reason: reason)
             XCTAssertTrue(app.isShowingRestingPill, "\(reason) must block")

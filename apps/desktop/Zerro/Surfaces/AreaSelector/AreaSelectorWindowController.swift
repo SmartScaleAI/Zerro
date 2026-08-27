@@ -64,9 +64,8 @@ final class AreaSelectorWindowController {
     /// exactly once per presentation; both implicitly dismiss the
     /// overlay before invocation.
     ///
-    /// `entitlements` feeds the model dropdown's per-row credit detail
-    /// (Managed/Trial) and BYOK key-gating; nil (tests) renders plain
-    /// model names.
+    /// `entitlements` feeds the model dropdown's provider-key gating; nil
+    /// (tests) renders plain model names.
     ///
     /// `offerToolbarWalkthrough` — when true AND the walkthrough hasn't been
     /// seen, the overlay opens with a seeded full-screen selection and the
@@ -140,9 +139,9 @@ final class AreaSelectorWindowController {
         }
 
         state.onConfirm = { [weak self] rect in
-            // Model selection now lives in the menu bar. Trial recordings use
-            // the free model without overwriting the user's persisted paid/BYOK
-            // selection, so upgrading restores their prior choice.
+            // Model selection lives in the menu bar; the recording honors the
+            // persisted choice when its provider key is on file, else falls
+            // back to a usable provider's model.
             let entitlementState = entitlements?.state
             let availableProviders = entitlementState?.usesOwnProviderKeys == true
                 ? ProviderKeys.availableProviders()
@@ -1079,11 +1078,12 @@ final class AreaSelectorWindowController {
     }
 
     /// Populate the Model section for `agentID`: the agent's available models
-    /// (manifest provider, or the Cursor CLI) and the resolved pick (remembered,
-    /// else newest/rank-0). Reads through `PreferencesStore.selectedModel(...)`
-    /// so a retired remembered pick falls back to newest. The list is ALWAYS
-    /// non-empty for a manifest agent (cache→bundled fallback), so offline never
-    /// empties the section.
+    /// (the bundled manifest, or the Codex/Cursor CLI lists) and the resolved
+    /// pick (remembered, else newest/rank-0). Reads through
+    /// `PreferencesStore.selectedModel(...)` so a retired remembered pick falls
+    /// back to newest. The bundled manifest needs no network, so offline never
+    /// empties a manifest agent's section (empty only if the shipped resource
+    /// itself is corrupted, in which case the agent's default model applies).
     private func refreshDevModelItems(forAgent agentID: String?, state: AreaSelectorState) {
         guard let agentID else {
             state.setDevModelMenuItems([], selectedID: nil)
@@ -1109,15 +1109,6 @@ final class AreaSelectorWindowController {
         DevAgentDetection.shared.warm { [weak self, weak state] entries in
             guard let state else { return }
             self?.applyAgentDetection(entries, to: state)
-        }
-        // Phase 2: refresh the server model manifest in the background (covers a
-        // session that launched in normal mode, where ZerroApp didn't warm it).
-        // When it lands, re-seed the Model section for the current agent so
-        // freshly-fetched models appear. Fail-open — offline keeps cache/bundled.
-        Task { [weak self, weak state] in
-            await AgentModelManifestStore.shared.warm()
-            guard let self, let state else { return }
-            self.refreshDevModelItems(forAgent: state.selectedAgentID, state: state)
         }
     }
 

@@ -2,13 +2,10 @@
 //  BillingLicenseModelScopingTests.swift
 //  ZerroTests
 //
-//  Report #11 regression cover — a Managed subscription key and a one-time
-//  BYOK license key share the SAME Keychain slot (`byokLicenseKey`) and are
-//  told apart only by `licenseProductKind`. The Settings license rows must be
-//  product-scoped: a row pre-fills its key, shows "Verified", and shows the
-//  Deactivate/Re-activate affordances ONLY when the on-file license belongs to
-//  that row's product. These tests pin that `BillingLicenseModel` adopts the
-//  stored key for the matching product and stays empty/unverified for the other.
+//  The Settings license row's field model. One product, one row: the model
+//  pre-fills the on-file key and shows "Verified" when a license is stored,
+//  tracks the entitlement as it changes, and treats the E-01 declined-replace
+//  as a quiet no-op (no error pill; the on-file license is restored).
 //
 
 import XCTest
@@ -17,81 +14,46 @@ import XCTest
 @MainActor
 final class BillingLicenseModelScopingTests: XCTestCase {
 
-    private func makeModel(
-        expectedProduct: LicenseProductKind,
-        storedKey: String?,
-        onFileKind: LicenseProductKind?
-    ) -> BillingLicenseModel {
-        BillingLicenseModel(
-            expectedProduct: expectedProduct,
-            keychain: InMemoryKeychainSlot(storedKey),
-            productKindSlot: InMemoryKeychainSlot(onFileKind?.rawValue)
-        )
+    private func makeModel(storedKey: String?) -> BillingLicenseModel {
+        BillingLicenseModel(keychain: InMemoryKeychainSlot(storedKey))
     }
 
-    // MARK: - init adopts the key only for the matching product
+    // MARK: - init adopts the on-file key
 
-    func testManagedKeyOnFileLeavesByokRowEmpty() {
-        // A managed key is on file; the BYOK pane's row must NOT adopt it.
-        let model = makeModel(expectedProduct: .byok, storedKey: "MANAGED-KEY", onFileKind: .managed)
-        XCTAssertEqual(model.licenseKey, "")
-        XCTAssertEqual(model.phase, .unverified)
-    }
-
-    func testByokKeyOnFileLeavesManagedRowEmpty() {
-        // Symmetric: a BYOK key is on file; the Managed pane's row stays empty.
-        let model = makeModel(expectedProduct: .managed, storedKey: "BYOK-KEY", onFileKind: .byok)
-        XCTAssertEqual(model.licenseKey, "")
-        XCTAssertEqual(model.phase, .unverified)
-    }
-
-    func testManagedKeyOnFileFillsManagedRow() {
-        let model = makeModel(expectedProduct: .managed, storedKey: "MANAGED-KEY", onFileKind: .managed)
-        XCTAssertEqual(model.licenseKey, "MANAGED-KEY")
+    func testKeyOnFileFillsRowAsLicensed() {
+        let model = makeModel(storedKey: "LICENSE-KEY")
+        XCTAssertEqual(model.licenseKey, "LICENSE-KEY")
         XCTAssertEqual(model.phase, .licensed)
-    }
-
-    func testByokKeyOnFileFillsByokRow() {
-        let model = makeModel(expectedProduct: .byok, storedKey: "BYOK-KEY", onFileKind: .byok)
-        XCTAssertEqual(model.licenseKey, "BYOK-KEY")
-        XCTAssertEqual(model.phase, .licensed)
-    }
-
-    func testKeyOnFileWithoutKindStaysUnverified() {
-        // Pre-Phase-E key with no resolved product kind: neither row adopts it
-        // (the discriminator is absent, so it can't be claimed as "mine").
-        let model = makeModel(expectedProduct: .byok, storedKey: "LEGACY-KEY", onFileKind: nil)
-        XCTAssertEqual(model.licenseKey, "")
-        XCTAssertEqual(model.phase, .unverified)
     }
 
     func testNoKeyOnFileStaysUnverified() {
-        let model = makeModel(expectedProduct: .managed, storedKey: nil, onFileKind: nil)
+        let model = makeModel(storedKey: nil)
         XCTAssertEqual(model.licenseKey, "")
         XCTAssertEqual(model.phase, .unverified)
     }
 
-    // MARK: - syncToEntitlement keeps only the matching row licensed
+    // MARK: - syncToEntitlement tracks the licensed state
 
-    func testSyncLicensesManagedRowOnlyForManagedState() {
-        let model = makeModel(expectedProduct: .managed, storedKey: "MANAGED-KEY", onFileKind: .managed)
-        model.syncToEntitlement(.managed(creditsRemaining: 100, resetDate: .distantFuture))
+    func testSyncLicensesRowOnByokState() {
+        let model = makeModel(storedKey: "LICENSE-KEY")
+        model.syncToEntitlement(licensed: true)
         XCTAssertEqual(model.phase, .licensed)
-
-        // A BYOK-row model must NOT light up on a managed entitlement.
-        let byokRow = makeModel(expectedProduct: .byok, storedKey: nil, onFileKind: nil)
-        byokRow.syncToEntitlement(.managed(creditsRemaining: 100, resetDate: .distantFuture))
-        XCTAssertEqual(byokRow.phase, .unverified)
     }
 
-    func testSyncClearsRowWhenEntitlementLeavesItsProduct() {
-        // A managed row that was licensed must clear when the entitlement flips
-        // to BYOK (e.g. the user activated a BYOK key while previewing).
-        let model = makeModel(expectedProduct: .managed, storedKey: "MANAGED-KEY", onFileKind: .managed)
+    func testSyncClearsRowWhenEntitlementLeavesLicensed() {
+        // A licensed row must clear when the license stops being the active
+        // entitlement (revoked, deactivated elsewhere, or a dev-forced state).
+        let model = makeModel(storedKey: "LICENSE-KEY")
         XCTAssertEqual(model.phase, .licensed)
-        model.syncToEntitlement(.byok)
+        model.syncToEntitlement(licensed: false)
         XCTAssertEqual(model.phase, .unverified)
         XCTAssertEqual(model.licenseKey, "")
+    }
+
+    func testSyncDoesNotLightUpWithoutALicense() {
+        let model = makeModel(storedKey: nil)
+        model.syncToEntitlement(licensed: false)
+        XCTAssertEqual(model.phase, .unverified)
     }
 
     // MARK: - E-01: declining the replace prompt is a quiet no-op (manual-paste path)
@@ -106,20 +68,17 @@ final class BillingLicenseModelScopingTests: XCTestCase {
             licenseKeySlot: keySlot,
             instanceIDSlot: InMemoryKeychainSlot("old-instance"),
             lastValidatedSlot: InMemoryKeychainSlot(),
-            licenseCreatedAtSlot: InMemoryKeychainSlot(),
+            licensedProductIDSlot: InMemoryKeychainSlot("7"),
+            licensedMajorSlot: InMemoryKeychainSlot("1"),
+            policy: LicenseEditionPolicy(requiredMajor: 1, approvedProductIDs: [7]),
             transport: OfflineLicenseTransport(),
             instanceNameProvider: { "TestMac" },
             confirmReplace: { false }
         )
-        let store = EntitlementStore(
-            licenseService: licenseService,
-            sessionTokens: SessionTokenManager(licenseKeySlot: keySlot, transport: StubManagedTransport()),
-            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.byok.rawValue),
-            defaults: .ephemeralPreview()
-        )
+        let store = EntitlementStore(enforcementMode: .official, licenseService: licenseService)
         XCTAssertEqual(store.state, .byok) // precondition: already paid on OLD-KEY
 
-        let model = makeModel(expectedProduct: .byok, storedKey: "OLD-KEY", onFileKind: .byok)
+        let model = makeModel(storedKey: "OLD-KEY")
         model.licenseKey = "NEW-KEY" // the user types a different key, then declines
 
         await model.performActivation(using: store)

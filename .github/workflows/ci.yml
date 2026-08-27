@@ -406,42 +406,84 @@ jobs:
           done
 
   # ---------------------------------------------------------------------------
-  # Invariant guard for the Sparkle auto-update feed. The website serves
-  # getzerro.app/appcast.xml from EITHER a committed file
-  # (apps/web/public/appcast.xml) OR — once that file is removed — a Vercel
-  # rewrite to the public Supabase Storage object (downloads/appcast.xml). This
-  # job FAILS the PR if neither source would serve a valid feed, which is exactly
-  # what would silently break the updater if the static file were removed before
-  # Storage was seeded (or if Storage later went empty). Cheap (one curl), runs
-  # on every PR, and is required via ci-passed below. Retries ride out a
-  # transient Storage blip; only a sustained outage/empty object fails the gate.
-  appcast-feed-guard:
+  # Routing guard for the public release artifacts. GitHub Releases on this
+  # repository are the sole public source for the official dmg and the
+  # Sparkle feed; the website (apps/web) serves the two stable URLs installed
+  # apps and marketing links depend on — getzerro.app/appcast.xml and
+  # getzerro.app/Zerro.dmg — by redirecting each to the matching asset on the
+  # latest release. This job pins that contract from the repository alone
+  # (no Supabase, no GitHub API; only the npm registry is contacted, to
+  # install the website's pinned dependencies) by running the website's
+  # routing test against the routes Next.js actually resolves from
+  # next.config.ts: both redirects must exist exactly once, point at the
+  # expected release asset URL, and be temporary (permanent: false); neither
+  # path may be served by a rewrite; no route may target Supabase Storage.
+  # An absent, swapped, changed, duplicated, rewritten, or permanent redirect
+  # fails the PR. It also rejects a committed apps/web/public/appcast.xml or
+  # Zerro.dmg: GitHub Releases are the sole source, so a repository copy is
+  # redundant and goes stale on the next release. (Next.js applies redirects
+  # before public-file lookup, so a static file would be unreachable anyway —
+  # the check exists to keep stale artifacts out of the repository.)
+  release-routing-guard:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-      - name: A working appcast feed must always be served
+
+      - name: No static appcast or dmg may be committed under apps/web/public
         run: |
           set -euo pipefail
-          FILE="apps/web/public/appcast.xml"
-          if [ -f "$FILE" ]; then
-            grep -q "<item>" "$FILE" || { echo "::error::$FILE exists but has no <item>."; exit 1; }
-            echo "Appcast served from the committed file ($FILE) — OK."
-            exit 0
-          fi
-          # Static file removed → the website rewrites /appcast.xml to Storage.
-          # That object MUST be live with items, or the updater has no feed.
-          URL="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml"
-          for a in 1 2 3 4 5; do
-            if curl -fsS --max-time 20 "$URL" -o /tmp/feed.xml && grep -q "<item>" /tmp/feed.xml; then
-              echo "No committed file; the Storage appcast is live with items — OK."
-              exit 0
+          for f in public/appcast.xml public/Zerro.dmg; do
+            if [ -e "$f" ]; then
+              echo "::error::apps/web/$f exists. GitHub Releases are the sole source for this artifact and the website redirects that path to the latest release asset; a repository copy is redundant and stale. Remove the file."
+              exit 1
             fi
-            echo "attempt $a: Storage appcast not ready; retrying in 10s…"
-            sleep 10
           done
-          echo "::error::No committed $FILE AND the Storage object is missing/empty ($URL). The updater would have no feed — seed Storage (run the 'Republish appcast to Storage' workflow) before removing the static file."
-          exit 1
+          echo "No static appcast.xml or Zerro.dmg under apps/web/public — OK."
+
+      # Pinned to a full commit SHA (supply-chain hardening, matching the
+      # other actions here). Node 24: the routing test imports next.config.ts
+      # through Node's native TypeScript type stripping (`npm test`).
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install website dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Runs ONLY the routing contract test (the rest of the website suite is
+      # not a merge gate here). The test resolves next.config.ts's real
+      # redirects()/rewrites() and checks both complete entries against
+      # hard-coded expected values. The pass count is asserted so a renamed
+      # or emptied test file cannot go silently green.
+      - name: Website redirects /appcast.xml and /Zerro.dmg to the GitHub Release assets
+        run: |
+          set -euo pipefail
+          TEST=lib/release-routes.test.ts
+          test -f "$TEST" || { echo "::error::$TEST is missing — the release routing contract has no test."; exit 1; }
+          node --test --test-reporter=spec "$TEST" 2>&1 | tee "$RUNNER_TEMP/routing-test.log"
+          PASS="$(grep -E '^ℹ pass [0-9]+' "$RUNNER_TEMP/routing-test.log" | awk '{print $3}' | tail -1)"
+          FAIL="$(grep -E '^ℹ fail [0-9]+' "$RUNNER_TEMP/routing-test.log" | awk '{print $3}' | tail -1)"
+          if [ -z "$PASS" ] || [ "$PASS" -lt 8 ] || [ "${FAIL:-1}" -ne 0 ]; then
+            echo "::error::routing contract test did not run to completion (pass=${PASS:-none}, fail=${FAIL:-unknown})."
+            exit 1
+          fi
+          echo "Routing contract verified from the resolved Next.js config ($PASS checks)."
+
+      - name: Release routing must not reference Supabase Storage
+        run: |
+          set -euo pipefail
+          if grep -nEi 'supabase\.co|storage/v1' lib/release-routes.ts next.config.ts; then
+            echo "::error::the website's release routing references Supabase Storage; GitHub Releases are the only public artifact source."
+            exit 1
+          fi
+          echo "No Storage-hosted destination in the site's release routing — OK."
 
   # ---------------------------------------------------------------------------
   # Aggregate gate. THIS is the single job to mark as the required status check
@@ -456,7 +498,7 @@ jobs:
   # quarantined subprocess suites must never block the gate, so their flakes (or
   # real failures) stay advisory-only and are surfaced as that job's own check.
   ci-passed:
-    needs: [swift-tests, edge-tests, sql-tests, appcast-feed-guard]
+    needs: [swift-tests, edge-tests, sql-tests, release-routing-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -466,16 +508,16 @@ jobs:
           swift='${{ needs.swift-tests.result }}'
           edge='${{ needs.edge-tests.result }}'
           sql='${{ needs.sql-tests.result }}'
-          feed='${{ needs.appcast-feed-guard.result }}'
-          echo "swift-tests:        $swift"
-          echo "edge-tests:         $edge"
-          echo "sql-tests:          $sql"
-          echo "appcast-feed-guard: $feed"
+          routing='${{ needs.release-routing-guard.result }}'
+          echo "swift-tests:           $swift"
+          echo "edge-tests:            $edge"
+          echo "sql-tests:             $sql"
+          echo "release-routing-guard: $routing"
           # A path-gated job that didn't run is `skipped` — that's fine.
-          # appcast-feed-guard is not path-gated, so it is `success`/`failure`.
+          # release-routing-guard is not path-gated, so it is `success`/`failure`.
           # Anything that isn't `success`/`skipped` (i.e. failure or cancelled)
           # fails the gate.
-          for r in "$swift" "$edge" "$sql" "$feed"; do
+          for r in "$swift" "$edge" "$sql" "$routing"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;

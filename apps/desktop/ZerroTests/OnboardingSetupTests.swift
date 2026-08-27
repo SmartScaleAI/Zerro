@@ -2,8 +2,8 @@
 //  OnboardingSetupTests.swift
 //  ZerroTests
 //
-//  Phase 2 guards for the collapsed Setup screen and its compatibility
-//  transitions into the existing transcription/permissions implementation.
+//  Guards for the Setup screen's policy and its transitions into the
+//  provider-key, transcription, and permissions steps.
 //
 
 import XCTest
@@ -11,48 +11,21 @@ import XCTest
 
 @MainActor
 final class OnboardingSetupTests: XCTestCase {
-    func testManagedSetupRequiresAValidLookingEmailAndTermsAgreement() {
-        XCTAssertFalse(OnboardingSetupPolicy.canStartFree(
-            email: "user@example.com",
-            agreed: false,
-            isWorking: false
-        ))
-        XCTAssertFalse(OnboardingSetupPolicy.canStartFree(
-            email: "not-an-email",
-            agreed: true,
-            isWorking: false
-        ))
-        XCTAssertTrue(OnboardingSetupPolicy.canStartFree(
-            email: " user@example.com ",
-            agreed: true,
-            isWorking: false
-        ))
-        XCTAssertFalse(OnboardingSetupPolicy.canStartFree(
-            email: "user@example.com",
-            agreed: true,
-            isWorking: true
-        ))
-    }
-
     func testBYOKSetupAcceptsAnyOneProviderOrAllThree() {
         XCTAssertFalse(OnboardingSetupPolicy.canContinueBYOK(
             keys: ["", "", ""],
-            agreed: true,
             isWorking: false
         ))
         XCTAssertFalse(OnboardingSetupPolicy.canContinueBYOK(
             keys: ["openai", "", ""],
-            agreed: false,
-            isWorking: false
+            isWorking: true
         ))
         XCTAssertTrue(OnboardingSetupPolicy.canContinueBYOK(
             keys: ["", "anthropic", ""],
-            agreed: true,
             isWorking: false
         ))
         XCTAssertTrue(OnboardingSetupPolicy.canContinueBYOK(
             keys: ["openai", "anthropic", "gemini"],
-            agreed: true,
             isWorking: false
         ))
     }
@@ -78,12 +51,10 @@ final class OnboardingSetupTests: XCTestCase {
         )
     }
 
-    func testSharedEmailThenBYOKKeysTransitionKeepsLegacyRestartStateSynchronized() {
+    func testSetupToKeysTransitionKeepsLegacyRestartStateSynchronized() {
         let defaults = UserDefaults.ephemeralPreview()
         let state = OnboardingState(defaults: defaults)
 
-        state.showPathSelection()
-        XCTAssertEqual(state.currentScreen, .mode)
         state.beginBYOKKeys()
 
         XCTAssertEqual(state.onboardingPath, .byok)
@@ -92,21 +63,18 @@ final class OnboardingSetupTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: OnboardingPersistenceKeys.path), "byok")
         XCTAssertEqual(defaults.string(forKey: OnboardingPersistenceKeys.screen), "keys")
 
-        state.returnToPathSelection()
-        XCTAssertEqual(state.currentScreen, .mode)
-        XCTAssertEqual(state.currentStep, .email)
+        state.moveBack()
+        XCTAssertEqual(state.currentScreen, .setup)
     }
 
-    func testFinishingEitherSetupPathLandsOnPermissions() {
-        for path in OnboardingPath.allCases {
-            let state = OnboardingState(defaults: .ephemeralPreview())
-            state.selectPath(path)
+    func testFinishingSetupLandsOnPermissions() {
+        let state = OnboardingState(defaults: .ephemeralPreview())
+        state.beginBYOKKeys()
 
-            state.finishSetup()
+        state.finishSetup()
 
-            XCTAssertEqual(state.onboardingPath, path)
-            XCTAssertEqual(state.currentScreen, .permissions)
-            XCTAssertEqual(state.currentStep, .permissions)
-        }
+        XCTAssertEqual(state.onboardingPath, .byok)
+        XCTAssertEqual(state.currentScreen, .permissions)
+        XCTAssertEqual(state.currentStep, .permissions)
     }
 }

@@ -13,7 +13,9 @@ import { cn } from "@/lib/utils";
 // directly. Instead it points here — https://getzerro.app/checkout-complete —
 // and this page forwards the buyer straight into the desktop app via the
 // `zerro://checkout-complete` deep link, carrying every query param through
-// (e.g. product, and LemonSqueezy link variables like [license_key]/[order_id]).
+// (the LemonSqueezy link variables such as [license_key]/[order_id]). The app
+// never activates from the link on its own: it prefills the issued key so the
+// buyer confirms the activation explicitly.
 const APP_SCHEME = "zerro://checkout-complete";
 
 const Page = () => {
@@ -24,9 +26,9 @@ const Page = () => {
     const deepLinkRef = useRef(APP_SCHEME);
 
     useEffect(() => {
-        // K-01: capture the LemonSqueezy query string (license_key / order_id /
-        // product …) into memory ONCE, before anything scrubs it. The deep link
-        // is built from this snapshot so the desktop app still receives the key.
+        // K-01: capture the LemonSqueezy query string (license_key / order_id …)
+        // into memory ONCE, before anything scrubs it. The deep link is built
+        // from this snapshot so the desktop app still receives the key.
         // Reading `window.location.search` (not `useSearchParams`) keeps this a
         // simple client component with no Suspense/SSR bail-out.
         const search = window.location.search;
@@ -47,9 +49,9 @@ const Page = () => {
         // Auto-attempt the hand-off. Assigning a custom scheme triggers the OS
         // handler without navigating this document, so the cleaned URL stays put.
         // If Zerro is installed, macOS opens it; if not, nothing visible happens
-        // and the manual button below is the fallback. Either way the app
-        // re-checks entitlement when it next becomes active, so the purchase is
-        // never lost.
+        // and the manual button below is the fallback. Either way the buyer can
+        // paste the key from their Lemon Squeezy receipt into the app, so the
+        // purchase is never lost.
         window.location.href = url;
     }, []);
 
@@ -84,7 +86,7 @@ const Page = () => {
                             Payment successful
                         </h1>
                         <p className="mt-2 text-sm text-muted-foreground font-light">
-                            Opening Zerro to finish setting up your plan&hellip;
+                            Opening Zerro to activate your license&hellip;
                         </p>
                     </div>
 
@@ -98,8 +100,9 @@ const Page = () => {
 
                     <p className="text-sm text-muted-foreground font-light">
                         If Zerro doesn&apos;t open automatically, click the button
-                        above, or just switch back to the app and it&apos;ll
-                        update on its own. You can close this tab.
+                        above, or open the app and paste the license key from your
+                        receipt under Settings &rarr; API Keys &amp; License. You can
+                        close this tab.
                     </p>
                 </CardContent>
             </Card>

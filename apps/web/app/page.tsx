@@ -1,23 +1,23 @@
 import type { Metadata } from "next";
-import Navbar from "@/components/templates/axis/navbar";
-import Hero from "@/components/templates/axis/hero";
-import Feature from "@/components/templates/axis/feature";
-import ToolFeature from "@/components/templates/axis/tools";
-import DevMode from "@/components/templates/axis/dev-mode";
-import BuiltRight from "@/components/templates/axis/built-right";
-import NowTalking from "@/components/templates/axis/now-talking";
-import Pricing from "@/components/templates/axis/pricing";
-import FinalCTA from "@/components/templates/axis/final-cta";
-import Footer from "@/components/templates/axis/footer";
-import Comparison from "@/components/templates/axis/comparison";
-import Faq from "@/components/templates/axis/faq";
+import Navbar from "@/components/marketing/navbar";
+import Hero from "@/components/marketing/hero";
+import Feature from "@/components/marketing/feature";
+import ToolFeature from "@/components/marketing/tools";
+import DevMode from "@/components/marketing/dev-mode";
+import BuiltRight from "@/components/marketing/built-right";
+import NowTalking from "@/components/marketing/now-talking";
+import Pricing from "@/components/marketing/pricing";
+import FinalCTA from "@/components/marketing/final-cta";
+import Footer from "@/components/marketing/footer";
+import Comparison from "@/components/marketing/comparison";
+import Faq from "@/components/marketing/faq";
 import { SectionView } from "@/components/section-view";
 import { GradientField } from "@/components/ui/gradient-field";
 import {
   SoftwareApplicationJsonLd,
   FaqJsonLd,
 } from "@/components/structured-data";
-import { faqEntries } from "@/components/templates/axis/faq-data";
+import { faqEntries } from "@/components/marketing/faq-data";
 
 export const metadata: Metadata = {
   // Absolute so the homepage title is fully controlled and mirrors the hero

@@ -11,7 +11,8 @@
 //                       snapshot on the clipboard for support emails.
 //                       Phase 13 will graduate this into structured
 //                       `os_log` collection.
-//    3. Send Feedback — navigation row opening the in-app feedback dialog.
+//    3. Send Feedback — navigation row opening a pre-addressed support
+//                       email in the user's mail app (see `SupportEmail`).
 //
 //  Footer is a separate sibling (not inside the card) so it sits
 //  centered below the section card the way the screenshots show.
@@ -27,12 +28,18 @@ struct AboutSupportSection: View {
                 VersionRow()
                 SettingsRowDivider()
                 WhatsNewRow()
-                SettingsRowDivider()
-                CheckForUpdatesRow()
+                // Community builds have no official updater (updates come
+                // from rebuilding the source), so the check row hides.
+                if EntitlementEnforcementMode.productionDefault == .official {
+                    SettingsRowDivider()
+                    CheckForUpdatesRow()
+                }
                 SettingsRowDivider()
                 CopyDiagnosticInfoRow()
                 SettingsRowDivider()
                 SendFeedbackRow()
+                SettingsRowDivider()
+                ThirdPartyNoticesRow()
             }
             SettingsFooter()
         }
@@ -155,15 +162,12 @@ private struct CheckForUpdatesRow: View {
 }
 
 private struct SendFeedbackRow: View {
-    @Environment(\.openWindow) private var openWindow
-
     var body: some View {
         SettingsNavigationRow(
             label: "Send Feedback",
             description: "Share an idea or report an issue."
         ) {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: FeedbackScene.windowID)
+            SupportEmail.open()
         }
     }
 }
@@ -178,6 +182,22 @@ private struct WhatsNewRow: View {
         ) {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: WhatsNewScene.windowID)
+        }
+    }
+}
+
+private struct ThirdPartyNoticesRow: View {
+    @State private var isPresented = false
+
+    var body: some View {
+        SettingsNavigationRow(
+            label: "Third-Party Notices",
+            description: "Licenses for software included with Zerro."
+        ) {
+            isPresented = true
+        }
+        .sheet(isPresented: $isPresented) {
+            ThirdPartyNoticesSheet()
         }
     }
 }

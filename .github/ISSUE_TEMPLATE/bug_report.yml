@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a problem with Zerro.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two things before you start:
+
+        **Security issues:** do NOT report vulnerabilities here. Use
+        [private vulnerability reporting](https://github.com/SmartScaleAI/smartscale-zerro/security/advisories/new)
+        or email support@getzerro.app (see SECURITY.md).
+
+        **Privacy:** Zerro records your screen and microphone. Redact
+        prompts, screenshots, recordings, and logs before attaching
+        them, and never include API keys, license keys, or personal
+        information.
+  - type: input
+    id: zerro-version
+    attributes:
+      label: Zerro version
+      description: From Zerro's menu bar icon or the About window (e.g. 1.4.35).
+      placeholder: "1.4.35"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.6 (Sequoia)"
+    validations:
+      required: true
+  - type: dropdown
+    id: build-type
+    attributes:
+      label: Build type
+      options:
+        - Official build from getzerro.app
+        - Self-built from source
+    validations:
+      required: true
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a recording with…
+        2. Say…
+        3. Stop the recording
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What actually happened. Include redacted error messages or log excerpts if you have them.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy-confirm
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I have redacted prompts, screenshots, recordings, and logs, and this report contains no API keys, license keys, or personal information.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md, not public issues).
+          required: true

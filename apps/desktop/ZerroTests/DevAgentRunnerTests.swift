@@ -20,8 +20,8 @@ final class DevAgentRunnerTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         // NOT a `zerro-` prefix: a parallel worker's `WorkingDirectory.sweep()`
-        // (PendingPaidGenerationTests) deletes every `zerro-*` temp dir, which
-        // would remove these fake-agent scripts mid-run.
+        // deletes every `zerro-*` temp dir, which would remove these
+        // fake-agent scripts mid-run.
         scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("dev-runner-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)

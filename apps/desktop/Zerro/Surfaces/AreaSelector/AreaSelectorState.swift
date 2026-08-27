@@ -356,8 +356,8 @@ final class AreaSelectorState {
     }
 
     /// Model rows for the dev-settings Model section, set by the controller for
-    /// the CURRENTLY-SELECTED agent (anthropic/openai manifest, or the Cursor
-    /// CLI). Ordered newest-first; empty for an agent with no model picker.
+    /// the CURRENTLY-SELECTED agent (the bundled manifest, or the Codex/Cursor
+    /// CLI lists). Ordered newest-first; empty for an agent with no model picker.
     private(set) var devModelMenuItems: [DevModelMenuItem] = []
 
     /// The model_id checkmarked in the Model section — the resolved pick for the

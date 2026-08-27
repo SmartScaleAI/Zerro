@@ -10,7 +10,7 @@
 //  instead of hard-coding the string.
 //
 //  This window is the dedicated landing spot for a checkout return that carries
-//  an issued license/subscription key: the key is routed here PREFILLED so the
+//  an issued license key: the key is routed here PREFILLED so the
 //  user explicitly taps Activate (E-01 — a deep link never auto-activates), in
 //  place of opening the full paywall.
 //

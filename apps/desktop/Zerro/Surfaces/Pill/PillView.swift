@@ -29,31 +29,12 @@ enum PillState: Equatable {
     /// false it falls back to reopening the screen-region selector to record
     /// again (the user fixes the underlying cause: Settings, free up disk, etc.).
     case error(headline: String, detail: String, retryable: Bool)
-    /// M5 — a PAID-blocked failure (trial credits exhausted / out of credits /
-    /// inactive subscription) that still has a held recording on disk. Rendered
-    /// as the shared failure card (same 760-wide chrome as `.error` /
-    /// `.failureExpanded`): the reason's `headline` on top, the paid-block
-    /// `detail` below, and a Discard + primary footer. The primary's single
-    /// action refreshes entitlement then resumes-or-paywalls; its LABEL reads
-    /// "Upgrade" until the user is entitled and "Generate" after. `entitled`
-    /// carries `EntitlementStore.canGenerate` so the label flips live (read in
-    /// the bridge so Observation tracks it). Mapped from `.failed` by the bridge
-    /// when `AppState.canResumePaidGeneration` is true.
-    case paidBlockResume(headline: String, detail: String, entitled: Bool)
-    /// Record-START out-of-credits block (preflight, nothing captured). Rendered
-    /// as the shared failure card (same 760-wide chrome as `.error` /
-    /// `.paidBlockResume`): the `headline` on top, the start-oriented `detail`
-    /// below, and a plain Dismiss + an "Add Credits" primary that opens the
-    /// top-up paywall. Crucially there is NO Retry and NO Resume — nothing was
-    /// recorded, so neither affordance has anything to act on. Mapped from
-    /// `.failed(.outOfCreditsAtStart)` by the bridge.
-    case outOfCreditsStart(headline: String, detail: String)
     /// Config-type failure (missing/invalid API key, or the on-device model not
     /// installed) that the user fixes in SETTINGS, not by retrying or re-recording.
-    /// Rendered as the shared failure card (same 760-wide chrome as `.error` /
-    /// `.outOfCreditsStart`): the `headline` on top, the `detail` below, and a
+    /// Rendered as the shared failure card (same 760-wide chrome as
+    /// `.error`): the `headline` on top, the `detail` below, and a
     /// plain Dismiss + an "Open Settings" primary that opens Settings preselected
-    /// to `pane` (Account & Billing). No Retry — a re-run fails identically until
+    /// to `pane` (API Keys & License). No Retry — a re-run fails identically until
     /// the config is fixed. Mapped from `.failed` by the bridge when
     /// `reason.settingsDeepLink != nil`.
     case openSettings(headline: String, detail: String, pane: SettingsCategory)
@@ -68,8 +49,8 @@ enum PillState: Equatable {
     /// was interrupted (system sleep, app quit, network drop, etc.) is
     /// recoverable on disk. Reads "Recording stopped — generate a prompt from
     /// it?" with exactly
-    /// two outcomes: Generate (run the recovered recording, spending the credit
-    /// with consent) and Discard (delete it). Dismissing the pill any other way
+    /// two outcomes: Generate (run the recovered recording, making the provider
+    /// call with consent) and Discard (delete it). Dismissing the pill any other way
     /// also resolves to Discard. Recovery NEVER auto-generates — it always asks.
     case confirmRecovery
 
@@ -123,13 +104,6 @@ struct DevResultCard: Equatable {
     var linesAdded: Int = 0
     var linesRemoved: Int = 0
     var filesChanged: Int = 0
-    /// The "−N credits · M left" charge readout for the EXPANDED card's footer —
-    /// managed Dev Mode meters its prompt-generation step exactly like artifact
-    /// mode, so the same line belongs on both result cards. `nil` for BYOK/local
-    /// (no managed call, no charge). Formatted in the bridge via the SAME
-    /// `CreditDisplay.chargeLine` the artifact path uses, so the two read
-    /// identically. Defaulted so literal `#Preview` constructions stay terse.
-    var chargeLine: String? = nil
 }
 
 // MARK: - PillView
@@ -177,19 +151,6 @@ struct PillView: View {
     /// region selector to record again. Wired in `PillWindowController` to
     /// `AppState.retryRecordingFromRegion`. Default no-op for #Preview blocks.
     var onErrorRetryRegion: () -> Void = {}
-    /// M5 — the `.paidBlockResume` pill's primary action. Wired in
-    /// `PillWindowController` to `AppState.resumePaidGeneration`, which re-checks
-    /// entitlement and either re-runs the held recording (when entitled) or opens
-    /// the paywall — so the one action backs both the "Generate" and "Upgrade"
-    /// labels. Default no-op so #Preview blocks can pass literal states without
-    /// ceremony.
-    var onResumePaidGeneration: () -> Void = {}
-    /// The `.outOfCreditsStart` pill's "Add Credits" primary. Wired in
-    /// `PillWindowController` to `AppState.openOutOfCreditsTopUp`, which opens the
-    /// top-up paywall and clears the block. Distinct from `onResumePaidGeneration`
-    /// — there is no held recording, so this only routes to the paywall. Default
-    /// no-op so #Preview blocks can pass the literal state without ceremony.
-    var onAddCredits: () -> Void = {}
     /// The `.openSettings` pill's "Open Settings" primary. Wired in
     /// `PillWindowController` to `AppState.openSettings(to:)`, which activates the
     /// app + opens the Settings window preselected to the given pane so the user
@@ -204,7 +165,7 @@ struct PillView: View {
     var onDismissResult: () -> Void = {}
 
     /// M2 recovery-pill resolutions — exactly two outcomes. `onRecoveryGenerate`
-    /// runs the recovered recording (spends the credit, with consent);
+    /// runs the recovered recording (makes the provider call, with consent);
     /// `onRecoveryDiscard` deletes it. Dismissing the pill by any other means
     /// also routes to Discard (wired in PillWindowController) — there is no
     /// leave-on-disk path. Default no-ops so `#Preview` blocks can pass a
@@ -255,13 +216,6 @@ struct PillView: View {
     /// via PillWindowController; PillView stays a pure renderer.
     var stoppedBySleep: Bool = false
 
-    /// Multi-model 6B — the pre-formatted "−N credits · M left" toast line
-    /// (CreditDisplay.chargeLine over the server's exact `credits_charged`,
-    /// D2). `nil` for BYOK/local results and pre-D2 backends — the header then
-    /// renders exactly as before. Threaded from AppState.lastGenerationCharge
-    /// via PillWindowController; PillView stays a pure renderer.
-    var chargeLine: String? = nil
-
     /// Live mic-input peak levels for the recording/wrappingUp waveform.
     /// 22-element rolling buffer threaded from AppState.audioLevels.
     /// `nil` falls back to the static sample bars so previews and the
@@ -311,10 +265,10 @@ struct PillView: View {
         switch state {
         case .recording, .wrappingUp, .processing, .devProgress:
             return Self.capsuleWidth
-        // `.error` and `.paidBlockResume` are now the 760-wide failure card
+        // `.error` is now the 760-wide failure card
         // (content-driven, like `.failureExpanded`), not locked capsules.
         case .resultCompact, .resultExpanded, .failureExpanded, .confirmRecovery,
-             .error, .paidBlockResume, .outOfCreditsStart, .openSettings, .devDone, .devFailed,
+             .error, .openSettings, .devDone, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         }
@@ -325,11 +279,11 @@ struct PillView: View {
         case .recording, .wrappingUp, .processing, .resultCompact, .confirmRecovery,
              .devProgress:
             return Self.capsuleHeight
-        // `.error` and `.paidBlockResume` are now the failure card: the title +
+        // `.error` is now the failure card: the title +
         // wrapped detail prose drive the card's own height (it grows down for a
         // long message instead of wrapping inside a fixed capsule).
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume,
-             .outOfCreditsStart, .openSettings, .devFailed,
+        case .resultExpanded, .failureExpanded, .error,
+             .openSettings, .devFailed,
              .reviewPrompt, .confirmDevRecovery:
             return nil
         // Compact dev-result is the locked-height summary capsule (like
@@ -384,7 +338,6 @@ struct PillView: View {
                 result: result ?? .empty,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
-                chargeLine: chargeLine,
                 onCopy: onCopy,
                 onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
@@ -396,7 +349,6 @@ struct PillView: View {
                 result: result ?? .empty,
                 noNarration: resultHadNoNarration,
                 stoppedBySleep: stoppedBySleep,
-                chargeLine: chargeLine,
                 onCopy: onCopy,
                 onCopyArtifact: onCopyArtifact,
                 onToggleExpand: onToggleExpand,
@@ -411,7 +363,6 @@ struct PillView: View {
             OutputCardView(
                 artifact: nil,
                 chatText: "",
-                chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
                 onCopy: {},
@@ -431,65 +382,6 @@ struct PillView: View {
             .frame(width: 760)
             .fixedSize(horizontal: false, vertical: true)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        case .paidBlockResume(let headline, let detail, let entitled):
-            // Same failure card, Discard + (Upgrade/Generate) footer. The single
-            // primary action refreshes entitlement then resumes-or-paywalls; its
-            // label flips with `entitled`. Once entitled the card switches from
-            // the amber paid-block warning to a blue "you're all set" success
-            // confirmation (blue checkmark badge + blue Generate); Discard stays.
-            OutputCardView(
-                artifact: nil,
-                chatText: "",
-                chargeLine: nil,
-                noNarration: false,
-                stoppedBySleep: false,
-                onCopy: {},
-                onCollapse: {},
-                onDismiss: onDismissError,
-                failure: OutputCardView.FailureConfig(
-                    headline: headline,
-                    detail: detail,
-                    secondaryTitle: "Discard",
-                    onSecondary: onDismissError,
-                    primaryTitle: entitled ? "Generate" : "Upgrade",
-                    primaryIcon: nil,
-                    primaryRole: entitled ? .reversible : .warning,
-                    badgeTint: entitled ? .vfAccentBlue : .vfWarningAmber,
-                    badgeSymbol: entitled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                ),
-                onRetry: onResumePaidGeneration
-            )
-            .frame(width: 760)
-            .fixedSize(horizontal: false, vertical: true)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        case .outOfCreditsStart(let headline, let detail):
-            // Record-START out-of-credits: the same failure card with a plain
-            // Dismiss + an "Add Credits" primary that opens the top-up paywall.
-            // No Retry and no Resume — nothing was captured, so the primary's only
-            // job is to route to the paywall (wired to `onAddCredits`).
-            OutputCardView(
-                artifact: nil,
-                chatText: "",
-                chargeLine: nil,
-                noNarration: false,
-                stoppedBySleep: false,
-                onCopy: {},
-                onCollapse: {},
-                onDismiss: onDismissError,
-                failure: OutputCardView.FailureConfig(
-                    headline: headline,
-                    detail: detail,
-                    secondaryTitle: "Dismiss",
-                    onSecondary: onDismissError,
-                    primaryTitle: "Add Credits",
-                    primaryIcon: nil,
-                    primaryRole: .warning
-                ),
-                onRetry: onAddCredits
-            )
-            .frame(width: 760)
-            .fixedSize(horizontal: false, vertical: true)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         case .openSettings(let headline, let detail, let pane):
             // Config failure: the same failure card with a plain Dismiss + an
             // "Open Settings" primary that opens Settings preselected to `pane`.
@@ -498,7 +390,6 @@ struct PillView: View {
             OutputCardView(
                 artifact: nil,
                 chatText: "",
-                chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
                 onCopy: {},
@@ -525,7 +416,6 @@ struct PillView: View {
             OutputCardView(
                 artifact: nil,
                 chatText: "",
-                chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
                 onCopy: {},
@@ -557,10 +447,6 @@ struct PillView: View {
                 OutputCardView(
                     artifact: nil,
                     chatText: "",
-                    // Managed Dev Mode bills its prompt generation just like
-                    // ask mode — surface the same "−N credits · M left"
-                    // readout bottom-left. `nil` (BYOK/local) shows nothing.
-                    chargeLine: card.chargeLine,
                     noNarration: false,
                     stoppedBySleep: false,
                     onCopy: {},
@@ -600,7 +486,6 @@ struct PillView: View {
             OutputCardView(
                 artifact: nil,
                 chatText: "",
-                chargeLine: nil,
                 noNarration: false,
                 stoppedBySleep: false,
                 onCopy: {},
@@ -642,7 +527,7 @@ struct PillView: View {
         // The failure-card family (error / paid-block / generation-failure /
         // dev-failure) and the review card all share the 18pt card radius, not the
         // 28pt capsule radius.
-        case .resultExpanded, .failureExpanded, .error, .paidBlockResume, .devFailed, .reviewPrompt:
+        case .resultExpanded, .failureExpanded, .error, .devFailed, .reviewPrompt:
             return 18
         case .devDone(_, let expanded):            return expanded ? 18 : 28
         default:                                    return 28
@@ -1076,9 +961,9 @@ private struct ProcessingPillContent: View {
 // width, left icon badge + question + trailing action cluster — the same
 // pill-family chrome the processing capsule morphs between. A
 // recording that a system sleep interrupted is recoverable on disk; rather
-// than silently spending a credit, we ASK — exactly two outcomes, made
+// than silently calling the provider, we ASK — exactly two outcomes, made
 // self-evident by the two verbs: "Discard" (delete it, secondary) and the
-// primary "Generate" (run it, spending the credit with consent). There is no
+// primary "Generate" (run it, with consent). There is no
 // separate dismiss affordance: dismissing the pill resolves to Discard (see
 // PillWindowController), so a recovered recording is never silently retained.
 // The recovery glyph ties it to the result's "recovered" note.
@@ -1119,8 +1004,8 @@ private struct ConfirmRecoveryPillContent: View {
 // Expanded (UI revision 2): the card IS the expanded pill — no outer
 // strip, no gutters. `OutputCardView` owns the whole layout: the header
 // (check + title, Hide chevron, close X), the chat text as prose, the
-// artifact body well (artifact only), and the footer (charge line left when
-// managed; Copy right). A chat-only response (artifact == nil) renders the
+// artifact body well (artifact only), and the footer (Copy right). A
+// chat-only response (artifact == nil) renders the
 // SAME card — header + chat text + a plain "Copy" action for the
 // explanation text; only the body well is dropped.
 
@@ -1143,10 +1028,6 @@ private struct ResultPillContent: View {
     /// complete and valid, so the note stays neutral (no amber header tint) —
     /// it only explains why a result appeared on its own.
     let stoppedBySleep: Bool
-    /// Multi-model 6B — the "−N credits · M left" toast, rendered as a small
-    /// secondary line under "Prompt ready". `nil` (BYOK/local) keeps the
-    /// single-line header exactly as before.
-    let chargeLine: String?
     let onCopy: () -> Void
     /// Forwarded to the expanded card's artifact-corner copy icon (artifact
     /// body only). The compact capsule ignores it — signatures stay uniform
@@ -1168,7 +1049,6 @@ private struct ResultPillContent: View {
                 OutputCardView(
                     artifact: result.artifact,
                     chatText: result.chatText,
-                    chargeLine: chargeLine,
                     noNarration: noNarration,
                     stoppedBySleep: stoppedBySleep,
                     onCopy: onCopy,
@@ -1214,7 +1094,7 @@ private struct ResultPillContent: View {
 
     /// The COMPACT capsule's content (the expanded layout is
     /// OutputCardView): check + result title, then View ⌄ + divider +
-    /// close X. Copying and the credits readout live ONLY in the expanded
+    /// close X. Copying lives ONLY in the expanded
     /// card now, so the title gets the freed width and the capsule hugs
     /// its content (fixed spacing, no Spacer — the maxWidth cap on the
     /// chrome is what makes a long title truncate).
@@ -1411,13 +1291,13 @@ private struct ResultPillContent: View {
 }
 
 #Preview("Error \u{00B7} Long") {
-    // The longest body — pulls the real copy from
-    // `RecordingFailureReason.trialCreditsExhausted` (the source of truth in
+    // A long body — pulls the real copy from
+    // `RecordingFailureReason.apiKeyMissing` (the source of truth in
     // AppState) rather than duplicating it, so the preview can't drift if the
     // copy changes. Exercises the full multi-line detail wrap in the card.
     PillView(state: .error(
-        headline: RecordingFailureReason.trialCreditsExhausted.headline,
-        detail: RecordingFailureReason.trialCreditsExhausted.detail,
+        headline: RecordingFailureReason.apiKeyMissing.headline,
+        detail: RecordingFailureReason.apiKeyMissing.detail,
         retryable: false
     ))
         .padding(40)
@@ -1432,31 +1312,6 @@ private struct ResultPillContent: View {
         headline: RecordingFailureReason.networkOffline.headline,
         detail: RecordingFailureReason.networkOffline.detail,
         retryable: true
-    ))
-        .padding(40)
-        .background(Color.vfPanelBackground)
-}
-
-#Preview("Paid block \u{00B7} Upgrade") {
-    // M5 — paid-blocked failure, NOT yet entitled: the amber failure card with a
-    // Discard + filled "Upgrade" footer (opens the paywall). Real copy from AppState.
-    PillView(state: .paidBlockResume(
-        headline: RecordingFailureReason.trialCreditsExhausted.headline,
-        detail: RecordingFailureReason.trialCreditsExhausted.detail,
-        entitled: false
-    ))
-        .padding(40)
-        .background(Color.vfPanelBackground)
-}
-
-#Preview("Paid block \u{00B7} Generate") {
-    // M5 — once entitled, the card flips to the blue "you're all set"
-    // confirmation: blue checkmark badge + blue "Generate" that resumes the held
-    // recording. Copy mirrors the bridge's entitled branch.
-    PillView(state: .paidBlockResume(
-        headline: "You\u{2019}re all set",
-        detail: "Your subscription is active and the recording you set aside is ready to generate. Pick up right where you left off.",
-        entitled: true
     ))
         .padding(40)
         .background(Color.vfPanelBackground)
@@ -1514,10 +1369,9 @@ private struct ResultPillContent: View {
         .background(Color.vfPanelBackground)
 }
 
-#Preview("Dev result \u{00B7} Expanded \u{00B7} charged") {
-    // The MANAGED variant: the same card as above, now showing the "−N credits ·
-    // M left" charge line bottom-left in the footer (left of Undo/Accept), exactly
-    // where ask mode shows it. BYOK leaves it nil → nothing renders.
+#Preview("Dev result \u{00B7} Expanded \u{00B7} long summary") {
+    // The same card as above with a longer summary, to exercise the wrap
+    // above the Undo/Accept footer.
     PillView(state: .devDone(
         card: DevResultCard(
             title: "Changes applied",
@@ -1531,8 +1385,7 @@ private struct ResultPillContent: View {
             +  flex-direction: column;
              }
             """,
-            linesAdded: 1, linesRemoved: 1, filesChanged: 1,
-            chargeLine: CreditDisplay.chargeLine(charged: 4, remaining: 96)
+            linesAdded: 1, linesRemoved: 1, filesChanged: 1
         ),
         expanded: true
     ))

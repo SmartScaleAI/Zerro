@@ -50,9 +50,8 @@ enum Analytics {
 
     /// The current anonymous PostHog `distinct_id` (a device-scoped id — we never
     /// `identify`, so it's never PII), or `nil` before `start()`. Plumbed through
-    /// the LemonSqueezy checkout `custom_data` (Tier 3) so the webhook's
-    /// server-side `subscription_*` events land on the SAME PostHog person as the
-    /// app's funnel.
+    /// the Lemon Squeezy checkout `custom_data` (Tier 3) so purchase-side
+    /// analytics can land on the SAME PostHog person as the app's funnel.
     static var distinctId: String? {
         didStart ? PostHogSDK.shared.getDistinctId() : nil
     }
@@ -130,64 +129,30 @@ enum Analytics {
 
     // MARK: - Entitlement super-properties (Tier 1)
 
-    /// Registers the two billing super-properties (`entitlement_state` +
-    /// `credits_remaining_bucket`) so EVERY event — existing and new — can be
-    /// segmented by monetization state. Re-registering overwrites the prior
-    /// values live, the same mechanism `start()` uses for the static
-    /// super-properties; call this whenever the entitlement changes.
+    /// Registers the billing super-property (`entitlement_state`) so EVERY
+    /// event — existing and new — can be segmented by monetization state.
+    /// Re-registering overwrites the prior value live, the same mechanism
+    /// `start()` uses for the static super-properties; call this whenever the
+    /// entitlement changes.
     ///
     /// No-op until `start()` has run (registering before setup would be lost).
-    /// Privacy: only a coarse state enum and a credit BUCKET ever leave here —
-    /// never the exact balance.
+    /// Privacy: only a coarse state enum ever leaves here.
     static func updateEntitlementProperties(_ state: EntitlementState) {
         guard didStart else { return }
         PostHogSDK.shared.register([
             "entitlement_state": entitlementStateName(state),
-            "credits_remaining_bucket": creditsRemainingBucket(state),
         ])
     }
 
-    /// Coarse monetization state. `pre_trial` distinguishes a never-verified
-    /// trial user (`.trial(creditsRemaining: nil)`) from one with a live balance.
+    /// Coarse monetization state.
     private static func entitlementStateName(_ state: EntitlementState) -> String {
         switch state {
-        case .trial(let creditsRemaining):
-            return creditsRemaining == nil ? "pre_trial" : "trial"
-        case .expired:
-            return "expired"
-        case .byokTrial:
-            return "byok_trial"
-        case .byokTrialExpired:
-            return "byok_trial_expired"
+        case .localTrial:
+            return "local_trial"
+        case .localTrialExpired:
+            return "local_trial_expired"
         case .byok:
             return "byok"
-        case .managed:
-            // Single managed tier (metered-credits Phase 6) — no starter/pro split.
-            return "managed"
-        }
-    }
-
-    /// Buckets the relevant credit balance so we can see "users near zero"
-    /// without ever emitting a high-cardinality, near-PII exact count. `n/a`
-    /// for the states with no meaningful balance (BYOK, expired, pre-trial).
-    private static func creditsRemainingBucket(_ state: EntitlementState) -> String {
-        let balance: Int
-        switch state {
-        case .trial(let creditsRemaining):
-            guard let creditsRemaining else { return "n/a" } // pre-trial
-            balance = creditsRemaining
-        case .managed(let creditsRemaining, _):
-            balance = creditsRemaining
-        case .byokTrial(let generationsRemaining):
-            balance = generationsRemaining
-        case .byok, .expired, .byokTrialExpired:
-            return "n/a"
-        }
-        switch balance {
-        case ..<1:    return "0"
-        case 1...10:  return "1-10"
-        case 11...50: return "11-50"
-        default:      return "50+"
         }
     }
 
