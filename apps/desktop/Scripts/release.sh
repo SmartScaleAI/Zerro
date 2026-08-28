@@ -12,9 +12,13 @@
 #   ./Scripts/release.sh <marketing_version> <build_number>
 #   ./Scripts/release.sh 1.0.2 3
 #
-#   <marketing_version>  human version, e.g. 1.0.2  -> MARKETING_VERSION
-#   <build_number>       integer Sparkle compares,  -> CURRENT_PROJECT_VERSION
+#   <marketing_version>  human version, exactly X.Y.Z (no prefix/suffix, no
+#                        missing component, no leading zeros) -> MARKETING_VERSION
+#   <build_number>       positive integer Sparkle compares (no 0, no sign, no
+#                        decimals, no leading zeros)          -> CURRENT_PROJECT_VERSION
 #                        MUST exceed the latest published build; see the GitHub Releases page or Scripts/README-release.md.
+#                        The checked-in apps/desktop/VERSION and apps/desktop/BUILD_NUMBER are what
+#                        CI ships; this script warns when its arguments differ from them.
 #
 # Prereqs (see Scripts/README-release.md for full setup):
 #   - Xcode + command line tools
@@ -88,14 +92,22 @@ trap 'die "Failed at line $LINENO. See output above."' ERR
 # ----------------------------------------------------------------------------
 # Argument parsing & validation
 # ----------------------------------------------------------------------------
-[[ $# -eq 2 ]] || die "Usage: $0 <marketing_version> <build_number>   e.g. $0 1.0.2 3"
+[[ $# -eq 2 ]] || die "Usage: $0 <marketing_version> <build_number>   e.g. $0 1.0.2 3   (exactly X.Y.Z; positive integer)"
 MARKETING_VERSION="$1"
 BUILD_NUMBER="$2"
 
-[[ "$MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-  || die "marketing_version '$MARKETING_VERSION' should look like 1.0.2"
-[[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] \
-  || die "build_number '$BUILD_NUMBER' must be a positive integer"
+# One rule set for every entry point (Scripts/release_metadata.py): the version
+# must be exactly X.Y.Z and the build a positive integer. Fails here, before any
+# preflight, file change, or build.
+python3 "$SCRIPT_DIR/release_metadata.py" validate --marketing "$MARKETING_VERSION" --build "$BUILD_NUMBER" \
+  || die "invalid arguments: marketing_version must be exactly X.Y.Z and build_number a positive integer (see Scripts/release_metadata.py)"
+# The checked-in metadata is authoritative for CI; flag a local build that
+# would report something different from what the release workflow ships.
+CHECKED_IN_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../VERSION" 2>/dev/null || true)"
+CHECKED_IN_BUILD="$(tr -d '[:space:]' < "$SCRIPT_DIR/../BUILD_NUMBER" 2>/dev/null || true)"
+if [[ "$MARKETING_VERSION" != "$CHECKED_IN_VERSION" || "$BUILD_NUMBER" != "$CHECKED_IN_BUILD" ]]; then
+  warn "arguments ($MARKETING_VERSION build $BUILD_NUMBER) differ from the checked-in apps/desktop/VERSION ($CHECKED_IN_VERSION) / BUILD_NUMBER ($CHECKED_IN_BUILD); CI releases use the files."
+fi
 
 # ----------------------------------------------------------------------------
 # Preflight checks (fail before doing slow work)

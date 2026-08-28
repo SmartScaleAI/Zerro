@@ -7,18 +7,20 @@ name: Release (macOS app — Staging)
 # ZerroStaging.dmg alias the feed never uses), and NEVER touches the website
 # or the production appcast.
 #
-# Trigger: push a staging version tag like staging-v1.0.7
-#   git tag staging-v1.0.7 && git push origin staging-v1.0.7
+# Trigger: push a plain staging tag that names the checked-in
+# apps/desktop/VERSION of the tagged commit:
+#   git tag staging-v1.0.0 && git push origin staging-v1.0.0
+# Every new staging release increments BOTH apps/desktop/VERSION and
+# apps/desktop/BUILD_NUMBER (staging-v1.0.0 / build 1000, then staging-v1.0.1 /
+# build 1001, then staging-v1.0.2 / build 1002, …): one visible version per
+# staging release, and a tag is never moved or reused.
 on:
   push:
     tags:
       - "staging-v*"
-  # Allow manually re-running for a given version from the Actions tab.
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Marketing version (e.g. 1.0.7). Used only for manual runs."
-        required: true
+  # Manual run from the Actions tab: allowed only from the staging branch;
+  # the version and build come from the checked-in files, never from inputs.
+  workflow_dispatch: {}
 
 # Default read-only. The one job below raises itself to contents: write —
 # the narrowest scope that lets it create the private staging PRERELEASE and
@@ -65,31 +67,58 @@ jobs:
         # together when upgrading.
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
-          fetch-depth: 0          # tags + full history for build-number derivation
+          fetch-depth: 0          # tags + full history for the tag-target checks
 
       # ----------------------------------------------------------------------
-      # Derive versions. Marketing version comes from the tag
-      # (staging-v1.0.2 -> 1.0.2). Build number = total commit count, which is
-      # monotonically increasing and therefore always greater than the last
-      # staging release (Sparkle requires this).
-      - name: Derive version + build number
+      # Release metadata comes from the checked-in files apps/desktop/VERSION
+      # (marketing version, exactly X.Y.Z) and apps/desktop/BUILD_NUMBER (the
+      # integer Sparkle compares), read and validated through
+      # Scripts/release_metadata.py. Nothing is derived from Git history, and
+      # the Xcode project must already carry the same values (drift check), so
+      # a local build reports exactly what CI ships.
+      #
+      # Every new staging release increments BOTH files (staging-v1.0.0 /
+      # build 1000, then staging-v1.0.1 / build 1001, …) and gets its own
+      # plain staging-v<X.Y.Z> tag; BUILD_NUMBER drives Sparkle
+      # (CURRENT_PROJECT_VERSION) and the immutable ZerroStaging-<build>.dmg.
+      #   • tag push:         the tag must be exactly staging-v<X.Y.Z>
+      #                       (build-qualified or otherwise decorated tags are
+      #                       rejected) and name EXACTLY the VERSION checked in
+      #                       at the tagged commit, or the run fails here,
+      #                       before any build.
+      #   • workflow_dispatch: allowed only from the staging branch; the tag
+      #                       is computed from VERSION and created at
+      #                       publication, pinned to this commit.
+      - name: Read release metadata (VERSION + BUILD_NUMBER)
         id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MARKETING="${{ github.event.inputs.version }}"
-          else
-            MARKETING="${GITHUB_REF_NAME#staging-v}"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/staging" ]; then
+            echo "::error::manual staging releases may only be dispatched from the staging branch (got $REF)."
+            exit 1
           fi
-          BUILD="$(git rev-list --count HEAD)"
+          python3 Scripts/release_metadata.py read > "$RUNNER_TEMP/metadata.txt"
+          MARKETING="$(sed -n 's/^marketing=//p' "$RUNNER_TEMP/metadata.txt")"
+          BUILD="$(sed -n 's/^build=//p' "$RUNNER_TEMP/metadata.txt")"
+          python3 Scripts/release_metadata.py check-project
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            RELEASE_TAG="$(python3 Scripts/release_metadata.py staging-tag)"
+          else
+            python3 Scripts/release_metadata.py parse-staging-tag "$REF_NAME" --require-match
+            RELEASE_TAG="$REF_NAME"
+          fi
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
-          # The staging-v<version> tag this run publishes under (the ref on a
-          # tag push; derived from the input on a manual run) and the
-          # immutable per-build archive name used on BOTH hosts: the GitHub
-          # prerelease asset and the Storage object the live feed references.
-          echo "RELEASE_TAG=staging-v$MARKETING" >> "$GITHUB_ENV"
+          # The tag this run publishes under and the immutable per-build
+          # archive name used on BOTH hosts: the GitHub prerelease asset and
+          # the Storage object the live feed references.
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "VERSIONED_DMG_NAME=ZerroStaging-$BUILD.dmg" >> "$GITHUB_ENV"
-          echo "Releasing Staging $MARKETING (build $BUILD)"
+          echo "Releasing Staging $MARKETING (build $BUILD) as $RELEASE_TAG"
 
       # ----------------------------------------------------------------------
       # Fail-closed tag-target check BEFORE the expensive build. A tag-push run
@@ -464,7 +493,7 @@ jobs:
           # mis-tagged staging-v1.4.45 — so the prerelease would name a commit
           # its assets were not built from.
           target_commitish: ${{ github.sha }}
-          name: Staging ${{ steps.ver.outputs.marketing }}
+          name: Staging ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true

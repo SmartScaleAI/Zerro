@@ -76,11 +76,13 @@ jobs:
       - name: Tag release if VERSION is new
         run: |
           set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < apps/desktop/VERSION)"
-          if [ -z "$VERSION" ]; then
-            echo "::error::apps/desktop/VERSION is empty."
-            exit 1
-          fi
+          # VERSION (exactly X.Y.Z) and BUILD_NUMBER (positive integer) are
+          # validated, and the Xcode project must carry the same values, before
+          # any tag is created — a release-app.yml run would otherwise fail
+          # after the tag exists.
+          python3 apps/desktop/Scripts/release_metadata.py read > "$RUNNER_TEMP/metadata.txt"
+          python3 apps/desktop/Scripts/release_metadata.py check-project
+          VERSION="$(sed -n 's/^marketing=//p' "$RUNNER_TEMP/metadata.txt")"
           TAG="app-v${VERSION}"
           echo "VERSION file -> $VERSION (tag $TAG)"
 

@@ -1,8 +1,10 @@
 # One-Time Setup — GitHub Actions Release Automation
 
-Do this once. Afterwards every release is an `apps/desktop/VERSION` bump in the
-staging → main promotion PR (`auto-release.yml` tags `app-v<version>` on merge
-and `release-app.yml` builds it) — or, as a manual fallback,
+Do this once. Afterwards every release is an `apps/desktop/VERSION` bump (with a
+matching `apps/desktop/BUILD_NUMBER` bump — the integer Sparkle compares, always
+above the newest published build — and the same values in the Xcode project) in
+the staging → main promotion PR (`auto-release.yml` tags `app-v<version>` on
+merge and `release-app.yml` builds it) — or, as a manual fallback,
 `git tag app-vX.Y.Z && git push origin app-vX.Y.Z`.
 
 Everything lives in **this** repository (`SmartScaleAI/Zerro`): the
@@ -167,9 +169,11 @@ Make sure these are on `main`:
 
 - `.github/workflows/release-app.yml`, `release-staging.yml`, `auto-release.yml`
 - `apps/desktop/Scripts/ExportOptions.plist`
-- `apps/desktop/Scripts/github_release_publish.py`, `appcast_github_feed.py`,
-  `appcast_publish_guard.py`, `publish_storage_release.py`,
-  `verify_release_tag.sh`, `verify_release_source.sh`
+- `apps/desktop/VERSION`, `apps/desktop/BUILD_NUMBER`
+- `apps/desktop/Scripts/release_metadata.py`, `github_release_publish.py`,
+  `appcast_github_feed.py`, `appcast_publish_guard.py`,
+  `publish_storage_release.py`, `verify_release_tag.sh`,
+  `verify_release_source.sh`
 
 The Sparkle CLI tools are downloaded (and checksum-verified) by the workflow at
 runtime — nothing to commit for that.

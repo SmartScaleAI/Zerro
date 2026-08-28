@@ -79,10 +79,21 @@ Scripts/sparkle/bin/generate_keys -x sparkle_private_key.txt
 ./Scripts/release.sh 1.0.2 3
 ```
 
-- `build_number` is what Sparkle compares (`CURRENT_PROJECT_VERSION`). It **must**
-  exceed the latest published build (see the newest `Zerro-<build>.dmg` on the
-  GitHub Releases page). The script refuses to go backwards.
-- `marketing_version` is the cosmetic string (`MARKETING_VERSION`).
+- `build_number` is what Sparkle compares (`CURRENT_PROJECT_VERSION`). It must be
+  a **positive integer** — digits only, no `0`, no sign, no decimals, no leading
+  zeros — and it **must** exceed the latest published build (see the newest
+  `Zerro-<build>.dmg` on the GitHub Releases page). The script refuses to go
+  backwards.
+- `marketing_version` is the cosmetic string (`MARKETING_VERSION`). It must be
+  **exactly `X.Y.Z`** — three dot-separated integers with no prefix (`v`), no
+  suffix (`-beta`), no missing component (`1.0`), and no leading zeros.
+- Both values are validated by `Scripts/release_metadata.py validate` before the
+  script touches anything; the same rules govern the checked-in files.
+- The checked-in `apps/desktop/VERSION` and `apps/desktop/BUILD_NUMBER` are
+  what the automated workflows ship (read through
+  `Scripts/release_metadata.py`, which also checks that the Xcode project
+  carries the same values). Pass the same numbers here; the script warns when
+  they differ.
 
 What the script does: preflight checks → version bump → archive → export
 Developer ID app → verify signature + hardened runtime → build dmg → notarize
