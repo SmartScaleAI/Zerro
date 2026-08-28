@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Generates THIRD_PARTY_NOTICES.md for the website from the production
-// dependency tree in package-lock.json. Uses only Node built-ins.
+// dependency tree in package-lock.json, plus the explicitly listed build
+// dependencies whose content is bundled into the deployed site. Uses only
+// Node built-ins.
 //
 //   node scripts/generate-third-party-notices.mjs          # write the file
 //   node scripts/generate-third-party-notices.mjs --check  # verify no drift
@@ -45,12 +47,29 @@ const canonicalTerms = (id) =>
     .filter((l) => l.trim() !== "Copyright (c) <year> <copyright holders>")
     .join("\n");
 
-// ---- collect production entries, deduped by name@version --------------------
+// ---- build dependencies whose content ships to users ------------------------
+// Packages declared under devDependencies are excluded from the inventory by
+// default: they run at build or development time and nothing of theirs is
+// delivered to website visitors. The packages named here are the exception —
+// they are build-time tools, but part of their content is compiled into the
+// deployed site, so their notices must be reproduced. Only the named package
+// itself is included; its transitive dependency tree stays excluded, because
+// that tree serves the tool (for example a CLI), not the shipped output.
+//
+//   - shadcn: app/globals.css imports `shadcn/tailwind.css`, which Tailwind
+//     compiles into the stylesheet served to users. The shadcn CLI and its
+//     dependencies never reach the deployed site.
+const BUNDLED_BUILD_DEPENDENCIES = new Set(["shadcn"]);
+
+// ---- collect entries, deduped by name@version -------------------------------
 const deps = new Map();
 for (const [path, entry] of Object.entries(lock.packages ?? {})) {
   if (!path.startsWith("node_modules/")) continue; // root project
-  if (entry.dev) continue; // development-only
   const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+  // Development-only, unless it is a top-level bundled build dependency.
+  const isBundledBuildDep =
+    BUNDLED_BUILD_DEPENDENCIES.has(name) && path === `node_modules/${name}`;
+  if (entry.dev && !isBundledBuildDep) continue;
   if (name === "@zerro/web") continue; // workspace self-link, first-party
   const key = `${name}@${entry.version ?? "?"}`;
   const installed = existsSync(join(webRoot, path));
@@ -144,9 +163,13 @@ lines.push("");
 lines.push("The Zerro website (`apps/web`) is built with the open-source packages");
 lines.push("listed below. Each remains subject to its own license, reproduced in");
 lines.push("the [License texts](#license-texts) section. This file is generated");
-lines.push("from the production dependency tree by");
-lines.push("`scripts/generate-third-party-notices.mjs`; regenerate it after");
-lines.push("dependency changes and verify with `npm run notices:check`.");
+lines.push("by `scripts/generate-third-party-notices.mjs` from the production");
+lines.push("dependency tree plus the explicitly identified build dependencies whose");
+lines.push("content is bundled into the deployed site (currently `shadcn`, whose");
+lines.push("`tailwind.css` is compiled into the shipped stylesheet; its command-line");
+lines.push("tooling and that tooling's dependencies are not part of the site).");
+lines.push("Regenerate it after dependency changes and verify with");
+lines.push("`npm run notices:check`.");
 lines.push("");
 lines.push("The Inter typeface, embedded in the built site, is licensed under the");
 lines.push("SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.");
