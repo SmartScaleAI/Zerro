@@ -82,7 +82,9 @@ FLAVORS = {
         name="staging",
         asset_re=re.compile(r"^ZerroStaging-(\d+)\.dmg$"),
         mutable_names=frozenset({"ZerroStaging.dmg", "Zerro.dmg"}),
-        tag_re=re.compile(r"^staging-v\d+\.\d+\.\d+$"),
+        # Plain staging-v<X.Y.Z> tags only (staging-v1.0.0, staging-v1.0.1, …):
+        # every staging release carries its own version and build number.
+        tag_re=re.compile(r"^staging-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$"),
     ),
 }
 

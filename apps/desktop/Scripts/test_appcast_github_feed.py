@@ -472,6 +472,49 @@ class StagingRuleTests(FeedFixture):
         self.assertEqual(code, 1)
         self.assertIn("does not match the staging versioned archive rule", err)
 
+    def test_plain_staging_tags_yield_a_single_item_feed_on_the_tag_asset(self) -> None:
+        # staging-v1.0.0 / build 1000 and the next release staging-v1.0.1 /
+        # build 1001, plus a historical staging-v1.4.48 / build 571.
+        for tag, build, short in (("staging-v1.0.0", 1000, "1.0.0"), ("staging-v1.0.1", 1001, "1.0.1"), ("staging-v1.4.48", 571, "1.4.48"),
+                                  ("staging-v0.0.1", 1, "0.0.1"), ("staging-v10.20.30", 102030, "10.20.30")):
+            with self.subTest(tag=tag):
+                url = gh_url(tag, f"ZerroStaging-{build}.dmg")
+                self.assertEqual(url, f"https://github.com/{REPO}/releases/download/{tag}/ZerroStaging-{build}.dmg")
+                feed_path = self.write(f"{tag}.xml", make_feed([
+                    {"build": build, "short": short, "url": url, "length": 8000 + build, "sig": "SIG=="},
+                ]))
+                assets = self.write(f"{tag}.json", releases_payload([(tag, f"ZerroStaging-{build}.dmg", 8000 + build)]))
+                code, out, err = self.run_cli(
+                    "verify", "--flavor", "staging", "--repo", REPO, "--current-build", str(build), "--current-tag", tag,
+                    "--feed", str(feed_path), "--assets", str(assets), "--expect-items", "1",
+                )
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"1 item(s), newest build {build}", out)
+        # A second (older) item in the fresh staging feed is rejected.
+        two = self.write("two.xml", make_feed([
+            {"build": 1000, "short": "1.0.0", "url": gh_url("staging-v1.0.0", "ZerroStaging-1000.dmg"), "length": 9000, "sig": "SIG=="},
+            {"build": 571, "short": "1.4.48", "url": gh_url("staging-v1.4.48", "ZerroStaging-571.dmg"), "length": 8571, "sig": "SIG=="},
+        ]))
+        code, _, err = self.run_cli(
+            "verify", "--flavor", "staging", "--repo", REPO, "--current-build", "1000", "--current-tag", "staging-v1.0.0",
+            "--feed", str(two), "--expect-items", "1",
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("expected exactly 1 item(s), found 2", err)
+
+    def test_build_qualified_and_malformed_staging_tags_are_rejected(self) -> None:
+        for tag in ("staging-v1.0.0-build.1000", "staging-v1.0.0-build.", "staging-v1.0.0-rc.1", "staging-1.0.0", "staging-v1.0",
+                    "staging-v01.0.0", "staging-v1.00.0", "staging-v1.0.00"):
+            with self.subTest(tag=tag):
+                feed_path = self.write("bad.xml", make_feed([
+                    {"build": 1000, "short": "1.0.0", "url": gh_url(tag, "ZerroStaging-1000.dmg"), "length": 9000, "sig": "SIG=="},
+                ]))
+                code, _, err = self.run_cli(
+                    "verify", "--flavor", "staging", "--repo", REPO, "--current-build", "1000", "--current-tag", tag, "--feed", str(feed_path),
+                )
+                self.assertEqual(code, 1)
+                self.assertIn("not a staging release tag", err)
+
     def test_production_flavor_rejects_staging_filenames(self) -> None:
         item = {"build": 600, "short": "1.4.36", "url": gh_url("app-v1.4.36", "ZerroStaging-600.dmg"), "length": 2000, "sig": "SIG=="}
         path = self.write("p.xml", make_feed([item]))

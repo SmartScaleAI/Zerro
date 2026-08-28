@@ -54,21 +54,38 @@ jobs:
         # together when upgrading.
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
-          fetch-depth: 0          # tags + full history for build-number derivation
+          fetch-depth: 0          # tags + full history for the tag-target checks and the Slack commit range
 
       # ----------------------------------------------------------------------
-      # Derive versions. Marketing version comes from the tag (v1.0.2 -> 1.0.2).
-      # Build number = total commit count, which is monotonically increasing and
-      # therefore always greater than the last release (Sparkle requires this).
-      - name: Derive version + build number
+      # Release metadata comes from the checked-in files apps/desktop/VERSION
+      # (marketing version, exactly X.Y.Z) and apps/desktop/BUILD_NUMBER (the
+      # integer Sparkle compares, bumped by hand and always above the newest
+      # published build), read and validated through
+      # Scripts/release_metadata.py. Nothing is derived from Git history, and
+      # the Xcode project must already carry the same values (drift check).
+      # The app-v<X.Y.Z> tag (or the manual-run version input) must name the
+      # checked-in VERSION of the released commit, or the run fails here.
+      - name: Read release metadata (VERSION + BUILD_NUMBER)
         id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MARKETING="${{ github.event.inputs.version }}"
-          else
-            MARKETING="${GITHUB_REF_NAME#app-v}"
+          set -euo pipefail
+          python3 Scripts/release_metadata.py read > "$RUNNER_TEMP/metadata.txt"
+          MARKETING="$(sed -n 's/^marketing=//p' "$RUNNER_TEMP/metadata.txt")"
+          BUILD="$(sed -n 's/^build=//p' "$RUNNER_TEMP/metadata.txt")"
+          python3 Scripts/release_metadata.py check-project
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_VERSION" != "$MARKETING" ]; then
+              echo "::error::manual run asked for version '$INPUT_VERSION' but apps/desktop/VERSION at this commit is $MARKETING — releases ship the checked-in metadata only."
+              exit 1
+            fi
+          elif [ "$REF_NAME" != "app-v$MARKETING" ]; then
+            echo "::error::tag $REF_NAME does not name the checked-in VERSION ($MARKETING) of the tagged commit — the release tag must be app-v$MARKETING."
+            exit 1
           fi
-          BUILD="$(git rev-list --count HEAD)"
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           # Permanent, versioned dmg filename. generate_appcast derives each

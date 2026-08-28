@@ -83,9 +83,13 @@ Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
 
 1. **Checkout** on a `macos-26` runner (Xcode 26.4.x, required for the
    macOS 26.4 deployment target and Sparkle 2.9.2).
-2. **Derive versions** — `app-v1.0.2` → marketing version `1.0.2`; build
-   number = commit count (always increasing, which Sparkle requires); dmg
-   name `Zerro-<build>.dmg`.
+2. **Read release metadata** — the marketing version is the checked-in
+   `apps/desktop/VERSION` (exactly `X.Y.Z`; the `app-v<X.Y.Z>` tag must name
+   it) and the build number is the checked-in `apps/desktop/BUILD_NUMBER` (a
+   positive integer bumped by hand, always above the newest published build,
+   which Sparkle requires). `Scripts/release_metadata.py` validates both and
+   fails the run if the Xcode project's `MARKETING_VERSION` /
+   `CURRENT_PROJECT_VERSION` differ; dmg name `Zerro-<build>.dmg`.
 3. **Preflight gates** — the release tag must resolve to the checked-out
    commit; the commit must be contained in `origin/main` (the production
    release branch) and its `.github/workflows` must be identical to GitHub's
@@ -152,13 +156,24 @@ Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
 
 ### Staging (`release-staging.yml`)
 
-`staging-v*` tags build the **Zerro Staging** configuration side by side with
-production. The workflow creates a GitHub **prerelease** (`make_latest: false`,
-so it never becomes the repository's "latest" release) with
-`ZerroStaging-<build>.dmg`, `ZerroStaging.dmg`, and `appcast-staging.xml`, then
-publishes the immutable dmg and feed to the staging Supabase project's Storage
-bucket, which is the staging app's feed. It never touches the website or the
-production feed.
+Plain `staging-v<X.Y.Z>` tags build the **Zerro Staging** configuration side
+by side with production. Every new staging release increments **both**
+`apps/desktop/VERSION` and `apps/desktop/BUILD_NUMBER` — `staging-v1.0.0` /
+build 1000, then `staging-v1.0.1` / build 1001, then `staging-v1.0.2` / build
+1002, … — so each staging release shows one visible version and gets its own
+tag; a tag is never moved or reused. The tag must name exactly the checked-in
+`VERSION` of the tagged commit (build-qualified or otherwise decorated tags are
+rejected), or the run fails before building; `BUILD_NUMBER` is validated and
+checked against the Xcode project the same way. A manual run (Actions tab) is
+allowed only from the `staging` branch and computes the tag from `VERSION`.
+The workflow creates a GitHub **prerelease** named `Staging <X.Y.Z> (build <N>)`
+(`make_latest: false`, so it never becomes the repository's "latest" release)
+with `ZerroStaging-<build>.dmg`, `ZerroStaging.dmg`, and a single-item
+`appcast-staging.xml` whose only enclosure is that immutable asset — for
+1.0.0 / build 1000, `releases/download/staging-v1.0.0/ZerroStaging-1000.dmg` —
+then publishes the immutable dmg and feed to the staging Supabase project's
+Storage bucket, which is the staging app's feed. It never touches the website
+or the production feed.
 
 ---
 
@@ -196,9 +211,10 @@ the tag) deliberately before re-cutting the same version.
 ## Notes specific to Zerro
 
 - **Build number must always increase.** Sparkle compares the integer build
-  number, not `1.0.2`. The workflow derives builds from commit count, which is
-  always higher and always increasing, and the feed check refuses a build that
-  is not the newest.
+  number, not `1.0.2`. The build number is the checked-in
+  `apps/desktop/BUILD_NUMBER`, bumped by hand in the change that ships it and
+  always above the newest published build for the channel; the feed check
+  refuses a build that is not the newest.
 - **Deployment target is macOS 26.4** — if a release fails at build time, the
   runner's Xcode may be too old; bump the runner image / Xcode selection in the
   workflow.
