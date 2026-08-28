@@ -136,7 +136,7 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | csstype | 3.2.3 | MIT |
 | detect-libc | 2.1.2 | Apache-2.0 |
 | detect-node-es | 1.1.0 | MIT |
-| dompurify | 3.4.10 | (MPL-2.0 OR Apache-2.0) |
+| dompurify | 3.4.13 | (MPL-2.0 OR Apache-2.0) |
 | fflate | 0.4.8 | MIT |
 | framer-motion | 12.40.0 | MIT |
 | get-nonce | 1.0.1 | MIT |
@@ -144,7 +144,7 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | motion | 12.40.0 | MIT |
 | motion-dom | 12.40.0 | MIT |
 | motion-utils | 12.39.0 | MIT |
-| nanoid | 3.3.12 | MIT |
+| nanoid | 3.3.18 | MIT |
 | next | 16.2.6 | MIT |
 | next-themes | 0.4.6 | MIT |
 | picocolors | 1.1.1 | ISC |
@@ -4724,7 +4724,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 28: dompurify@3.4.10
+### Text 28: dompurify@3.4.13
 
 ```text
 This package is distributed under "(MPL-2.0 OR Apache-2.0)". All license texts provided with the package are reproduced below.
@@ -5462,7 +5462,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 34: nanoid@3.3.12
+### Text 34: nanoid@3.3.18
 
 ```text
 The MIT License (MIT)
