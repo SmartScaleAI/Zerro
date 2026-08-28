@@ -130,18 +130,19 @@ needs no token beyond your normal push access.
 
 ---
 
-## Part 5 — Storage compatibility-mirror secrets → 2 secrets  *(in: Supabase dashboard)*
+## Part 5 — Storage compatibility-mirror secret → 1 secret  *(in: Supabase dashboard)*
 
-After the GitHub Release is published, the release workflows also mirror the
-dmg and feed to Supabase Storage for clients that read the Storage objects
-directly (see `RELEASE-AUTOMATION.md`). The uploads authenticate with each
-project's service-role key:
+After the production GitHub Release is published, `release-app.yml` also
+mirrors the dmg and feed to Supabase Storage for clients that read the Storage
+objects directly (see `RELEASE-AUTOMATION.md`). The upload authenticates with
+the production project's service-role key:
 
 - `SUPABASE_SERVICE_ROLE_KEY` → production project, used by `release-app.yml`
-- `STAGING_SERVICE_ROLE_KEY` → staging project, used by `release-staging.yml`
 
-Both come from the project's **Settings → API** page. They are full-access keys:
-never echo them, and rotate them if they are ever exposed.
+It comes from the project's **Settings → API** page. It is a full-access key:
+never echo it, and rotate it if it is ever exposed. Staging uses no Supabase
+project and needs no Storage secret: its update feed is the permanent
+`staging-channel` GitHub prerelease.
 
 ---
 
@@ -198,9 +199,10 @@ Required for a production release:
 - [ ] `RELEASE_PAT` (auto-release tagging)
 - [ ] `SUPABASE_SERVICE_ROLE_KEY` (Storage compatibility mirror)
 
-Staging releases additionally need:
-
-- [ ] `STAGING_SERVICE_ROLE_KEY`
+Staging releases need no additional secret. The permanent `staging-channel`
+prerelease is created once by a manual `Release (macOS app — Staging)` run
+from the `staging` branch with the `bootstrap_staging_channel` input set to
+true (off by default); every later staging release replaces its feed asset.
 
 Optional:
 

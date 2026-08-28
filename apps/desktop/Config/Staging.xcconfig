@@ -8,9 +8,14 @@
 // variable reference — it parses without starting a comment and expands to
 // nothing, so the resolved value is a normal `https://…` URL.
 //
-// SU_FEED_URL is provisional here — finalized in the staging release step.
+// SU_FEED_URL is the permanent GitHub staging update channel: the
+// `appcast-staging.xml` asset of the `staging-channel` prerelease, which the
+// staging release workflow replaces with each release's verified feed. The
+// feed's enclosure points at the immutable ZerroStaging-<build>.dmg on that
+// release's own staging-v<X.Y.Z> prerelease. Anonymous Sparkle checks against
+// this URL work only while the repository is public.
 
-SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml
+SU_FEED_URL = https:/$()/github.com/SmartScaleAI/Zerro/releases/download/staging-channel/appcast-staging.xml
 PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
 PRODUCT_NAME = Zerro Staging
 

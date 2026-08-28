@@ -1,11 +1,19 @@
 name: Release (macOS app — Staging)
 
 # Side-by-side "Zerro Staging" release. Adapted from release-app.yml (the prod
-# release) but pointed entirely at the STAGING channel: it builds the Staging
-# configuration, ships an immutable ZerroStaging-<build>.dmg + the feed that
-# references it to the staging Supabase project (plus a manual-download
-# ZerroStaging.dmg alias the feed never uses), and NEVER touches the website
-# or the production appcast.
+# release) but pointed entirely at the STAGING channel, which lives on GitHub:
+#   • each release gets its own versioned prerelease (staging-v<X.Y.Z>) that
+#     holds the immutable ZerroStaging-<build>.dmg, a byte-identical
+#     ZerroStaging.dmg manual-download copy, and that release's one-item
+#     appcast-staging.xml;
+#   • the permanent `staging-channel` prerelease ("Staging Update Channel")
+#     holds the mutable staging feed — its single appcast-staging.xml asset is
+#     what the staging app's SUFeedURL points at
+#     (https://github.com/<owner>/<repo>/releases/download/staging-channel/appcast-staging.xml)
+#     and is replaced, fail-closed, with each release's verified feed.
+# Staging uses no Supabase project. Nothing here touches the website or the
+# production appcast. Anonymous Sparkle checks against the channel URL work
+# only while the repository is public.
 #
 # Trigger: push a plain staging tag that names the checked-in
 # apps/desktop/VERSION of the tagged commit:
@@ -20,17 +28,26 @@ on:
       - "staging-v*"
   # Manual run from the Actions tab: allowed only from the staging branch;
   # the version and build come from the checked-in files, never from inputs.
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      # First-time only, off by default: create the permanent `staging-channel`
+      # prerelease when it does not exist yet. Without it, a missing channel
+      # fails the run closed. It never alters an existing channel.
+      bootstrap_staging_channel:
+        description: "Create the permanent staging-channel prerelease if it does not exist (first time only; leave false)"
+        type: boolean
+        required: false
+        default: false
 
 # Default read-only. The one job below raises itself to contents: write —
-# the narrowest scope that lets it create the private staging PRERELEASE and
-# attach its assets (dual-publish bridge). No appcast commit is ever pushed;
-# the live staging appcast still lives in Supabase Storage.
+# the narrowest scope that lets it create the versioned staging PRERELEASE,
+# attach its assets, and replace the staging-channel feed asset. No commit is
+# ever pushed.
 permissions:
   contents: read
 
-# Never run two staging releases at once: both would upsert the same dmg +
-# appcast object in the staging bucket.
+# Never run two staging releases at once: both would race the same
+# staging-channel feed asset.
 concurrency:
   group: release-staging
   cancel-in-progress: false
@@ -47,16 +64,17 @@ env:
   DMG_NAME: ZerroStaging.dmg          # dmg filename — NO spaces (task requirement)
   BUNDLE_ID: com.cbreeding.Zerro.staging
   TEAM_ID: H6NWCRRAHV
-  # Staging Supabase project. The downloads bucket is public; reads resolve at
-  # …/storage/v1/object/public/downloads/<name>.
-  STAGING_PROJECT_REF: waripvlpcpwdmacpjiqc
   SPARKLE_VERSION: "2.9.2"            # must match the app's pinned Sparkle
+  # The permanent staging update channel (see the header comment).
+  CHANNEL_TAG: staging-channel
+  CHANNEL_ASSET: appcast-staging.xml
 
 jobs:
   release:
     runs-on: macos-26      # default Xcode 26.4.x — required for the macOS 26.4 deployment target
-    # contents: write is needed ONLY to create the staging prerelease and
-    # upload its three assets; every other step here is read-only.
+    # contents: write is needed ONLY to create the versioned prerelease,
+    # upload its three assets, and replace the staging-channel feed asset;
+    # every other step here is read-only.
     permissions:
       contents: write
     steps:
@@ -114,8 +132,7 @@ jobs:
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           # The tag this run publishes under and the immutable per-build
-          # archive name used on BOTH hosts: the GitHub prerelease asset and
-          # the Storage object the live feed references.
+          # archive name of the versioned prerelease asset the feed references.
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "VERSIONED_DMG_NAME=ZerroStaging-$BUILD.dmg" >> "$GITHUB_ENV"
           echo "Releasing Staging $MARKETING (build $BUILD) as $RELEASE_TAG"
@@ -391,59 +408,17 @@ jobs:
           done
 
       # ----------------------------------------------------------------------
-      # Generate the signed STAGING appcast for the live Storage channel. The
-      # feed references an IMMUTABLE, build-specific Storage object
-      # (downloads/ZerroStaging-<build>.dmg) — never the mutable ZerroStaging.dmg
-      # alias — so a feed that is live keeps pointing at exactly the bytes it
-      # was signed against no matter where a later run fails. dist/storage
-      # holds only that one archive, so this is a single-item feed;
-      # generate_appcast computes its length + edSignature from the actual
-      # build. NOTHING is uploaded here — the live channel is only touched by
-      # the final publication block at the end of the job.
-      - name: Generate signed staging appcast
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          DL_PREFIX="https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/"
-          mkdir -p dist/storage
-          cp "dist/$DMG_NAME" "dist/storage/$VERSIONED_DMG_NAME"
-          cmp "dist/$DMG_NAME" "dist/storage/$VERSIONED_DMG_NAME" \
-            || { echo "::error::dist/storage/$VERSIONED_DMG_NAME is not byte-identical to $DMG_NAME"; exit 1; }
-
-          echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
-            --ed-key-file - \
-            --download-url-prefix "$DL_PREFIX" \
-            --link "https://getzerro.app/" \
-            -o "dist/storage/appcast-staging.xml" \
-            "dist/storage"
-
-          # Structural check of the generated feed BEFORE anything is
-          # published: exactly one item, this build + version, the IMMUTABLE
-          # versioned public URL, the dmg's real byte length, and a signature.
-          python3 Scripts/appcast_publish_guard.py check \
-            --feed dist/storage/appcast-staging.xml \
-            --expect-build "${{ steps.ver.outputs.build }}" \
-            --expect-version "${{ steps.ver.outputs.marketing }}" \
-            --expect-url "${DL_PREFIX}${VERSIONED_DMG_NAME}" \
-            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
-            --expect-items 1
-          echo "----- appcast-staging.xml (Storage) -----"
-          cat "dist/storage/appcast-staging.xml"
-
-      # ----------------------------------------------------------------------
-      # Dual-publish bridge (staging): a private GitHub PRERELEASE on the
-      # staging-v* tag carrying exactly three assets:
-      #   • ZerroStaging-<build>.dmg — the immutable staging archive
-      #   • ZerroStaging.dmg         — a byte-identical stable copy
-      #   • appcast-staging.xml      — a signed single-item feed whose only
-      #                                enclosure is the immutable asset
-      # The live staging path (Storage dmg + feed) is published LAST, after
-      # this prerelease is verified; the staging app's SUFeedURL is unchanged.
-      # `prerelease: true` +
-      # `make_latest: false` keep it from ever becoming the repository's
-      # "latest" release. The two copies live in separate directories so
-      # generate_appcast (which scans a directory) sees only the immutable one.
+      # The versioned GitHub PRERELEASE on the staging-v* tag carrying exactly
+      # three assets:
+      #   • ZerroStaging-<build>.dmg — the immutable staging archive (the
+      #                                only enclosure the feed references)
+      #   • ZerroStaging.dmg         — a byte-identical manual-download copy
+      #   • appcast-staging.xml      — this release's signed one-item feed
+      # The staging-channel feed is replaced LAST, after this prerelease and
+      # its assets are verified. `prerelease: true` + `make_latest: false`
+      # keep it from ever becoming the repository's "latest" release. The two
+      # copies live in separate directories so generate_appcast (which scans
+      # a directory) sees only the immutable one.
       - name: Stage GitHub prerelease assets
         run: |
           set -euo pipefail
@@ -525,11 +500,11 @@ jobs:
           Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
           echo "Release metadata target_commitish (informational): $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
 
-      # Authenticated verification (private repo): the release is a
-      # prerelease, carries exactly the three assets, both dmgs match the
-      # local notarized artifact byte-for-byte, and the uploaded feed
-      # references only ZerroStaging-<build>.dmg on this tag — never the
-      # stable alias, never Storage. Nothing secret is read or printed.
+      # Authenticated verification: the release is a prerelease, carries
+      # exactly the three assets, both dmgs match the local notarized
+      # artifact byte-for-byte, and the uploaded feed references only
+      # ZerroStaging-<build>.dmg on this tag — never the manual-download
+      # copy. Nothing secret is read or printed.
       - name: Verify GitHub prerelease assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -584,133 +559,93 @@ jobs:
           echo "GitHub prerelease $RELEASE_TAG verified: $VERSIONED_DMG_NAME and ZerroStaging.dmg are byte-identical to the notarized build; appcast-staging.xml references only the immutable asset."
 
       # ----------------------------------------------------------------------
-      # LIVE PUBLICATION — the only steps that touch staging Storage, and the
-      # last thing the job does. Everything above (archive, export, official
-      # marker, signing, notarization + stapling, both appcasts, the GitHub
-      # prerelease with its tag-target and asset verification) has already
-      # passed, so a failure anywhere before this block leaves the live
-      # staging download channel untouched.
+      # CHANNEL PUBLICATION — the only step that touches the permanent
+      # staging-channel prerelease, and the last mutation of the job.
+      # Everything above (archive, export, official marker, signing,
+      # notarization + stapling, the versioned prerelease with its tag-target
+      # and asset verification) has already passed, so a failure anywhere
+      # before this step leaves the live staging channel untouched.
       #
-      # Immediately before the first mutation a monotonic guard reads the LIVE
-      # feed (cache-busted so a CDN copy can't stand in for it): a newer build
-      # may publish; an equal build only when its version matches and the
-      # release tag resolves to this commit (a same-tag re-run); an older
-      # build, or a missing/unreadable/malformed live feed, fails closed —
-      # nothing is ever published over an unknown live state. (Even a run
-      # that passes the guard can only ADD an immutable versioned dmg before
-      # the feed is swapped; it can never change the bytes an older feed
-      # references.)
-      - name: Publication guard (live staging feed must not move backwards)
+      # Scripts/staging_channel_publish.py (fail-closed, transport-injectable):
+      #   • the channel must exist as a published prerelease named "Staging
+      #     Update Channel"; a missing channel is created ONLY on a manual
+      #     staging-branch run with bootstrap_staging_channel=true (first
+      #     time only); a draft or non-prerelease channel fails;
+      #   • the local feed must be this release's one-item feed whose
+      #     enclosure is the immutable archive on THIS versioned prerelease,
+      #     which must be published with that asset uploaded at the feed's
+      #     length;
+      #   • the live feed is downloaded and validated: a newer build may
+      #     publish; an equal build only as a proven same-tag/same-commit
+      #     re-run with identical bytes (the tag → commit binding was
+      #     re-proven by the post-release step above); an older build, a
+      #     malformed/missing live feed, or unexpected channel assets fail;
+      #   • the new feed is uploaded as a candidate, downloaded back,
+      #     required byte-identical and valid BEFORE the stable asset is
+      #     touched; the stable asset is renamed to a backup, the candidate
+      #     promoted, downloaded again and required byte-identical, and only
+      #     then is the backup deleted — any failure after the rename
+      #     restores the previous feed. The channel ends with exactly one
+      #     asset, appcast-staging.xml.
+      - name: Publish the verified feed to the staging channel
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          BOOTSTRAP_STAGING_CHANNEL: ${{ github.event.inputs.bootstrap_staging_channel }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/live"
-          LIVE_FEED="https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml"
-          if ! curl -fsS "${LIVE_FEED}?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-guard" -o "$RUNNER_TEMP/live/appcast-staging.xml"; then
-            echo "::error::could not read the live staging appcast — refusing to publish over an unknown live state"
-            exit 1
+          BOOT=()
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "${BOOTSTRAP_STAGING_CHANNEL:-false}" = "true" ]; then
+            echo "::warning::bootstrap_staging_channel=true — the permanent ${CHANNEL_TAG} prerelease will be created if it does not exist."
+            BOOT=(--bootstrap)
           fi
-          # Re-prove the tag → commit binding right here (it also ran after
-          # the release step); it is what licenses a same-build republish.
-          Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
-          python3 Scripts/appcast_publish_guard.py guard \
-            --live "$RUNNER_TEMP/live/appcast-staging.xml" \
-            --current-build "${{ steps.ver.outputs.build }}" \
-            --current-version "${{ steps.ver.outputs.marketing }}" \
-            --tag-matches-commit
+          python3 Scripts/staging_channel_publish.py --repo "$GITHUB_REPOSITORY" publish \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --build "${{ steps.ver.outputs.build }}" \
+            --version "${{ steps.ver.outputs.marketing }}" \
+            --feed "$RUNNER_TEMP/gh-verify/appcast-staging.xml" \
+            --download-dir "$RUNNER_TEMP/channel" \
+            --tag-matches-commit \
+            ${BOOT[@]+"${BOOT[@]}"}
 
-      # The live channel is written by Scripts/publish_storage_release.py in an
-      # order that can never leave the feed pointing at bytes that no longer
-      # match it:
-      #   1. the IMMUTABLE downloads/ZerroStaging-<build>.dmg — reused untouched
-      #      if it already exists with identical bytes (a same-build re-run),
-      #      refused if it exists with different bytes (cut a new build), or
-      #      uploaded WITHOUT upsert if missing — then read straight back and
-      #      required to match the local notarized dmg;
-      #   2. appcast-staging.xml (upsert, Cache-Control: no-cache), only after
-      #      step 1 verified, then read back and required to match;
-      #   3. the mutable downloads/ZerroStaging.dmg alias LAST — a manual
-      #      "latest staging build" download that Sparkle never reads, so its
-      #      state has no bearing on the feed's integrity.
-      # The guarantee: a failure BEFORE the appcast upload preserves the
-      # previously live feed and the archive it references (that pair only
-      # ever names an immutable object, so nothing this run did can change
-      # its bytes). Once the appcast upload has succeeded, the live feed is
-      # the NEW one and it references the immutable archive verified in
-      # step 1; a later alias failure does not affect Sparkle and does not
-      # invalidate the live update channel. Every failure path therefore
-      # leaves a valid feed/archive combination live — but not necessarily
-      # the previously live one. The script also refuses, before any write,
-      # a feed that does not reference the immutable object for this exact
-      # build.
-      #
-      # SECURITY (mirrors prod's L-01): STAGING_SERVICE_ROLE_KEY is full backend
-      # access (bypasses RLS) and is over-privileged for these upserts, but the
-      # bucket has no RLS write policy so service_role is currently the only
-      # write path. The key is a registered GitHub secret (auto-masked), read
-      # by the script from the environment, and never echoed — no `set -x`.
-      - name: Publish immutable dmg, appcast, then alias to staging Storage
+      # Independent read-back of the live channel: the stable asset must be
+      # the only asset, byte-identical to the locally verified feed, and pass
+      # both validators against this release's exact artifacts.
+      - name: Verify the staging channel feed
         env:
-          STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail   # NOTE: never add `set -x` here.
-          python3 Scripts/publish_storage_release.py \
-            --base "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1" \
-            --bucket downloads \
-            --token-env STAGING_SERVICE_ROLE_KEY \
-            --immutable-name "$VERSIONED_DMG_NAME" \
-            --dmg "dist/$DMG_NAME" \
-            --appcast-name appcast-staging.xml \
-            --appcast dist/storage/appcast-staging.xml \
-            --alias-name ZerroStaging.dmg \
-            --expect-build "${{ steps.ver.outputs.build }}" \
-            --expect-version "${{ steps.ver.outputs.marketing }}" \
-            --expect-items 1 \
-            --cache-buster "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-
-      # Independent read-back of the live objects (cache-busted, short retry
-      # for propagation): the immutable dmg and the alias must be
-      # byte-identical to the local notarized dmg, the feed to the generated
-      # Storage feed, and the live feed must advertise exactly this build,
-      # version, immutable URL, length, and signature.
-      - name: Verify live staging Storage
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          PUB="https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads"
-          OUT="$RUNNER_TEMP/live-verify"
+          OUT="$RUNNER_TEMP/channel-verify"
           rm -rf "$OUT" && mkdir -p "$OUT"
-          for attempt in 1 2 3 4 5 6; do
-            curl -fsS "$PUB/${VERSIONED_DMG_NAME}?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-v${attempt}" -o "$OUT/${VERSIONED_DMG_NAME}"
-            curl -fsS "$PUB/appcast-staging.xml?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-v${attempt}" -o "$OUT/appcast-staging.xml"
-            curl -fsS "$PUB/ZerroStaging.dmg?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-v${attempt}" -o "$OUT/ZerroStaging.dmg"
-            if cmp -s "$OUT/${VERSIONED_DMG_NAME}" "dist/${DMG_NAME}" && cmp -s "$OUT/appcast-staging.xml" dist/storage/appcast-staging.xml && cmp -s "$OUT/ZerroStaging.dmg" "dist/${DMG_NAME}"; then
-              echo "live objects match the built artifacts on attempt $attempt."
-              break
-            fi
-            if [ "$attempt" -eq 6 ]; then
-              cmp "$OUT/${VERSIONED_DMG_NAME}" "dist/${DMG_NAME}" || echo "::error::live ${VERSIONED_DMG_NAME} is not byte-identical to the notarized dmg"
-              cmp "$OUT/appcast-staging.xml" dist/storage/appcast-staging.xml || echo "::error::live appcast-staging.xml is not byte-identical to the generated feed"
-              cmp "$OUT/ZerroStaging.dmg" "dist/${DMG_NAME}" || echo "::error::live ZerroStaging.dmg alias is not byte-identical to the notarized dmg"
-              exit 1
-            fi
-            echo "attempt $attempt: live objects not settled yet; retrying in 10s…"
-            sleep 10
-          done
+          ASSETS="$(gh release view "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort | tr '\n' ' ')"
+          [ "$ASSETS" = "$CHANNEL_ASSET " ] \
+            || { echo "::error::${CHANNEL_TAG} must carry exactly [$CHANNEL_ASSET]; it has: $ASSETS"; exit 1; }
+          STATE="$(gh release view "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          [ "$STATE" = "false true" ] \
+            || { echo "::error::${CHANNEL_TAG} must be a published prerelease (draft prerelease = $STATE)"; exit 1; }
+          gh release download "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --dir "$OUT" --pattern "$CHANNEL_ASSET"
+          cmp "$OUT/$CHANNEL_ASSET" "$RUNNER_TEMP/gh-verify/appcast-staging.xml" \
+            || { echo "::error::the live ${CHANNEL_TAG} feed is not byte-identical to the verified feed"; exit 1; }
           python3 Scripts/appcast_publish_guard.py check \
-            --feed "$OUT/appcast-staging.xml" \
+            --feed "$OUT/$CHANNEL_ASSET" \
             --expect-build "${{ steps.ver.outputs.build }}" \
             --expect-version "${{ steps.ver.outputs.marketing }}" \
-            --expect-url "$PUB/${VERSIONED_DMG_NAME}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
             --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
             --expect-items 1
-          echo "Live staging Storage verified: ${VERSIONED_DMG_NAME}, appcast-staging.xml, and the ZerroStaging.dmg alias match the built artifacts."
+          python3 Scripts/appcast_github_feed.py verify \
+            --flavor staging \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --feed "$OUT/$CHANNEL_ASSET" \
+            --expect-items 1
+          echo "Staging channel verified: https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL_TAG}/${CHANNEL_ASSET} → ${VERSIONED_DMG_NAME} on ${RELEASE_TAG}."
 
       - name: Done
         run: |
           echo "Released Staging ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})."
-          echo "GitHub prerelease: ${{ env.RELEASE_TAG }} (${{ env.VERSIONED_DMG_NAME }}, ZerroStaging.dmg, appcast-staging.xml)"
-          echo "Live staging feed: https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml → ${VERSIONED_DMG_NAME} (immutable); ZerroStaging.dmg is the manual-download alias only."
-          echo "dmg:     https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/${DMG_NAME}"
-          echo "appcast: https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml"
+          echo "Versioned prerelease: ${{ env.RELEASE_TAG }} (${{ env.VERSIONED_DMG_NAME }}, ZerroStaging.dmg, appcast-staging.xml)"
+          echo "Staging channel feed: https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL_TAG}/${CHANNEL_ASSET} → ${VERSIONED_DMG_NAME} (immutable); ZerroStaging.dmg on the versioned prerelease is the manual-download copy only."

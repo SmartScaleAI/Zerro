@@ -18,7 +18,7 @@ sys.path.insert(0, str(HERE))
 import publish_storage_release as psr  # noqa: E402
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
-BASE = "https://waripvlpcpwdmacpjiqc.supabase.co/storage/v1"
+BASE = "https://storage.example.test/storage/v1"
 PUB = f"{BASE}/object/public/downloads/"
 
 
