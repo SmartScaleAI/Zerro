@@ -147,6 +147,13 @@ never echo them, and rotate them if they are ever exposed.
 
 ## Part 6 — Optional secrets and variables
 
+Manual-run input (Actions tab → Release (macOS app) → Run workflow):
+`bootstrap_storage_mirror` — off by default. Set it to true only for a genuine
+first-time Storage compatibility mirror with no `appcast.xml` published in the
+bucket; it allows a *missing* seed and nothing else. An existing mirror never
+needs it, and the run fails closed if the published Storage appcast cannot be
+read.
+
 The release succeeds without these; each step skips or degrades cleanly when
 its value is unset.
 
@@ -155,11 +162,6 @@ its value is unset.
   What's New notes there.
 - `POSTHOG_CLI_API_KEY` (secret) — lets the archive step's dSYM-upload build
   phase send symbol files to PostHog.
-- `APPCAST_ASSET_PINS` (repository **variable**, not a secret) — only needed
-  when the same `Zerro-<build>.dmg` is attached to two releases (a re-cut).
-  Space-separated `Zerro-<build>.dmg=app-v<version>` entries tell the
-  GitHub-hosted feed which release each ambiguous asset belongs to; the
-  workflow fails closed until the pin exists.
 
 ---
 
@@ -171,7 +173,7 @@ Make sure these are on `main`:
 - `apps/desktop/Scripts/ExportOptions.plist`
 - `apps/desktop/VERSION`, `apps/desktop/BUILD_NUMBER`
 - `apps/desktop/Scripts/release_metadata.py`, `github_release_publish.py`,
-  `appcast_github_feed.py`, `appcast_publish_guard.py`,
+  `appcast_release_line.py`, `appcast_github_feed.py`, `appcast_publish_guard.py`,
   `publish_storage_release.py`, `verify_release_tag.sh`,
   `verify_release_source.sh`
 
@@ -204,7 +206,6 @@ Optional:
 
 - [ ] `SLACK_RELEASE_WEBHOOK_URL`
 - [ ] `POSTHOG_CLI_API_KEY`
-- [ ] `APPCAST_ASSET_PINS` (variable; only for a re-cut build)
 
 ---
 
@@ -236,9 +237,12 @@ the failing step's log in the Actions tab. Common first-run issues:
   wrong.
 - **Tag does not target this commit** — the `app-v*` tag already exists at a
   different commit; delete and re-push it (below).
-- **Feed check failed** — the built build is not the newest in the cumulative
-  feed (the tag is on an old or duplicate commit), or a re-cut build needs an
-  `APPCAST_ASSET_PINS` entry.
+- **Feed check failed** — the generated feed does not advertise exactly this
+  build and version on its immutable GitHub asset URL with the dmg's byte
+  length and a signature; a later release could not load or validate the
+  previous release-line feed (the latest release's `appcast.xml`) or a
+  retained release's asset; or the Storage-mirror feed's newest build is not
+  this build (the tag is on an old or duplicate commit).
 
 Retry an unpublished version by re-running the workflow (it repairs the draft)
 or by deleting and re-pushing the tag:

@@ -23,9 +23,30 @@ carries exactly three assets:
 
 | Asset | Purpose |
 |---|---|
-| `Zerro-<build>.dmg` | The immutable archive. It is the only enclosure the Sparkle feed references, so every past release's recorded `edSignature`/`length` stays valid and old builds remain downloadable. |
+| `Zerro-<build>.dmg` | The immutable archive and the only enclosure the release's Sparkle feed references, so its recorded `edSignature`/`length` never change. |
 | `Zerro.dmg` | A byte-identical stable "download latest" copy. |
-| `appcast.xml` | The cumulative, signed Sparkle feed. Every release appends its `<item>` and preserves all prior ones; each enclosure is a tag-specific `https://github.com/SmartScaleAI/Zerro/releases/download/app-v<version>/Zerro-<build>.dmg` URL. |
+| `appcast.xml` | The signed release-line Sparkle feed: this release plus the newest release of every other major version in the line, each on its tag-specific `https://github.com/SmartScaleAI/Zerro/releases/download/app-v<version>/Zerro-<build>.dmg` URL — for 1.0.0 / build 1000, exactly one item on `…/app-v1.0.0/Zerro-1000.dmg`. |
+
+The GitHub release line begins at exactly **version 1.0.0, build 1000, tag
+`app-v1.0.0`** (the workflow passes both the start build and start version to
+the helper; build 1000 under another version or tag, or 1.0.0 under another
+build, fails closed). A release's feed
+carries **the newest release from each major version in the line**: a newer
+release replaces the older item of its own major, and the final release of an
+earlier major stays so that installs on that major keep being offered it (a
+license covers every release of one major; `UpdateMajorPolicy` offers only the
+installed major). Examples: 1.0.0 → `[1.0.0]`; 1.0.1 → `[1.0.1]`; the final
+1.x then 2.0.0 → `[final 1.x, 2.0.0]`; 2.0.1 → `[final 1.x, 2.0.1]`. The first
+release of the line composes from its own item alone; every later release
+composes from its own item plus the previous release-line feed (the latest
+release's `appcast.xml`, bound to that release's tag: the feed's newest item
+must be exactly that release) and fails closed if that feed is missing,
+invalid, or stale. Every retained prior-major item is verified against its own
+release when the feed is composed and again, from freshly fetched data, right
+before publication (published, not a prerelease, exactly one
+`Zerro-<build>.dmg` in state `uploaded`, size equal to the recorded length).
+Nothing before the line is ever read, so pre-line releases and tags are not
+needed and can be removed.
 
 The website (`apps/web`, deployed by Vercel) owns the two stable public URLs
 and redirects each to the matching asset on the latest release
@@ -42,10 +63,19 @@ installs it, `apps/web/lib/release-routes.test.ts` verifies it, and the CI
 `apps/web/public` or any routing change away from GitHub Releases.
 
 **Storage compatibility mirror.** After the GitHub Release is published, the
-workflow also upserts the same dmg and feed into the public Supabase Storage
-`downloads` bucket (`Zerro-<build>.dmg`, `Zerro.dmg`, `appcast.xml`) for
-clients that read the Storage objects directly. The mirror is guarded so its
-objects can never move backwards. It is not what the website routes to.
+workflow also upserts the dmgs and a Storage feed into the public Supabase
+Storage `downloads` bucket (`Zerro-<build>.dmg`, `Zerro.dmg`, `appcast.xml`)
+for clients that read the Storage objects directly. The mirror keeps its own
+cumulative, multi-item feed history, so the two feeds intentionally differ:
+GitHub starts fresh at 1.0.0 / build 1000 and then carries the newest release
+of each major; Storage carries its existing history plus each new item. The
+mirror is seeded only from its own published Storage appcast — never from the
+website or the GitHub feed — and the run fails closed before touching Storage
+if that appcast is missing, unreadable, empty, malformed, or not a Storage
+feed (`Scripts/storage_mirror_seed.py`). A genuine first-time mirror can start
+without a seed only through the explicit `bootstrap_storage_mirror` manual-run
+input, which is off by default. The mirror is guarded so its objects can never
+move backwards. It is not what the website routes to.
 
 ### Why one repo, and why the dmg lives on GitHub Releases
 
@@ -105,10 +135,10 @@ Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
    build, then **verify** the official marker, the version, the signature, and
    the hardened runtime.
 6. **Package** the dmg, **notarize** via `notarytool --wait`, and **staple**.
-7. **Generate the cumulative signed appcast** with `generate_appcast` and the
-   Sparkle private key, seeded from the currently published feed so every
-   prior item is preserved, and check it (versioned enclosure present, newest
-   build, no mutable URL).
+7. **Generate the Storage-mirror appcast** with `generate_appcast` and the
+   Sparkle private key, seeded from the currently published Storage feed so
+   its prior items are preserved, and check it (versioned enclosure present,
+   newest build, no mutable URL). This feed is only for the Storage mirror.
 8. **Prepare a draft GitHub Release** for the tag
    (`Scripts/github_release_publish.py prepare`). A published release for the
    tag fails the run (a re-cut is a deliberate manual act); a single existing
@@ -116,11 +146,18 @@ Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
    deleted); more than one draft is ambiguous and fails.
 9. **Upload `Zerro-<build>.dmg` and the byte-identical `Zerro.dmg`** to the
    draft (same-name assets are replaced, never duplicated).
-10. **Build and upload the GitHub-hosted `appcast.xml`** to the draft — the
-    same feed with every enclosure rewritten to its immutable release-asset
-    URL, validated by `Scripts/appcast_github_feed.py` (every historical item
-    must map to exactly one published release asset; the only draft counted
-    is this run's own; signatures and lengths are preserved verbatim).
+10. **Generate and upload the GitHub `appcast.xml`** to the draft. This
+    release's own signed item is generated from the immutable
+    `Zerro-<build>.dmg` alone (enclosure
+    `releases/download/app-v<version>/Zerro-<build>.dmg`) and validated by
+    `Scripts/appcast_publish_guard.py check` and
+    `Scripts/appcast_github_feed.py verify`. `Scripts/appcast_release_line.py`
+    then composes the release-line feed: for the first release, that item
+    alone; for later releases, that item plus the newest item of every other
+    major from the previous release-line feed, each retained item re-verified
+    against its own release (published, `Zerro-<build>.dmg` present, size
+    equal to the recorded length). Missing or invalid previous feeds fail
+    closed; no other feed, inventory, or pin is consulted.
 11. **Verify the draft** — exactly the three assets, each the local size and
     byte-identical after download, on a draft pinned to this commit; the
     downloaded feed re-passes every feed rule. A verification manifest is
@@ -222,9 +259,10 @@ the tag) deliberately before re-cutting the same version.
   Release; the workflow re-asserts it.
 - **Entitlements stay minimal** (currently audio input); extras can fail
   notarization.
-- **A build attached to two releases** (a re-cut) is resolved for the
-  GitHub-hosted feed only by the `APPCAST_ASSET_PINS` repository variable
-  (`Zerro-<build>.dmg=app-v<version> …`), reviewed by the owner.
+- **The release line is self-contained.** A release's feed references only
+  releases of the line (itself and the newest of each other major), so
+  pre-line releases and tags are not required by the release workflow and can
+  be removed independently.
 
 ---
 

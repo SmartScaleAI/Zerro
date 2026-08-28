@@ -6,7 +6,8 @@
  *
  *   - `Zerro-<build>.dmg` — the immutable archive the Sparkle feed references
  *   - `Zerro.dmg`         — a byte-identical stable "download latest" copy
- *   - `appcast.xml`       — the cumulative, signed Sparkle feed
+ *   - `appcast.xml`       — the signed Sparkle feed: this release plus the
+ *                            newest release of each other major version
  *
  * `releases/latest/download/<asset>` always resolves to the newest published,
  * non-prerelease, non-draft release, so the two stable getzerro.app URLs below
