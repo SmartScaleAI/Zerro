@@ -114,8 +114,8 @@ release. Nothing built here should be uploaded anywhere public: the CI feed
 references the release's immutable per-build GitHub URL, and a hand-published
 feed or a mutable enclosure would break that contract.
 
-1. **Test the update path** on the previously shipped build against a local or
-   staging host (Sparkle only needs the feed URL to serve `dist/appcast.xml`).
+1. **Test the update path** on the previously shipped build against a local
+   feed host (Sparkle only needs the feed URL to serve `dist/appcast.xml`).
 2. **Ship through CI** when satisfied: bump `apps/desktop/VERSION` in the
    staging → main promotion PR (or run `Scripts/cut-release.sh <version>` from
    `main`). The `app-v<version>` tag triggers the release workflow.

@@ -15,7 +15,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
-STORAGE = "https://waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/"
+STORAGE = "https://storage.example.test/storage/v1/object/public/downloads/"
 
 
 def feed(items: list[dict]) -> str:

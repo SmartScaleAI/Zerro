@@ -203,14 +203,36 @@ tag; a tag is never moved or reused. The tag must name exactly the checked-in
 rejected), or the run fails before building; `BUILD_NUMBER` is validated and
 checked against the Xcode project the same way. A manual run (Actions tab) is
 allowed only from the `staging` branch and computes the tag from `VERSION`.
-The workflow creates a GitHub **prerelease** named `Staging <X.Y.Z> (build <N>)`
-(`make_latest: false`, so it never becomes the repository's "latest" release)
-with `ZerroStaging-<build>.dmg`, `ZerroStaging.dmg`, and a single-item
-`appcast-staging.xml` whose only enclosure is that immutable asset — for
-1.0.0 / build 1000, `releases/download/staging-v1.0.0/ZerroStaging-1000.dmg` —
-then publishes the immutable dmg and feed to the staging Supabase project's
-Storage bucket, which is the staging app's feed. It never touches the website
-or the production feed.
+The workflow creates a versioned GitHub **prerelease** named
+`Staging <X.Y.Z> (build <N>)` (`make_latest: false`, so it never becomes the
+repository's "latest" release) with `ZerroStaging-<build>.dmg` (the immutable
+archive), `ZerroStaging.dmg` (a byte-identical manual-download copy), and a
+single-item `appcast-staging.xml` whose only enclosure is that immutable asset
+— for 1.0.0 / build 1000, `releases/download/staging-v1.0.0/ZerroStaging-1000.dmg`.
+
+The staging app's update feed is the permanent **`staging-channel`**
+prerelease ("Staging Update Channel"), whose single asset
+`appcast-staging.xml` is served at
+`https://github.com/SmartScaleAI/Zerro/releases/download/staging-channel/appcast-staging.xml`
+— the `SU_FEED_URL` in `Config/Staging.xcconfig`. After the versioned
+prerelease and its three assets verify, `Scripts/staging_channel_publish.py`
+replaces that asset with the release's verified feed, fail-closed: the channel
+must be a published prerelease; the live feed is validated first; a newer
+build may publish, an equal build only as a proven same-commit re-run with
+identical bytes, and the channel never moves backwards; the candidate is
+uploaded and verified before the stable asset is renamed aside and replaced,
+with the previous feed restored on any failure; the run ends with exactly one
+asset, downloaded again and re-validated. Staging uses no Supabase project.
+The permanent channel is created only once, by a manual staging-branch run
+with the `bootstrap_staging_channel` input set to true (off by default).
+Anonymous Sparkle checks against the channel URL work only while the
+repository is public. It never touches the website or the production feed.
+
+Operational note: the already-released staging 1.0.0 (build 1000) still
+points at the former Storage feed, which is no longer served, so it cannot
+update itself from GitHub. The first complete GitHub update test is
+1.0.1 → 1.0.2: install 1.0.1 (built with the channel URL), publish 1.0.2, and
+confirm the in-app update.
 
 ---
 
