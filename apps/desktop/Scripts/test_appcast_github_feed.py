@@ -6,17 +6,19 @@ Run from apps/desktop:  python3 -m unittest Scripts/test_appcast_github_feed.py 
 
 Every fixture is built in code so the rules are exercised against exactly the
 shapes generate_appcast emits (sparkle:version as an element, enclosure with
-url/length/type/sparkle:edSignature), plus deliberately broken variants.
+url/length/type/sparkle:edSignature), plus deliberately broken variants. The
+production feed is the current release plus the newest retained release from
+every other major version (see appcast_release_line.py); the line starts at
+app-v1.0.0 / build 1000, whose feed is that single release. Staging feeds are
+single-item. No release inventory or pin is ever consulted.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -49,7 +51,7 @@ def make_feed(items: list[dict], *, version_as_attribute: bool = False) -> str:
         else:
             version_el = f"<sparkle:version>{it['build']}</sparkle:version>"
         parts.append(
-            f"<item><title>{it['short']}</title><pubDate>Mon, 27 Jul 2026 05:06:55 +0000</pubDate>"
+            f"<item><title>{it['short']}</title><pubDate>Fri, 28 Aug 2026 00:00:00 +0000</pubDate>"
             f"<link>https://getzerro.app/</link>{version_el}"
             f"<sparkle:shortVersionString>{it['short']}</sparkle:shortVersionString>"
             f"<sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>"
@@ -59,30 +61,17 @@ def make_feed(items: list[dict], *, version_as_attribute: bool = False) -> str:
     return "".join(parts)
 
 
-def prod_item(build: int, short: str, *, url: str | None = None, length: int | None = None, sig: str | None = "SIG=="):
-    return {
-        "build": build,
-        "short": short,
-        "url": url if url is not None else f"{STORAGE}Zerro-{build}.dmg",
-        "length": 1000 + build if length is None else length,
-        "sig": sig,
-    }
-
-
 def gh_url(tag: str, name: str) -> str:
     return f"https://github.com/{REPO}/releases/download/{tag}/{name}"
 
 
-def releases_payload(entries: list[tuple[str, str, int | None]], drafts: list[tuple[str, str, int | None]] = ()) -> str:
-    """Raw GitHub releases API shape; entries are (tag, asset name, size)."""
-    by_tag: dict[str, dict] = {}
-    for tag, name, size in entries:
-        by_tag.setdefault(tag, {"tag_name": tag, "draft": False, "prerelease": False, "assets": []})
-        by_tag[tag]["assets"].append({"name": name, "size": size, "browser_download_url": gh_url(tag, name)})
-    for tag, name, size in drafts:
-        by_tag.setdefault(tag, {"tag_name": tag, "draft": True, "prerelease": False, "assets": []})
-        by_tag[tag]["assets"].append({"name": name, "size": size})
-    return json.dumps(list(by_tag.values()))
+PROD_URL_1000 = "https://github.com/SmartScaleAI/Zerro/releases/download/app-v1.0.0/Zerro-1000.dmg"
+DMG_LENGTH_1000 = 8009857
+
+
+def prod_item(build: int = 1000, short: str = "1.0.0", *, url: str | None = None, length: int | None = DMG_LENGTH_1000, sig: str | None = "SIG=="):
+    tag = f"app-v{short}"
+    return {"build": build, "short": short, "url": url if url is not None else gh_url(tag, f"Zerro-{build}.dmg"), "length": length, "sig": sig}
 
 
 class FeedFixture(unittest.TestCase):
@@ -104,401 +93,202 @@ class FeedFixture(unittest.TestCase):
         )
         return proc.returncode, proc.stdout, proc.stderr
 
-    # A three-item cumulative feed (two historical builds + the current one)
-    # with matching release assets, the shape a real production run sees.
-    def three_item_setup(self, *, version_as_attribute: bool = False):
-        items = [prod_item(530, "1.4.32"), prod_item(527, "1.4.31"), prod_item(521, "1.4.30")]
-        feed_path = self.write("dist/appcast.xml", make_feed(items, version_as_attribute=version_as_attribute))
-        assets = self.write(
-            "releases.json",
-            releases_payload([
-                ("app-v1.4.32", "Zerro-530.dmg", 1530),
-                ("app-v1.4.32", "Zerro.dmg", 1530),
-                ("app-v1.4.31", "Zerro-527.dmg", 1527),
-                ("app-v1.4.30", "Zerro-521.dmg", 1521),
-            ]),
+    def run_guard(self, *argv: str) -> tuple[int, str, str]:
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "appcast_publish_guard.py"), *argv],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        return feed_path, assets
+        return proc.returncode, proc.stdout, proc.stderr
 
-    def migrate_args(self, feed_path: Path, assets: Path, output: Path, *extra: str) -> list[str]:
-        return [
-            "migrate", "--flavor", "production", "--repo", REPO,
-            "--current-build", "530", "--current-tag", "app-v1.4.32",
-            "--input", str(feed_path), "--assets", str(assets), "--output", str(output), *extra,
-        ]
+    def verify(self, feed_path: Path, *extra: str, build: str = "1000", tag: str = "app-v1.0.0", flavor: str = "production") -> tuple[int, str, str]:
+        return self.run_cli(
+            "verify", "--flavor", flavor, "--repo", REPO, "--current-build", build, "--current-tag", tag,
+            "--feed", str(feed_path), *extra,
+        )
+
+    def guard(self, feed_path: Path, *, build: str = "1000", version: str = "1.0.0", url: str = PROD_URL_1000, length: str = str(DMG_LENGTH_1000)) -> tuple[int, str, str]:
+        return self.run_guard(
+            "check", "--feed", str(feed_path), "--expect-build", build, "--expect-version", version,
+            "--expect-url", url, "--expect-length", length, "--expect-items", "1",
+        )
 
 
-class MigrateTests(FeedFixture):
-    def test_rewrites_every_historical_item_to_its_immutable_release_url(self) -> None:
-        feed_path, assets = self.three_item_setup()
-        output = self.tmp / "github/appcast.xml"
-        code, out, err = self.run_cli(*self.migrate_args(feed_path, assets, output))
+class FreshProductionFeedTests(FeedFixture):
+    """The production GitHub feed for 1.0.0 / build 1000 — the first release of
+    the line — is exactly one item; later feeds add the newest retained
+    release from each other major (covered by test_appcast_release_line.py)."""
+
+    def test_single_item_1_0_0_feed_passes_both_validators(self) -> None:
+        feed_path = self.write("appcast.xml", make_feed([prod_item()]))
+        code, out, err = self.verify(feed_path, "--expect-items", "1")
         self.assertEqual(code, 0, err)
-        self.assertIn("3 item(s), newest build 530", out)
-        tree = ET.parse(output)
-        urls = [e.get("url") for e in tree.getroot().iter("enclosure")]
-        self.assertEqual(urls, [
-            gh_url("app-v1.4.32", "Zerro-530.dmg"),
-            gh_url("app-v1.4.31", "Zerro-527.dmg"),
-            gh_url("app-v1.4.30", "Zerro-521.dmg"),
-        ])
-        # Signatures, lengths, and every other element survive untouched.
-        for enclosure in tree.getroot().iter("enclosure"):
-            self.assertEqual(enclosure.get(f"{{{SPARKLE}}}edSignature"), "SIG==")
-            self.assertTrue(enclosure.get("length").isdigit())
-        self.assertEqual(len(tree.getroot().findall("./channel/item/pubDate")), 3)
-        text = output.read_text(encoding="utf-8")
-        self.assertNotIn("supabase", text)
-        self.assertIn('xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"', text)
-        self.assertTrue(text.startswith("<?xml"))
+        self.assertIn("1 item(s), newest build 1000", out)
+        self.assertIn("Zerro-1000.dmg", feed_path.read_text())
+        self.assertEqual(gh_url("app-v1.0.0", "Zerro-1000.dmg"), PROD_URL_1000)
+        code, out, err = self.guard(feed_path)
+        self.assertEqual(code, 0, err)
+
+    def test_the_next_release_is_also_a_single_item_feed(self) -> None:
+        feed_path = self.write("next.xml", make_feed([prod_item(1001, "1.0.1", length=8100000)]))
+        code, out, err = self.verify(feed_path, "--expect-items", "1", build="1001", tag="app-v1.0.1")
+        self.assertEqual(code, 0, err)
+        self.assertIn("newest build 1001", out)
+        code, _, err = self.guard(feed_path, build="1001", version="1.0.1", url=gh_url("app-v1.0.1", "Zerro-1001.dmg"), length="8100000")
+        self.assertEqual(code, 0, err)
 
     def test_accepts_sparkle_version_as_enclosure_attribute(self) -> None:
-        feed_path, assets = self.three_item_setup(version_as_attribute=True)
-        output = self.tmp / "github/appcast.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output))
+        feed_path = self.write("attr.xml", make_feed([prod_item()], version_as_attribute=True))
+        code, _, err = self.verify(feed_path, "--expect-items", "1")
         self.assertEqual(code, 0, err)
 
-    def test_current_release_must_be_inserted_and_map_to_the_current_tag(self) -> None:
-        items = [prod_item(527, "1.4.31"), prod_item(521, "1.4.30")]  # 530 missing
-        feed_path = self.write("dist/appcast.xml", make_feed(items))
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521),
-        ]))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o.xml"))
+    def test_no_inventory_pins_or_migration_are_accepted_or_needed(self) -> None:
+        # The tool has no migrate command and no inventory/pin options: a
+        # release feed is verified from its own contents alone.
+        feed_path = self.write("appcast.xml", make_feed([prod_item()]))
+        code, _, err = self.run_cli("migrate", "--flavor", "production", "--repo", REPO)
+        self.assertNotEqual(code, 0)
+        self.assertIn("invalid choice: 'migrate'", err)
+        for extra in (("--assets", "x.json"), ("--pin", "Zerro-242.dmg=app-v1.4.18"), ("--include-draft", "app-v1.0.0")):
+            with self.subTest(extra=extra):
+                code, _, err = self.verify(feed_path, *extra)
+                self.assertNotEqual(code, 0)
+                self.assertIn("unrecognized arguments", err)
+        self.assertFalse(hasattr(feed, "migrate"))
+        self.assertFalse(hasattr(feed, "load_assets"))
+        self.assertFalse(hasattr(feed, "parse_pins"))
+
+    def test_a_historical_item_in_the_fresh_feed_is_rejected(self) -> None:
+        two = self.write("two.xml", make_feed([prod_item(), prod_item(527, "1.4.31", length=8395405)]))
+        code, _, err = self.verify(two, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("no item for the current build 530", err)
-
-        # Present, but attached to a different tag than this run's.
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases2.json", releases_payload([
-            ("app-v1.4.99", "Zerro-530.dmg", 1530),
-            ("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521),
-        ]))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o2.xml"))
+        self.assertIn("expected exactly 1 item(s), found 2", err)
+        code, _, err = self.guard(two)
         self.assertEqual(code, 1)
-        self.assertIn("expected the current tag 'app-v1.4.32'", err)
 
-    def test_missing_historical_asset_fails_closed(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31", "Zerro-527.dmg", 1527),
-            ("app-v1.4.30", "Zerro.dmg", 1521),  # 1.4.30 only ever got the mutable asset
-        ]))
-        output = self.tmp / "o.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output))
-        self.assertEqual(code, 1)
-        self.assertIn("no non-draft GitHub Release carries the asset 'Zerro-521.dmg'", err)
-        self.assertFalse(output.exists(), "nothing may be written on failure")
-
-    def test_draft_release_assets_do_not_count(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload(
-            [("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31", "Zerro-527.dmg", 1527)],
-            drafts=[("app-v1.4.30", "Zerro-521.dmg", 1521)],
-        ))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o.xml"))
-        self.assertEqual(code, 1)
-        self.assertIn("Zerro-521.dmg", err)
-
-    def test_current_draft_counts_only_when_explicitly_included(self) -> None:
-        # Draft-first publication: this run's release is still a draft when
-        # the feed is built, so its assets are visible only through an
-        # explicit --include-draft naming exactly the current tag.
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload(
-            [("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521)],
-            drafts=[("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.32", "Zerro.dmg", 1530)],
-        ))
-        output = self.tmp / "o.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output))
-        self.assertEqual(code, 1)
-        self.assertIn("no non-draft GitHub Release carries the asset 'Zerro-530.dmg'", err)
-        self.assertFalse(output.exists())
-
-        code, out, err = self.run_cli(*self.migrate_args(feed_path, assets, output, "--include-draft", "app-v1.4.32"))
-        self.assertEqual(code, 0, err)
-        self.assertIn("3 item(s), newest build 530", out)
-        urls = [e.get("url") for e in ET.parse(output).getroot().iter("enclosure")]
-        self.assertEqual(urls[0], gh_url("app-v1.4.32", "Zerro-530.dmg"))
-
-        # Naming a different tag does not unlock the current draft.
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o2.xml", "--include-draft", "app-v1.4.99"))
-        self.assertEqual(code, 1)
-        self.assertIn("Zerro-530.dmg", err)
-
-    def test_other_drafts_stay_ignored_when_the_current_draft_is_included(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        # A historical build that only ever reached a draft, plus an abandoned
-        # unrelated draft carrying the same archive name as a published one.
-        assets = self.write("releases.json", releases_payload(
-            [("app-v1.4.31", "Zerro-527.dmg", 1527)],
-            drafts=[
-                ("app-v1.4.32", "Zerro-530.dmg", 1530),
-                ("app-v1.4.30", "Zerro-521.dmg", 1521),
-                ("app-v1.4.31-retry", "Zerro-527.dmg", 1527),
-            ],
-        ))
-        output = self.tmp / "o.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output, "--include-draft", "app-v1.4.32"))
-        self.assertEqual(code, 1)
-        self.assertIn("Zerro-521.dmg", err, "the historical draft is still invisible")
-        self.assertFalse(output.exists())
-
-        # With 1.4.30 published, the abandoned 1.4.31-retry draft must not turn
-        # Zerro-527.dmg into an ambiguous (two-release) asset.
-        assets = self.write("releases2.json", releases_payload(
-            [("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521)],
-            drafts=[("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31-retry", "Zerro-527.dmg", 1527)],
-        ))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output, "--include-draft", "app-v1.4.32"))
-        self.assertEqual(code, 0, err)
-        urls = [e.get("url") for e in ET.parse(output).getroot().iter("enclosure")]
-        self.assertEqual(urls[1], gh_url("app-v1.4.31", "Zerro-527.dmg"))
-
-    def test_two_drafts_for_the_current_tag_are_ambiguous(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        payload = json.loads(releases_payload(
-            [("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521)],
-        ))
-        for _ in range(2):  # two separate draft releases, same tag_name
-            payload.append({"tag_name": "app-v1.4.32", "draft": True, "prerelease": False,
-                            "assets": [{"name": "Zerro-530.dmg", "size": 1530}]})
-        assets = self.write("releases.json", json.dumps(payload))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o.xml", "--include-draft", "app-v1.4.32"))
-        self.assertEqual(code, 1)
-        self.assertIn("attached to 2 releases", err)
-
-    def test_duplicate_matching_asset_fails_unless_pinned(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31", "Zerro-527.dmg", 1527),
-            ("app-v1.4.30", "Zerro-521.dmg", 1521), ("app-v1.4.29", "Zerro-521.dmg", 1521),  # reused build
-        ]))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o.xml"))
-        self.assertEqual(code, 1)
-        self.assertIn("attached to 2 releases ['app-v1.4.29', 'app-v1.4.30']", err)
-
-        output = self.tmp / "pinned.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output, "--pin", "Zerro-521.dmg=app-v1.4.30"))
-        self.assertEqual(code, 0, err)
-        urls = [e.get("url") for e in ET.parse(output).getroot().iter("enclosure")]
-        self.assertIn(gh_url("app-v1.4.30", "Zerro-521.dmg"), urls)
-
-        # A pin naming a release that lacks the asset is rejected.
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o3.xml", "--pin", "Zerro-521.dmg=app-v1.4.28"))
-        self.assertEqual(code, 1)
-        self.assertIn("names a release that does not carry that asset", err)
-
-    def test_mutable_and_latest_urls_are_rejected(self) -> None:
-        feed_path, assets = self.three_item_setup()
-        # The stable alias as an enclosure.
-        items = [prod_item(530, "1.4.32", url=f"{STORAGE}Zerro.dmg"), prod_item(527, "1.4.31"), prod_item(521, "1.4.30")]
-        bad = self.write("mutable.xml", make_feed(items))
-        code, _, err = self.run_cli(*self.migrate_args(bad, assets, self.tmp / "o.xml"))
+    def test_mutable_alias_and_latest_urls_are_rejected(self) -> None:
+        alias = self.write("alias.xml", make_feed([prod_item(url=gh_url("app-v1.0.0", "Zerro.dmg"))]))
+        code, _, err = self.verify(alias, "--expect-items", "1")
         self.assertEqual(code, 1)
         self.assertIn("mutable stable alias", err)
-
-        # A /releases/latest/ URL in a feed under verification.
-        items = [prod_item(530, "1.4.32", url=f"https://github.com/{REPO}/releases/latest/download/Zerro-530.dmg")]
-        latest = self.write("latest.xml", make_feed(items))
-        code, _, err = self.run_cli("verify", "--flavor", "production", "--repo", REPO, "--current-build", "530", "--current-tag", "app-v1.4.32", "--feed", str(latest))
+        latest = self.write("latest.xml", make_feed([prod_item(url=f"https://github.com/{REPO}/releases/latest/download/Zerro-1000.dmg")]))
+        code, _, err = self.verify(latest, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("/releases/latest/", err)
+        self.assertIn("mutable /releases/latest/ URL", err)
 
-    def test_length_mismatch_with_release_asset_fails(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31", "Zerro-527.dmg", 9999), ("app-v1.4.30", "Zerro-521.dmg", 1521),
-        ]))
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, self.tmp / "o.xml"))
-        self.assertEqual(code, 1)
-        self.assertIn("is 9999 bytes but the feed's length is 1527", err)
-
-    def test_missing_signature_or_length_fails(self) -> None:
-        _, assets = self.three_item_setup()
-        no_sig = self.write("nosig.xml", make_feed([prod_item(530, "1.4.32", sig=None), prod_item(527, "1.4.31"), prod_item(521, "1.4.30")]))
-        code, _, err = self.run_cli(*self.migrate_args(no_sig, assets, self.tmp / "o.xml"))
+    def test_missing_signature_or_length_is_rejected(self) -> None:
+        no_sig = self.write("nosig.xml", make_feed([prod_item(sig=None)]))
+        code, _, err = self.verify(no_sig, "--expect-items", "1")
         self.assertEqual(code, 1)
         self.assertIn("no sparkle:edSignature", err)
-
-        no_len = self.write("nolen.xml", make_feed([prod_item(530, "1.4.32"), prod_item(527, "1.4.31", length=0), prod_item(521, "1.4.30")]))
-        code, _, err = self.run_cli(*self.migrate_args(no_len, assets, self.tmp / "o2.xml"))
+        no_len = self.write("nolen.xml", make_feed([prod_item(length=None)]))
+        code, _, err = self.verify(no_len, "--expect-items", "1")
         self.assertEqual(code, 1)
         self.assertIn("no positive integer length", err)
 
-    def test_malformed_xml_fails(self) -> None:
-        _, assets = self.three_item_setup()
-        broken = self.write("broken.xml", "<rss><channel><item><enclosure url='x'")
-        code, _, err = self.run_cli(*self.migrate_args(broken, assets, self.tmp / "o.xml"))
+    def test_incorrect_length_build_version_or_asset_name_is_rejected(self) -> None:
+        feed_path = self.write("appcast.xml", make_feed([prod_item()]))
+        code, _, err = self.guard(feed_path, length="1")
+        self.assertEqual(code, 1, "length must equal the released dmg's byte size")
+        code, _, err = self.guard(feed_path, build="999")
         self.assertEqual(code, 1)
-        self.assertIn("not well-formed XML", err)
-
-        empty = self.write("empty.xml", f'<rss xmlns:sparkle="{SPARKLE}"><channel><title>Zerro</title></channel></rss>')
-        code, _, err = self.run_cli(*self.migrate_args(empty, assets, self.tmp / "o2.xml"))
+        code, _, err = self.guard(feed_path, version="1.0.1")
         self.assertEqual(code, 1)
-        self.assertIn("no <item>", err)
-
-    def test_current_build_must_be_the_highest(self) -> None:
-        feed_path, _ = self.three_item_setup()
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521),
-        ]))
-        args = self.migrate_args(feed_path, assets, self.tmp / "o.xml")
-        args[args.index("--current-build") + 1] = "527"
-        args[args.index("--current-tag") + 1] = "app-v1.4.31"
-        code, _, err = self.run_cli(*args)
+        code, _, err = self.guard(feed_path, url=gh_url("app-v1.0.0", "Zerro-999.dmg"))
         self.assertEqual(code, 1)
-        self.assertIn("current build 527 is not the newest", err)
-
-    def test_duplicate_builds_and_urls_are_rejected(self) -> None:
-        _, assets = self.three_item_setup()
-        dup = self.write("dup.xml", make_feed([prod_item(530, "1.4.32"), prod_item(530, "1.4.32-again"), prod_item(521, "1.4.30")]))
-        code, _, err = self.run_cli(*self.migrate_args(dup, assets, self.tmp / "o.xml"))
+        # Wrong asset name for the item's build.
+        wrong_name = self.write("name.xml", make_feed([prod_item(url=gh_url("app-v1.0.0", "Zerro-999.dmg"))]))
+        code, _, err = self.verify(wrong_name, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("duplicate sparkle:version", err)
-
-    def test_filename_build_must_match_sparkle_version(self) -> None:
-        _, assets = self.three_item_setup()
-        wrong = self.write("wrong.xml", make_feed([prod_item(530, "1.4.32"), prod_item(527, "1.4.31", url=f"{STORAGE}Zerro-521.dmg")]))
-        code, _, err = self.run_cli(*self.migrate_args(wrong, assets, self.tmp / "o.xml"))
+        self.assertIn("carries build 999 but the item's sparkle:version is 1000", err)
+        # Wrong build for the run (feed says 1000, run says 1001).
+        code, _, err = self.verify(feed_path, "--expect-items", "1", build="1001", tag="app-v1.0.1")
         self.assertEqual(code, 1)
-        self.assertIn("carries build 521 but the item's sparkle:version is 527", err)
-
-    def test_non_https_enclosure_is_rejected(self) -> None:
-        _, assets = self.three_item_setup()
-        http = self.write("http.xml", make_feed([prod_item(530, "1.4.32", url="http://example.com/Zerro-530.dmg")]))
-        code, _, err = self.run_cli(*self.migrate_args(http, assets, self.tmp / "o.xml"))
+        self.assertIn("no item for the current build 1001", err)
+        # Right build, but published under a different tag than this run's.
+        code, _, err = self.verify(feed_path, "--expect-items", "1", tag="app-v1.0.1")
         self.assertEqual(code, 1)
-        self.assertIn("must be https", err)
-
-
-class VerifyTests(FeedFixture):
-    def github_feed(self, items: list[dict]) -> Path:
-        return self.write("github/appcast.xml", make_feed(items))
-
-    def verify_args(self, feed_path: Path, *extra: str) -> list[str]:
-        return ["verify", "--flavor", "production", "--repo", REPO, "--current-build", "530", "--current-tag", "app-v1.4.32", "--feed", str(feed_path), *extra]
-
-    def test_verifies_a_correct_github_feed_against_the_inventory(self) -> None:
-        feed_path = self.github_feed([
-            prod_item(530, "1.4.32", url=gh_url("app-v1.4.32", "Zerro-530.dmg")),
-            prod_item(527, "1.4.31", url=gh_url("app-v1.4.31", "Zerro-527.dmg")),
-        ])
-        assets = self.write("releases.json", releases_payload([
-            ("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.32", "Zerro.dmg", 1530), ("app-v1.4.32", "appcast.xml", 4),
-            ("app-v1.4.31", "Zerro-527.dmg", 1527),
-        ]))
-        code, out, err = self.run_cli(*self.verify_args(feed_path, "--assets", str(assets)))
-        self.assertEqual(code, 0, err)
-        self.assertIn("2 item(s), newest build 530", out)
-
-    def test_verify_resolves_the_current_draft_only_when_included(self) -> None:
-        feed_path, assets = self.three_item_setup()
-        output = self.tmp / "github/appcast.xml"
-        code, _, err = self.run_cli(*self.migrate_args(feed_path, assets, output))
-        self.assertEqual(code, 0, err)
-        draft_inventory = self.write("drafts.json", releases_payload(
-            [("app-v1.4.31", "Zerro-527.dmg", 1527), ("app-v1.4.30", "Zerro-521.dmg", 1521)],
-            drafts=[("app-v1.4.32", "Zerro-530.dmg", 1530), ("app-v1.4.32", "Zerro.dmg", 1530), ("app-v1.4.32", "appcast.xml", 4096)],
-        ))
-        base = ["verify", "--flavor", "production", "--repo", REPO, "--current-build", "530",
-                "--current-tag", "app-v1.4.32", "--feed", str(output), "--assets", str(draft_inventory)]
-        code, _, err = self.run_cli(*base)
+        self.assertIn("published under 'app-v1.0.0', expected 'app-v1.0.1'", err)
+        # Staging archive name in a production feed.
+        staging_name = self.write("stg.xml", make_feed([prod_item(url=gh_url("app-v1.0.0", "ZerroStaging-1000.dmg"))]))
+        code, _, err = self.verify(staging_name, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("does not resolve to exactly one existing non-draft release asset", err)
-        code, out, err = self.run_cli(*base, "--include-draft", "app-v1.4.32")
-        self.assertEqual(code, 0, err)
-        self.assertIn("3 item(s), newest build 530", out)
+        self.assertIn("does not match the production versioned archive rule", err)
 
-    def test_storage_url_left_in_github_feed_is_rejected(self) -> None:
-        feed_path = self.github_feed([
-            prod_item(530, "1.4.32", url=gh_url("app-v1.4.32", "Zerro-530.dmg")),
-            prod_item(527, "1.4.31"),  # still on Storage
-        ])
-        code, _, err = self.run_cli(*self.verify_args(feed_path))
+    def test_storage_foreign_repo_and_wrong_tag_shapes_are_rejected(self) -> None:
+        storage = self.write("storage.xml", make_feed([prod_item(url=f"{STORAGE}Zerro-1000.dmg")]))
+        code, _, err = self.verify(storage, "--expect-items", "1")
         self.assertEqual(code, 1)
         self.assertIn("still references 'supabase.co'", err)
-
-    def test_enclosure_must_resolve_to_an_existing_asset(self) -> None:
-        feed_path = self.github_feed([prod_item(530, "1.4.32", url=gh_url("app-v1.4.32", "Zerro-530.dmg"))])
-        assets = self.write("releases.json", releases_payload([("app-v1.4.32", "Zerro.dmg", 1530)]))
-        code, _, err = self.run_cli(*self.verify_args(feed_path, "--assets", str(assets)))
-        self.assertEqual(code, 1)
-        self.assertIn("does not resolve to exactly one existing non-draft release asset", err)
-
-    def test_foreign_repo_or_wrong_tag_shape_is_rejected(self) -> None:
-        other = self.github_feed([prod_item(530, "1.4.32", url="https://github.com/someone/else/releases/download/app-v1.4.32/Zerro-530.dmg")])
-        code, _, err = self.run_cli(*self.verify_args(other))
+        other = self.write("other.xml", make_feed([prod_item(url="https://github.com/someone/else/releases/download/app-v1.0.0/Zerro-1000.dmg")]))
+        code, _, err = self.verify(other, "--expect-items", "1")
         self.assertEqual(code, 1)
         self.assertIn("is not a release asset of", err)
-
-        staging_tag = self.github_feed([prod_item(530, "1.4.32", url=gh_url("staging-v1.4.32", "Zerro-530.dmg"))])
-        code, _, err = self.run_cli(*self.verify_args(staging_tag))
+        for tag in ("staging-v1.0.0", "app-v01.0.0", "app-v1.0", "v1.0.0", "app-v1.0.0-rc.1"):
+            with self.subTest(tag=tag):
+                bad = self.write("tag.xml", make_feed([prod_item(url=gh_url(tag, "Zerro-1000.dmg"))]))
+                code, _, err = self.verify(bad, "--expect-items", "1")
+                self.assertEqual(code, 1)
+                self.assertIn("not a production release tag", err)
+        http = self.write("http.xml", make_feed([prod_item(url="http://github.com/SmartScaleAI/Zerro/releases/download/app-v1.0.0/Zerro-1000.dmg")]))
+        code, _, err = self.verify(http, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("not a production release tag", err)
-
-    def test_expect_items_pins_the_item_count(self) -> None:
-        feed_path = self.github_feed([
-            prod_item(530, "1.4.32", url=gh_url("app-v1.4.32", "Zerro-530.dmg")),
-            prod_item(527, "1.4.31", url=gh_url("app-v1.4.31", "Zerro-527.dmg")),
-        ])
-        code, _, err = self.run_cli(*self.verify_args(feed_path, "--expect-items", "1"))
+        query = self.write("query.xml", make_feed([prod_item(url=PROD_URL_1000 + "?x=1")]))
+        code, _, err = self.verify(query, "--expect-items", "1")
         self.assertEqual(code, 1)
-        self.assertIn("expected exactly 1 item(s), found 2", err)
+
+    def test_malformed_xml_and_empty_feeds_are_rejected(self) -> None:
+        broken = self.write("broken.xml", "<rss><channel><item>")
+        code, _, err = self.verify(broken)
+        self.assertEqual(code, 1)
+        self.assertIn("not well-formed XML", err)
+        empty = self.write("empty.xml", make_feed([]))
+        code, _, err = self.verify(empty)
+        self.assertEqual(code, 1)
+        self.assertIn("has no <item>", err)
+
+    def test_duplicate_builds_and_urls_and_stale_newest_are_rejected(self) -> None:
+        dup = self.write("dup.xml", make_feed([prod_item(), prod_item()]))
+        code, _, err = self.verify(dup)
+        self.assertEqual(code, 1)
+        self.assertIn("duplicate sparkle:version", err)
+        stale = self.write("stale.xml", make_feed([prod_item(), prod_item(1001, "1.0.1")]))
+        code, _, err = self.verify(stale)
+        self.assertEqual(code, 1)
+        self.assertIn("is not the newest in the feed", err)
 
 
 class StagingRuleTests(FeedFixture):
-    def staging_item(self, build: int, name: str) -> dict:
-        return {"build": build, "short": "1.4.36", "url": gh_url("staging-v1.4.36", name), "length": 2000, "sig": "SIG=="}
-
-    def verify_args(self, feed_path: Path, *extra: str) -> list[str]:
-        return ["verify", "--flavor", "staging", "--repo", REPO, "--current-build", "600", "--current-tag", "staging-v1.4.36", "--feed", str(feed_path), "--expect-items", "1", *extra]
-
     def test_staging_feed_references_only_the_immutable_staging_archive(self) -> None:
-        good = self.write("good.xml", make_feed([self.staging_item(600, "ZerroStaging-600.dmg")]))
-        assets = self.write("releases.json", releases_payload([
-            ("staging-v1.4.36", "ZerroStaging-600.dmg", 2000), ("staging-v1.4.36", "ZerroStaging.dmg", 2000), ("staging-v1.4.36", "appcast-staging.xml", 3),
+        good = self.write("staging.xml", make_feed([
+            {"build": 1000, "short": "1.0.0", "url": gh_url("staging-v1.0.0", "ZerroStaging-1000.dmg"), "length": DMG_LENGTH_1000, "sig": "SIG=="},
         ]))
-        code, _, err = self.run_cli(*self.verify_args(good, "--assets", str(assets)))
+        code, out, err = self.verify(good, "--expect-items", "1", tag="staging-v1.0.0", flavor="staging")
         self.assertEqual(code, 0, err)
-
-        alias = self.write("alias.xml", make_feed([self.staging_item(600, "ZerroStaging.dmg")]))
-        code, _, err = self.run_cli(*self.verify_args(alias))
+        self.assertIn("1 item(s), newest build 1000", out)
+        alias = self.write("alias.xml", make_feed([
+            {"build": 1000, "short": "1.0.0", "url": gh_url("staging-v1.0.0", "ZerroStaging.dmg"), "length": DMG_LENGTH_1000, "sig": "SIG=="},
+        ]))
+        code, _, err = self.verify(alias, "--expect-items", "1", tag="staging-v1.0.0", flavor="staging")
         self.assertEqual(code, 1)
         self.assertIn("mutable stable alias", err)
 
-        prod_name = self.write("prodname.xml", make_feed([self.staging_item(600, "Zerro-600.dmg")]))
-        code, _, err = self.run_cli(*self.verify_args(prod_name))
-        self.assertEqual(code, 1)
-        self.assertIn("does not match the staging versioned archive rule", err)
-
     def test_plain_staging_tags_yield_a_single_item_feed_on_the_tag_asset(self) -> None:
-        # staging-v1.0.0 / build 1000 and the next release staging-v1.0.1 /
-        # build 1001, plus a historical staging-v1.4.48 / build 571.
         for tag, build, short in (("staging-v1.0.0", 1000, "1.0.0"), ("staging-v1.0.1", 1001, "1.0.1"), ("staging-v1.4.48", 571, "1.4.48"),
                                   ("staging-v0.0.1", 1, "0.0.1"), ("staging-v10.20.30", 102030, "10.20.30")):
             with self.subTest(tag=tag):
                 url = gh_url(tag, f"ZerroStaging-{build}.dmg")
                 self.assertEqual(url, f"https://github.com/{REPO}/releases/download/{tag}/ZerroStaging-{build}.dmg")
-                feed_path = self.write(f"{tag}.xml", make_feed([
-                    {"build": build, "short": short, "url": url, "length": 8000 + build, "sig": "SIG=="},
-                ]))
-                assets = self.write(f"{tag}.json", releases_payload([(tag, f"ZerroStaging-{build}.dmg", 8000 + build)]))
-                code, out, err = self.run_cli(
-                    "verify", "--flavor", "staging", "--repo", REPO, "--current-build", str(build), "--current-tag", tag,
-                    "--feed", str(feed_path), "--assets", str(assets), "--expect-items", "1",
-                )
+                feed_path = self.write(f"{tag}.xml", make_feed([{"build": build, "short": short, "url": url, "length": 8000 + build, "sig": "SIG=="}]))
+                code, out, err = self.verify(feed_path, "--expect-items", "1", build=str(build), tag=tag, flavor="staging")
                 self.assertEqual(code, 0, err)
                 self.assertIn(f"1 item(s), newest build {build}", out)
-        # A second (older) item in the fresh staging feed is rejected.
         two = self.write("two.xml", make_feed([
             {"build": 1000, "short": "1.0.0", "url": gh_url("staging-v1.0.0", "ZerroStaging-1000.dmg"), "length": 9000, "sig": "SIG=="},
             {"build": 571, "short": "1.4.48", "url": gh_url("staging-v1.4.48", "ZerroStaging-571.dmg"), "length": 8571, "sig": "SIG=="},
         ]))
-        code, _, err = self.run_cli(
-            "verify", "--flavor", "staging", "--repo", REPO, "--current-build", "1000", "--current-tag", "staging-v1.0.0",
-            "--feed", str(two), "--expect-items", "1",
-        )
+        code, _, err = self.verify(two, "--expect-items", "1", tag="staging-v1.0.0", flavor="staging")
         self.assertEqual(code, 1)
         self.assertIn("expected exactly 1 item(s), found 2", err)
 
@@ -509,34 +299,19 @@ class StagingRuleTests(FeedFixture):
                 feed_path = self.write("bad.xml", make_feed([
                     {"build": 1000, "short": "1.0.0", "url": gh_url(tag, "ZerroStaging-1000.dmg"), "length": 9000, "sig": "SIG=="},
                 ]))
-                code, _, err = self.run_cli(
-                    "verify", "--flavor", "staging", "--repo", REPO, "--current-build", "1000", "--current-tag", tag, "--feed", str(feed_path),
-                )
+                code, _, err = self.verify(feed_path, tag=tag, flavor="staging")
                 self.assertEqual(code, 1)
                 self.assertIn("not a staging release tag", err)
 
-    def test_production_flavor_rejects_staging_filenames(self) -> None:
-        item = {"build": 600, "short": "1.4.36", "url": gh_url("app-v1.4.36", "ZerroStaging-600.dmg"), "length": 2000, "sig": "SIG=="}
-        path = self.write("p.xml", make_feed([item]))
-        code, _, err = self.run_cli("verify", "--flavor", "production", "--repo", REPO, "--current-build", "600", "--current-tag", "app-v1.4.36", "--feed", str(path))
+    def test_production_flavor_rejects_staging_filenames_and_vice_versa(self) -> None:
+        feed_path = self.write("x.xml", make_feed([{"build": 1000, "short": "1.0.0", "url": gh_url("app-v1.0.0", "ZerroStaging-1000.dmg"), "length": 9000, "sig": "SIG=="}]))
+        code, _, err = self.verify(feed_path)
         self.assertEqual(code, 1)
         self.assertIn("does not match the production versioned archive rule", err)
-
-
-class InventoryTests(FeedFixture):
-    def test_reads_concatenated_paginated_payloads_and_flat_lists(self) -> None:
-        page1 = releases_payload([("app-v1.4.32", "Zerro-530.dmg", 1530)])
-        page2 = releases_payload([("app-v1.4.31", "Zerro-527.dmg", 1527)])
-        path = self.write("pages.json", page1 + "\n" + page2)
-        names = sorted(a.name for a in feed.load_assets(path))
-        self.assertEqual(names, ["Zerro-527.dmg", "Zerro-530.dmg"])
-
-        flat = self.write("flat.json", json.dumps([{"tag": "app-v1.4.30", "name": "Zerro-521.dmg", "size": 1}]))
-        self.assertEqual([a.tag for a in feed.load_assets(flat)], ["app-v1.4.30"])
-
-        bad = self.write("bad.json", "{not json")
-        with self.assertRaises(feed.FeedError):
-            feed.load_assets(bad)
+        feed_path = self.write("y.xml", make_feed([{"build": 1000, "short": "1.0.0", "url": gh_url("staging-v1.0.0", "Zerro-1000.dmg"), "length": 9000, "sig": "SIG=="}]))
+        code, _, err = self.verify(feed_path, tag="staging-v1.0.0", flavor="staging")
+        self.assertEqual(code, 1)
+        self.assertIn("does not match the staging versioned archive rule", err)
 
 
 if __name__ == "__main__":

@@ -470,8 +470,18 @@ jobs:
             --link "https://getzerro.app/" \
             -o "dist/github/appcast-staging.xml" \
             "dist/github"
-          # Structural gate before anything is uploaded: one item, immutable
-          # staging archive name, tag-specific GitHub URL, signature + length.
+          # Exact-artifact gate before anything is uploaded: exactly one item
+          # carrying this build and marketing version, the tag-specific
+          # ZerroStaging-<build>.dmg URL, the local dmg's byte length, and a
+          # signature; then the structural rules (immutable staging archive
+          # name, GitHub URL shape, no mutable alias).
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed dist/github/appcast-staging.xml \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
+            --expect-items 1
           python3 Scripts/appcast_github_feed.py verify \
             --flavor staging \
             --repo "$GITHUB_REPOSITORY" \
@@ -552,14 +562,24 @@ jobs:
           done
           cmp "$VERIFY/appcast-staging.xml" dist/github/appcast-staging.xml \
             || { echo "::error::downloaded appcast-staging.xml differs from the generated GitHub feed"; exit 1; }
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$VERIFY/releases.json"
+          # The asset set was just verified above (exact three assets,
+          # byte-identical dmgs); the downloaded feed is re-checked against
+          # the exact artifacts: one item, this build and version, the
+          # tag-specific ZerroStaging-<build>.dmg URL, the local dmg's byte
+          # length, a signature — then the structural rules.
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed "$VERIFY/appcast-staging.xml" \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
+            --expect-items 1
           python3 Scripts/appcast_github_feed.py verify \
             --flavor staging \
             --repo "$GITHUB_REPOSITORY" \
             --current-build "${{ steps.ver.outputs.build }}" \
             --current-tag "$RELEASE_TAG" \
             --feed "$VERIFY/appcast-staging.xml" \
-            --assets "$VERIFY/releases.json" \
             --expect-items 1
           echo "GitHub prerelease $RELEASE_TAG verified: $VERSIONED_DMG_NAME and ZerroStaging.dmg are byte-identical to the notarized build; appcast-staging.xml references only the immutable asset."
 

@@ -107,11 +107,12 @@ Artifacts land in `dist/` (gitignored): `dist/Zerro.dmg` and `dist/appcast.xml`.
 The local artifacts are for **testing the signing and update chain only**. The
 official artifacts are the assets of the GitHub Release that
 `.github/workflows/release-app.yml` creates (`Zerro-<build>.dmg`, `Zerro.dmg`,
-and the cumulative signed `appcast.xml`); `https://getzerro.app/Zerro.dmg` and
-`https://getzerro.app/appcast.xml` redirect to those assets on the latest
-release. Nothing built here should be uploaded anywhere public: the CI feed is
-cumulative and references immutable per-build URLs, and a hand-published
-single-item feed or a mutable enclosure would break that contract.
+and the signed release-line `appcast.xml` — this release plus the newest
+release of each other major); `https://getzerro.app/Zerro.dmg`
+and `https://getzerro.app/appcast.xml` redirect to those assets on the latest
+release. Nothing built here should be uploaded anywhere public: the CI feed
+references the release's immutable per-build GitHub URL, and a hand-published
+feed or a mutable enclosure would break that contract.
 
 1. **Test the update path** on the previously shipped build against a local or
    staging host (Sparkle only needs the feed URL to serve `dist/appcast.xml`).
