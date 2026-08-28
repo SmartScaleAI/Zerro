@@ -14,52 +14,54 @@ Regenerate it after dependency changes and verify with
 The Inter typeface, embedded in the built site, is licensed under the
 SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 
-## Package inventory (154 packages)
+## Package inventory (156 packages)
 
 | Package | Version | License |
 |---|---|---|
 | @babel/runtime | 7.29.7 | MIT |
 | @base-ui/react | 1.5.0 | MIT |
 | @base-ui/utils | 0.2.9 | MIT |
-| @emnapi/runtime | 1.10.0 | MIT |
+| @emnapi/runtime | 1.11.3 | MIT |
 | @floating-ui/core | 1.7.5 | MIT |
 | @floating-ui/dom | 1.7.6 | MIT |
 | @floating-ui/react-dom | 2.1.8 | MIT |
 | @floating-ui/utils | 0.2.11 | MIT |
 | @img/colour | 1.1.0 | MIT |
-| @img/sharp-darwin-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-darwin-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-libvips-darwin-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-darwin-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-arm | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-ppc64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-riscv64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-s390x | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linuxmusl-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linuxmusl-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-linux-arm | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-ppc64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-riscv64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-s390x | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linuxmusl-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linuxmusl-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-wasm32 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later AND MIT |
-| @img/sharp-win32-arm64 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
-| @img/sharp-win32-ia32 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
-| @img/sharp-win32-x64 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
-| @next/env | 16.2.6 | MIT |
-| @next/swc-darwin-arm64 | 16.2.6 | MIT |
-| @next/swc-darwin-x64 | 16.2.6 | MIT |
-| @next/swc-linux-arm64-gnu | 16.2.6 | MIT |
-| @next/swc-linux-arm64-musl | 16.2.6 | MIT |
-| @next/swc-linux-x64-gnu | 16.2.6 | MIT |
-| @next/swc-linux-x64-musl | 16.2.6 | MIT |
-| @next/swc-win32-arm64-msvc | 16.2.6 | MIT |
-| @next/swc-win32-x64-msvc | 16.2.6 | MIT |
+| @img/sharp-darwin-arm64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-darwin-x64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-freebsd-wasm32 | 0.35.4 | Apache-2.0 |
+| @img/sharp-libvips-darwin-arm64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-darwin-x64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-ppc64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-riscv64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-s390x | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-x64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-arm64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-x64 | 1.3.3 | LGPL-3.0-or-later |
+| @img/sharp-linux-arm | 0.35.4 | Apache-2.0 |
+| @img/sharp-linux-arm64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-linux-ppc64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-linux-riscv64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-linux-s390x | 0.35.4 | Apache-2.0 |
+| @img/sharp-linux-x64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-linuxmusl-arm64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-linuxmusl-x64 | 0.35.4 | Apache-2.0 |
+| @img/sharp-wasm32 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later AND MIT |
+| @img/sharp-webcontainers-wasm32 | 0.35.4 | Apache-2.0 |
+| @img/sharp-win32-arm64 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-ia32 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-x64 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later |
+| @next/env | 16.3.3 | MIT |
+| @next/swc-darwin-arm64 | 16.3.3 | MIT |
+| @next/swc-darwin-x64 | 16.3.3 | MIT |
+| @next/swc-linux-arm64-gnu | 16.3.3 | MIT |
+| @next/swc-linux-arm64-musl | 16.3.3 | MIT |
+| @next/swc-linux-x64-gnu | 16.3.3 | MIT |
+| @next/swc-linux-x64-musl | 16.3.3 | MIT |
+| @next/swc-win32-arm64-msvc | 16.3.3 | MIT |
+| @next/swc-win32-x64-msvc | 16.3.3 | MIT |
 | @posthog/core | 1.32.5 | MIT |
 | @posthog/types | 1.386.4 | MIT |
 | @radix-ui/number | 1.1.1 | MIT |
@@ -122,7 +124,7 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | @radix-ui/react-use-size | 1.1.1 | MIT |
 | @radix-ui/react-visually-hidden | 1.2.3 | MIT |
 | @radix-ui/rect | 1.1.1 | MIT |
-| @swc/helpers | 0.5.15 | Apache-2.0 |
+| @swc/helpers | 0.5.23 | Apache-2.0 |
 | @types/react | 19.2.15 | MIT |
 | @types/react-dom | 19.2.3 | MIT |
 | @types/trusted-types | 2.0.7 | MIT |
@@ -145,10 +147,10 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | motion-dom | 12.40.0 | MIT |
 | motion-utils | 12.39.0 | MIT |
 | nanoid | 3.3.18 | MIT |
-| next | 16.2.6 | MIT |
+| next | 16.3.3 | MIT |
 | next-themes | 0.4.6 | MIT |
 | picocolors | 1.1.1 | ISC |
-| postcss | 8.4.31 | MIT |
+| postcss | 8.5.23 | MIT |
 | posthog-js | 1.386.8 | SEE LICENSE IN LICENSE |
 | preact | 10.29.2 | MIT |
 | query-selector-shadow-dom | 1.0.1 | MIT |
@@ -160,9 +162,9 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | react-style-singleton | 2.2.3 | MIT |
 | reselect | 5.2.0 | MIT |
 | scheduler | 0.27.0 | MIT |
-| semver | 7.8.1 | ISC |
+| semver | 7.8.5 | ISC |
 | shadcn | 4.8.2 | MIT |
-| sharp | 0.34.5 | Apache-2.0 |
+| sharp | 0.35.4 | Apache-2.0 |
 | source-map-js | 1.2.1 | BSD-3-Clause |
 | styled-jsx | 5.1.6 | MIT |
 | tailwind-merge | 3.6.0 | MIT |
@@ -228,10 +230,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 3: @emnapi/runtime@1.10.0
+### Text 3: @emnapi/runtime@1.11.3
 
 ```text
---- emnapi-1.10.0-LICENSE.txt ---
+--- emnapi-1.11.3-LICENSE.txt ---
 
 MIT License
 
@@ -255,7 +257,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Source: https://raw.githubusercontent.com/toyobayashi/emnapi/v1.10.0/LICENSE
+Source: https://raw.githubusercontent.com/toyobayashi/emnapi/v1.11.3/LICENSE
 ```
 
 ### Text 4: @floating-ui/core@1.7.5, @floating-ui/dom@1.7.6, @floating-ui/react-dom@2.1.8, @floating-ui/utils@0.2.11
@@ -370,7 +372,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 6: @img/sharp-darwin-arm64@0.34.5, sharp@0.34.5
+### Text 6: @img/sharp-darwin-arm64@0.35.4, sharp@0.35.4
 
 ```text
 Apache License
@@ -566,10 +568,10 @@ third-party archives.
    limitations under the License.
 ```
 
-### Text 7: @img/sharp-darwin-x64@0.34.5, @img/sharp-linux-arm@0.34.5, @img/sharp-linux-arm64@0.34.5, @img/sharp-linux-ppc64@0.34.5, @img/sharp-linux-riscv64@0.34.5, @img/sharp-linux-s390x@0.34.5, @img/sharp-linux-x64@0.34.5, @img/sharp-linuxmusl-arm64@0.34.5, @img/sharp-linuxmusl-x64@0.34.5
+### Text 7: @img/sharp-darwin-x64@0.35.4, @img/sharp-linux-arm@0.35.4, @img/sharp-linux-arm64@0.35.4, @img/sharp-linux-ppc64@0.35.4, @img/sharp-linux-riscv64@0.35.4, @img/sharp-linux-s390x@0.35.4, @img/sharp-linux-x64@0.35.4, @img/sharp-linuxmusl-arm64@0.35.4, @img/sharp-linuxmusl-x64@0.35.4
 
 ```text
---- sharp-0.34.5-LICENSE.txt ---
+--- sharp-0.35.4-LICENSE.txt ---
 
 Apache License
 Version 2.0, January 2004
@@ -763,15 +765,217 @@ third-party archives.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-Source: https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE
+Source: https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE
 ```
 
-### Text 8: @img/sharp-libvips-darwin-arm64@1.2.4, @img/sharp-libvips-darwin-x64@1.2.4, @img/sharp-libvips-linux-arm@1.2.4, @img/sharp-libvips-linux-arm64@1.2.4, @img/sharp-libvips-linux-ppc64@1.2.4, @img/sharp-libvips-linux-riscv64@1.2.4, @img/sharp-libvips-linux-s390x@1.2.4, @img/sharp-libvips-linux-x64@1.2.4, @img/sharp-libvips-linuxmusl-arm64@1.2.4, @img/sharp-libvips-linuxmusl-x64@1.2.4
+### Text 8: @img/sharp-freebsd-wasm32@0.35.4, @img/sharp-webcontainers-wasm32@0.35.4
+
+```text
+Thin platform wrapper that loads @img/sharp-wasm32 (whose sharp, sharp-libvips and emnapi notices are reproduced under its own entry); sharp's Apache-2.0 license applies.
+
+--- sharp-0.35.4-LICENSE.txt ---
+
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+"License" shall mean the terms and conditions for use, reproduction, and
+distribution as defined by Sections 1 through 9 of this document.
+
+"Licensor" shall mean the copyright owner or entity authorized by the copyright
+owner that is granting the License.
+
+"Legal Entity" shall mean the union of the acting entity and all other entities
+that control, are controlled by, or are under common control with that entity.
+For the purposes of this definition, "control" means (i) the power, direct or
+indirect, to cause the direction or management of such entity, whether by
+contract or otherwise, or (ii) ownership of fifty percent (50%) or more of the
+outstanding shares, or (iii) beneficial ownership of such entity.
+
+"You" (or "Your") shall mean an individual or Legal Entity exercising
+permissions granted by this License.
+
+"Source" form shall mean the preferred form for making modifications, including
+but not limited to software source code, documentation source, and configuration
+files.
+
+"Object" form shall mean any form resulting from mechanical transformation or
+translation of a Source form, including but not limited to compiled object code,
+generated documentation, and conversions to other media types.
+
+"Work" shall mean the work of authorship, whether in Source or Object form, made
+available under the License, as indicated by a copyright notice that is included
+in or attached to the work (an example is provided in the Appendix below).
+
+"Derivative Works" shall mean any work, whether in Source or Object form, that
+is based on (or derived from) the Work and for which the editorial revisions,
+annotations, elaborations, or other modifications represent, as a whole, an
+original work of authorship. For the purposes of this License, Derivative Works
+shall not include works that remain separable from, or merely link (or bind by
+name) to the interfaces of, the Work and Derivative Works thereof.
+
+"Contribution" shall mean any work of authorship, including the original version
+of the Work and any modifications or additions to that Work or Derivative Works
+thereof, that is intentionally submitted to Licensor for inclusion in the Work
+by the copyright owner or by an individual or Legal Entity authorized to submit
+on behalf of the copyright owner. For the purposes of this definition,
+"submitted" means any form of electronic, verbal, or written communication sent
+to the Licensor or its representatives, including but not limited to
+communication on electronic mailing lists, source code control systems, and
+issue tracking systems that are managed by, or on behalf of, the Licensor for
+the purpose of discussing and improving the Work, but excluding communication
+that is conspicuously marked or otherwise designated in writing by the copyright
+owner as "Not a Contribution."
+
+"Contributor" shall mean Licensor and any individual or Legal Entity on behalf
+of whom a Contribution has been received by Licensor and subsequently
+incorporated within the Work.
+
+2. Grant of Copyright License.
+
+Subject to the terms and conditions of this License, each Contributor hereby
+grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
+irrevocable copyright license to reproduce, prepare Derivative Works of,
+publicly display, publicly perform, sublicense, and distribute the Work and such
+Derivative Works in Source or Object form.
+
+3. Grant of Patent License.
+
+Subject to the terms and conditions of this License, each Contributor hereby
+grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
+irrevocable (except as stated in this section) patent license to make, have
+made, use, offer to sell, sell, import, and otherwise transfer the Work, where
+such license applies only to those patent claims licensable by such Contributor
+that are necessarily infringed by their Contribution(s) alone or by combination
+of their Contribution(s) with the Work to which such Contribution(s) was
+submitted. If You institute patent litigation against any entity (including a
+cross-claim or counterclaim in a lawsuit) alleging that the Work or a
+Contribution incorporated within the Work constitutes direct or contributory
+patent infringement, then any patent licenses granted to You under this License
+for that Work shall terminate as of the date such litigation is filed.
+
+4. Redistribution.
+
+You may reproduce and distribute copies of the Work or Derivative Works thereof
+in any medium, with or without modifications, and in Source or Object form,
+provided that You meet the following conditions:
+
+You must give any other recipients of the Work or Derivative Works a copy of
+this License; and
+You must cause any modified files to carry prominent notices stating that You
+changed the files; and
+You must retain, in the Source form of any Derivative Works that You distribute,
+all copyright, patent, trademark, and attribution notices from the Source form
+of the Work, excluding those notices that do not pertain to any part of the
+Derivative Works; and
+If the Work includes a "NOTICE" text file as part of its distribution, then any
+Derivative Works that You distribute must include a readable copy of the
+attribution notices contained within such NOTICE file, excluding those notices
+that do not pertain to any part of the Derivative Works, in at least one of the
+following places: within a NOTICE text file distributed as part of the
+Derivative Works; within the Source form or documentation, if provided along
+with the Derivative Works; or, within a display generated by the Derivative
+Works, if and wherever such third-party notices normally appear. The contents of
+the NOTICE file are for informational purposes only and do not modify the
+License. You may add Your own attribution notices within Derivative Works that
+You distribute, alongside or as an addendum to the NOTICE text from the Work,
+provided that such additional attribution notices cannot be construed as
+modifying the License.
+You may add Your own copyright statement to Your modifications and may provide
+additional or different license terms and conditions for use, reproduction, or
+distribution of Your modifications, or for any such Derivative Works as a whole,
+provided Your use, reproduction, and distribution of the Work otherwise complies
+with the conditions stated in this License.
+
+5. Submission of Contributions.
+
+Unless You explicitly state otherwise, any Contribution intentionally submitted
+for inclusion in the Work by You to the Licensor shall be under the terms and
+conditions of this License, without any additional terms or conditions.
+Notwithstanding the above, nothing herein shall supersede or modify the terms of
+any separate license agreement you may have executed with Licensor regarding
+such Contributions.
+
+6. Trademarks.
+
+This License does not grant permission to use the trade names, trademarks,
+service marks, or product names of the Licensor, except as required for
+reasonable and customary use in describing the origin of the Work and
+reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty.
+
+Unless required by applicable law or agreed to in writing, Licensor provides the
+Work (and each Contributor provides its Contributions) on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied,
+including, without limitation, any warranties or conditions of TITLE,
+NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE. You are
+solely responsible for determining the appropriateness of using or
+redistributing the Work and assume any risks associated with Your exercise of
+permissions under this License.
+
+8. Limitation of Liability.
+
+In no event and under no legal theory, whether in tort (including negligence),
+contract, or otherwise, unless required by applicable law (such as deliberate
+and grossly negligent acts) or agreed to in writing, shall any Contributor be
+liable to You for damages, including any direct, indirect, special, incidental,
+or consequential damages of any character arising as a result of this License or
+out of the use or inability to use the Work (including but not limited to
+damages for loss of goodwill, work stoppage, computer failure or malfunction, or
+any and all other commercial damages or losses), even if such Contributor has
+been advised of the possibility of such damages.
+
+9. Accepting Warranty or Additional Liability.
+
+While redistributing the Work or Derivative Works thereof, You may choose to
+offer, and charge a fee for, acceptance of support, warranty, indemnity, or
+other liability obligations and/or rights consistent with this License. However,
+in accepting such obligations, You may act only on Your own behalf and on Your
+sole responsibility, not on behalf of any other Contributor, and only if You
+agree to indemnify, defend, and hold each Contributor harmless for any liability
+incurred by, or claims asserted against, such Contributor by reason of your
+accepting any such warranty or additional liability.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work
+
+To apply the Apache License to your work, attach the following boilerplate
+notice, with the fields enclosed by brackets "[]" replaced with your own
+identifying information. (Don't include the brackets!) The text should be
+enclosed in the appropriate comment syntax for the file format. We also
+recommend that a file or class name and description of purpose be included on
+the same "printed page" as the copyright notice for easier identification within
+third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+Source: https://github.com/lovell/sharp/tree/v0.35.4
+```
+
+### Text 9: @img/sharp-libvips-darwin-arm64@1.3.3, @img/sharp-libvips-darwin-x64@1.3.3, @img/sharp-libvips-linux-arm@1.3.3, @img/sharp-libvips-linux-arm64@1.3.3, @img/sharp-libvips-linux-ppc64@1.3.3, @img/sharp-libvips-linux-riscv64@1.3.3, @img/sharp-libvips-linux-s390x@1.3.3, @img/sharp-libvips-linux-x64@1.3.3, @img/sharp-libvips-linuxmusl-arm64@1.3.3, @img/sharp-libvips-linuxmusl-x64@1.3.3
 
 ```text
 Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.
 
---- sharp-libvips-1.2.4-LICENSE.txt ---
+--- sharp-libvips-1.3.3-LICENSE.txt ---
 
 Apache License
                            Version 2.0, January 2004
@@ -975,44 +1179,44 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
---- sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md ---
+--- sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md ---
 
 # Third-party notices
 
 This software contains third-party libraries
-used under the terms of the following licences:
+used under the terms of the following licenses:
 
 | Library       | Used under the terms of                                                                                   |
 |---------------|-----------------------------------------------------------------------------------------------------------|
 | aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
 | cairo         | Mozilla Public License 2.0                                                                                |
-| cgif          | MIT Licence                                                                                               |
-| expat         | MIT Licence                                                                                               |
-| fontconfig    | [fontconfig Licence](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
-| freetype      | [freetype Licence](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
+| cgif          | MIT License                                                                                               |
+| expat         | MIT License                                                                                               |
+| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
+| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
 | fribidi       | LGPLv3                                                                                                    |
 | glib          | LGPLv3                                                                                                    |
-| harfbuzz      | MIT Licence                                                                                               |
-| highway       | Apache-2.0 License, BSD 3-Clause                                                                          |
-| lcms          | MIT Licence                                                                                               |
+| harfbuzz      | MIT License                                                                                               |
+| highway       | BSD 3-Clause                                                                                              |
+| lcms          | MIT License                                                                                               |
 | libarchive    | BSD 2-Clause                                                                                              |
 | libexif       | LGPLv3                                                                                                    |
-| libffi        | MIT Licence                                                                                               |
+| libffi        | MIT License                                                                                               |
 | libheif       | LGPLv3                                                                                                    |
 | libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |
-| libnsgif      | MIT Licence                                                                                               |
+| libnsgif      | MIT License                                                                                               |
 | libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |
 | librsvg       | LGPLv3                                                                                                    |
-| libspng       | [BSD 2-Clause, libpng License](https://github.com/randy408/libspng/blob/master/LICENSE)                   |
 | libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |
+| libultrahdr   | MIT License                                                                                               |
 | libvips       | LGPLv3                                                                                                    |
 | libwebp       | New BSD License                                                                                           |
-| libxml2       | MIT Licence                                                                                               |
-| mozjpeg       | [zlib License, IJG License, BSD-3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
+| libxml2       | MIT License                                                                                               |
+| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
 | pango         | LGPLv3                                                                                                    |
-| pixman        | MIT Licence                                                                                               |
+| pixman        | MIT License                                                                                               |
 | proxy-libintl | LGPLv3                                                                                                    |
-| zlib-ng       | [zlib Licence](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
+| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
 
 Use of libraries under the terms of the LGPLv3 is via the
 "any later version" clause of the LGPLv2 or LGPLv2.1.
@@ -1327,15 +1531,15 @@ You should also get your employer (if you work as a programmer) or school, if an
 
 The GNU General Public License does not permit incorporating your program into proprietary programs. If your program is a subroutine library, you may consider it more useful to permit linking proprietary applications with the library. If this is what you want to do, use the GNU Lesser General Public License instead of this License. But first, please read <http://www.gnu.org/philosophy/why-not-lgpl.html>.
 
-Source: https://github.com/lovell/sharp-libvips/tree/v1.2.4
+Source: https://github.com/lovell/sharp-libvips/tree/v1.3.3
 ```
 
-### Text 9: @img/sharp-wasm32@0.34.5
+### Text 10: @img/sharp-wasm32@0.35.4
 
 ```text
 Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply. The wasm build additionally includes @emnapi runtime code under the MIT license (Toyo Li); the emnapi license is reproduced below.
 
---- sharp-0.34.5-LICENSE.txt ---
+--- sharp-0.35.4-LICENSE.txt ---
 
 Apache License
 Version 2.0, January 2004
@@ -1529,7 +1733,7 @@ third-party archives.
    See the License for the specific language governing permissions and
    limitations under the License.
 
---- sharp-libvips-1.2.4-LICENSE.txt ---
+--- sharp-libvips-1.3.3-LICENSE.txt ---
 
 Apache License
                            Version 2.0, January 2004
@@ -1733,44 +1937,44 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
---- sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md ---
+--- sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md ---
 
 # Third-party notices
 
 This software contains third-party libraries
-used under the terms of the following licences:
+used under the terms of the following licenses:
 
 | Library       | Used under the terms of                                                                                   |
 |---------------|-----------------------------------------------------------------------------------------------------------|
 | aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
 | cairo         | Mozilla Public License 2.0                                                                                |
-| cgif          | MIT Licence                                                                                               |
-| expat         | MIT Licence                                                                                               |
-| fontconfig    | [fontconfig Licence](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
-| freetype      | [freetype Licence](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
+| cgif          | MIT License                                                                                               |
+| expat         | MIT License                                                                                               |
+| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
+| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
 | fribidi       | LGPLv3                                                                                                    |
 | glib          | LGPLv3                                                                                                    |
-| harfbuzz      | MIT Licence                                                                                               |
-| highway       | Apache-2.0 License, BSD 3-Clause                                                                          |
-| lcms          | MIT Licence                                                                                               |
+| harfbuzz      | MIT License                                                                                               |
+| highway       | BSD 3-Clause                                                                                              |
+| lcms          | MIT License                                                                                               |
 | libarchive    | BSD 2-Clause                                                                                              |
 | libexif       | LGPLv3                                                                                                    |
-| libffi        | MIT Licence                                                                                               |
+| libffi        | MIT License                                                                                               |
 | libheif       | LGPLv3                                                                                                    |
 | libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |
-| libnsgif      | MIT Licence                                                                                               |
+| libnsgif      | MIT License                                                                                               |
 | libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |
 | librsvg       | LGPLv3                                                                                                    |
-| libspng       | [BSD 2-Clause, libpng License](https://github.com/randy408/libspng/blob/master/LICENSE)                   |
 | libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |
+| libultrahdr   | MIT License                                                                                               |
 | libvips       | LGPLv3                                                                                                    |
 | libwebp       | New BSD License                                                                                           |
-| libxml2       | MIT Licence                                                                                               |
-| mozjpeg       | [zlib License, IJG License, BSD-3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
+| libxml2       | MIT License                                                                                               |
+| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
 | pango         | LGPLv3                                                                                                    |
-| pixman        | MIT Licence                                                                                               |
+| pixman        | MIT License                                                                                               |
 | proxy-libintl | LGPLv3                                                                                                    |
-| zlib-ng       | [zlib Licence](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
+| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
 
 Use of libraries under the terms of the LGPLv3 is via the
 "any later version" clause of the LGPLv2 or LGPLv2.1.
@@ -1778,7 +1982,7 @@ Use of libraries under the terms of the LGPLv3 is via the
 Please report any errors or omissions via
 https://github.com/lovell/sharp-libvips/issues/new
 
---- emnapi-1.10.0-LICENSE.txt ---
+--- emnapi-1.11.3-LICENSE.txt ---
 
 MIT License
 
@@ -2109,15 +2313,15 @@ You should also get your employer (if you work as a programmer) or school, if an
 
 The GNU General Public License does not permit incorporating your program into proprietary programs. If your program is a subroutine library, you may consider it more useful to permit linking proprietary applications with the library. If this is what you want to do, use the GNU Lesser General Public License instead of this License. But first, please read <http://www.gnu.org/philosophy/why-not-lgpl.html>.
 
-Source: https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4
+Source: https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3
 ```
 
-### Text 10: @img/sharp-win32-arm64@0.34.5, @img/sharp-win32-ia32@0.34.5, @img/sharp-win32-x64@0.34.5
+### Text 11: @img/sharp-win32-arm64@0.35.4, @img/sharp-win32-ia32@0.35.4, @img/sharp-win32-x64@0.35.4
 
 ```text
 Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.
 
---- sharp-0.34.5-LICENSE.txt ---
+--- sharp-0.35.4-LICENSE.txt ---
 
 Apache License
 Version 2.0, January 2004
@@ -2311,7 +2515,7 @@ third-party archives.
    See the License for the specific language governing permissions and
    limitations under the License.
 
---- sharp-libvips-1.2.4-LICENSE.txt ---
+--- sharp-libvips-1.3.3-LICENSE.txt ---
 
 Apache License
                            Version 2.0, January 2004
@@ -2515,44 +2719,44 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
---- sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md ---
+--- sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md ---
 
 # Third-party notices
 
 This software contains third-party libraries
-used under the terms of the following licences:
+used under the terms of the following licenses:
 
 | Library       | Used under the terms of                                                                                   |
 |---------------|-----------------------------------------------------------------------------------------------------------|
 | aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
 | cairo         | Mozilla Public License 2.0                                                                                |
-| cgif          | MIT Licence                                                                                               |
-| expat         | MIT Licence                                                                                               |
-| fontconfig    | [fontconfig Licence](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
-| freetype      | [freetype Licence](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
+| cgif          | MIT License                                                                                               |
+| expat         | MIT License                                                                                               |
+| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
+| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
 | fribidi       | LGPLv3                                                                                                    |
 | glib          | LGPLv3                                                                                                    |
-| harfbuzz      | MIT Licence                                                                                               |
-| highway       | Apache-2.0 License, BSD 3-Clause                                                                          |
-| lcms          | MIT Licence                                                                                               |
+| harfbuzz      | MIT License                                                                                               |
+| highway       | BSD 3-Clause                                                                                              |
+| lcms          | MIT License                                                                                               |
 | libarchive    | BSD 2-Clause                                                                                              |
 | libexif       | LGPLv3                                                                                                    |
-| libffi        | MIT Licence                                                                                               |
+| libffi        | MIT License                                                                                               |
 | libheif       | LGPLv3                                                                                                    |
 | libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |
-| libnsgif      | MIT Licence                                                                                               |
+| libnsgif      | MIT License                                                                                               |
 | libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |
 | librsvg       | LGPLv3                                                                                                    |
-| libspng       | [BSD 2-Clause, libpng License](https://github.com/randy408/libspng/blob/master/LICENSE)                   |
 | libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |
+| libultrahdr   | MIT License                                                                                               |
 | libvips       | LGPLv3                                                                                                    |
 | libwebp       | New BSD License                                                                                           |
-| libxml2       | MIT Licence                                                                                               |
-| mozjpeg       | [zlib License, IJG License, BSD-3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
+| libxml2       | MIT License                                                                                               |
+| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
 | pango         | LGPLv3                                                                                                    |
-| pixman        | MIT Licence                                                                                               |
+| pixman        | MIT License                                                                                               |
 | proxy-libintl | LGPLv3                                                                                                    |
-| zlib-ng       | [zlib Licence](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
+| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
 
 Use of libraries under the terms of the LGPLv3 is via the
 "any later version" clause of the LGPLv2 or LGPLv2.1.
@@ -2867,13 +3071,13 @@ You should also get your employer (if you work as a programmer) or school, if an
 
 The GNU General Public License does not permit incorporating your program into proprietary programs. If your program is a subroutine library, you may consider it more useful to permit linking proprietary applications with the library. If this is what you want to do, use the GNU Lesser General Public License instead of this License. But first, please read <http://www.gnu.org/philosophy/why-not-lgpl.html>.
 
-Source: https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4
+Source: https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3
 ```
 
-### Text 11: @next/env@16.2.6, @next/swc-darwin-arm64@16.2.6, @next/swc-darwin-x64@16.2.6, @next/swc-linux-arm64-gnu@16.2.6, @next/swc-linux-arm64-musl@16.2.6, @next/swc-linux-x64-gnu@16.2.6, @next/swc-linux-x64-musl@16.2.6, @next/swc-win32-arm64-msvc@16.2.6, @next/swc-win32-x64-msvc@16.2.6
+### Text 12: @next/env@16.3.3, @next/swc-darwin-arm64@16.3.3, @next/swc-darwin-x64@16.3.3, @next/swc-linux-arm64-gnu@16.3.3, @next/swc-linux-arm64-musl@16.3.3, @next/swc-linux-x64-gnu@16.3.3, @next/swc-linux-x64-musl@16.3.3, @next/swc-win32-arm64-msvc@16.3.3, @next/swc-win32-x64-msvc@16.3.3
 
 ```text
---- next-js-16.2.6-LICENSE.txt ---
+--- next-js-16.3.3-LICENSE.txt ---
 
 The MIT License (MIT)
 
@@ -2897,10 +3101,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Source: https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md
+Source: https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md
 ```
 
-### Text 12: @posthog/core@1.32.5
+### Text 13: @posthog/core@1.32.5
 
 ```text
 Published by PostHog from the posthog-js repository (packages/core). At tag @posthog/core@1.32.5 the package manifest declares the MIT license and packages/core contains no license file; the repository-root LICENSE at that tag is Apache-2.0 ("Copyright 2020 Posthog / Hiberly, Inc." and "Copyright 2015 Mixpanel, Inc.") and does not match this package's declared MIT license, so it is not reproduced as this package's license. The MIT terms follow.
@@ -2928,7 +3132,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Source: https://registry.npmjs.org/@posthog/core/1.32.5 and https://raw.githubusercontent.com/PostHog/posthog-js/%40posthog/core%401.32.5/packages/core/package.json
 ```
 
-### Text 13: @posthog/types@1.386.4, posthog-js@1.386.8
+### Text 14: @posthog/types@1.386.4, posthog-js@1.386.8
 
 ```text
 Copyright 2020 Posthog / Hiberly, Inc.
@@ -3286,7 +3490,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 14: @radix-ui/number@1.1.1, @radix-ui/react-compose-refs@1.1.2, @radix-ui/react-context@1.1.2, @radix-ui/react-direction@1.1.1, @radix-ui/react-id@1.1.1, @radix-ui/react-use-callback-ref@1.1.1, @radix-ui/react-use-escape-keydown@1.1.1, @radix-ui/react-use-layout-effect@1.1.1, @radix-ui/react-use-previous@1.1.1, @radix-ui/react-use-rect@1.1.1, @radix-ui/react-use-size@1.1.1, @radix-ui/rect@1.1.1
+### Text 15: @radix-ui/number@1.1.1, @radix-ui/react-compose-refs@1.1.2, @radix-ui/react-context@1.1.2, @radix-ui/react-direction@1.1.1, @radix-ui/react-id@1.1.1, @radix-ui/react-use-callback-ref@1.1.1, @radix-ui/react-use-escape-keydown@1.1.1, @radix-ui/react-use-layout-effect@1.1.1, @radix-ui/react-use-previous@1.1.1, @radix-ui/react-use-rect@1.1.1, @radix-ui/react-use-size@1.1.1, @radix-ui/rect@1.1.1
 
 ```text
 --- radix-ui-primitives-LICENSE.txt ---
@@ -3316,7 +3520,7 @@ SOFTWARE.
 Source: https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)
 ```
 
-### Text 15: @radix-ui/primitive@1.1.3, @radix-ui/react-accessible-icon@1.1.7, @radix-ui/react-accordion@1.2.12, @radix-ui/react-alert-dialog@1.1.15, @radix-ui/react-arrow@1.1.7, @radix-ui/react-aspect-ratio@1.1.7, @radix-ui/react-avatar@1.1.10, @radix-ui/react-checkbox@1.3.3, @radix-ui/react-collapsible@1.1.12, @radix-ui/react-collection@1.1.7, @radix-ui/react-context-menu@2.2.16, @radix-ui/react-dialog@1.1.15, @radix-ui/react-dismissable-layer@1.1.11, @radix-ui/react-dropdown-menu@2.1.16, @radix-ui/react-focus-guards@1.1.3, @radix-ui/react-focus-scope@1.1.7, @radix-ui/react-form@0.1.8, @radix-ui/react-hover-card@1.1.15, @radix-ui/react-label@2.1.7, @radix-ui/react-menu@2.1.16, @radix-ui/react-menubar@1.1.16, @radix-ui/react-navigation-menu@1.2.14, @radix-ui/react-one-time-password-field@0.1.8, @radix-ui/react-password-toggle-field@0.1.3, @radix-ui/react-popover@1.1.15, @radix-ui/react-popper@1.2.8, @radix-ui/react-portal@1.1.9, @radix-ui/react-presence@1.1.5, @radix-ui/react-primitive@2.1.3, @radix-ui/react-progress@1.1.7, @radix-ui/react-radio-group@1.3.8, @radix-ui/react-roving-focus@1.1.11, @radix-ui/react-scroll-area@1.2.10, @radix-ui/react-select@2.2.6, @radix-ui/react-separator@1.1.7, @radix-ui/react-slider@1.3.6, @radix-ui/react-slot@1.2.3, @radix-ui/react-switch@1.2.6, @radix-ui/react-tabs@1.1.13, @radix-ui/react-toast@1.2.15, @radix-ui/react-toggle@1.1.10, @radix-ui/react-toggle-group@1.1.11, @radix-ui/react-toolbar@1.1.11, @radix-ui/react-tooltip@1.2.8, @radix-ui/react-use-controllable-state@1.2.2, @radix-ui/react-use-effect-event@0.0.2, @radix-ui/react-use-is-hydrated@0.1.0, @radix-ui/react-visually-hidden@1.2.3, radix-ui@1.4.3
+### Text 16: @radix-ui/primitive@1.1.3, @radix-ui/react-accessible-icon@1.1.7, @radix-ui/react-accordion@1.2.12, @radix-ui/react-alert-dialog@1.1.15, @radix-ui/react-arrow@1.1.7, @radix-ui/react-aspect-ratio@1.1.7, @radix-ui/react-avatar@1.1.10, @radix-ui/react-checkbox@1.3.3, @radix-ui/react-collapsible@1.1.12, @radix-ui/react-collection@1.1.7, @radix-ui/react-context-menu@2.2.16, @radix-ui/react-dialog@1.1.15, @radix-ui/react-dismissable-layer@1.1.11, @radix-ui/react-dropdown-menu@2.1.16, @radix-ui/react-focus-guards@1.1.3, @radix-ui/react-focus-scope@1.1.7, @radix-ui/react-form@0.1.8, @radix-ui/react-hover-card@1.1.15, @radix-ui/react-label@2.1.7, @radix-ui/react-menu@2.1.16, @radix-ui/react-menubar@1.1.16, @radix-ui/react-navigation-menu@1.2.14, @radix-ui/react-one-time-password-field@0.1.8, @radix-ui/react-password-toggle-field@0.1.3, @radix-ui/react-popover@1.1.15, @radix-ui/react-popper@1.2.8, @radix-ui/react-portal@1.1.9, @radix-ui/react-presence@1.1.5, @radix-ui/react-primitive@2.1.3, @radix-ui/react-progress@1.1.7, @radix-ui/react-radio-group@1.3.8, @radix-ui/react-roving-focus@1.1.11, @radix-ui/react-scroll-area@1.2.10, @radix-ui/react-select@2.2.6, @radix-ui/react-separator@1.1.7, @radix-ui/react-slider@1.3.6, @radix-ui/react-slot@1.2.3, @radix-ui/react-switch@1.2.6, @radix-ui/react-tabs@1.1.13, @radix-ui/react-toast@1.2.15, @radix-ui/react-toggle@1.1.10, @radix-ui/react-toggle-group@1.1.11, @radix-ui/react-toolbar@1.1.11, @radix-ui/react-tooltip@1.2.8, @radix-ui/react-use-controllable-state@1.2.2, @radix-ui/react-use-effect-event@0.0.2, @radix-ui/react-use-is-hydrated@0.1.0, @radix-ui/react-visually-hidden@1.2.3, radix-ui@1.4.3
 
 ```text
 MIT License
@@ -3342,7 +3546,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 16: @swc/helpers@0.5.15
+### Text 17: @swc/helpers@0.5.23
 
 ```text
 Apache License
@@ -3548,7 +3752,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### Text 17: @types/react@19.2.15, @types/react-dom@19.2.3, @types/trusted-types@2.0.7
+### Text 18: @types/react@19.2.15, @types/react-dom@19.2.3, @types/trusted-types@2.0.7
 
 ```text
 MIT License
@@ -3574,7 +3778,7 @@ MIT License
     SOFTWARE
 ```
 
-### Text 18: aria-hidden@1.2.6, react-remove-scroll@2.7.2, react-style-singleton@2.2.3, use-callback-ref@1.3.3, use-sidecar@1.1.3
+### Text 19: aria-hidden@1.2.6, react-remove-scroll@2.7.2, react-style-singleton@2.2.3, use-callback-ref@1.3.3, use-sidecar@1.1.3
 
 ```text
 MIT License
@@ -3600,7 +3804,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 19: baseline-browser-mapping@2.10.32
+### Text 20: baseline-browser-mapping@2.10.32
 
 ```text
 Apache License
@@ -3806,7 +4010,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 20: caniuse-lite@1.0.30001793
+### Text 21: caniuse-lite@1.0.30001793
 
 ```text
 Attribution 4.0 International
@@ -4206,7 +4410,7 @@ public licenses.
 Creative Commons may be contacted at creativecommons.org.
 ```
 
-### Text 21: class-variance-authority@0.7.1
+### Text 22: class-variance-authority@0.7.1
 
 ```text
 Apache License
@@ -4401,7 +4605,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 22: client-only@0.0.1
+### Text 23: client-only@0.0.1
 
 ```text
 The published package declares the MIT license in its npm registry metadata (homepage: https://reactjs.org, published by the React team) and includes no copyright notice or license text; the MIT terms follow.
@@ -4429,7 +4633,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Source: https://registry.npmjs.org/client-only/0.0.1
 ```
 
-### Text 23: clsx@2.1.1
+### Text 24: clsx@2.1.1
 
 ```text
 MIT License
@@ -4443,7 +4647,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 24: core-js@3.49.0
+### Text 25: core-js@3.49.0
 
 ```text
 Copyright (c) 2013–2025 Denis Pushkarev (zloirock.ru)
@@ -4468,7 +4672,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Text 25: csstype@3.2.3
+### Text 26: csstype@3.2.3
 
 ```text
 Copyright (c) 2017-2018 Fredrik Nicol
@@ -4492,7 +4696,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 26: detect-libc@2.1.2
+### Text 27: detect-libc@2.1.2
 
 ```text
 Apache License
@@ -4698,7 +4902,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 27: detect-node-es@1.1.0
+### Text 28: detect-node-es@1.1.0
 
 ```text
 MIT License
@@ -4724,7 +4928,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 28: dompurify@3.4.13
+### Text 29: dompurify@3.4.13
 
 ```text
 This package is distributed under "(MPL-2.0 OR Apache-2.0)". All license texts provided with the package are reproduced below.
@@ -5310,7 +5514,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 ```
 
-### Text 29: fflate@0.4.8
+### Text 30: fflate@0.4.8
 
 ```text
 MIT License
@@ -5336,7 +5540,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 30: framer-motion@12.40.0
+### Text 31: framer-motion@12.40.0
 
 ```text
 The MIT License (MIT)
@@ -5362,7 +5566,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 31: get-nonce@1.0.1
+### Text 32: get-nonce@1.0.1
 
 ```text
 MIT License
@@ -5388,7 +5592,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 32: lucide-react@1.17.0
+### Text 33: lucide-react@1.17.0
 
 ```text
 ISC License
@@ -5436,7 +5640,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 33: motion@12.40.0, motion-dom@12.40.0, motion-utils@12.39.0
+### Text 34: motion@12.40.0, motion-dom@12.40.0, motion-utils@12.39.0
 
 ```text
 The MIT License (MIT)
@@ -5462,7 +5666,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 34: nanoid@3.3.18
+### Text 35: nanoid@3.3.18
 
 ```text
 The MIT License (MIT)
@@ -5487,7 +5691,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 35: next@16.2.6
+### Text 36: next@16.3.3
 
 ```text
 The MIT License (MIT)
@@ -5513,7 +5717,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 36: next-themes@0.4.6
+### Text 37: next-themes@0.4.6
 
 ```text
 MIT License
@@ -5539,7 +5743,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 37: picocolors@1.1.1
+### Text 38: picocolors@1.1.1
 
 ```text
 ISC License
@@ -5559,12 +5763,12 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 38: postcss@8.4.31
+### Text 39: postcss@8.5.23
 
 ```text
 The MIT License (MIT)
 
-Copyright 2013 Andrey Sitnik <andrey@sitnik.ru>
+Copyright 2013 Andrey Sitnik <andrey@sitnik.es>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -5584,7 +5788,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 39: preact@10.29.2
+### Text 40: preact@10.29.2
 
 ```text
 The MIT License (MIT)
@@ -5610,7 +5814,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 40: query-selector-shadow-dom@1.0.1
+### Text 41: query-selector-shadow-dom@1.0.1
 
 ```text
 MIT License
@@ -5636,7 +5840,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 41: react@19.2.4, react-dom@19.2.4, scheduler@0.27.0, use-sync-external-store@1.6.0
+### Text 42: react@19.2.4, react-dom@19.2.4, scheduler@0.27.0, use-sync-external-store@1.6.0
 
 ```text
 MIT License
@@ -5662,7 +5866,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 42: react-remove-scroll-bar@2.3.8
+### Text 43: react-remove-scroll-bar@2.3.8
 
 ```text
 The published package declares the MIT license and the author Anton Korzunov <thekashey@gmail.com> in its package metadata and includes no license text; the repository has no v2.3.8 tag and the commit this version was published from is not present in the public repository, so no repository source can be tied to this exact version. The MIT terms follow.
@@ -5690,7 +5894,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Source: https://registry.npmjs.org/react-remove-scroll-bar/2.3.8
 ```
 
-### Text 43: reselect@5.2.0
+### Text 44: reselect@5.2.0
 
 ```text
 The MIT License (MIT)
@@ -5716,7 +5920,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 44: semver@7.8.1
+### Text 45: semver@7.8.5
 
 ```text
 The ISC License
@@ -5736,7 +5940,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 45: shadcn@4.8.2
+### Text 46: shadcn@4.8.2
 
 ```text
 MIT License
@@ -5762,7 +5966,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 46: source-map-js@1.2.1
+### Text 47: source-map-js@1.2.1
 
 ```text
 Copyright (c) 2009-2011, Mozilla Foundation and contributors
@@ -5794,7 +5998,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Text 47: styled-jsx@5.1.6
+### Text 48: styled-jsx@5.1.6
 
 ```text
 MIT License
@@ -5820,7 +6024,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 48: tailwind-merge@3.6.0
+### Text 49: tailwind-merge@3.6.0
 
 ```text
 MIT License
@@ -5846,7 +6050,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 49: tslib@2.8.1
+### Text 50: tslib@2.8.1
 
 ```text
 Copyright (c) Microsoft Corporation.
@@ -5863,7 +6067,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 50: tw-animate-css@1.4.0
+### Text 51: tw-animate-css@1.4.0
 
 ```text
 MIT License
@@ -5889,7 +6093,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 51: web-vitals@5.3.0
+### Text 52: web-vitals@5.3.0
 
 ```text
 Apache License

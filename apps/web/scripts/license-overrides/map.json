@@ -1,276 +1,290 @@
 {
-  "@emnapi/runtime@1.10.0": {
+  "@emnapi/runtime@1.11.3": {
     "files": [
-      "emnapi-1.10.0-LICENSE.txt"
+      "emnapi-1.11.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/toyobayashi/emnapi/v1.10.0/LICENSE"
+    "source": "https://raw.githubusercontent.com/toyobayashi/emnapi/v1.11.3/LICENSE"
   },
-  "@img/sharp-darwin-x64@0.34.5": {
+  "@img/sharp-darwin-x64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-libvips-darwin-arm64@1.2.4": {
+  "@img/sharp-freebsd-wasm32@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "note": "Thin platform wrapper that loads @img/sharp-wasm32 (whose sharp, sharp-libvips and emnapi notices are reproduced under its own entry); sharp's Apache-2.0 license applies.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4"
+  },
+  "@img/sharp-libvips-darwin-arm64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-darwin-x64@1.2.4": {
+  "@img/sharp-libvips-darwin-x64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-arm64@1.2.4": {
+  "@img/sharp-libvips-linux-arm64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-arm@1.2.4": {
+  "@img/sharp-libvips-linux-arm@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-ppc64@1.2.4": {
+  "@img/sharp-libvips-linux-ppc64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-riscv64@1.2.4": {
+  "@img/sharp-libvips-linux-riscv64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-s390x@1.2.4": {
+  "@img/sharp-libvips-linux-s390x@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linux-x64@1.2.4": {
+  "@img/sharp-libvips-linux-x64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linuxmusl-arm64@1.2.4": {
+  "@img/sharp-libvips-linuxmusl-arm64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-libvips-linuxmusl-x64@1.2.4": {
+  "@img/sharp-libvips-linuxmusl-x64@1.3.3": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
-    "source": "https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-linux-arm64@0.34.5": {
+  "@img/sharp-linux-arm64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linux-arm@0.34.5": {
+  "@img/sharp-linux-arm@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linux-ppc64@0.34.5": {
+  "@img/sharp-linux-ppc64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linux-riscv64@0.34.5": {
+  "@img/sharp-linux-riscv64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linux-s390x@0.34.5": {
+  "@img/sharp-linux-s390x@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linux-x64@0.34.5": {
+  "@img/sharp-linux-x64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linuxmusl-arm64@0.34.5": {
+  "@img/sharp-linuxmusl-arm64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-linuxmusl-x64@0.34.5": {
+  "@img/sharp-linuxmusl-x64@0.35.4": {
     "files": [
-      "sharp-0.34.5-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.34.5/LICENSE"
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
   },
-  "@img/sharp-wasm32@0.34.5": {
+  "@img/sharp-wasm32@0.35.4": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-0.34.5-LICENSE.txt",
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md",
-      "emnapi-1.10.0-LICENSE.txt"
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md",
+      "emnapi-1.11.3-LICENSE.txt"
     ],
     "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply. The wasm build additionally includes @emnapi runtime code under the MIT license (Toyo Li); the emnapi license is reproduced below.",
-    "source": "https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-win32-arm64@0.34.5": {
+  "@img/sharp-webcontainers-wasm32@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "note": "Thin platform wrapper that loads @img/sharp-wasm32 (whose sharp, sharp-libvips and emnapi notices are reproduced under its own entry); sharp's Apache-2.0 license applies.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4"
+  },
+  "@img/sharp-win32-arm64@0.35.4": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-0.34.5-LICENSE.txt",
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
-    "source": "https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-win32-ia32@0.34.5": {
+  "@img/sharp-win32-ia32@0.35.4": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-0.34.5-LICENSE.txt",
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
-    "source": "https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@img/sharp-win32-x64@0.34.5": {
+  "@img/sharp-win32-x64@0.35.4": {
     "canonical": [
       "LGPL-3.0-or-later"
     ],
     "files": [
-      "sharp-0.34.5-LICENSE.txt",
-      "sharp-libvips-1.2.4-LICENSE.txt",
-      "sharp-libvips-1.2.4-THIRD-PARTY-NOTICES.md"
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
     ],
     "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
-    "source": "https://github.com/lovell/sharp/tree/v0.34.5 and https://github.com/lovell/sharp-libvips/tree/v1.2.4"
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
   },
-  "@next/env@16.2.6": {
+  "@next/env@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-darwin-arm64@16.2.6": {
+  "@next/swc-darwin-arm64@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-darwin-x64@16.2.6": {
+  "@next/swc-darwin-x64@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-linux-arm64-gnu@16.2.6": {
+  "@next/swc-linux-arm64-gnu@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-linux-arm64-musl@16.2.6": {
+  "@next/swc-linux-arm64-musl@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-linux-x64-gnu@16.2.6": {
+  "@next/swc-linux-x64-gnu@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-linux-x64-musl@16.2.6": {
+  "@next/swc-linux-x64-musl@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-win32-arm64-msvc@16.2.6": {
+  "@next/swc-win32-arm64-msvc@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
-  "@next/swc-win32-x64-msvc@16.2.6": {
+  "@next/swc-win32-x64-msvc@16.3.3": {
     "files": [
-      "next-js-16.2.6-LICENSE.txt"
+      "next-js-16.3.3-LICENSE.txt"
     ],
-    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.2.6/license.md"
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
   },
   "@open-draft/deferred-promise@2.2.0": {
     "canonical": [
