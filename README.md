@@ -65,19 +65,19 @@ permitted.
 
 ## Releases and updates
 
-Official releases are built from this repository:
+Official builds are produced from this repository:
 
+- [getzerro.app](https://getzerro.app) is the official download location
+  for the signed and notarized build. Installed official builds check for
+  updates through Sparkle.
 - Pushing a production tag (`app-v<version>`) makes GitHub Actions build,
-  sign, notarize, and staple the official DMG.
+  sign, notarize, and staple the official DMG and publish it as a GitHub
+  Release. No official production build is currently published on
+  GitHub.
 - [GitHub Releases](https://github.com/SmartScaleAI/Zerro/releases)
-  are the canonical public source for official artifacts. Each production
-  release contains `Zerro-<build>.dmg` (immutable, used by Sparkle
-  updates), `Zerro.dmg` (the stable latest-download asset), and
-  `appcast.xml` (the signed Sparkle feed).
-- [getzerro.app/Zerro.dmg](https://getzerro.app/Zerro.dmg) and
-  getzerro.app/appcast.xml are the stable public URLs for the latest
-  download and the Sparkle feed; each redirects to the matching asset on
-  the latest GitHub Release. No DMG or appcast is stored in the repo.
+  currently contain staging prereleases (`staging-v<version>`) used for
+  testing. They are not production releases.
+- No DMG or appcast is stored in the repository.
 
 ## License
 

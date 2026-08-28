@@ -1,4 +1,5 @@
 // =============================================================================
+// ARCHIVED LEGACY BACKEND — kept for reference only; this code no longer runs.
 // Server-side copy of the LOCKED conversion prompt v1 (Phase 6 — the free
 // "Write agent prompt" fallback).
 // =============================================================================
@@ -12,8 +13,8 @@
 //                      outside repo)
 //   - in-repo mirror:  apps/desktop/Scripts/artifact-eval/convert-prompt-v1.md
 //                      (the first fenced block)
-//   - THIS FILE        (Managed path)
-//   - Swift copy:      Zerro/Services/ConversionSystemPrompt.swift (BYOK)
+//   - THIS FILE        (archived legacy backend copy)
+//   The app has no Swift copy of this prompt.
 //
 // Byte-identity with convert-prompt-v1.md is ENFORCED by prompt_test.ts —
 // drift fails the suite instead of relying on this comment.

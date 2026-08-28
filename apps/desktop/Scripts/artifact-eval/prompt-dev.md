@@ -1,16 +1,18 @@
 # Zerro Dev Mode prompt — in-repo mirror (J-01)
 
 The fenced block below is the canonical Dev Mode system prompt (design §6 +
-§11) — the single source of truth for the two live copies, byte-identical,
-no re-wrapping:
+§11) — the single source of truth for the copies below, byte-identical, no
+re-wrapping:
 
-- Swift (BYOK path): `apps/desktop/Zerro/Services/PromptGenerationSystemPrompt.swift` (`devText`)
-- server (Managed path): `supabase/functions/generate/prompt.ts` (`PROMPT_DEV`)
+- Swift (the live copy): `apps/desktop/Zerro/Services/PromptGenerationSystemPrompt.swift` (`devText`)
+- archived legacy backend (kept for reference, no longer runs):
+  `supabase/functions/generate/prompt.ts` (`PROMPT_DEV`)
 
 Byte-identity is ENFORCED by `ZerroTests/PromptDevMirrorTests.swift` (reads
-this file via `#filePath`) and `supabase/functions/generate/prompt_test.ts`
-(reads it from the repo) — drift in either copy fails its suite, exactly like
-the `prompt-v2.md` mirror for the normal prompt.
+this file via `#filePath`) and, for the archived copy,
+`supabase/functions/generate/prompt_test.ts` (reads it from the repo) — drift
+in either copy fails its suite, exactly like the `prompt-v2.md` mirror for the
+normal prompt.
 
 NOTE: the fence below is FOUR backticks because the prompt itself contains a
 three-backtick `zerro_anchors` block — extract on the four-backtick fence.
