@@ -4,15 +4,24 @@
 //
 //  Created by Colin Breeding on 6/1/26.
 //
-//  Phase C — unit coverage for the BYOK license layer. The network is stubbed
-//  through `LicenseTransport` (canned JSON + status codes, no real requests)
-//  and the Keychain through `InMemoryKeychainSlot` (Phase B's fake), so these
-//  are deterministic value-in/value-out assertions. Covers:
-//    • Activation success → Keychain written, instance ID saved, state .byok.
+//  Unit coverage for the license layer. The network is stubbed through
+//  `LicenseTransport` (canned JSON + status codes, no real requests), the
+//  Keychain through `InMemoryKeychainSlot`, and the edition policy is
+//  injected — so these are deterministic value-in/value-out assertions.
+//  Covers:
+//    • Activation success → Keychain + edition metadata written, state .byok.
+//    • Product-identity gate → wrong/missing `meta.product_id` fails closed
+//      with `.wrongProduct`, persists nothing, and best-effort frees the slot.
 //    • Activation at-limit → .atActivationLimit, Keychain untouched.
 //    • Validate valid:false (disabled) → license cleared → falls back to trial.
-//    • Validate network failure → fail-open: license retained, stays .byok.
+//    • Validate wrong/missing product (whatever `valid` says) → edition
+//      metadata cleared, key kept, stamp untouched, entitlement dropped.
+//    • Validate network failure → fail-open: license retained, stays .byok —
+//      only for a complete, readable, compatible cached record.
 //    • Throttle → validate not called when last-validated is within the window.
+//    • `currentLicenseState` verdicts: exactly present+compatible grants;
+//      read failures, missing/malformed metadata, wrong product, and wrong
+//      major all FAIL CLOSED.
 //
 
 import XCTest
@@ -44,6 +53,11 @@ final class LicenseServiceTests: XCTestCase {
 
     private func data(_ json: String) -> Data { Data(json.utf8) }
 
+    /// The edition policy the tests pin: major 1, product 7 approved. Product
+    /// 7 is deliberately NOT a real Lemon Squeezy ID — the policy is injected,
+    /// so nothing here depends on the shipping product IDs.
+    static let testPolicy = LicenseEditionPolicy(requiredMajor: 1, approvedProductIDs: [7])
+
     /// Builds a `LicenseService` over fresh in-memory slots + the given
     /// transport, returning both so tests can inspect the Keychain slots.
     private func makeService(
@@ -51,7 +65,9 @@ final class LicenseServiceTests: XCTestCase {
         keySlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         instanceSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
         lastValidatedSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
-        createdAtSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
+        productSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
+        majorSlot: InMemoryKeychainSlot = InMemoryKeychainSlot(),
+        policy: LicenseEditionPolicy = LicenseServiceTests.testPolicy,
         clock: @escaping () -> Date = { Date() },
         confirmReplace: @escaping () async -> Bool = { true }
     ) -> LicenseService {
@@ -59,13 +75,20 @@ final class LicenseServiceTests: XCTestCase {
             licenseKeySlot: keySlot,
             instanceIDSlot: instanceSlot,
             lastValidatedSlot: lastValidatedSlot,
-            licenseCreatedAtSlot: createdAtSlot,
+            licensedProductIDSlot: productSlot,
+            licensedMajorSlot: majorSlot,
+            policy: policy,
             transport: transport,
             clock: clock,
             instanceNameProvider: { "TestMac-DEADBEEF" },
             confirmReplace: confirmReplace
         )
     }
+
+    /// In-memory slots seeded as a CONFIRMED compatible edition for the test
+    /// policy (product 7, major 1).
+    private func compatibleProductSlot() -> InMemoryKeychainSlot { InMemoryKeychainSlot("7") }
+    private func compatibleMajorSlot() -> InMemoryKeychainSlot { InMemoryKeychainSlot("1") }
 
     /// Records whether the "replace your current license?" confirmation was
     /// asked, and answers with a fixed verdict — so the E-01 replace-gate tests
@@ -78,38 +101,25 @@ final class LicenseServiceTests: XCTestCase {
         func confirm() -> Bool { asked += 1; return answer }
     }
 
-    /// Hermetic `EntitlementStore` dependencies. The store's defaults reach
-    /// for the REAL machine otherwise, which lets developer state leak into
-    /// these tests (observed: a live local-backend dev subscription flipped
-    /// both EntitlementStore tests here):
-    ///   • `defaults: .standard` carries the app's cached Managed snapshot;
-    ///   • the real product-kind Keychain slot carries `kind=managed`;
-    ///   • a real-transport `SessionTokenManager` activates the DEBUG
-    ///     `ZERRO_DEV_LICENSE_KEY` scheme fallback and probes the local
-    ///     backend during `activate()` (the E9 gate only protects stubbed
-    ///     transports).
+    /// Hermetic `EntitlementStore`: official mode over the injected license
+    /// service and no trial clock, so the unlicensed branch lands on the
+    /// gated `.localTrialExpired` (never real Keychain / defaults reads).
     private func makeHermeticStore(
         licenseService: LicenseService,
-        keySlot: InMemoryKeychainSlot,
-        sessionTransport: StubManagedTransport = StubManagedTransport()
+        keySlot: InMemoryKeychainSlot
     ) -> EntitlementStore {
-        EntitlementStore(
-            licenseService: licenseService,
-            sessionTokens: SessionTokenManager(licenseKeySlot: keySlot, transport: sessionTransport),
-            productKindSlot: InMemoryKeychainSlot(),
-            defaults: UserDefaults(suiteName: "LicenseServiceTests-\(UUID().uuidString)")!
-        )
+        EntitlementStore(enforcementMode: .official, licenseService: licenseService)
     }
 
     // MARK: - Activation success
 
-    func testActivationSuccessWritesKeychainAndSavesInstanceID() async throws {
+    func testActivationSuccessWritesKeychainAndEditionMetadata() async throws {
         let transport = StubLicenseTransport()
         transport.responses = [(data("""
         {
           "activated": true,
           "error": null,
-          "license_key": { "id": 1, "status": "active", "activation_limit": 1, "activation_usage": 1 },
+          "license_key": { "id": 1, "status": "active", "activation_limit": 2, "activation_usage": 1 },
           "instance": { "id": "inst_ABC123", "name": "TestMac-DEADBEEF" },
           "meta": { "store_id": 42, "product_id": 7, "variant_id": 9, "customer_email": "buyer@example.com" }
         }
@@ -118,11 +128,15 @@ final class LicenseServiceTests: XCTestCase {
         let keySlot = InMemoryKeychainSlot()
         let instanceSlot = InMemoryKeychainSlot()
         let lastValidatedSlot = InMemoryKeychainSlot()
+        let productSlot = InMemoryKeychainSlot()
+        let majorSlot = InMemoryKeychainSlot()
         let service = makeService(
             transport: transport,
             keySlot: keySlot,
             instanceSlot: instanceSlot,
-            lastValidatedSlot: lastValidatedSlot
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
         )
 
         let result = try await service.activate(licenseKey: "  KEY-123  ")
@@ -130,11 +144,15 @@ final class LicenseServiceTests: XCTestCase {
         XCTAssertEqual(result.instanceID, "inst_ABC123")
         XCTAssertEqual(result.status, .active)
         XCTAssertEqual(result.storeID, 42)
+        XCTAssertEqual(result.productID, 7)
         XCTAssertEqual(result.customerEmail, "buyer@example.com")
 
-        // Keychain written (trimmed key), instance saved, throttle stamped.
+        // Keychain written (trimmed key), instance saved, edition confirmed,
+        // throttle stamped — all together.
         XCTAssertEqual(keySlot.readResult(), .found("KEY-123"))
         XCTAssertEqual(instanceSlot.readResult(), .found("inst_ABC123"))
+        XCTAssertEqual(productSlot.readResult(), .found("7"))
+        XCTAssertEqual(majorSlot.readResult(), .found("1"))
         if case .found = lastValidatedSlot.readResult() {} else {
             XCTFail("expected last-validated stamp to be written on activation")
         }
@@ -148,30 +166,149 @@ final class LicenseServiceTests: XCTestCase {
     func testActivationSuccessMakesEntitlementByok() async throws {
         let transport = StubLicenseTransport()
         transport.responses = [(data("""
-        { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_X" } }
+        { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_X" }, "meta": { "product_id": 7 } }
         """), 200)]
 
         let keySlot = InMemoryKeychainSlot()
         let instanceSlot = InMemoryKeychainSlot()
         let service = makeService(transport: transport, keySlot: keySlot, instanceSlot: instanceSlot)
 
-        // The activation probe asks /session whether the key is a Managed
-        // subscription; 403 (not in the mirror) is the BYOK classification.
-        let sessionTransport = StubManagedTransport()
-        sessionTransport.enqueue(#"{"error":"not_entitled"}"#, status: 403)
-
         // Start in trial; activation should flip the store to .byok.
-        let store = makeHermeticStore(
-            licenseService: service,
-            keySlot: keySlot,
-            sessionTransport: sessionTransport
-        )
-        if case .trial = store.state {} else {
-            XCTFail("expected initial .trial, got \(store.state)")
-        }
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .localTrialExpired, "precondition: unlicensed, no clock → gated")
 
         try await store.activate(licenseKey: "KEY-XYZ")
         XCTAssertEqual(store.state, .byok)
+    }
+
+    // MARK: - Product-identity gate (activation)
+
+    func testActivationWrongProductThrowsPersistsNothingAndFreesSlot() async {
+        let transport = StubLicenseTransport()
+        transport.responses = [
+            // The key ACTIVATES fine — but for another product (id 999).
+            (data("""
+            { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_WRONG" }, "meta": { "product_id": 999 } }
+            """), 200),
+            // The best-effort cleanup deactivation succeeds.
+            (data(#"{ "deactivated": true }"#), 200),
+        ]
+
+        let keySlot = InMemoryKeychainSlot()
+        let instanceSlot = InMemoryKeychainSlot()
+        let productSlot = InMemoryKeychainSlot()
+        let majorSlot = InMemoryKeychainSlot()
+        let lastValidatedSlot = InMemoryKeychainSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
+        )
+
+        do {
+            _ = try await service.activate(licenseKey: "KEY-OTHER-PRODUCT")
+            XCTFail("expected .wrongProduct")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .wrongProduct)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        // Nothing persisted — the wrong-product key never becomes a license.
+        XCTAssertEqual(keySlot.readResult(), .absent)
+        XCTAssertEqual(instanceSlot.readResult(), .absent)
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
+        XCTAssertEqual(lastValidatedSlot.readResult(), .absent)
+
+        // The just-created instance was best-effort freed WITH the incoming
+        // key (nothing is in the Keychain to read at that point).
+        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertEqual(transport.requests[1].path, LicenseService.deactivatePath)
+        XCTAssertEqual(transport.requests[1].parameters["license_key"], "KEY-OTHER-PRODUCT")
+        XCTAssertEqual(transport.requests[1].parameters["instance_id"], "inst_WRONG")
+    }
+
+    func testActivationMissingProductIDFailsClosed() async {
+        // No `meta` at all → the product can't be verified → fail closed.
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NOMETA" } }
+        """), 200)]
+
+        let keySlot = InMemoryKeychainSlot()
+        let service = makeService(transport: transport, keySlot: keySlot)
+
+        do {
+            _ = try await service.activate(licenseKey: "KEY-NO-META")
+            XCTFail("expected .wrongProduct for a missing product id")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .wrongProduct)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(keySlot.readResult(), .absent)
+    }
+
+    func testWrongProductCleanupFailureStillThrowsWrongProduct() async {
+        // The cleanup deactivation failing (network) must not mask the
+        // wrong-product verdict — it's best-effort only.
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_W2" }, "meta": { "product_id": 999 } }
+        """), 200)]
+        // Second request (deactivate) hits the empty queue → `{}` → refused.
+
+        let service = makeService(transport: transport)
+        do {
+            _ = try await service.activate(licenseKey: "KEY-W2")
+            XCTFail("expected .wrongProduct")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .wrongProduct)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testWrongProductActivationLeavesExistingLicenseUntouched() async {
+        // A good license is on file; activating a wrong-product key (user
+        // confirms the replace prompt) must fail closed WITHOUT clobbering it.
+        let transport = StubLicenseTransport()
+        transport.responses = [
+            (data("""
+            { "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_W3" }, "meta": { "product_id": 999 } }
+            """), 200),
+            (data(#"{ "deactivated": true }"#), 200),
+        ]
+        let keySlot = InMemoryKeychainSlot("GOOD-KEY")
+        let instanceSlot = InMemoryKeychainSlot("inst_GOOD")
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot,
+            confirmReplace: { true }
+        )
+
+        do {
+            _ = try await service.activate(licenseKey: "KEY-W3")
+            XCTFail("expected .wrongProduct")
+        } catch let error as LicenseError {
+            XCTAssertEqual(error, .wrongProduct)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(keySlot.readResult(), .found("GOOD-KEY"))
+        XCTAssertEqual(instanceSlot.readResult(), .found("inst_GOOD"))
+        XCTAssertEqual(productSlot.readResult(), .found("7"))
+        XCTAssertEqual(majorSlot.readResult(), .found("1"))
     }
 
     // MARK: - Activation at-limit
@@ -182,7 +319,7 @@ final class LicenseServiceTests: XCTestCase {
         {
           "activated": false,
           "error": "This license key has reached the activation limit.",
-          "license_key": { "status": "active", "activation_limit": 1, "activation_usage": 1 },
+          "license_key": { "status": "active", "activation_limit": 2, "activation_usage": 2 },
           "instance": null
         }
         """), 400)]
@@ -226,7 +363,7 @@ final class LicenseServiceTests: XCTestCase {
     /// license fully intact — no network call, no Keychain write.
     func testReplaceDifferentKeyDeclinedKeepsOldLicenseUntouched() async {
         let transport = StubLicenseTransport()
-        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" }, "meta": { "product_id": 7 } }"#), 200)]
         let keySlot = InMemoryKeychainSlot("OLD-KEY")
         let instanceSlot = InMemoryKeychainSlot("old-instance")
         let confirm = ConfirmReplaceSpy(answer: false)
@@ -257,7 +394,7 @@ final class LicenseServiceTests: XCTestCase {
     /// written, overwriting the old binding.
     func testReplaceDifferentKeyConfirmedOverwrites() async throws {
         let transport = StubLicenseTransport()
-        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" }, "meta": { "product_id": 7 } }"#), 200)]
         let keySlot = InMemoryKeychainSlot("OLD-KEY")
         let instanceSlot = InMemoryKeychainSlot("old-instance")
         let confirm = ConfirmReplaceSpy(answer: true)
@@ -283,7 +420,7 @@ final class LicenseServiceTests: XCTestCase {
     /// on-file key was stored trimmed.
     func testReactivatingSameKeyNeverPromptsToReplace() async throws {
         let transport = StubLicenseTransport()
-        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_SAME" } }"#), 200)]
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_SAME" }, "meta": { "product_id": 7 } }"#), 200)]
         let keySlot = InMemoryKeychainSlot("SAME-KEY")
         let instanceSlot = InMemoryKeychainSlot("old-instance")
         // answer:false would THROW if the gate were (wrongly) consulted.
@@ -306,7 +443,7 @@ final class LicenseServiceTests: XCTestCase {
     /// replace prompt is never shown.
     func testFirstActivationWithNoCurrentLicenseNeverPrompts() async throws {
         let transport = StubLicenseTransport()
-        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_FRESH" } }"#), 200)]
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_FRESH" }, "meta": { "product_id": 7 } }"#), 200)]
         let keySlot = InMemoryKeychainSlot()
         let confirm = ConfirmReplaceSpy(answer: false)
         let service = makeService(
@@ -326,16 +463,18 @@ final class LicenseServiceTests: XCTestCase {
     /// unchanged when the user declines (proves the gate covers that path too).
     func testStoreActivateDifferentKeyDeclinedLeavesEntitlementIntact() async {
         let transport = StubLicenseTransport()
-        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" } }"#), 200)]
+        transport.responses = [(data(#"{ "activated": true, "license_key": { "status": "active" }, "instance": { "id": "inst_NEW" }, "meta": { "product_id": 7 } }"#), 200)]
         let keySlot = InMemoryKeychainSlot("OLD-KEY")
         let confirm = ConfirmReplaceSpy(answer: false)
         let service = makeService(
             transport: transport,
             keySlot: keySlot,
             instanceSlot: InMemoryKeychainSlot("old-instance"),
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot(),
             confirmReplace: { confirm.confirm() }
         )
-        // The present OLD-KEY license + (no product kind) computes to .byok.
+        // The present, edition-confirmed OLD-KEY license computes to .byok.
         let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
         XCTAssertEqual(store.state, .byok, "precondition: already paid on the old key")
 
@@ -362,16 +501,21 @@ final class LicenseServiceTests: XCTestCase {
         { "valid": false, "error": "license key has been disabled", "license_key": { "status": "disabled" } }
         """), 400)]
 
-        // Pre-seed a present, activated license whose throttle stamp is old.
+        // Pre-seed a present, edition-confirmed license whose throttle stamp
+        // is old.
         let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
         let keySlot = InMemoryKeychainSlot("KEY-REFUNDED")
         let instanceSlot = InMemoryKeychainSlot("inst_REF")
         let lastValidatedSlot = InMemoryKeychainSlot(oldStamp)
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
         let service = makeService(
             transport: transport,
             keySlot: keySlot,
             instanceSlot: instanceSlot,
-            lastValidatedSlot: lastValidatedSlot
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
         )
 
         // A present license → store starts .byok.
@@ -380,13 +524,159 @@ final class LicenseServiceTests: XCTestCase {
 
         await store.revalidateLicenseIfNeeded()
 
-        // Refund/revoke → license cleared, dropped back to the trial clock.
+        // Refund/revoke → license + edition metadata cleared, dropped back to
+        // the trial computation.
         XCTAssertEqual(keySlot.readResult(), .absent)
         XCTAssertEqual(instanceSlot.readResult(), .absent)
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
         XCTAssertEqual(transport.callCount, 1, "validate should have been called (throttle elapsed)")
-        if case .trial = store.state {} else {
-            XCTFail("expected drop to .trial after revocation, got \(store.state)")
-        }
+        XCTAssertEqual(store.state, .localTrialExpired, "revocation drops to the trial computation")
+    }
+
+    // MARK: - Validate: wrong product is definitive (metadata cleared, key kept)
+
+    func testValidateWrongProductClearsMetadataKeepsKeyAndDropsEntitlement() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": true, "license_key": { "status": "active" }, "meta": { "product_id": 999 } }
+        """), 200)]
+
+        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
+        let keySlot = InMemoryKeychainSlot("KEY-MIGRATED")
+        let instanceSlot = InMemoryKeychainSlot("inst_MIG")
+        let lastValidatedSlot = InMemoryKeychainSlot(oldStamp)
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
+        )
+
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .byok)
+
+        await store.revalidateLicenseIfNeeded()
+
+        // The key + instance stay on file (Settings can still show/deactivate
+        // them) but the edition metadata is gone → fails closed offline.
+        XCTAssertEqual(keySlot.readResult(), .found("KEY-MIGRATED"))
+        XCTAssertEqual(instanceSlot.readResult(), .found("inst_MIG"))
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
+        // The throttle stamp was NOT refreshed — a wrong-product check is not
+        // a successful validation.
+        XCTAssertEqual(lastValidatedSlot.readResult(), .found(oldStamp))
+        // And the entitlement dropped out of .byok immediately.
+        XCTAssertNotEqual(store.state, .byok)
+        XCTAssertFalse(service.currentLicenseState().grantsBYOK)
+    }
+
+    /// The product check is NOT gated on `valid`: a `valid:false` response
+    /// whose product ID is missing entirely must still be treated as a
+    /// definitive incompatibility — metadata cleared, stamp untouched, the
+    /// `.byok` entitlement dropped, key + instance preserved (the non-
+    /// definitive `valid:false` itself never clears the whole license).
+    func testValidateInvalidWithMissingProductDropsByok() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": false, "license_key": { "status": "inactive" } }
+        """), 400)]
+
+        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
+        let keySlot = InMemoryKeychainSlot("KEY-NOMETA")
+        let instanceSlot = InMemoryKeychainSlot("inst_NOMETA")
+        let lastValidatedSlot = InMemoryKeychainSlot(oldStamp)
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
+        )
+
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .byok)
+
+        await store.revalidateLicenseIfNeeded()
+
+        XCTAssertEqual(keySlot.readResult(), .found("KEY-NOMETA"), "non-definitive valid:false keeps the key")
+        XCTAssertEqual(instanceSlot.readResult(), .found("inst_NOMETA"))
+        XCTAssertEqual(productSlot.readResult(), .absent, "an unvouched product must clear the metadata")
+        XCTAssertEqual(majorSlot.readResult(), .absent)
+        XCTAssertEqual(lastValidatedSlot.readResult(), .found(oldStamp), "no stamp refresh on a product mismatch")
+        XCTAssertNotEqual(store.state, .byok)
+    }
+
+    /// Same, with `valid:false` and an explicitly WRONG product ID.
+    func testValidateInvalidWithWrongProductDropsByok() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": false, "license_key": { "status": "inactive" }, "meta": { "product_id": 999 } }
+        """), 400)]
+
+        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
+        let keySlot = InMemoryKeychainSlot("KEY-WRONG")
+        let instanceSlot = InMemoryKeychainSlot("inst_WRONG")
+        let lastValidatedSlot = InMemoryKeychainSlot(oldStamp)
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
+        )
+
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .byok)
+
+        await store.revalidateLicenseIfNeeded()
+
+        XCTAssertEqual(keySlot.readResult(), .found("KEY-WRONG"))
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
+        XCTAssertEqual(lastValidatedSlot.readResult(), .found(oldStamp), "no stamp refresh on a product mismatch")
+        XCTAssertNotEqual(store.state, .byok)
+    }
+
+    /// A DEFINITIVE revocation (disabled) that also lacks a product ID clears
+    /// the ENTIRE license — the revocation verdict wins over the
+    /// keep-key-on-mismatch rule.
+    func testDefinitiveRevocationWithMissingProductClearsEverything() async throws {
+        let transport = StubLicenseTransport()
+        transport.responses = [(data("""
+        { "valid": false, "error": "license key has been disabled", "license_key": { "status": "disabled" } }
+        """), 400)]
+
+        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
+        let keySlot = InMemoryKeychainSlot("KEY-DIS")
+        let instanceSlot = InMemoryKeychainSlot("inst_DIS")
+        let service = makeService(
+            transport: transport,
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: InMemoryKeychainSlot(oldStamp),
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot()
+        )
+        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
+        XCTAssertEqual(store.state, .byok)
+
+        await store.revalidateLicenseIfNeeded()
+
+        XCTAssertEqual(keySlot.readResult(), .absent, "a definitive revocation clears the whole license")
+        XCTAssertEqual(instanceSlot.readResult(), .absent)
+        XCTAssertNotEqual(store.state, .byok)
     }
 
     // MARK: - Validate: network failure fails open
@@ -403,7 +693,9 @@ final class LicenseServiceTests: XCTestCase {
             transport: transport,
             keySlot: keySlot,
             instanceSlot: instanceSlot,
-            lastValidatedSlot: lastValidatedSlot
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot()
         )
 
         let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
@@ -435,6 +727,8 @@ final class LicenseServiceTests: XCTestCase {
             keySlot: keySlot,
             instanceSlot: instanceSlot,
             lastValidatedSlot: lastValidatedSlot,
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot(),
             clock: { now }
         )
 
@@ -448,42 +742,54 @@ final class LicenseServiceTests: XCTestCase {
         XCTAssertEqual(store.state, .byok)
     }
 
-    func testValidValidationRefreshesThrottleStamp() async throws {
+    func testValidValidationRefreshesThrottleStampAndMetadata() async throws {
         let transport = StubLicenseTransport()
         transport.responses = [(data("""
-        { "valid": true, "license_key": { "status": "active" } }
+        { "valid": true, "license_key": { "status": "active" }, "meta": { "product_id": 7 } }
         """), 200)]
 
         let now = Date()
         let oldInstant = now.addingTimeInterval(-LicenseService.revalidationInterval - 60)
         let oldStamp = String(Int(oldInstant.timeIntervalSince1970))
         let lastValidatedSlot = InMemoryKeychainSlot(oldStamp)
+        // No persisted edition — a cache from before the metadata existed.
+        let productSlot = InMemoryKeychainSlot()
+        let majorSlot = InMemoryKeychainSlot()
         let service = makeService(
             transport: transport,
             keySlot: InMemoryKeychainSlot("KEY-OK"),
             instanceSlot: InMemoryKeychainSlot("inst_OK"),
             lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot,
             clock: { now }
         )
 
         XCTAssertTrue(service.shouldRevalidate(), "stale stamp should permit revalidation")
         let result = try await service.validate()
         XCTAssertTrue(result.valid)
+        XCTAssertTrue(result.productApproved)
         XCTAssertEqual(result.status, .active)
         // Stamp refreshed to "now" → throttle now suppresses the next check.
         XCTAssertFalse(service.shouldRevalidate(), "valid validation should refresh the throttle stamp")
+        // And the edition metadata healed from the confirmed response.
+        XCTAssertEqual(productSlot.readResult(), .found("7"))
+        XCTAssertEqual(majorSlot.readResult(), .found("1"))
     }
 
-    // MARK: - currentLicenseState
+    // MARK: - currentLicenseState: presence
 
     func testCurrentLicenseStatePresentAbsentIndeterminate() {
-        // Present: both slots found.
+        // Present + confirmed edition: full offline grant.
         let present = makeService(
             transport: StubLicenseTransport(),
             keySlot: InMemoryKeychainSlot("K"),
-            instanceSlot: InMemoryKeychainSlot("I")
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot()
         )
         XCTAssertEqual(present.currentLicenseState().presence, .present)
+        XCTAssertEqual(present.currentLicenseState().edition, .compatible)
         XCTAssertTrue(present.currentLicenseState().grantsBYOK)
 
         // Absent: nothing stored.
@@ -491,180 +797,197 @@ final class LicenseServiceTests: XCTestCase {
         XCTAssertEqual(absent.currentLicenseState().presence, .absent)
         XCTAssertFalse(absent.currentLicenseState().grantsBYOK)
 
-        // Indeterminate: a genuine read failure on the key slot → fail-open.
+        // Indeterminate: a genuine read failure on the key slot. Diagnostic
+        // only — an unverifiable record must FAIL CLOSED.
         let failingKey = InMemoryKeychainSlot("K")
         failingKey.simulateReadFailure = true
         let indeterminate = makeService(
             transport: StubLicenseTransport(),
             keySlot: failingKey,
-            instanceSlot: InMemoryKeychainSlot("I")
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot()
         )
         XCTAssertEqual(indeterminate.currentLicenseState().presence, .indeterminate)
-        XCTAssertTrue(indeterminate.currentLicenseState().grantsBYOK, "a read failure must fail open to .byok")
-    }
+        XCTAssertFalse(indeterminate.currentLicenseState().grantsBYOK, "an unreadable key/instance must never unlock")
 
-    // MARK: - Update window (E7): created_at decode + persist
-
-    /// 2026-01-15T12:00:00Z, the epoch the fixtures below encode.
-    private static let createdAtEpoch = 1_768_478_400
-
-    func testActivationPersistsCreatedAtAndComputesWindowEnd() async throws {
-        let transport = StubLicenseTransport()
-        transport.responses = [(data("""
-        {
-          "activated": true,
-          "license_key": { "id": 1, "status": "active", "created_at": "2026-01-15T12:00:00.000000Z" },
-          "instance": { "id": "inst_E7" }
-        }
-        """), 200)]
-
-        let createdAtSlot = InMemoryKeychainSlot()
-        let service = makeService(transport: transport, createdAtSlot: createdAtSlot)
-        _ = try await service.activate(licenseKey: "KEY-E7")
-
-        XCTAssertEqual(createdAtSlot.readResult(), .found(String(Self.createdAtEpoch)))
-        let createdAt = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch))
-        XCTAssertEqual(service.updateWindowEnd(), LicenseService.updateWindowEnd(createdAt: createdAt))
-    }
-
-    func testValidateBackfillsCreatedAtForPreE7License() async throws {
-        // A license activated before E7 has no persisted window start; the
-        // next good validation must backfill it without re-activating.
-        let transport = StubLicenseTransport()
-        transport.responses = [(data("""
-        { "valid": true, "license_key": { "status": "active", "created_at": "2026-01-15T12:00:00.000000Z" } }
-        """), 200)]
-
-        let createdAtSlot = InMemoryKeychainSlot()
-        let service = makeService(
-            transport: transport,
-            keySlot: InMemoryKeychainSlot("KEY-PRE-E7"),
-            instanceSlot: InMemoryKeychainSlot("inst_PRE"),
-            createdAtSlot: createdAtSlot
+        // Same for a failing instance slot.
+        let failingInstance = InMemoryKeychainSlot("I")
+        failingInstance.simulateReadFailure = true
+        let indeterminateInstance = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: failingInstance,
+            productSlot: compatibleProductSlot(),
+            majorSlot: compatibleMajorSlot()
         )
-        XCTAssertNil(service.updateWindowEnd(), "pre-E7 license starts with no window")
-
-        let result = try await service.validate()
-        XCTAssertTrue(result.valid)
-        XCTAssertEqual(createdAtSlot.readResult(), .found(String(Self.createdAtEpoch)))
-        XCTAssertNotNil(service.updateWindowEnd())
+        XCTAssertEqual(indeterminateInstance.currentLicenseState().presence, .indeterminate)
+        XCTAssertFalse(indeterminateInstance.currentLicenseState().grantsBYOK)
     }
 
-    func testActivationWithNewKeyRestartsWindow() async throws {
-        // Renewal = paste-new-key (F.0): activating a fresh key overwrites
-        // the old window start with the new license's created_at.
-        let transport = StubLicenseTransport()
-        transport.responses = [(data("""
-        {
-          "activated": true,
-          "license_key": { "status": "active", "created_at": "2027-03-01T00:00:00.000000Z" },
-          "instance": { "id": "inst_RENEWED" }
-        }
-        """), 200)]
+    // MARK: - currentLicenseState: edition
 
-        let oldEpoch = String(Self.createdAtEpoch)
-        let createdAtSlot = InMemoryKeychainSlot(oldEpoch)
-        let service = makeService(transport: transport, createdAtSlot: createdAtSlot)
-        _ = try await service.activate(licenseKey: "KEY-RENEWAL")
-
-        if case .found(let raw) = createdAtSlot.readResult() {
-            XCTAssertNotEqual(raw, oldEpoch, "a renewal key must restart the window")
-        } else {
-            XCTFail("expected a persisted window start after renewal activation")
-        }
-    }
-
-    func testMissingCreatedAtKeepsExistingWindowAndFailsOpenWhenAbsent() async throws {
-        // A response WITHOUT created_at (older shape) must not erase a
-        // previously-persisted window start…
-        let transport = StubLicenseTransport()
-        transport.responses = [(data("""
-        { "valid": true, "license_key": { "status": "active" } }
-        """), 200)]
-        let seeded = InMemoryKeychainSlot(String(Self.createdAtEpoch))
+    func testCachedKeyWithoutEditionMetadataFailsClosed() {
+        // An old cache holds a key but no confirmed product/major — never
+        // unlocks offline until an online activate/validate re-confirms.
         let service = makeService(
-            transport: transport,
-            keySlot: InMemoryKeychainSlot("KEY-OLD-SHAPE"),
-            instanceSlot: InMemoryKeychainSlot("inst_OLD"),
-            createdAtSlot: seeded
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I")
         )
-        _ = try await service.validate()
-        XCTAssertEqual(seeded.readResult(), .found(String(Self.createdAtEpoch)))
-
-        // …and with nothing persisted at all, the window reads nil (callers
-        // fail OPEN — updates offered normally).
-        let bare = makeService(transport: StubLicenseTransport())
-        XCTAssertNil(bare.updateWindowEnd())
+        let snapshot = service.currentLicenseState()
+        XCTAssertEqual(snapshot.presence, .present)
+        XCTAssertEqual(snapshot.edition, .missingMetadata)
+        XCTAssertFalse(snapshot.grantsBYOK, "missing edition metadata must fail closed")
     }
 
-    func testParseCreatedAtAcceptsKnownFormatsAndRejectsGarbage() {
-        let expected = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch))
-        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15T12:00:00.000000Z"), expected)
-        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15T12:00:00Z"), expected)
-        XCTAssertEqual(LicenseService.parseCreatedAt("2026-01-15 12:00:00"), expected)
-        XCTAssertNil(LicenseService.parseCreatedAt(nil))
-        XCTAssertNil(LicenseService.parseCreatedAt(""))
-        XCTAssertNil(LicenseService.parseCreatedAt("not-a-date"))
-    }
-
-    func testUpdateWindowEndIsOneCalendarYear() {
-        let createdAt = Date(timeIntervalSince1970: TimeInterval(Self.createdAtEpoch)) // 2026-01-15
-        let end = LicenseService.updateWindowEnd(createdAt: createdAt)
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        XCTAssertEqual(calendar.dateComponents([.year], from: createdAt, to: end).year, 1)
-    }
-
-    func testClearLicenseRemovesCreatedAt() async throws {
-        let createdAtSlot = InMemoryKeychainSlot(String(Self.createdAtEpoch))
+    func testCachedWrongProductFailsClosed() {
         let service = makeService(
             transport: StubLicenseTransport(),
             keySlot: InMemoryKeychainSlot("K"),
             instanceSlot: InMemoryKeychainSlot("I"),
-            createdAtSlot: createdAtSlot
+            productSlot: InMemoryKeychainSlot("999"),
+            majorSlot: compatibleMajorSlot()
         )
-        service.clearLicense()
-        XCTAssertEqual(createdAtSlot.readResult(), .absent)
+        let snapshot = service.currentLicenseState()
+        XCTAssertEqual(snapshot.edition, .incompatible(licensedMajor: 1))
+        XCTAssertFalse(snapshot.grantsBYOK)
     }
 
-    // MARK: - Update window (E7): the F.2 trap — validity/generation untouched
-
-    func testOutOfWindowLicenseStillValidatesAndGenerates() async throws {
-        // A license purchased >1 year ago is OUT of its update window — and
-        // that must change NOTHING about validity or generation: validate
-        // still completes `valid:true` (no revocation), the entitlement stays
-        // .byok, and the generation gate stays open. Only the updater reads
-        // the window.
-        let transport = StubLicenseTransport()
-        transport.responses = [(data("""
-        { "valid": true, "license_key": { "status": "active", "created_at": "2024-01-15T12:00:00.000000Z" } }
-        """), 200)]
-
-        let twoYearsAgo = Date(timeIntervalSince1970: 1_705_320_000) // 2024-01-15
-        let createdAtSlot = InMemoryKeychainSlot(String(Int(twoYearsAgo.timeIntervalSince1970)))
-        let oldStamp = String(Int(Date().addingTimeInterval(-LicenseService.revalidationInterval - 60).timeIntervalSince1970))
-        let keySlot = InMemoryKeychainSlot("KEY-LAPSED-WINDOW")
+    func testMajorOneLicenseReadByMajorTwoBuildFailsClosed() {
+        // A future Zerro 2 build (requiredMajor 2, its own product) reading a
+        // cached major-1 record: fails closed, and the snapshot names the
+        // licensed major so the paywall can say "covers Zerro 1.x".
+        let majorTwoPolicy = LicenseEditionPolicy(requiredMajor: 2, approvedProductIDs: [8])
         let service = makeService(
-            transport: transport,
-            keySlot: keySlot,
-            instanceSlot: InMemoryKeychainSlot("inst_LAPSED"),
-            lastValidatedSlot: InMemoryKeychainSlot(oldStamp),
-            createdAtSlot: createdAtSlot
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: compatibleProductSlot(),   // product 7 = the major-1 product
+            majorSlot: compatibleMajorSlot(),       // major 1
+            policy: majorTwoPolicy
         )
+        let snapshot = service.currentLicenseState()
+        XCTAssertEqual(snapshot.edition, .incompatible(licensedMajor: 1))
+        XCTAssertFalse(snapshot.grantsBYOK, "a 1.x license must never unlock a 2.x build")
+    }
 
-        // The window has lapsed…
-        let windowEnd = try XCTUnwrap(service.updateWindowEnd())
-        XCTAssertLessThan(windowEnd, Date(), "fixture sanity: window must be in the past")
+    func testUnparseableEditionMetadataFailsClosed() {
+        let service = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: InMemoryKeychainSlot("garbage"),
+            majorSlot: InMemoryKeychainSlot("also-garbage")
+        )
+        let snapshot = service.currentLicenseState()
+        XCTAssertEqual(snapshot.edition, .incompatible(licensedMajor: nil))
+        XCTAssertFalse(snapshot.grantsBYOK)
+    }
 
-        // …yet validation is a plain non-revoking success…
-        let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
-        XCTAssertEqual(store.state, .byok)
-        await store.revalidateLicenseIfNeeded()
-        XCTAssertEqual(keySlot.readResult(), .found("KEY-LAPSED-WINDOW"), "out-of-window must never clear the license")
-        XCTAssertEqual(store.state, .byok)
+    func testEditionReadFailureFailsClosed() {
+        // A genuine Keychain READ FAILURE on either edition slot leaves the
+        // record unverifiable — `.readFailure` is diagnostic only and must
+        // FAIL CLOSED.
+        let failingProduct = InMemoryKeychainSlot("7")
+        failingProduct.simulateReadFailure = true
+        let service = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: failingProduct,
+            majorSlot: compatibleMajorSlot()
+        )
+        let snapshot = service.currentLicenseState()
+        XCTAssertEqual(snapshot.edition, .readFailure)
+        XCTAssertFalse(snapshot.grantsBYOK, "an unverifiable edition must never unlock")
 
-        // …and the generation gate is untouched.
-        XCTAssertTrue(store.canGenerate)
+        let failingMajor = InMemoryKeychainSlot("1")
+        failingMajor.simulateReadFailure = true
+        let majorService = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: InMemoryKeychainSlot("K"),
+            instanceSlot: InMemoryKeychainSlot("I"),
+            productSlot: compatibleProductSlot(),
+            majorSlot: failingMajor
+        )
+        XCTAssertEqual(majorService.currentLicenseState().edition, .readFailure)
+        XCTAssertFalse(majorService.currentLicenseState().grantsBYOK)
+    }
+
+    func testAllSlotsFailingReadsNeverUnlockANewOrExpiredUser() {
+        // The attack/failure shape that motivated fail-closed: a brand-new
+        // (or expired) machine where EVERY license slot reports a read
+        // failure must not conjure `.byok` out of unreadable storage.
+        let slots = (0..<5).map { _ -> InMemoryKeychainSlot in
+            let slot = InMemoryKeychainSlot("junk")
+            slot.simulateReadFailure = true
+            return slot
+        }
+        let service = LicenseService(
+            licenseKeySlot: slots[0],
+            instanceIDSlot: slots[1],
+            lastValidatedSlot: slots[2],
+            licensedProductIDSlot: slots[3],
+            licensedMajorSlot: slots[4],
+            policy: Self.testPolicy,
+            transport: StubLicenseTransport()
+        )
+        XCTAssertFalse(service.currentLicenseState().grantsBYOK)
+
+        // Through the store: with no trial clock underneath, the simulated
+        // failures land on `.localTrialExpired` (blocked), never `.byok`.
+        let store = EntitlementStore(enforcementMode: .official, licenseService: service)
+        XCTAssertEqual(store.state, .localTrialExpired)
+        XCTAssertFalse(store.canGenerate)
+    }
+
+    // MARK: - Policy
+
+    func testPolicyApprovalRules() {
+        let policy = LicenseEditionPolicy(requiredMajor: 1, approvedProductIDs: [7])
+        XCTAssertTrue(policy.isApproved(productID: 7))
+        XCTAssertFalse(policy.isApproved(productID: 8))
+        XCTAssertFalse(policy.isApproved(productID: nil), "a missing product id is never approved")
+    }
+
+    func testCurrentPolicyApprovesExactlyOneEnvironmentProduct() {
+        // The build's policy holds exactly ONE product — the environment's —
+        // never both. (The test binary compiles DEBUG → the test product.)
+        let policy = LicenseEditionPolicy.current
+        XCTAssertEqual(policy.requiredMajor, 1)
+        XCTAssertEqual(policy.approvedProductIDs.count, 1)
+        if LicenseEditionPolicy.usesTestEnvironment {
+            XCTAssertEqual(policy.approvedProductIDs, [LicenseEditionPolicy.testProductID])
+            XCTAssertFalse(policy.isApproved(productID: LicenseEditionPolicy.liveProductID))
+        } else {
+            XCTAssertEqual(policy.approvedProductIDs, [LicenseEditionPolicy.liveProductID])
+            XCTAssertFalse(policy.isApproved(productID: LicenseEditionPolicy.testProductID))
+        }
+    }
+
+    // MARK: - clearLicense
+
+    func testClearLicenseRemovesAllFiveSlots() {
+        let keySlot = InMemoryKeychainSlot("K")
+        let instanceSlot = InMemoryKeychainSlot("I")
+        let lastValidatedSlot = InMemoryKeychainSlot("123")
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
+        let service = makeService(
+            transport: StubLicenseTransport(),
+            keySlot: keySlot,
+            instanceSlot: instanceSlot,
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
+        )
+        service.clearLicense()
+        XCTAssertEqual(keySlot.readResult(), .absent)
+        XCTAssertEqual(instanceSlot.readResult(), .absent)
+        XCTAssertEqual(lastValidatedSlot.readResult(), .absent)
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
     }
 
     // MARK: - Deactivate
@@ -678,11 +1001,15 @@ final class LicenseServiceTests: XCTestCase {
         let keySlot = InMemoryKeychainSlot("KEY-DEV")
         let instanceSlot = InMemoryKeychainSlot("inst_DEV")
         let lastValidatedSlot = InMemoryKeychainSlot(String(Int(Date().timeIntervalSince1970)))
+        let productSlot = compatibleProductSlot()
+        let majorSlot = compatibleMajorSlot()
         let service = makeService(
             transport: transport,
             keySlot: keySlot,
             instanceSlot: instanceSlot,
-            lastValidatedSlot: lastValidatedSlot
+            lastValidatedSlot: lastValidatedSlot,
+            productSlot: productSlot,
+            majorSlot: majorSlot
         )
 
         let store = makeHermeticStore(licenseService: service, keySlot: keySlot)
@@ -694,8 +1021,8 @@ final class LicenseServiceTests: XCTestCase {
         XCTAssertEqual(transport.requests.first?.parameters["instance_id"], "inst_DEV")
         XCTAssertEqual(keySlot.readResult(), .absent)
         XCTAssertEqual(instanceSlot.readResult(), .absent)
-        if case .trial = store.state {} else {
-            XCTFail("expected drop to .trial after deactivation, got \(store.state)")
-        }
+        XCTAssertEqual(productSlot.readResult(), .absent)
+        XCTAssertEqual(majorSlot.readResult(), .absent)
+        XCTAssertEqual(store.state, .localTrialExpired, "deactivation drops to the trial computation")
     }
 }

@@ -24,9 +24,9 @@ final class UpdaterRelaunchGateTests: XCTestCase {
     private func makeDelegate(
         isBusy: @escaping @MainActor () -> Bool,
         onNextIdle: @escaping @MainActor (_ callback: @escaping @MainActor () -> Void) -> Void
-    ) -> UpdateWindowUpdaterDelegate {
-        UpdateWindowUpdaterDelegate(
-            currentWindowEnd: { nil },
+    ) -> UpdateMajorUpdaterDelegate {
+        UpdateMajorUpdaterDelegate(
+            allowedMajor: { 1 },
             isBusy: isBusy,
             onNextIdle: onNextIdle
         )

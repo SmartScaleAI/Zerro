@@ -2,7 +2,11 @@
 //  AreaSelectorModelLockTests.swift
 //  ZerroTests
 //
-//  Model-selection policy shared by the menu bar and recording start.
+//  Model-selection policy shared by the menu bar and recording start: the
+//  persisted choice is honored whenever its provider key is on file, and
+//  falls back to a usable provider's model otherwise. Every entitlement
+//  state runs on the user's own keys, so the gating is identical across
+//  the trial and the license.
 //
 
 import XCTest
@@ -12,118 +16,72 @@ import XCTest
 final class AreaSelectorModelLockTests: XCTestCase {
     private let premiumModel = ModelRegistry.all.first { $0.id == "claude-opus-4-7" }!
 
-    func testTrialUsesFreeModelWithoutOverwritingPersistedChoice() {
-        let persisted = premiumModel.id
-        let effective = ModelSelectionPolicy.effectiveModelID(
-            persistedModelID: persisted,
-            entitlement: .trial(creditsRemaining: 15),
-            availableProviders: []
-        )
+    private let allStates: [EntitlementState] = [
+        .localTrial(daysRemaining: 9),
+        .localTrialExpired,
+        .byok,
+    ]
 
-        XCTAssertEqual(effective, ModelRegistry.trialModelID)
-        XCTAssertEqual(persisted, premiumModel.id)
-        XCTAssertTrue(
-            ModelSelectionPolicy.isTrialLocked(
-                premiumModel,
-                entitlement: .trial(creditsRemaining: 15)
-            )
+    func testUnresolvedEntitlementUsesPersistedChoice() {
+        XCTAssertEqual(
+            ModelSelectionPolicy.effectiveModelID(
+                persistedModelID: premiumModel.id,
+                entitlement: nil,
+                availableProviders: []
+            ),
+            premiumModel.id
+        )
+        XCTAssertFalse(
+            ModelSelectionPolicy.isBYOKGated(premiumModel, entitlement: nil, availableProviders: [])
         )
     }
 
-    func testManagedAndUnresolvedEntitlementsUsePersistedChoice() {
-        let states: [EntitlementState?] = [
-            .managed(creditsRemaining: 300, resetDate: Date()), nil,
-        ]
-
-        for entitlement in states {
+    func testEveryStateUsesPersistedChoiceWhenProviderIsAvailable() {
+        for entitlement in allStates {
             XCTAssertEqual(
                 ModelSelectionPolicy.effectiveModelID(
                     persistedModelID: premiumModel.id,
                     entitlement: entitlement,
-                    availableProviders: []
+                    availableProviders: [.anthropic]
                 ),
-                premiumModel.id
+                premiumModel.id,
+                "\(entitlement)"
+            )
+        }
+    }
+
+    func testEveryStateFallsBackToAUsableProviderModel() {
+        for entitlement in allStates {
+            XCTAssertEqual(
+                ModelSelectionPolicy.effectiveModelID(
+                    persistedModelID: "gemini-3.5-flash",
+                    entitlement: entitlement,
+                    availableProviders: [.anthropic]
+                ),
+                "claude-sonnet-4-6",
+                "\(entitlement)"
+            )
+        }
+    }
+
+    func testGatesOnlyProvidersWithoutKeys() {
+        for entitlement in allStates {
+            XCTAssertTrue(
+                ModelSelectionPolicy.isBYOKGated(
+                    premiumModel,
+                    entitlement: entitlement,
+                    availableProviders: [.openai, .gemini]
+                ),
+                "\(entitlement)"
             )
             XCTAssertFalse(
-                ModelSelectionPolicy.isTrialLocked(
+                ModelSelectionPolicy.isBYOKGated(
                     premiumModel,
-                    entitlement: entitlement
-                )
-            )
-        }
-    }
-
-    func testBYOKModesUsePersistedChoiceWhenProviderIsAvailable() {
-        let states: [EntitlementState] = [
-            .byok,
-            .byokTrial(generationsRemaining: 9),
-            .byokTrialExpired,
-        ]
-
-        for entitlement in states {
-            XCTAssertEqual(
-                ModelSelectionPolicy.effectiveModelID(
-                    persistedModelID: premiumModel.id,
                     entitlement: entitlement,
                     availableProviders: [.anthropic]
                 ),
-                premiumModel.id
+                "\(entitlement)"
             )
         }
-    }
-
-    func testBYOKModesFallBackToAUsableProviderModel() {
-        for entitlement in [
-            EntitlementState.byok,
-            .byokTrial(generationsRemaining: 9),
-            .byokTrialExpired,
-        ] {
-            XCTAssertEqual(
-                ModelSelectionPolicy.effectiveModelID(
-                    persistedModelID: ModelRegistry.trialModelID,
-                    entitlement: entitlement,
-                    availableProviders: [.anthropic]
-                ),
-                "claude-sonnet-4-6"
-            )
-        }
-    }
-
-    func testBYOKGatesOnlyProvidersWithoutKeys() {
-        XCTAssertTrue(
-            ModelSelectionPolicy.isBYOKGated(
-                premiumModel,
-                entitlement: .byok,
-                availableProviders: [.openai, .gemini]
-            )
-        )
-        XCTAssertFalse(
-            ModelSelectionPolicy.isBYOKGated(
-                premiumModel,
-                entitlement: .byok,
-                availableProviders: [.anthropic]
-            )
-        )
-        XCTAssertTrue(
-            ModelSelectionPolicy.isBYOKGated(
-                premiumModel,
-                entitlement: .byokTrial(generationsRemaining: 9),
-                availableProviders: [.openai, .gemini]
-            )
-        )
-        XCTAssertTrue(
-            ModelSelectionPolicy.isBYOKGated(
-                premiumModel,
-                entitlement: .byokTrialExpired,
-                availableProviders: [.openai, .gemini]
-            )
-        )
-        XCTAssertFalse(
-            ModelSelectionPolicy.isBYOKGated(
-                premiumModel,
-                entitlement: .managed(creditsRemaining: 300, resetDate: Date()),
-                availableProviders: []
-            )
-        )
     }
 }

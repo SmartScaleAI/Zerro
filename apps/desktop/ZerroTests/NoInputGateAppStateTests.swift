@@ -7,12 +7,11 @@
 //  `RecordingInputGateTests` pins the pure predicate; this pins the wiring:
 //  `runPromptGeneration(processed:)` consults the gate FIRST, so a recording with
 //  no on-device signal (silent audio AND no clicks) is short-circuited to the
-//  friendly `.noInputCaptured` failure BEFORE any analytics, route resolution, or
-//  provider/local dispatch — and its working directory is discarded rather than
-//  held for a paid resume.
+//  friendly `.noInputCaptured` failure BEFORE any analytics or provider
+//  dispatch — and its working directory is discarded rather than retained.
 //
-//  Zero-dispatch proof without a stub proxy: the gate returns synchronously with
-//  `.failed(.noInputCaptured)`. A real dispatch (managed/trial/BYOK) instead
+//  Zero-dispatch proof: the gate returns synchronously with
+//  `.failed(.noInputCaptured)`. A real dispatch instead
 //  leaves `state == .processing` with an in-flight task and would NEVER produce
 //  this terminal state on the calling turn — so the synchronous outcome alone
 //  distinguishes "gated" from "dispatched". The test therefore never starts a
@@ -60,11 +59,11 @@ final class NoInputGateAppStateTests: XCTestCase {
         app.processedRecording = processed
         app.runPromptGeneration(processed: processed)
 
-        // Gated synchronously, before any dispatch (a real managed/trial/BYOK run
-        // would still be `.processing` with an in-flight task here, never this
-        // terminal state on the calling turn).
+        // Gated synchronously, before any dispatch (a real run would still be
+        // `.processing` with an in-flight task here, never this terminal state
+        // on the calling turn).
         XCTAssertEqual(app.state, .failed(reason: .noInputCaptured))
-        // The held recording is torn down — not retained for a paid resume.
+        // The held recording is torn down — not retained.
         XCTAssertNil(app.processedRecording)
     }
 

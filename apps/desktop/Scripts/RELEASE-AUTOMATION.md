@@ -1,8 +1,8 @@
-# Zerro — Full Release Automation (GitHub Actions)
+# Zerro — Release Automation (GitHub Actions)
 
-You've already shipped versions by hand, so this is the **fully-automated** setup:
-push a version tag and GitHub does everything — build, sign, notarize, publish the
-download, and update the appcast on your website. Existing users auto-update.
+Releases are fully automated: a version bump (or a pushed tag) makes GitHub
+Actions build, sign, notarize, staple, package the dmg, sign the Sparkle feed,
+and publish. Existing users auto-update.
 
 ```
 # Standard path: bump apps/desktop/VERSION in the staging → main promotion PR;
@@ -13,132 +13,152 @@ download, and update the appcast on your website. Existing users auto-update.
 git tag app-v1.0.2 && git push origin app-v1.0.2   # only app-v* tags trigger a release
 ```
 
-> **Update (2026-06-26) — appcast retention & versioned downloads (L-07).** The
-> appcast at `apps/web/public/appcast.xml` is now a **cumulative, multi-item
-> feed**: every release appends its `<item>` and preserves all prior ones (each
-> with its recorded `pubDate`/`length`/`edSignature`). Each release uploads its
-> dmg to a **permanent, immutable** object `downloads/Zerro-<build>.dmg` — the
-> only URL the appcast references — so old versions stay downloadable and their
-> signatures never go stale. The stable `downloads/Zerro.dmg` is still
-> overwritten every release but is **marketing-only** ("download latest", behind
-> `getzerro.app/Zerro.dmg`); the appcast never points at it. CI seeds
-> `generate_appcast` from `origin/main`'s appcast and runs it with
-> `--maximum-versions 0` (preserve all). This retention is what lets the BYOK
-> 1-year update window offer a lapsed user the newest build they're entitled to
-> rather than nothing. **Note (refreshed 2026-07-10, L-08):** the two-repo /
-> GitHub-Releases-download topology described in the sections below no longer
-> exists and is retained only as historical context. The live pipeline is
-> `.github/workflows/release-app.yml` in this monorepo, triggered by `app-v*`
-> tags (normally created by `auto-release.yml` on an `apps/desktop/VERSION`
-> bump); the dmg and the appcast publish to Supabase Storage, and the
-> getzerro.app site lives in `apps/web`, serving both via Vercel redirects.
-
 ---
 
-## Your two repos and what lives where
+## Where the artifacts live
 
-| Repo | Purpose | What changes for automation |
-|---|---|---|
-| **`SmartScaleAI/smartscale-zerro`** (app repo) | The macOS app source | Gets the workflow file, the export options, the secrets, and the version tags. **Almost all setup happens here.** Each release's `.dmg` is stored on this repo's **Releases** page. |
-| **`SmartScaleAI/smartscale-website`** (site repo) | The getzerro.app site, auto-deployed by Vercel | Receives **one automated commit per release**: the updated `appcast.xml`. You make **no manual changes** here for releases — the workflow pushes to it. The only setup touching it is granting a token permission (and confirming the appcast's path). |
+**GitHub Releases on `SmartScaleAI/Zerro` are the canonical public
+source for every official artifact.** Each production release (`app-v<version>`)
+carries exactly three assets:
 
-**Keep them separate — do not merge.** They release on different cadences, binaries
-don't belong in the site's git history, and the automation is designed to work across
-the two.
+| Asset | Purpose |
+|---|---|
+| `Zerro-<build>.dmg` | The immutable archive. It is the only enclosure the Sparkle feed references, so every past release's recorded `edSignature`/`length` stays valid and old builds remain downloadable. |
+| `Zerro.dmg` | A byte-identical stable "download latest" copy. |
+| `appcast.xml` | The cumulative, signed Sparkle feed. Every release appends its `<item>` and preserves all prior ones; each enclosure is a tag-specific `https://github.com/SmartScaleAI/Zerro/releases/download/app-v<version>/Zerro-<build>.dmg` URL. |
 
-```
-  Zerro (app repo)                                smartscale-website (site repo)
-  ┌────────────────────────────────┐             ┌──────────────────────────────┐
-  │  you: git push tag v1.0.2      │             │  appcast.xml  (served at      │
-  │      │                         │  workflow   │   getzerro.app/appcast.xml)   │
-  │      ▼                         │  commits    │            │                  │
-  │  GitHub Actions workflow ──────┼────────────▶│            ▼                  │
-  │   build → sign → notarize      │  appcast    │  Vercel auto-deploys          │
-  │   → staple → dmg → appcast     │             └──────────────────────────────┘
-  │      │                         │
-  │      ▼                         │
-  │  GitHub Release (dmg asset)    │  ◀── users download the dmg from here
-  └────────────────────────────────┘
-```
+The website (`apps/web`, deployed by Vercel) owns the two stable public URLs
+and redirects each to the matching asset on the latest release
+(`releases/latest/download/<asset>`), so neither URL ever changes:
 
-### Why the dmg lives on Zerro's GitHub Releases (not in smartscale-website)
+- `https://getzerro.app/appcast.xml` — the `SUFeedURL` baked into installed
+  apps → `…/releases/latest/download/appcast.xml`
+- `https://getzerro.app/Zerro.dmg` — the marketing download link →
+  `…/releases/latest/download/Zerro.dmg`
 
-- **Old versions stay downloadable** — each release keeps its own permanent
-  `downloads/Zerro-<build>.dmg` object (the appcast references these versioned
-  URLs). The stable `Zerro.dmg` is overwritten each release but is marketing-only
-  and never referenced by the appcast, so overwriting it can't strand anyone.
-- **smartscale-website stays tiny** — binaries don't belong in git; only the small
-  `appcast.xml` text file crosses into it.
+The routing contract is `apps/web/lib/release-routes.ts`; `next.config.ts`
+installs it, `apps/web/lib/release-routes.test.ts` verifies it, and the CI
+`release-routing-guard` job rejects any static `appcast.xml`/`Zerro.dmg` under
+`apps/web/public` or any routing change away from GitHub Releases.
+
+**Storage compatibility mirror.** After the GitHub Release is published, the
+workflow also upserts the same dmg and feed into the public Supabase Storage
+`downloads` bucket (`Zerro-<build>.dmg`, `Zerro.dmg`, `appcast.xml`) for
+clients that read the Storage objects directly. The mirror is guarded so its
+objects can never move backwards. It is not what the website routes to.
+
+### Why one repo, and why the dmg lives on GitHub Releases
+
+- **Old versions stay downloadable** — every release keeps its own permanent
+  `Zerro-<build>.dmg`; the stable `Zerro.dmg` is marketing-only and never
+  referenced by the feed, so overwriting it can't strand anyone.
+- **Binaries don't belong in git** — the site and the app share this monorepo,
+  but no dmg or appcast is ever committed; CI enforces it.
+- **Fewer credentials** — the workflow creates the release in its own repo
+  with the job's `GITHUB_TOKEN`; no cross-repo token exists.
 - **Enables Sparkle delta updates later**, which need old versions kept around.
-- **Fewer credentials** — the workflow creates Releases in its own repo (Zerro)
-  natively; only the appcast commit needs a cross-repo token.
 
-Your app's `SUFeedURL` (`https://getzerro.app/appcast.xml`) does **not** change — only
-where the dmg downloads *from* changes, and that's controlled by the appcast, so
-existing users transition seamlessly.
+The app's `SUFeedURL` (`https://getzerro.app/appcast.xml`) never changes — only
+where the dmg downloads *from* is controlled by the appcast, so existing users
+transition seamlessly.
 
 ---
 
 ## The two security systems (both automated)
 
-| System | Purpose | Key used in CI | Stored as secrets in |
+| System | Purpose | Key used in CI | Stored as |
 |---|---|---|---|
-| **Apple Developer ID + notarization** | macOS opens the app without warnings | Developer ID cert (`.p12`) + App Store Connect API key | **Zerro** repo |
-| **Sparkle EdDSA** | Users only install updates genuinely from you | Sparkle private key | **Zerro** repo |
+| **Apple Developer ID + notarization** | macOS opens the app without warnings | Developer ID cert (`.p12`) + App Store Connect API key | GitHub Actions secrets |
+| **Sparkle EdDSA** | Users only install updates genuinely from you | Sparkle private key | GitHub Actions secret |
 
-The CI runner is a fresh cloud Mac with none of your keys, so each is stored once as
-an encrypted GitHub Actions secret **in the Zerro repo** and loaded at runtime.
-One-time setup; never touched per release.
-
----
-
-## What the workflow does (all in the Zerro repo, except the last step)
-
-Triggered by pushing a tag matching `app-v*`:
-
-1. **Checkout** Zerro on a `macos-26` runner (default Xcode 26.4.x, required for the macOS 26.4
-   deployment target and Sparkle 2.9.2).
-2. **Import the Developer ID cert** from the secret into a temporary keychain
-   (destroyed when the job ends).
-3. **Derive versions from the tag** — `app-v1.0.2` → marketing version `1.0.2`; build
-   number = commit count (always increasing, which Sparkle requires).
-4. **Archive & export** a Developer ID-signed `Zerro.app`.
-5. **Verify** signature + hardened runtime (fails fast if misconfigured).
-6. **Package** the `.dmg`.
-7. **Notarize** via `notarytool --wait` using the App Store Connect API key; on
-   failure it prints Apple's log naming the offending file.
-8. **Staple** the ticket.
-9. **Generate the signed appcast** with `generate_appcast` + the Sparkle private key,
-   pointing the download URL at this tag's GitHub Release asset.
-10. **Create the GitHub Release on Zerro** and upload the `.dmg`.
-11. **Push `appcast.xml` to smartscale-website** (the only cross-repo step) → Vercel
-    auto-deploys → `getzerro.app/appcast.xml` is live.
-
-Nothing is published unless every prior step succeeds.
+The CI runner is a fresh cloud Mac with none of your keys, so each is stored
+once as an encrypted GitHub Actions secret and loaded at runtime. One-time
+setup (`SETUP-GITHUB-ACTIONS.md`); never touched per release.
 
 ---
 
-## One-time setup — which repo each step touches
+## What `release-app.yml` does
 
-Full click-by-click in `SETUP-GITHUB-ACTIONS.md`. Summary:
+Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
 
-| Setup step | Repo |
-|---|---|
-| Commit `.github/workflows/release-app.yml`, `Scripts/ExportOptions.plist` | **Zerro** |
-| Create all 8 secrets | **Zerro** → Settings → Secrets and variables → Actions |
-| Create the fine-grained PAT (`SITE_REPO_TOKEN`) | GitHub account settings; scope it to **smartscale-website** with Contents: Read/Write; store it as a secret **in Zerro** |
-| Confirm `SITE_APPCAST_PATH` matches where `appcast.xml` lives | look in **smartscale-website** (likely `public/appcast.xml`); set the value in the workflow file **in Zerro** |
+1. **Checkout** on a `macos-26` runner (Xcode 26.4.x, required for the
+   macOS 26.4 deployment target and Sparkle 2.9.2).
+2. **Derive versions** — `app-v1.0.2` → marketing version `1.0.2`; build
+   number = commit count (always increasing, which Sparkle requires); dmg
+   name `Zerro-<build>.dmg`.
+3. **Preflight gates** — the release tag must resolve to the checked-out
+   commit; the commit must be contained in `origin/main` (the production
+   release branch) and its `.github/workflows` must be identical to GitHub's
+   default branch (`github.event.repository.default_branch`, which need not
+   be `main` or contain the commit — GitHub's release API rejects the workflow
+   token for a commit whose workflow files differ from the default branch,
+   and `GITHUB_TOKEN` cannot be granted workflow-write);
+   and `Changelog.swift` must carry a What's New entry for the version (or the
+   commit carries `[no-changelog]`).
+4. **Import the Developer ID cert** into a temporary keychain (destroyed when
+   the job ends) and **fetch the pinned Sparkle tools** (checksum-verified).
+5. **Archive & export** a Developer ID-signed `Zerro.app` as an official
+   build, then **verify** the official marker, the version, the signature, and
+   the hardened runtime.
+6. **Package** the dmg, **notarize** via `notarytool --wait`, and **staple**.
+7. **Generate the cumulative signed appcast** with `generate_appcast` and the
+   Sparkle private key, seeded from the currently published feed so every
+   prior item is preserved, and check it (versioned enclosure present, newest
+   build, no mutable URL).
+8. **Prepare a draft GitHub Release** for the tag
+   (`Scripts/github_release_publish.py prepare`). A published release for the
+   tag fails the run (a re-cut is a deliberate manual act); a single existing
+   draft is reused and repaired (target/title reset, every stale asset
+   deleted); more than one draft is ambiguous and fails.
+9. **Upload `Zerro-<build>.dmg` and the byte-identical `Zerro.dmg`** to the
+   draft (same-name assets are replaced, never duplicated).
+10. **Build and upload the GitHub-hosted `appcast.xml`** to the draft — the
+    same feed with every enclosure rewritten to its immutable release-asset
+    URL, validated by `Scripts/appcast_github_feed.py` (every historical item
+    must map to exactly one published release asset; the only draft counted
+    is this run's own; signatures and lengths are preserved verbatim).
+11. **Verify the draft** — exactly the three assets, each the local size and
+    byte-identical after download, on a draft pinned to this commit; the
+    downloaded feed re-passes every feed rule. A verification manifest is
+    written.
+12. **Publish** — only with that manifest, and only if the draft still
+    matches it exactly: `draft=false` + `make_latest=true`, then confirm the
+    release is `releases/latest`, then confirm the real tag ref names this
+    commit. From here `getzerro.app/appcast.xml` and `getzerro.app/Zerro.dmg`
+    resolve this release.
+13. **Storage compatibility mirror** — after a monotonic guard against the
+    live objects, upsert the dmgs and feed into Supabase Storage and verify
+    them.
+14. **Notify Slack** with the What's New notes (best-effort; skipped without
+    the webhook secret).
 
-Secrets to create **in the Zerro repo**: `DEVELOPER_ID_CERT_P12`,
-`DEVELOPER_ID_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`, `AC_API_KEY_P8`, `AC_API_KEY_ID`,
-`AC_API_ISSUER_ID`, `SPARKLE_PRIVATE_KEY`, `SITE_REPO_TOKEN`.
+### What a failure leaves behind
 
-**smartscale-website needs no secrets and no workflow.** It just receives a commit.
+- **Before step 8:** nothing exists anywhere — no release, no draft, no
+  Storage change.
+- **Steps 8–11, or step 12 before its publish call:** a *draft* release for
+  the tag (invisible to `releases/latest` and to the website's URLs). The
+  previous latest release and both website URLs are unchanged. A same-tag
+  re-run reuses and repairs that draft.
+- **Step 12 after publication (the release did not become latest / the tag
+  check failed):** the release is published and complete but the job fails;
+  inspect before re-running.
+- **Step 13 (Storage compatibility mirror):** the workflow fails, but the
+  GitHub Release is already complete, verified, published, and latest — it is
+  not invalidated. Only the mirror's Storage objects need repair (re-run the
+  failed uploads by hand). A same-tag re-run of the workflow fails closed at
+  step 8 because the release is already published.
+- **Step 14:** warning only; the release is already live.
 
-> **Back up your Sparkle private key before anything else.** Your public key is baked
-> into shipped apps; if you lose the private key you can never sign an update existing
-> users will accept. Export from your keychain into a password manager (Part 3 of the
-> setup doc).
+### Staging (`release-staging.yml`)
+
+`staging-v*` tags build the **Zerro Staging** configuration side by side with
+production. The workflow creates a GitHub **prerelease** (`make_latest: false`,
+so it never becomes the repository's "latest" release) with
+`ZerroStaging-<build>.dmg`, `ZerroStaging.dmg`, and `appcast-staging.xml`, then
+publishes the immutable dmg and feed to the staging Supabase project's Storage
+bucket, which is the staging app's feed. It never touches the website or the
+production feed.
 
 ---
 
@@ -153,30 +173,42 @@ git tag app-v1.0.2
 git push origin app-v1.0.2
 
 # Watch the Actions tab. Green check =
-#   • versioned dmg uploaded to Supabase Storage (+ GitHub Release asset)
-#   • appcast.xml upserted to Supabase Storage → getzerro.app/appcast.xml serves it
+#   • GitHub Release app-v1.0.2 carries Zerro-<build>.dmg, Zerro.dmg, appcast.xml
+#   • getzerro.app/appcast.xml and getzerro.app/Zerro.dmg resolve to those assets
+#   • the Storage compatibility mirror was updated to match
 #   • users on older builds get offered the update
 ```
 
-If a release fails, nothing is published. Fix, then re-tag:
+If a release fails before publication (see "What a failure leaves behind"),
+only a draft exists. Fix the cause, then either re-run the workflow for the
+same tag (it repairs the draft) or re-tag:
 
 ```bash
 git tag -d app-v1.0.2 && git push origin :app-v1.0.2   # remove the bad tag
 git tag app-v1.0.2 && git push origin app-v1.0.2       # try again
 ```
 
+If it fails *after* publication, the GitHub Release is live; delete it (and
+the tag) deliberately before re-cutting the same version.
+
 ---
 
 ## Notes specific to Zerro
 
-- **Build number must always increase.** Sparkle compares the integer build number,
-  not `1.0.2`. Last shipped build was `2`; the workflow derives builds from commit
-  count, which is always higher and always increasing.
-- **Deployment target is macOS 26.4** — if a release fails at build time, the runner's
-  Xcode may be too old; bump the runner image / Xcode selection in the workflow.
-- **Hardened runtime** is required for notarization and already `YES` in Release; the
-  workflow re-asserts it.
-- **Entitlements stay minimal** (currently audio input); extras can fail notarization.
+- **Build number must always increase.** Sparkle compares the integer build
+  number, not `1.0.2`. The workflow derives builds from commit count, which is
+  always higher and always increasing, and the feed check refuses a build that
+  is not the newest.
+- **Deployment target is macOS 26.4** — if a release fails at build time, the
+  runner's Xcode may be too old; bump the runner image / Xcode selection in the
+  workflow.
+- **Hardened runtime** is required for notarization and already `YES` in
+  Release; the workflow re-asserts it.
+- **Entitlements stay minimal** (currently audio input); extras can fail
+  notarization.
+- **A build attached to two releases** (a re-cut) is resolved for the
+  GitHub-hosted feed only by the `APPCAST_ASSET_PINS` repository variable
+  (`Zerro-<build>.dmg=app-v<version> …`), reviewed by the owner.
 
 ---
 

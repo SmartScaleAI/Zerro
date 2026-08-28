@@ -1,5 +1,6 @@
 import type { NextConfig } from "next"
 import withBundleAnalyzer from "@next/bundle-analyzer"
+import { RELEASE_REDIRECTS } from "./lib/release-routes.ts"
 
 // K-04: Content-Security-Policy, built from the site's ACTUAL resource usage.
 // Shipped REPORT-ONLY first (see headers() below) so violations are logged to
@@ -32,10 +33,8 @@ import withBundleAnalyzer from "@next/bundle-analyzer"
 //  - font-src 'self'            Inter is self-hosted by next/font (no Google
 //                               Fonts network fetch).
 //  - connect-src 'self'         PostHog ingest is reverse-proxied through
-//                               /ingest (same-origin).
-//    https://…supabase.co       The affiliate-capture beacon POSTs the ?aff code
-//                               to the Supabase Edge Function (FUNCTIONS_BASE_URL
-//                               in lib/site-config.ts).
+//                               /ingest (same-origin); the browser talks to no
+//                               other origin.
 //  - worker-src 'self' blob:    posthog-js spins up a blob: web worker to gzip
 //                               event payloads.
 //  - frame-ancestors 'none'     modern equivalent of X-Frame-Options: DENY —
@@ -44,15 +43,14 @@ import withBundleAnalyzer from "@next/bundle-analyzer"
 //  - object-src 'none'          no <object>/<embed>/plugins.
 //  - base-uri 'self'            block <base> tag injection from redirecting
 //                               relative URLs.
-//  - form-action 'self'         no <form> submits cross-origin (the affiliate
-//                               beacon is a fetch, covered by connect-src).
+//  - form-action 'self'         no <form> submits cross-origin.
 const cspDirectives = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https://wjxqmurgwyxwkezncxke.supabase.co",
+  "connect-src 'self'",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",
   "frame-src 'none'",
@@ -75,25 +73,6 @@ const nextConfig: NextConfig = {
       {
         source: "/ingest/:path*",
         destination: "https://us.i.posthog.com/:path*",
-      },
-      {
-        // Sparkle auto-update feed. Installed apps have getzerro.app/appcast.xml
-        // baked in as their SUFeedURL, so that path must keep resolving. Serve it
-        // by REWRITE (transparent proxy, same-origin) from the public Supabase
-        // Storage object the release workflow uploads — NOT a redirect, so the
-        // Sparkle client never has to follow a cross-host hop. This replaces
-        // committing the feed to git and pushing it to the now-PR-protected
-        // `main` (which silently broke 1.4.19's publish).
-        //
-        // CUTOVER: this is an afterFiles rewrite (the array form), which Next.js
-        // evaluates AFTER the filesystem — so while a real file exists at
-        // public/appcast.xml it serves the feed and this rewrite is INERT.
-        // Removing public/appcast.xml (after Storage is seeded) atomically flips
-        // serving to the Storage object with no gap. (Same precedence rule as the
-        // /Zerro.dmg redirect note below.)
-        source: "/appcast.xml",
-        destination:
-          "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml",
       },
     ]
   },
@@ -147,25 +126,17 @@ const nextConfig: NextConfig = {
       },
     ]
   },
+  // Stable public release URLs. getzerro.app/appcast.xml (the Sparkle feed URL
+  // baked into installed apps) and getzerro.app/Zerro.dmg (the latest-download
+  // link) redirect to the matching asset on the latest GitHub Release of the
+  // app repository, which is the canonical public source for official builds.
+  // The contract — sources, destinations, and the temporary-redirect choice —
+  // lives in lib/release-routes.ts; keep this list wired to it so the CI
+  // routing guard and lib/release-routes.test.ts keep verifying the real
+  // configuration. Never commit apps/web/public/appcast.xml or
+  // apps/web/public/Zerro.dmg.
   async redirects() {
-    return [
-      {
-        // Keep the stable public download link working across releases by
-        // redirecting it to the public Supabase Storage asset. Temporary (307)
-        // so the target is re-resolved on every request, never cached.
-        //
-        // The repo is private, so GitHub release assets 404 for anyone not
-        // signed in. The .dmg is hosted in the public `downloads` bucket
-        // instead; CI overwrites Zerro.dmg there on each release.
-        //
-        // NOTE: a real file at `public/Zerro.dmg` takes precedence over this
-        // redirect on Vercel — never commit the dmg into apps/web/public.
-        source: "/Zerro.dmg",
-        destination:
-          "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/Zerro.dmg",
-        permanent: false,
-      },
-    ]
+    return [...RELEASE_REDIRECTS]
   },
 }
 

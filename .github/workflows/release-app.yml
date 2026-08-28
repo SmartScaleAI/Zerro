@@ -14,9 +14,10 @@ on:
         required: true
 
 permissions:
-  contents: write          # create the GitHub Release (the appcast publishes to Storage, not a git push)
+  contents: write          # create the GitHub Release and upload its assets (no git push is involved)
 
-# Never run two releases at once: both would upsert the same Storage appcast object.
+# Never run two releases at once: both would build a cumulative feed from the
+# same published state and upsert the same Storage compatibility-mirror objects.
 concurrency:
   group: release-app
   cancel-in-progress: false
@@ -32,9 +33,14 @@ env:
   APP_NAME: Zerro
   BUNDLE_ID: com.cbreeding.Zerro
   TEAM_ID: H6NWCRRAHV
-  # The Sparkle appcast is published by uploading it to a public Supabase Storage
-  # object; getzerro.app/appcast.xml serves it via a Vercel redirect (apps/web).
-  # No git push to the (PR-protected) main branch is involved.
+  # GitHub Releases are the canonical public source for the official artifacts:
+  # each release carries Zerro-<build>.dmg, Zerro.dmg, and appcast.xml, and
+  # the website (apps/web/lib/release-routes.ts) redirects getzerro.app/appcast.xml
+  # and getzerro.app/Zerro.dmg to those assets on the latest release. The
+  # Supabase Storage publication at the end of the job maintains a
+  # compatibility mirror of the same artifacts for clients that read the
+  # Storage objects directly; it is not what the website routes to. No git
+  # push to the (PR-protected) main branch is involved.
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
 
 jobs:
@@ -70,7 +76,66 @@ jobs:
           # so naming the dmg Zerro-<build>.dmg yields a per-release immutable URL
           # (…/downloads/Zerro-<build>.dmg) instead of the mutable Zerro.dmg (L-07).
           echo "DMG_NAME=$APP_NAME-$BUILD.dmg" >> "$GITHUB_ENV"
+          # The tag this run publishes under. On a tag push it is the ref
+          # itself; on a manual run it is derived from the version input, so
+          # every GitHub Release step below targets the same app-v<version>
+          # instead of the branch name workflow_dispatch runs on.
+          echo "RELEASE_TAG=app-v$MARKETING" >> "$GITHUB_ENV"
           echo "Releasing $MARKETING (build $BUILD)"
+
+      # ----------------------------------------------------------------------
+      # Fail-closed tag-target check BEFORE the expensive build. A tag-push run
+      # must have the tag, and it must resolve (peeling any annotated tag
+      # object) to the checked-out commit; a workflow_dispatch run may have no
+      # tag yet, in which case the release step below creates it pinned to
+      # this commit (target_commitish). A tag that already exists at another
+      # commit fails the run here: the release would otherwise advertise
+      # assets built from a different commit than its tag names. The script
+      # checks the real Git ref, never the release's target_commitish
+      # metadata, and treats anything other than a genuine 404 (auth, rate
+      # limit, network) as a failure.
+      - name: Verify release tag targets this commit (preflight)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" preflight "$EVENT_NAME"
+
+      # ----------------------------------------------------------------------
+      # Fail-closed release-source check BEFORE the expensive build, in two
+      # separate parts (Scripts/verify_release_source.sh):
+      #   • The commit being released must be contained in origin/main, the
+      #     PRODUCTION RELEASE branch.
+      #   • Its .github/workflows must be identical to GitHub's DEFAULT
+      #     branch (github.event.repository.default_branch — supplied by the
+      #     event, never hardcoded, and not necessarily main). GitHub's
+      #     release API compares a release's target commit against the
+      #     default branch and rejects the workflow's GITHUB_TOKEN ("Resource
+      #     not accessible by integration") when that commit modifies workflow
+      #     files relative to it; GITHUB_TOKEN cannot be granted the
+      #     workflow-write permission that would allow it. Without this check
+      #     the rejection would surface only at publication, after the full
+      #     build. The default branch does not need to contain the release
+      #     commit.
+      # The auto-release tag (created on a main merge) and a manual release of
+      # a main commit pass as long as main's workflows match the default
+      # branch; a tag or dispatch on any other commit fails here. Fails closed
+      # if the default-branch name is missing or either ref cannot be
+      # fetched. Both refs are fetched explicitly, then only local history is
+      # read.
+      - name: Verify release source (main + default-branch workflows)
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEFAULT_BRANCH:-}" ]; then
+            echo "::error::github.event.repository.default_branch is empty — cannot determine GitHub's default branch for the workflow-tree check. Refusing to guess."
+            exit 1
+          fi
+          git fetch --quiet --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          echo "Production release branch: origin/main; GitHub default branch: origin/${DEFAULT_BRANCH}"
+          Scripts/verify_release_source.sh "$GITHUB_SHA" origin/main "origin/${DEFAULT_BRANCH}"
 
       # ----------------------------------------------------------------------
       # Pre-build gate: the released version must have a What's New entry in
@@ -186,6 +251,25 @@ jobs:
       # settings always override the pbxproj). agvtool is NOT used: without
       # VERSIONING_SYSTEM=apple-generic it silently no-ops on the marketing
       # version, which shipped v1.0.4 binaries that identified as 1.0.1.
+      # The EXPLICIT resolved conditions for the official production build:
+      # the Release configuration defines no baseline conditions, so the full
+      # official set is exactly OFFICIAL_BUILD. Deliberately NOT
+      # '$(inherited) OFFICIAL_BUILD' - command-line inheritance is not relied
+      # on; if a baseline condition is ever added to the Release config it
+      # must be added here in lockstep (the staging workflow lists STAGING
+      # explicitly for the same reason). The official build needs BOTH the
+      # Swift condition (SWIFT_ACTIVE_COMPILATION_CONDITIONS=OFFICIAL_BUILD,
+      # which flips Build.isOfficialBuild) and the C macro
+      # (GCC_PREPROCESSOR_DEFINITIONS='$(inherited) OFFICIAL_BUILD=1', which
+      # compiles the exported marker in OfficialBuildMarker.c); the two are
+      # paired at link time, so a build with only one of them fails instead of
+      # producing a half-official artifact. The C macro MUST keep $(inherited):
+      # a command-line build setting applies to every target in the build,
+      # including the Swift package dependencies, and a bare value would wipe
+      # their own preprocessor macros (PLCrashReporter stops compiling). The
+      # app's Release configuration defines no baseline macros of its own, so
+      # the app resolves to exactly OFFICIAL_BUILD=1. The artifact gate below
+      # fails the pipeline if the flags did not take effect.
       - name: Archive
         # These env vars are read by the "Upload dSYMs to PostHog" Run Script
         # build phase on the Zerro target. xcodebuild passes them through to
@@ -207,7 +291,10 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}"
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=OFFICIAL_BUILD \
+            'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) OFFICIAL_BUILD=1' \
+            ZERRO_BUILD_CHANNEL=official
 
       - name: Export Developer ID app
         run: |
@@ -217,6 +304,31 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "Scripts/ExportOptions.plist"
           test -d "$RUNNER_TEMP/export/$APP_NAME.app"
+
+      # Deterministic official-build gate: the exported ARTIFACT itself must
+      # carry both official markers (the Info.plist channel key set by
+      # ZERRO_BUILD_CHANNEL=official, and the symbol compiled in only under
+      # OFFICIAL_BUILD). If either is missing the pipeline stops here — before
+      # the dmg, notarization, or publication — instead of shipping a
+      # community build as official.
+      - name: Verify official build marker
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/export/$APP_NAME.app"
+          CHANNEL="$(/usr/libexec/PlistBuddy -c 'Print ZerroBuildChannel' "$APP/Contents/Info.plist")"
+          [ "$CHANNEL" = "official" ] \
+            || { echo "::error::ZerroBuildChannel is '$CHANNEL', expected 'official' — OFFICIAL_BUILD settings were not applied"; exit 1; }
+          # The marker is an exported C symbol (`_zerroOfficialBuildMarker`,
+          # see BuildEnvironment.swift), the only kind that survives the
+          # exported app's STRIP_STYLE=all post-processing. List the DEFINED
+          # GLOBAL symbol names and require the exact name as a whole line —
+          # never a substring. Capture nm's output first: `nm | grep -q`
+          # would let grep exit early, nm take SIGPIPE, and the pipeline fail
+          # with 141 under `set -euo pipefail` on a PERFECTLY GOOD artifact.
+          GLOBAL_SYMBOLS="$(nm -g --defined-only "$APP/Contents/MacOS/$APP_NAME" | awk '{print $NF}')"
+          grep -qx "_zerroOfficialBuildMarker" <<< "$GLOBAL_SYMBOLS" \
+            || { echo "::error::the exported app has no _zerroOfficialBuildMarker global symbol — either the OFFICIAL_BUILD condition was not applied to this archive, or the marker did not survive export stripping; refusing to ship it as official"; exit 1; }
+          echo "Official build markers verified (plist channel + exported _zerroOfficialBuildMarker symbol)."
 
       # Fail fast if the built app's versions don't match the tag — this is
       # what generate_appcast reads, so a mismatch here ships a bad appcast.
@@ -317,63 +429,6 @@ jobs:
           done
 
       # ----------------------------------------------------------------------
-      # Upload the notarized + stapled dmg to the public Supabase Storage
-      # bucket. The repo is private, so GitHub Release assets 404 for anyone
-      # not signed in; the public download is served from Supabase instead.
-      # Must run AFTER stapling so the stapled dmg is what ships.
-      #
-      # Two destinations, same bytes (L-07 fix):
-      #   • downloads/Zerro-<build>.dmg — PERMANENT, immutable. This is the only
-      #     object the appcast references, so every past release's advertised
-      #     edSignature stays valid forever (and old builds remain downloadable,
-      #     which the BYOK update window depends on). Build numbers are monotonic,
-      #     so a future release never targets this name.
-      #   • downloads/Zerro.dmg — the stable "download latest" marketing object,
-      #     overwritten every release. The appcast NEVER references it, so it
-      #     carries no signature constraint and is safe to overwrite.
-      #
-      # SECURITY — L-01 (over-privileged upload credential; remediation pending):
-      #   This step authenticates with SUPABASE_SERVICE_ROLE_KEY, which is
-      #   full backend access (bypasses all RLS). It is over-privileged for what
-      #   it does: upsert two objects in the downloads bucket (Zerro-<build>.dmg
-      #   and Zerro.dmg). The bucket today has
-      #   ZERO RLS write policies, so service_role is currently the only path that
-      #   can write — a least-privilege swap REQUIRES a Supabase-side change.
-      #   Cleanest fix (see docs/README-backend.md → "Release DMG upload (L-01)"): a tiny edge
-      #   function mints a one-time, path-scoped, 2-hour `createSignedUploadUrl`
-      #   for the two downloads/* objects; CI then PUTs to those URLs holding NO Supabase key
-      #   (only a narrow RELEASE_UPLOAD_SECRET). Owner action: deploy the function +
-      #   set secrets, then switch this step (snippet in the runbook). Until then:
-      #   the key is a registered GitHub secret (auto-masked in logs) and is never
-      #   echoed — no `set -x`, no `curl -v`. ROTATE SUPABASE_SERVICE_ROLE_KEY as
-      #   part of that change.
-      - name: Upload notarized dmg to Supabase Storage
-        env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          BASE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads"
-
-          # 1) Permanent, versioned object — the only one the appcast references.
-          #    Immutable across forward releases; x-upsert keeps a same-tag re-run
-          #    from 409ing (the appcast regen step below then re-signs to match).
-          curl --fail-with-body -X POST \
-            "$BASE/${DMG_NAME}" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/x-apple-diskimage" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/${DMG_NAME}"
-
-          # 2) Stable marketing "download latest" object (getzerro.app/Zerro.dmg
-          #    redirects here). Overwritten every release; never in the appcast.
-          curl --fail-with-body -X POST \
-            "$BASE/${APP_NAME}.dmg" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/x-apple-diskimage" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/${DMG_NAME}"
-
-      # ----------------------------------------------------------------------
       # Generate the signed appcast as a CUMULATIVE, multi-item feed. The new
       # item's download URL points at this release's permanent versioned object;
       # generate_appcast computes its length + edSignature from the actual build,
@@ -396,8 +451,9 @@ jobs:
           #
           # The source of truth is the PUBLISHED feed, fetched over HTTP (the
           # runner is on a detached tag, and the feed no longer lives in git):
-          # the public Storage object first, then the live site URL as a fallback
-          # for the git→Storage migration window, then a fresh feed.
+          # the Storage compatibility-mirror object first, then the live site
+          # URL (which redirects to the latest GitHub Release feed) as a
+          # fallback, then a fresh feed.
           PUB_STORAGE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml"
           PUB_SITE="https://getzerro.app/appcast.xml"
           if curl -fsS "$PUB_STORAGE" -o "dist/appcast.xml" && grep -q "<item>" "dist/appcast.xml"; then
@@ -445,55 +501,344 @@ jobs:
             echo "::error::built build ${{ steps.ver.outputs.build }} is not the newest in the appcast (max sparkle:version=$MAX_VER) — the tag is likely on an old/duplicate commit; bump VERSION on a fresh commit before tagging."
             exit 1
           fi
+          # Structural check of the generated feed BEFORE anything is
+          # published: this build is present exactly once and is the newest,
+          # with this version, the versioned public URL, the dmg's real byte
+          # length, and a signature.
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed dist/appcast.xml \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "${DL_PREFIX}${DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")"
           echo "----- appcast.xml -----"
           cat dist/appcast.xml
 
       # ----------------------------------------------------------------------
-      - name: Create GitHub Release + upload dmg
-        # Pinned to a full commit SHA (supply-chain hardening L-03). Trailing
-        # comment is the tag the SHA maps to; bump both together on upgrade.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ steps.ver.outputs.marketing }}
-          fail_on_unmatched_files: true
-          files: |
-            apps/desktop/dist/${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg
+      # GitHub Release asset set — the canonical public artifacts. Every
+      # release carries exactly three assets:
+      #   • Zerro-<build>.dmg  — the immutable Sparkle enclosure
+      #   • Zerro.dmg          — the stable latest-download copy, byte-identical
+      #                          (getzerro.app/Zerro.dmg redirects to it on the
+      #                          latest release)
+      #   • appcast.xml        — the cumulative signed feed on GitHub URLs
+      #                          (getzerro.app/appcast.xml redirects to it on
+      #                          the latest release)
+      #
+      # DRAFT-FIRST, FAIL-CLOSED. Because the website resolves
+      # releases/latest/download/<asset>, a release must never be published or
+      # become "latest" while it carries only the dmgs. The steps below
+      # (Scripts/github_release_publish.py) therefore:
+      #   1. prepare  — create this run's DRAFT release (or reuse and repair
+      #                 the single existing draft for the tag: reset its
+      #                 target/title, delete every stale asset). A release
+      #                 that is already published for the tag fails closed;
+      #                 more than one draft for the tag fails closed.
+      #   2. upload   — the two dmgs, then (after the feed is built against
+      #                 an inventory that includes only THIS draft) the
+      #                 appcast; same-name assets are replaced, never doubled.
+      #   3. verify   — exactly the three assets, each the local size and
+      #                 byte-identical (sha256) after download, on a draft
+      #                 pinned to this commit; the downloaded feed then passes
+      #                 every feed rule against a fresh inventory. A manifest
+      #                 of the verified asset ids/sizes/timestamps is written.
+      #   4. publish  — only with that manifest, and only if the draft still
+      #                 matches it exactly: draft=false + make_latest=true,
+      #                 then confirm the release IS releases/latest.
+      # Any failure in 1–3, or in 4 before its PATCH, leaves the release a
+      # draft: the previous latest release and both website URLs are
+      # unchanged. Storage is untouched until the final mirror block.
+      #
+      # The stable copy is staged OUTSIDE dist/ so generate_appcast, which
+      # scans dist/, never treats it as a second archive.
+      - name: Stage GitHub Release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist/github
+          cp "dist/$DMG_NAME" dist/github/Zerro.dmg
+          cmp "dist/$DMG_NAME" dist/github/Zerro.dmg \
+            || { echo "::error::dist/github/Zerro.dmg is not byte-identical to $DMG_NAME"; exit 1; }
+          echo "Staged Zerro.dmg as a byte-identical copy of $DMG_NAME."
+
+      # On a tag push the tag already exists and was checked in preflight. On
+      # a workflow_dispatch run with no tag yet, the draft records this commit
+      # as target_commitish and GitHub creates the tag there at publication;
+      # the real tag ref is verified right after publication below.
+      - name: Prepare draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 Scripts/github_release_publish.py --repo "$GITHUB_REPOSITORY" prepare \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.ver.outputs.marketing }}" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Upload dmgs to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 Scripts/github_release_publish.py --repo "$GITHUB_REPOSITORY" upload \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --asset "dist/$DMG_NAME" \
+            --asset dist/github/Zerro.dmg
 
       # ----------------------------------------------------------------------
-      # Publish the appcast by upserting it into the public Supabase Storage
-      # `downloads` bucket. getzerro.app/appcast.xml serves THIS object via a
-      # Vercel redirect (apps/web/next.config.ts), so a successful upload IS the
-      # publish — no git commit, no push to the PR-protected `main`.
+      # The public Sparkle feed: a GitHub-hosted copy of the cumulative feed
+      # whose enclosures are immutable, tag-specific GitHub Release asset URLs
+      # (https://github.com/<owner>/<repo>/releases/download/<tag>/Zerro-<build>.dmg,
+      # built from $GITHUB_REPOSITORY so a repository rename cannot break it).
+      # It is uploaded as this release's `appcast.xml` asset — the asset
+      # getzerro.app/appcast.xml redirects to once the release is the latest,
+      # and therefore what Sparkle clients read. The dmg bytes are identical on
+      # both hosts, so every recorded EdDSA signature and length is preserved
+      # verbatim; only the enclosure URL changes. Every historical item must
+      # map to exactly one existing, published release asset and the job fails
+      # closed on any gap, duplicate, mutable/"latest" URL, leftover Storage
+      # URL, or missing signature/length (Scripts/appcast_github_feed.py). The
+      # ONLY draft the inventory may count is this run's own (--include-draft
+      # "$RELEASE_TAG"), so the current build resolves to its still-unpublished
+      # release while every other draft stays invisible. A build that is
+      # attached to two releases is resolved only by the APPCAST_ASSET_PINS
+      # repository variable ("NAME=TAG …"), reviewed by the owner.
+      - name: Inventory GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > dist/github/releases.json
+          echo "Inventoried $(grep -o '"tag_name"' dist/github/releases.json | wc -l | tr -d ' ') release(s)."
+
+      - name: Build GitHub-hosted appcast
+        env:
+          APPCAST_ASSET_PINS: ${{ vars.APPCAST_ASSET_PINS }}
+        run: |
+          set -euo pipefail
+          PINS=()
+          for pin in ${APPCAST_ASSET_PINS:-}; do PINS+=(--pin "$pin"); done
+          # ${PINS[@]+…} keeps `set -u` happy on an empty array (macOS bash 3.2).
+          python3 Scripts/appcast_github_feed.py migrate \
+            --flavor production \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --include-draft "$RELEASE_TAG" \
+            --input dist/appcast.xml \
+            --assets dist/github/releases.json \
+            --output dist/github/appcast.xml \
+            ${PINS[@]+"${PINS[@]}"}
+          echo "----- dist/github/appcast.xml -----"
+          cat dist/github/appcast.xml
+
+      - name: Upload appcast to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 Scripts/github_release_publish.py --repo "$GITHUB_REPOSITORY" upload \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --asset dist/github/appcast.xml
+
+      # Authenticated verification of the DRAFT (drafts are invisible to
+      # anonymous URLs, so everything is fetched through gh): exactly the
+      # three assets, each the local size and byte-identical to the notarized
+      # build / generated feed after download, on a draft pinned to this
+      # commit. The downloaded feed is then checked against a fresh inventory
+      # (this draft included, no other) so the current build's enclosure
+      # resolves to its own asset and every historical enclosure to exactly
+      # one published asset with the feed's recorded length. Because the dmg
+      # bytes match what generate_appcast signed, the recorded edSignature is
+      # valid for what the release will serve. Nothing secret is read or
+      # printed here.
+      - name: Verify draft release assets + feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERIFY="$RUNNER_TEMP/gh-verify"
+          rm -rf "$VERIFY" && mkdir -p "$VERIFY"
+          python3 Scripts/github_release_publish.py --repo "$GITHUB_REPOSITORY" verify \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --asset "$DMG_NAME=dist/$DMG_NAME" \
+            --asset "Zerro.dmg=dist/github/Zerro.dmg" \
+            --asset "appcast.xml=dist/github/appcast.xml" \
+            --download-dir "$VERIFY/assets" \
+            --manifest "$VERIFY/manifest.json"
+          # Re-inventory AFTER the uploads so this build's own enclosure resolves.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$VERIFY/releases.json"
+          python3 Scripts/appcast_github_feed.py verify \
+            --flavor production \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --include-draft "$RELEASE_TAG" \
+            --feed "$VERIFY/assets/appcast.xml" \
+            --assets "$VERIFY/releases.json"
+          echo "Draft release $RELEASE_ID ($RELEASE_TAG) verified: $DMG_NAME and Zerro.dmg are byte-identical to the notarized build; appcast.xml is the generated immutable-URL feed."
+
+      # THE PUBLICATION. Refuses to run unless the draft still matches the
+      # verification manifest exactly (same asset ids, sizes, timestamps, no
+      # extras); then flips draft=false + make_latest=true in one PATCH and
+      # confirms the release is releases/latest. From this moment
+      # getzerro.app/appcast.xml and getzerro.app/Zerro.dmg resolve this
+      # release's assets. A failure before the PATCH leaves the draft (and
+      # the previous latest) untouched; a failure after it fails the job
+      # while the release stays published.
+      - name: Publish the verified draft as the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 Scripts/github_release_publish.py --repo "$GITHUB_REPOSITORY" publish \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --manifest "$RUNNER_TEMP/gh-verify/manifest.json"
+
+      # Re-resolve the REAL tag ref after publication: it must now exist and
+      # name the checked-out commit (publication creates a missing tag at the
+      # draft's target_commitish; a pre-existing tag was checked in
+      # preflight). The release metadata is printed for information only.
+      - name: Verify release tag targets this commit (post-publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
+          echo "Release metadata target_commitish (informational): $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+
+      # ----------------------------------------------------------------------
+      # STORAGE COMPATIBILITY MIRROR — the only steps that touch the
+      # production Storage bucket, and the last thing the job does before the
+      # notification. The GitHub Release above is the canonical public source
+      # and is already published and latest by now; these steps mirror the
+      # same artifacts to the Storage objects (downloads/Zerro-<build>.dmg,
+      # downloads/Zerro.dmg, downloads/appcast.xml) so any client or link
+      # that reads Storage directly sees the same build as GitHub. A failure
+      # anywhere before this block leaves the Storage objects untouched. A
+      # failure INSIDE this block fails the workflow but does not invalidate
+      # the GitHub Release: it is complete, verified, and what the website
+      # resolves — only the mirror objects need repair (re-run the failed
+      # uploads by hand; a same-tag re-run of this workflow fails closed at
+      # "Prepare draft GitHub Release" because the release is already
+      # published).
       #
-      # This replaced a `git push origin main` of apps/web/public/appcast.xml,
-      # which started silently failing once `main` got a require-PR ruleset: the
-      # push was rejected but the old retry loop swallowed it, so 1.4.19 reported
-      # a green release while never updating the feed. --fail-with-body makes any
-      # HTTP error FAIL the release, so a publish failure can never be hidden again.
+      # Immediately before the first mutation a monotonic guard reads the LIVE
+      # feed (cache-busted): a newer build may publish; an equal build only
+      # when its version matches and the release tag resolves to this commit
+      # (a same-tag re-run); an older build, or a missing/unreadable/malformed
+      # live feed, fails closed. This is what keeps the mutable Zerro.dmg from
+      # ever being overwritten by an older build.
+      - name: Publication guard (live feed must not move backwards)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/live"
+          if ! curl -fsS "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-guard" -o "$RUNNER_TEMP/live/appcast.xml"; then
+            echo "::error::could not read the live appcast — refusing to publish over an unknown live state"
+            exit 1
+          fi
+          Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
+          python3 Scripts/appcast_publish_guard.py guard \
+            --live "$RUNNER_TEMP/live/appcast.xml" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-version "${{ steps.ver.outputs.marketing }}" \
+            --tag-matches-commit
+
+      # Two dmg destinations, same bytes (L-07):
+      #   • downloads/Zerro-<build>.dmg — PERMANENT, immutable. The only object
+      #     the appcast references, so every past release's advertised
+      #     edSignature stays valid forever and old builds remain downloadable.
+      #     Build numbers are monotonic, so a future release never targets it.
+      #   • downloads/Zerro.dmg — the stable "download latest" object,
+      #     overwritten every release and never referenced by the appcast. The
+      #     guard above guarantees it only ever moves forward.
+      # Then the cumulative feed, with Cache-Control: no-cache so it is always
+      # revalidated (Vercel would otherwise edge-cache a stale feed for up to
+      # an hour). --fail-with-body makes any HTTP error FAIL the release.
       #
-      # SECURITY (L-01, mirrors the dmg upload above): SUPABASE_SERVICE_ROLE_KEY
-      # is over-privileged for a bucket upsert but is the only write path today;
-      # it's a masked GitHub secret and is never echoed — no `set -x`, no curl -v.
-      - name: Publish appcast to Supabase Storage
+      # SECURITY — L-01 (over-privileged upload credential; remediation pending):
+      #   SUPABASE_SERVICE_ROLE_KEY is full backend access (bypasses all RLS)
+      #   and is over-privileged for upserting three objects in the downloads
+      #   bucket, but the bucket has ZERO RLS write policies, so service_role is
+      #   currently the only path that can write — a least-privilege swap
+      #   REQUIRES a Supabase-side change (a path-scoped signed upload URL minted
+      #   by an edge function; CI would then hold no Supabase key). Until then the
+      #   key is a registered GitHub secret (auto-masked in logs) and is never
+      #   echoed — no `set -x`, no `curl -v`. ROTATE it as part of that change.
+      - name: Publish dmgs + appcast to Supabase Storage
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          # cache-control: no-cache — the feed is mutable (a new release upserts
-          # it), so it must always be revalidated. Without this the object can
-          # inherit Supabase's default max-age, which Vercel WILL edge-cache,
-          # pinning a stale feed for up to an hour after a release.
+          BASE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads"
           curl --fail-with-body -X POST \
-            "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads/appcast.xml" \
+            "$BASE/${DMG_NAME}" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/${DMG_NAME}"
+          curl --fail-with-body -X POST \
+            "$BASE/${APP_NAME}.dmg" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/x-apple-diskimage" \
+            -H "x-upsert: true" \
+            --data-binary @"dist/${DMG_NAME}"
+          curl --fail-with-body -X POST \
+            "$BASE/appcast.xml" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/xml" \
             -H "Cache-Control: no-cache" \
             -H "x-upsert: true" \
             --data-binary @"dist/appcast.xml"
 
+      # Read the live objects straight back (cache-busted, with a short retry
+      # for propagation) and require them to be byte-identical to what was
+      # just built: both dmgs to the local notarized dmg, the feed to the
+      # generated cumulative feed — and the live feed must advertise this
+      # build as the newest, with this version, length, and signature.
+      - name: Verify live Supabase Storage
+        run: |
+          set -euo pipefail
+          PUB="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads"
+          OUT="$RUNNER_TEMP/live-verify"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          for attempt in 1 2 3 4 5 6; do
+            curl -fsS "$PUB/${DMG_NAME}?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/${DMG_NAME}"
+            curl -fsS "$PUB/${APP_NAME}.dmg?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/${APP_NAME}.dmg"
+            curl -fsS "$PUB/appcast.xml?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/appcast.xml"
+            if cmp -s "$OUT/${DMG_NAME}" "dist/${DMG_NAME}" && cmp -s "$OUT/${APP_NAME}.dmg" "dist/${DMG_NAME}" && cmp -s "$OUT/appcast.xml" dist/appcast.xml; then
+              echo "live objects match the built artifacts on attempt $attempt."
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              cmp "$OUT/${DMG_NAME}" "dist/${DMG_NAME}" || echo "::error::live ${DMG_NAME} is not byte-identical to the notarized dmg"
+              cmp "$OUT/${APP_NAME}.dmg" "dist/${DMG_NAME}" || echo "::error::live ${APP_NAME}.dmg is not byte-identical to the notarized dmg"
+              cmp "$OUT/appcast.xml" dist/appcast.xml || echo "::error::live appcast.xml is not byte-identical to the generated feed"
+              exit 1
+            fi
+            echo "attempt $attempt: live objects not settled yet; retrying in 10s…"
+            sleep 10
+          done
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed "$OUT/appcast.xml" \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "$PUB/${DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")"
+          echo "Live Supabase Storage verified: ${DMG_NAME}, ${APP_NAME}.dmg, and appcast.xml are byte-identical to the built artifacts."
+
       - name: Done
-        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). Appcast uploaded to Supabase Storage; getzerro.app/appcast.xml serves it via the Vercel redirect."
+        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). GitHub Release ${{ env.RELEASE_TAG }} carries ${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg, Zerro.dmg, and appcast.xml — getzerro.app/appcast.xml and getzerro.app/Zerro.dmg redirect to the latest release's assets. The Supabase Storage compatibility mirror was updated to match."
 
       # ----------------------------------------------------------------------
       # Post the release to Slack: the user-facing What's New highlights (the

@@ -4,17 +4,15 @@
 //
 //  Created by Colin Breeding on 6/1/26.
 //
-//  Phase C — the external LemonSqueezy URLs the billing UI links out to:
-//  the hosted BYOK checkout (paywall "Get a license") and the customer
-//  portal ("Manage devices" / "Manage subscription"). Pulled into one place
-//  so the two surfaces (PaywallView, BillingSection) share a single source
-//  of truth.
+//  The external Lemon Squeezy URLs the billing UI links out to: the hosted
+//  checkout for THE Zerro license (the single product — $39 one-time,
+//  covering every Zerro 1.x.x release) and the customer portal ("Manage
+//  devices"). Pulled into one place so the surfaces (PaywallView,
+//  BillingSection, onboarding) share a single source of truth.
 //
-//  These are intentionally PLACEHOLDERS until the LemonSqueezy account is out
-//  of review — grep `TODO:` to find the two strings to fill in. Each is read
-//  through `url`, which returns `nil` for an unfilled placeholder so the UI
-//  can disable/soften the affordance instead of opening a dead link or
-//  crashing on a force-unwrap.
+//  Each URL is read through `resolvedURL`, which returns `nil` for an
+//  unfilled placeholder so the UI can disable/soften the affordance instead
+//  of opening a dead link or crashing on a force-unwrap.
 //
 
 import Foundation
@@ -23,51 +21,20 @@ enum BillingLinks {
 
     // MARK: - Checkout custom-data (Tier 3 analytics)
 
-    /// The purchasable products. Drives both the `checkout_opened.product`
-    /// analytics property and the LemonSqueezy `custom_data.product` the webhook
-    /// reads back alongside the resolved tier. Raw values match the event spec.
-    enum CheckoutProduct: String {
-        case subscriptionPro = "subscription_pro"
-        case byok = "byok"
-        /// The single multi-variant "Credit Packs" product. The customer picks
-        /// which pack (50–10,000 credits) ON the LemonSqueezy page; the webhook
-        /// resolves the purchased variant id → credits (`config.TOPUP_PACKS`).
-        case topup = "topup"
-        /// Same Managed subscription product as `subscriptionPro`, but tagged
-        /// distinctly so upgrades that originate from the capture toolbar's
-        /// trial model-lock popup are attributable separately in analytics.
-        case subscriptionProModelLock = "subscription_pro_model_lock"
-    }
+    /// The single product tag sent as `custom_data.product` and used as the
+    /// `checkout_opened.product` analytics property. One stable value — the
+    /// store sells exactly one thing.
+    static let checkoutProductValue = "license"
 
-    /// Returns `base` decorated with the LemonSqueezy custom-data query params
-    /// (Tier 3 §0): the app's anonymous PostHog `distinct_id` — so the webhook's
-    /// server-side `subscription_activated`/`_lapsed` stitch to the SAME PostHog
-    /// person as the app funnel — plus the product tag. The distinct_id is
-    /// omitted when analytics hasn't started; the product is always set. Pure URL
-    /// construction (callers fire `checkout_opened` + open the result); brackets
-    /// are URL-encoded by `URLComponents`, which LemonSqueezy decodes back to
-    /// `checkout[custom][…]`.
-    /// `trialGrantId`, when supplied (a converting trial user — see
-    /// `EntitlementStore.trialGrantIdForCheckout`), rides along as
-    /// `custom_data.trial_grant_id` so the lemonsqueezy-webhook links the new
-    /// subscription to that EXACT trial grant and `/generate` can drain the trial
-    /// remainder before billing the paid plan. Omitted when nil (BYOK / top-ups /
-    /// a never-trialed buyer) → byte-identical to the pre-existing URL.
-    ///
-    /// `affRef`, when supplied, is the LemonSqueezy affiliate referral code for
-    /// this buyer (resolved by `AffiliateAttribution` — a server-side match on
-    /// the device's public IP, since the referral was captured in the browser
-    /// and the app can't read a browser cookie). It rides as the top-level
-    /// `aff_ref` query param LemonSqueezy reads to attribute the sale. Omitted
-    /// when nil/empty (no affiliate, or the lookup missed) → byte-identical to
-    /// the pre-existing URL, so a non-referred purchase is unaffected.
-    /// Ref: https://docs.lemonsqueezy.com/help/affiliates-for-merchants/getting-referrals
-    static func checkoutURL(
-        _ base: URL,
-        product: CheckoutProduct,
-        trialGrantId: String? = nil,
-        affRef: String? = nil
-    ) -> URL {
+    /// Returns `base` decorated with the Lemon Squeezy custom-data query
+    /// params: the app's anonymous PostHog `distinct_id` — so server-side
+    /// purchase analytics stitch to the SAME PostHog person as the app
+    /// funnel — plus the product tag. The distinct_id is omitted when
+    /// analytics hasn't started; the product is always set. Pure URL
+    /// construction (callers fire `checkout_opened` + open the result);
+    /// brackets are URL-encoded by `URLComponents`, which Lemon Squeezy
+    /// decodes back to `checkout[custom][…]`.
+    static func checkoutURL(_ base: URL) -> URL {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return base
         }
@@ -75,105 +42,51 @@ enum BillingLinks {
         if let distinctId = Analytics.distinctId {
             items.append(URLQueryItem(name: "checkout[custom][ph_distinct_id]", value: distinctId))
         }
-        items.append(URLQueryItem(name: "checkout[custom][product]", value: product.rawValue))
-        if let trialGrantId, !trialGrantId.isEmpty {
-            items.append(URLQueryItem(name: "checkout[custom][trial_grant_id]", value: trialGrantId))
-        }
-        if let affRef, !affRef.isEmpty {
-            items.append(URLQueryItem(name: "aff_ref", value: affRef))
-        }
+        items.append(URLQueryItem(name: "checkout[custom][product]", value: checkoutProductValue))
         components.queryItems = items
         return components.url ?? base
     }
 
     // MARK: - Test vs. Live checkout switch
     //
-    // LemonSqueezy test mode and live mode are the SAME store domain
-    // (store.getzerro.app) but each product has a DISTINCT buy-id per mode.
-    // DEBUG builds open the TEST checkouts (test card numbers, no real charge),
-    // so the full purchase → webhook → credits flow can be exercised locally;
-    // Release builds use the live buy-ids. Mirrors the ManagedBackend.baseURL
-    // DEBUG/Release convention. To add/rotate a product, edit BOTH the test and
-    // live id below — keep them paired.
+    // Lemon Squeezy test mode and live mode are the SAME store domain
+    // (store.getzerro.app) but the product has a DISTINCT buy-id per mode.
+    // Debug and Staging builds open the TEST checkout (test card numbers, no
+    // real charge) — the same environment split `LicenseEditionPolicy` uses
+    // for the approved product, so a purchase made from a build always
+    // yields a key that same build accepts. Production Release builds use
+    // the live buy-id.
     private static let checkoutBase = "https://store.getzerro.app/checkout/buy/"
 
-    /// Picks the test buy-id in DEBUG, the live buy-id in Release.
+    /// Picks the test buy-id in Debug/Staging, the live buy-id in production
+    /// Release. Keep the direction in lockstep with
+    /// `LicenseEditionPolicy.usesTestEnvironment`.
     private static func checkout(test: String, live: String) -> String {
-        #if DEBUG
+        #if DEBUG || STAGING
         return checkoutBase + test
         #else
         return checkoutBase + live
         #endif
     }
 
-    /// The LemonSqueezy hosted checkout for the one-time BYOK license.
-    /// Opening this in the default browser (NSWorkspace) is the v1 buy flow —
-    /// the LS overlay JS is awkward to host in a native app.
-    static let byokCheckoutURLString = checkout(
+    /// The Lemon Squeezy hosted checkout for the Zerro license. Opening this
+    /// in the default browser (NSWorkspace) is the buy flow — the LS overlay
+    /// JS is awkward to host in a native app.
+    static let licenseCheckoutURLString = checkout(
         test: "1e36ae90-2f72-4dcf-9f30-6d763b10cac1",
         live: "e31278f5-48b6-4265-8d69-37b8c9628e1f"
     )
 
-    /// The LemonSqueezy customer portal where a buyer manages their license /
-    /// devices (used by the at-activation-limit hint and the Settings "Manage"
-    /// row). Also the v1 "manage subscription" target for Managed users — the
-    /// my-orders link reaches the order/subscription. A per-subscription signed
-    /// portal URL from the LS API is the cleaner version (// DEFERRED Phase G).
-    // URL once the account is approved.
+    /// The Lemon Squeezy customer portal where a buyer manages their license
+    /// and devices (used by the at-activation-limit hint and the Settings
+    /// "Manage" row).
     static let customerPortalURLString = "https://app.lemonsqueezy.com/my-orders"
 
-    // MARK: - Managed subscription checkout (Phase E)
-    //
-    // The hosted LemonSqueezy checkout URL for the single Managed subscription
-    // product. LemonSqueezy's Share panel gives one checkout link per product —
-    // the customer picks monthly vs yearly ON the page — so the app links out
-    // per product, not per billing variant. (The monthly/yearly variant IDs
-    // still exist server-side for the webhook's billing_interval mapping; the
-    // app never needs them.) Same resolve-to-nil + no-op-if-unset pattern as the
-    // BYOK checkout above.
-
-    // Single Managed product; monthly vs yearly is chosen ON the LS page, so
-    // one checkout link covers both intervals.
-    static let proCheckoutURLString = checkout(
-        test: "4ab963c6-7e81-473b-b815-ecc163584539",
-        live: "889b1ee8-9e71-422f-a714-362a2ca3ff39"
-    )
-
-    static var proCheckoutURL: URL? { resolvedURL(proCheckoutURLString) }
-
-    // MARK: - Top-up checkout (multi-model Phase 6 / plan §1.4)
-    //
-    // ONE multi-variant "Credit Packs" product. The customer chooses which pack
-    // (50–10,000 credits, $5–$300) ON the LemonSqueezy page — the app links out
-    // per product, not per variant. Purchased credits attach to the buyer's
-    // subscription server-side (the `order_created` webhook resolves the variant
-    // id → credits via `config.TOPUP_PACKS`) and expire 12 months from purchase.
-    // Same DEBUG(test)/Release(live) switch + resolve-to-nil pattern as the BYOK
-    // and Managed checkouts: a `TODO-*` live id resolves nil so the "Add Credits"
-    // button softens to disabled until production go-live (a separate step).
-    static let topupCheckoutURLString = checkout(
-        test: "0f5787db-cde1-4c8e-95de-553ac4842205",
-        live: "c8c1d865-dce1-4b2e-8b99-9ec21c046b46"
-    )
-
-    static var topupCheckoutURL: URL? { resolvedURL(topupCheckoutURLString) }
-
-    /// The checkout URL, or `nil` if still a placeholder. `nil` until the
-    /// `TODO:` above is filled in (the placeholder isn't a valid absolute URL,
-    /// so `URL(string:)` already rejects it — the prefix guard is belt-and-
-    /// suspenders against a half-filled value).
-    static var byokCheckoutURL: URL? { resolvedURL(byokCheckoutURLString) }
+    /// The checkout URL, or `nil` while the buy-id is still a placeholder.
+    static var licenseCheckoutURL: URL? { resolvedURL(licenseCheckoutURLString) }
 
     /// The customer-portal URL, or `nil` if still a placeholder.
     static var customerPortalURL: URL? { resolvedURL(customerPortalURLString) }
-
-    /// Resolves the single Managed subscription checkout URL, or `nil` if the
-    /// placeholder isn't filled in yet (the paywall softens/disables the button
-    /// rather than opening a dead link). Monthly vs yearly is chosen on the
-    /// LemonSqueezy page, not in-app.
-    static func subscriptionCheckoutURL() -> URL? {
-        proCheckoutURL
-    }
 
     /// `nil` if the URL is still a placeholder. Rejects a bare `TODO` prefix AND
     /// any URL whose path still contains a `TODO-` token (the test/live buy-id

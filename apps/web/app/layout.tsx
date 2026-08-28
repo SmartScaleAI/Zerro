@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import { AffiliateCapture } from "@/components/affiliate-capture";
 import {
   OrganizationJsonLd,
   WebSiteJsonLd,
@@ -96,12 +95,6 @@ export default function RootLayout({
             {children}
           </div>
         </PostHogProvider>
-        {/* Affiliate attribution. Purchasing happens only in the Mac app, in a
-            different browser context, so LemonSqueezy's browser affiliate.js
-            can't carry the referral to checkout. Instead we record the `?aff`
-            code server-side (keyed to the visitor's IP); the app matches it at
-            checkout and tags `aff_ref`. See components/affiliate-capture.tsx. */}
-        <AffiliateCapture />
       </body>
     </html>
   );

@@ -6,6 +6,11 @@ import {
   UL,
   Strong,
 } from "@/components/legal/legal-shell"
+import { LICENSE_MAC_COUNT, TRIAL_DAYS } from "@/lib/product-facts"
+
+// LEGAL REVIEW: owner/legal should confirm the final wording before
+// publishing, in particular the Lemon Squeezy data description, the
+// analytics anonymous-vs-pseudonymous explanation, and the retention list.
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -14,7 +19,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/privacy" },
 }
 
-const LAST_UPDATED = "July 30, 2026"
+const LAST_UPDATED = "August 24, 2026"
 
 export default function PrivacyPage() {
   return (
@@ -23,12 +28,13 @@ export default function PrivacyPage() {
         <P>
           Zerro is operated by <Strong>SmartScale Solutions LLC</Strong>{" "}
           (&ldquo;SmartScale&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;). Zerro
-          is a macOS menu-bar app that lets you record a region of your screen,
-          dictate what you want, and receive exactly what you need: an agent
-          prompt, a message, a snippet, a document, or a clear answer to your
-          question. This policy explains what data we collect through the
-          Zerro app and the getzerro.app website, how we use it, and the
-          choices you have. Questions? Email us at{" "}
+          is an open-source, bring-your-own-key macOS menu-bar app that lets
+          you record a region of your screen, dictate what you want, and
+          receive exactly what you need: an agent prompt, a message, a
+          snippet, a document, or a clear answer to your question. This policy
+          explains what data we collect through the Zerro app and the
+          getzerro.app website, how we use it, and the choices you have.
+          Questions? Email us at{" "}
           <a
             href="mailto:support@getzerro.app"
             className="text-foreground underline underline-offset-4"
@@ -42,22 +48,26 @@ export default function PrivacyPage() {
       <LegalSection title="The short version">
         <UL>
           <li>
-            <Strong>We do not store your recordings.</Strong> Screen frames,
-            audio, and transcripts are held briefly on your device and in
-            memory during generation, and are never written to our database.
-            Our generation log has no content columns by design; it records
-            only token counts, model, estimated cost, and success.
+            <Strong>We never receive your recordings.</Strong> Screen frames,
+            audio, transcripts, prompts, and results never reach a server we
+            operate. Your Mac prepares the recording and talks directly to
+            the AI provider you chose, using your own API key.
           </li>
           <li>
             <Strong>Processing starts on your Mac.</Strong> Your recording is
-            prepared locally, and best-effort secret redaction runs on your Mac
-            before anything is uploaded. Redaction covers detected on-screen
-            text only; your spoken audio is uploaded as recorded.
+            prepared locally, and best-effort secret redaction runs on your
+            Mac before anything leaves it. Redaction covers detected on-screen
+            text only, not what you say.
           </li>
           <li>
-            <Strong>On the BYOK trial and plan, recordings never touch our servers.</Strong>{" "}
-            Generations go directly from your Mac to your AI provider using
-            your own API keys, which are stored in your macOS Keychain.
+            <Strong>Your keys stay in your macOS Keychain.</Strong> Provider
+            API keys are stored by the app in the Keychain on your Mac and are
+            sent only to the provider they belong to.
+          </li>
+          <li>
+            <Strong>No account.</Strong> Zerro has no user accounts. The free
+            trial is a {TRIAL_DAYS}-day clock stored on your Mac and needs no
+            email; a purchased license is activated with a license key.
           </li>
           <li>
             <Strong>We do not sell your personal information</Strong> or share
@@ -74,37 +84,29 @@ export default function PrivacyPage() {
 
       <LegalSection title="Information we collect">
         <P>
-          <Strong>Account information.</Strong> We collect your email address
-          if you choose the Zerro Cloud Trial or create a paid account. The
-          anonymous BYOK trial does not require an email or account. Zerro Cloud
-          Trial users verify their email with a one-time 6-digit code; paid
-          access uses a license key issued by Lemon Squeezy. We do not offer
-          social sign-in (such as Apple or Google), and there is no password to
-          manage. Authentication and our database are handled by Supabase.
-        </P>
-        <P>
-          <Strong>Billing information.</Strong> Payments are processed by Lemon
-          Squeezy, our merchant of record. We never see or store your full
-          card number. We receive and store your subscription status, plan,
-          and billing events needed to operate your account.
-        </P>
-        <P>
-          <Strong>Recordings (Zerro Cloud and Zerro Cloud Trial).</Strong> When
-          you start a recording, the app captures the screen region you select
-          and your voice. Your Mac first prepares the recording locally and masks
-          detected secrets before upload. This masking is best-effort: it scans
+          <Strong>Recordings and generation.</Strong> When you start a
+          recording, the app captures the screen region you select and your
+          voice. Everything that follows begins on your Mac: the app prepares
+          the recording, transcribes your narration (see Transcription below),
+          and masks detected secrets. This masking is best-effort: it scans
           on-screen text for common structured secrets (such as API keys and
-          tokens), so it can miss things, and it does not apply to your spoken
-          audio; your narration is uploaded and transcribed as recorded. The
-          frames and audio are then sent to our generation service, where the
-          audio is transcribed and the content is sent to the third-party AI
-          model you selected (OpenAI, Google (Gemini), or Anthropic) to produce
-          your prompt.
-          This data is processed transiently: frames, audio, transcripts, and
-          prompts are not stored in our database. The generated output is held
-          in a short-lived cache for up to 15 minutes solely so that a dropped
-          connection can be retried without charging you twice, then becomes
-          unreadable and is purged.
+          tokens), so it can miss things, and it does not apply to what you
+          say. To generate your result, the app sends the prepared screen
+          frames together with the transcript and generation prompt directly
+          from your Mac to the third-party AI provider you selected (OpenAI,
+          Google (Gemini), or Anthropic), using your own API key, and the
+          result comes straight back to your Mac. Your audio is not sent to
+          the generation provider. Zerro does not receive, relay, cache, or
+          store your recordings, frames, audio, transcripts, prompts, or
+          results on any server we operate.
+        </P>
+        <P>
+          <Strong>Transcription.</Strong> By default, your narration is
+          transcribed on your Mac by a local speech model that the app
+          downloads once; with local transcription your audio stays on your
+          Mac. If you choose OpenAI transcription in Settings, your audio is
+          sent directly from your Mac to OpenAI using your own OpenAI API key,
+          and OpenAI returns the transcript to your Mac.
         </P>
         <P>
           You must not submit data subject to special legal protection, such as
@@ -119,49 +121,53 @@ export default function PrivacyPage() {
           .
         </P>
         <P>
-          <Strong>Recordings (BYOK trial and plan).</Strong> If you bring your
-          own API keys, generations are sent directly from your Mac to the
-          relevant provider (OpenAI, Google (Gemini), or Anthropic). You can
-          transcribe audio on your Mac, or choose OpenAI cloud transcription;
-          the cloud option sends audio directly to OpenAI and requires an
-          OpenAI API key. Your recordings and keys never pass through our
-          servers; keys are stored locally in your macOS Keychain.
+          <Strong>Provider API keys.</Strong> The OpenAI, Google (Gemini), and
+          Anthropic keys you add are stored locally in your macOS Keychain and
+          are transmitted only to the provider each key belongs to. We never
+          receive them. Your use of each provider, including how it processes
+          your content and what it charges you, is governed by your own
+          agreement with that provider.
+        </P>
+        <P>
+          <Strong>Free trial.</Strong> The first time an official build runs
+          on a Mac it begins a {TRIAL_DAYS}-day free trial, recorded in that
+          Mac&rsquo;s Keychain; reinstalling the app does not reset it. The
+          trial requires no email, no account, and no contact with our
+          servers, and nothing about it is sent to us.
+        </P>
+        <P>
+          <Strong>License and billing.</Strong> Purchases are processed by
+          Lemon Squeezy, our merchant of record. We never see or store your
+          full card number. Lemon Squeezy shares with us the order details
+          needed to support you, such as the email address you used at
+          checkout, the license key it issued, and the purchase and refund
+          history. When you activate a license, the app contacts Lemon
+          Squeezy&rsquo;s License API directly from your Mac to activate,
+          validate, and deactivate the key on up to {LICENSE_MAC_COUNT} Macs;
+          that exchange carries the license key, a per-Mac activation
+          identifier, and a device name. Your license key and the local
+          activation credentials are stored in your Mac&rsquo;s Keychain,
+          while Lemon Squeezy retains the activation records for the key. Zerro
+          operates no license server of its own.
         </P>
         <P>
           <Strong>Dev Mode (optional).</Strong> If you turn on Dev Mode, Zerro
-          launches Claude Code (Anthropic&rsquo;s coding-agent CLI) locally on
-          your Mac, inside the project folder you choose. Acting at your
-          direction, the agent can read and modify files in that folder and run
-          commands there; it runs under sandboxing and permission controls that
-          scope its access to your project. To match your recording to the right
-          project, Zerro can read the address of your active browser tab via
-          Apple Events, but it only ever uses a local (localhost) address to
-          detect the development-server port; any non-local address is
-          discarded the instant it is seen, and is never stored, logged, or
-          transmitted. Your project files stay on your Mac and are not sent to
-          SmartScale; when the agent runs, it communicates with Anthropic under
-          its own terms to carry out the work you request.
-        </P>
-        <P>
-          <Strong>Usage data.</Strong> For Zerro Cloud generations, we record
-          per-generation metadata (token counts, estimated cost, model,
-          provider, and success) to operate credits and billing. For the
-          anonymous BYOK trial, Zerro sends only the one-way device hash and a
-          random generation identifier after a successful result so we can
-          enforce the 10-generation limit and avoid counting a retry twice. We
-          do not receive the recording, prompt, transcript, result, API key,
-          model, or provider for that generation. We also process IP addresses
-          and session identifiers for rate limiting and abuse prevention.
-        </P>
-        <P>
-          <Strong>Trial verification.</Strong> The Zerro Cloud Trial requires
-          an email verified with a one-time code sent via Resend. We store only
-          a hashed version of the code, never the raw code. The anonymous BYOK
-          trial requires no email. To prevent trial abuse, both paths use a
-          one-way hash of a hardware identifier and are mutually exclusive,
-          limiting each Mac to one free-trial type. The underlying identifier
-          never leaves your Mac (only the hash is sent), and it is used solely
-          for fraud prevention, never for tracking or advertising.
+          launches the coding-agent CLI you select (Claude Code, Codex, or
+          Cursor) locally on your Mac, inside the project folder you choose.
+          Acting at your direction, the agent can read and modify files in
+          that folder and run commands there. Zerro applies sandboxing and
+          permission controls where the selected agent supports them; the
+          controls differ by agent and do not guarantee that every agent is
+          confined to the folder you select. To match your recording to the
+          right project, Zerro can read the address of your active browser
+          tab via Apple Events, but it only ever uses a local (localhost)
+          address to detect the development-server port; any non-local
+          address is discarded the instant it is seen, and is never stored,
+          logged, or transmitted. Your project files stay on your Mac and are
+          not sent to SmartScale; when the selected agent runs, it
+          communicates with its own provider under the terms of the account
+          you hold with that provider (Anthropic for Claude Code, OpenAI for
+          Codex, or Cursor).
         </P>
         <P>
           <Strong>App analytics and crash reports.</Strong> The Zerro desktop
@@ -170,10 +176,12 @@ export default function PrivacyPage() {
           diagnostic crash and error reports. These contain only metadata
           (event names, timings, app version, model identifiers, and error
           types) and never your recordings, transcripts, generated prompts,
-          file paths, or API keys. This data is associated with an anonymous device
-          identifier, not your name or email. You can turn it off at any time in
-          the app under Settings &rarr; &ldquo;Send Anonymous Usage Data &amp;
-          Crash Reports.&rdquo;
+          file paths, API keys, or license key. They are keyed to a random
+          analytics identifier generated on your Mac, not to your name or
+          email, so they are anonymous unless that identifier is later
+          connected with a checkout as described below. You can turn analytics
+          off at any time in the app under Settings &rarr; &ldquo;Send
+          Anonymous Usage Data &amp; Crash Reports.&rdquo;
         </P>
         <P>
           <Strong>Website analytics.</Strong> The getzerro.app website uses
@@ -187,93 +195,108 @@ export default function PrivacyPage() {
           between visits.
         </P>
         <P>
-          <Strong>Affiliate attribution and checkout.</Strong> If you arrive
-          through an affiliate link (a getzerro.app address carrying an
-          &ldquo;aff&rdquo; code), we send that code to our server keyed to your
-          public IP address so that a later purchase can be credited to the
-          referrer. Because checkout happens inside the Mac app (a separate
-          browser context), the app also passes its analytics identifier into
-          the Lemon Squeezy checkout so that a completed subscription can be
-          matched back to the app&rsquo;s usage events. Where this identifier is
-          linked to a checkout or subscription in this way it is pseudonymous
-          rather than fully anonymous, though it is still not your name or
-          email.
+          <Strong>Checkout.</Strong> Checkout opens from the Mac app. If
+          analytics is enabled, the app passes its analytics identifier into
+          the Lemon Squeezy checkout so that a completed purchase can be
+          matched back to the app&rsquo;s usage events. From that point the
+          identifier, and the app analytics keyed to it, can be linked to
+          your order, so they are pseudonymous rather than anonymous, though
+          they are still not keyed to your name or email. The license key that
+          Lemon Squeezy hands back to the app after checkout is kept out of
+          our website analytics.
+        </P>
+        <P>
+          <Strong>Downloads and updates.</Strong> When you download the app or
+          it checks for an update, the request reaches our hosting providers
+          like any web request. Their standard server logs record the IP
+          address, time, and file requested, and are used only to serve the
+          file and for ordinary operational logging and abuse prevention.
+        </P>
+        <P>
+          <Strong>Support communications.</Strong> If you email us, we keep
+          the correspondence, including your email address and whatever you
+          choose to include, so we can respond and keep a record of the
+          request.
         </P>
       </LegalSection>
 
       <LegalSection title="How we use your information">
         <UL>
-          <li>To provide the service: generating prompts from your recordings, managing your account, credits, and subscription.</li>
-          <li>To process payments and prevent fraud and abuse, including rate limiting and trial-abuse prevention.</li>
-          <li>To communicate with you about your account, such as trial verification codes and support responses.</li>
+          <li>To provide the official app: distributing it, delivering updates, and supporting your license.</li>
+          <li>To process payments and prevent fraud and abuse, including license enforcement in official builds.</li>
+          <li>To respond to support requests.</li>
           <li>To understand aggregate usage of our website and improve the product.</li>
           <li>To diagnose crashes and errors and improve the app&rsquo;s reliability.</li>
           <li>To comply with legal obligations.</li>
         </UL>
         <P>
-          We do not use your recordings, transcripts, or generated prompts to
-          train AI models.
+          We never receive your recordings, transcripts, or generated prompts,
+          so we cannot and do not use them for anything, including training AI
+          models.
         </P>
       </LegalSection>
 
       <LegalSection title="Service providers">
         <P>
           We share data with a small set of providers, each only to the extent
-          needed to run Zerro: <Strong>Supabase</Strong> (authentication,
-          database, and generation service), <Strong>OpenAI</Strong>,{" "}
-          <Strong>Google (Gemini)</Strong>, and <Strong>Anthropic</Strong> (AI
-          model processing of recordings on Zerro Cloud and the Zerro Cloud
-          Trial, direct model processing on BYOK, and optional BYOK cloud transcription through
-          OpenAI), <Strong>Anthropic (Claude Code)</Strong>{" "}
-          (the local coding agent that powers Dev Mode, a role separate from
-          Anthropic&rsquo;s model API above), <Strong>Lemon Squeezy</Strong>{" "}
-          (payments, as merchant of record), <Strong>Resend</Strong>{" "}
-          (transactional email), <Strong>Slack</Strong> (internal routing of
-          in-app feedback and issue reports you choose to send, which include
-          your email address when you are signed in), <Strong>PostHog</Strong>{" "}
-          (app and website analytics and crash reporting), and{" "}
-          <Strong>Vercel</Strong> (website hosting). AI providers process your
-          content under their API terms; we use API offerings under which inputs
-          are not used to train their models. We do not sell your personal
-          information to anyone.
+          needed to run Zerro: <Strong>Lemon Squeezy</Strong> (payments as
+          merchant of record, and license activation and validation),{" "}
+          <Strong>PostHog</Strong> (app and website analytics and crash
+          reporting), <Strong>Vercel</Strong> (website hosting), and{" "}
+          <Strong>Supabase</Strong> (static file hosting for the app download
+          and update feed). We do not sell your personal information to anyone.
+        </P>
+        <P>
+          <Strong>OpenAI</Strong>, <Strong>Google (Gemini)</Strong>, and{" "}
+          <Strong>Anthropic</Strong> receive the prepared frames, transcripts,
+          and prompts directly from your Mac under your own API key and your
+          own agreement with them, and OpenAI also receives your audio if you
+          choose OpenAI transcription; we are not a party to that processing.
+          Whether a provider uses your inputs to train its models, and what it
+          charges, is determined by the provider and the API terms you
+          accepted. The same applies to the coding agent you select for Dev
+          Mode (Claude Code, Codex, or Cursor), which runs locally and
+          communicates with its own provider under the account you hold with
+          it.
         </P>
       </LegalSection>
 
       <LegalSection title="Data retention">
         <UL>
           <li>
-            <Strong>Screen frames, audio, transcripts, prompts:</Strong> not
-            stored in our database; held briefly on your device and in memory
-            during generation only.
+            <Strong>Screen frames, audio, transcripts, prompts, results:</Strong>{" "}
+            never held by us. They exist on your Mac and with the AI provider
+            you sent them to, under that provider&rsquo;s retention terms.
           </li>
           <li>
-            <Strong>Zerro Cloud generated output:</Strong> cached up to 15 minutes
-            for retry safety, then purged. BYOK output is returned directly by
-            your AI provider and is never cached by Zerro.
+            <Strong>Provider API keys, trial state, license key, and activation credentials:</Strong>{" "}
+            stored only in your Mac&rsquo;s Keychain; removed when you delete
+            them or remove the app&rsquo;s Keychain items.
           </li>
           <li>
-            <Strong>Account, subscription, and generation metadata:</Strong>{" "}
-            kept while your account is active and as required for accounting
-            and legal purposes.
+            <Strong>Order, license, and activation records:</Strong> kept by
+            Lemon Squeezy, and the order details shared with us kept by us,
+            for as long as needed to support your license and as required for
+            accounting and legal purposes.
           </li>
           <li>
-            <Strong>Trial verification codes:</Strong> stored hashed and
-            expire within minutes.
+            <Strong>Support correspondence:</Strong> kept for as long as needed
+            to handle the request and keep a record of it.
           </li>
           <li>
-            <Strong>BYOK trial ledger:</Strong> the one-way device hash and
-            random successful-generation identifiers are retained to enforce
-            the one-trial-per-Mac and 10-generation limits.
+            <Strong>Hosting logs</Strong> for the website, download, and update
+            feed: kept by our hosting providers under their standard log
+            retention.
           </li>
           <li>
-            <Strong>Anonymous app analytics and crash diagnostics:</Strong>{" "}
-            retained by PostHog under our configured retention period and tied
-            only to an anonymous device identifier.
+            <Strong>App and website analytics and crash diagnostics:</Strong>{" "}
+            retained by PostHog under our configured retention period, keyed
+            to the analytics identifier described above.
           </li>
         </UL>
         <P>
-          You can request deletion of your account and associated data at any
-          time by emailing{" "}
+          You can request deletion of the personal data we hold about you, such
+          as order records or support correspondence, at any time by emailing{" "}
           <a
             href="mailto:support@getzerro.app"
             className="text-foreground underline underline-offset-4"
@@ -287,16 +310,14 @@ export default function PrivacyPage() {
       <LegalSection title="Security">
         <P>
           We use industry-standard safeguards: data is encrypted in transit
-          (TLS), API keys on the BYOK trial and plan live in your macOS
-          Keychain rather than on our servers, trial verification codes are
-          stored only as
-          hashes, the underlying trial device identifier never leaves your
-          Mac, and our backend enforces
-          authentication, rate limits, and least-privilege access. Some account
-          data, such as your email address, is necessarily stored in readable
-          form so we can operate billing and trials. No system is perfectly
-          secure, but we design so that the most sensitive data (your screen
-          and voice) is held by us for the shortest possible time, or not at
+          (TLS), your API keys, trial state, license key, and activation
+          credentials live in your macOS Keychain rather than on any server,
+          and your recordings never pass through infrastructure we operate.
+          The server-side data that can be tied to you is limited to the
+          order and license records described above, hosting logs, support
+          correspondence, and analytics keyed to the app&rsquo;s analytics
+          identifier. No system is perfectly secure, but we design so that the
+          most sensitive data (your screen and voice) is never held by us at
           all.
         </P>
       </LegalSection>
@@ -305,9 +326,10 @@ export default function PrivacyPage() {
         <P>
           We are based in the United States and our service providers process
           data primarily in the United States. If you use Zerro from outside
-          the US, your data will be transferred to and processed in the US.
-          Where required, we rely on appropriate safeguards such as standard
-          contractual clauses offered by our providers.
+          the US, the limited data described above will be transferred to and
+          processed in the US. Where required, we rely on appropriate
+          safeguards such as standard contractual clauses offered by our
+          providers.
         </P>
       </LegalSection>
 
@@ -318,10 +340,11 @@ export default function PrivacyPage() {
           correct, delete, or receive a copy of your personal data, to object
           to or restrict certain processing, and to withdraw consent where
           processing is based on consent. Our legal bases are performance of a
-          contract (providing the service), legitimate interests (security,
-          abuse prevention, product improvement), and consent where required.
-          You may also lodge a complaint with your local supervisory
-          authority. To exercise any right, email{" "}
+          contract (providing the official app and supporting your license),
+          legitimate interests (security, abuse prevention, product
+          improvement), and consent where required. You may also lodge a
+          complaint with your local supervisory authority. To exercise any
+          right, email{" "}
           <a
             href="mailto:support@getzerro.app"
             className="text-foreground underline underline-offset-4"
@@ -364,7 +387,7 @@ export default function PrivacyPage() {
           We may update this policy from time to time. We will post the
           updated version on this page and revise the &ldquo;Last
           updated&rdquo; date. For material changes, we will provide more
-          prominent notice, such as email.
+          prominent notice, such as a note in the app or on this site.
         </P>
       </LegalSection>
 

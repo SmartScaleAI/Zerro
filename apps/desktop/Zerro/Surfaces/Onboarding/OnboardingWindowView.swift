@@ -67,8 +67,6 @@ struct OnboardingWindowView: View {
         switch onboarding.currentScreen {
         case .setup:
             OnboardingSetupStepView()
-        case .mode:
-            OnboardingModeSelectionView()
         case .keys:
             BYOKSetupView()
         case .transcription:
@@ -146,15 +144,11 @@ private extension Color {
 
 /// Isolated shell for onboarding Canvas previews. It mirrors the production
 /// panel dimensions and environment while keeping UserDefaults, Keychain,
-/// model storage, and managed-backend traffic out of the developer's real app
-/// state. Individual step previews live below and alongside their private BYOK
-/// views in `BYOKOnboardingFlow.swift`.
+/// and model storage out of the developer's real app state.
 @MainActor
 struct OnboardingPreviewHost<Content: View>: View {
     @State private var onboarding: OnboardingState
     @State private var permissions: PermissionsManager
-    @State private var trialCredits: TrialCreditsManager
-    @State private var byokTrial: BYOKTrialManager
     @State private var entitlements: EntitlementStore
     @State private var preferences: PreferencesStore
     @State private var modelManager: LocalModelManager
@@ -166,7 +160,6 @@ struct OnboardingPreviewHost<Content: View>: View {
 
     init(
         step: OnboardingStep,
-        path: OnboardingPath = .free,
         screenStatus: PermissionStatus? = nil,
         microphoneStatus: PermissionStatus? = nil,
         providerKeys: Set<ModelProvider> = [],
@@ -174,23 +167,13 @@ struct OnboardingPreviewHost<Content: View>: View {
     ) {
         let defaults = UserDefaults.ephemeralPreview()
         let onboarding = OnboardingState(defaults: defaults)
-        onboarding.selectPath(path)
         onboarding.jump(to: step)
         onboarding.pinnedScreenSubState = screenStatus
         onboarding.pinnedMicSubState = microphoneStatus
 
         let preferences = PreferencesStore(defaults: defaults)
         let permissions = PermissionsManager(defaults: defaults)
-        let trialCredits = TrialCreditsManager.inMemory()
-        let byokTrial = BYOKTrialManager.inMemory()
-        let entitlements = EntitlementStore(
-            licenseService: .inMemory(),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(),
-            trialCredits: trialCredits,
-            byokTrial: byokTrial,
-            defaults: defaults
-        )
+        let entitlements = EntitlementStore(licenseService: .inMemory())
         let previewModel = ModelSpec(
             id: "preview-model",
             fileName: "preview-model.bin",
@@ -212,8 +195,6 @@ struct OnboardingPreviewHost<Content: View>: View {
         self.content = content
         _onboarding = State(initialValue: onboarding)
         _permissions = State(initialValue: permissions)
-        _trialCredits = State(initialValue: trialCredits)
-        _byokTrial = State(initialValue: byokTrial)
         _entitlements = State(initialValue: entitlements)
         _preferences = State(initialValue: preferences)
         _modelManager = State(initialValue: modelManager)
@@ -237,8 +218,6 @@ struct OnboardingPreviewHost<Content: View>: View {
         .defaultAppStorage(defaults)
         .environment(permissions)
         .environment(onboarding)
-        .environment(trialCredits)
-        .environment(byokTrial)
         .environment(entitlements)
         .environment(preferences)
         .environment(modelManager)

@@ -6,8 +6,8 @@
 //
 //  Runtime Dock-icon management for an LSUIElement app. Zerro LAUNCHES
 //  with no Dock icon (INFOPLIST_KEY_LSUIElement stays YES), but while a
-//  real window is open — Settings, Onboarding, Paywall, Trial email,
-//  Feedback — the app should behave like a regular app: visible in the Dock and
+//  real window is open — Settings, Onboarding, Paywall, Trial email —
+//  the app should behave like a regular app: visible in the Dock and
 //  the ⌘Tab switcher. The moment the LAST such window closes, the icon
 //  must disappear again.
 //
@@ -44,8 +44,6 @@ final class DockIconController {
         OnboardingScene.windowID,
         PaywallScene.windowID,
         ActivateKeyScene.windowID,
-        TrialEmailScene.windowID,
-        FeedbackScene.windowID,
         WhatsNewScene.windowID,
     ]
 

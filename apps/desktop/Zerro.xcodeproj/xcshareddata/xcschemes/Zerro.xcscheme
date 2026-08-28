@@ -70,18 +70,6 @@
             isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "ZERRO_FUNCTIONS_BASE_URL"
-            value = "https://waripvlpcpwdmacpjiqc.supabase.co/functions/v1"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "ZERRO_DEV_LICENSE_KEY"
-            value = "STAGING-TEST-KEY-001"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

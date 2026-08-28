@@ -284,8 +284,8 @@ enum DevAgentRegistry {
     static let codexID = "codex"
     /// Wire id of the Cursor agent (Phase 3 — `cursor-agent -p`). MUST be the
     /// literal "cursor" so `AgentModelMapping.source(forAgent:)` routes it to
-    /// `.cursorCLI` (its model list comes from `cursor-agent models`, not a
-    /// server manifest).
+    /// `.cursorCLI` (its model list comes from the local `cursor-agent models`
+    /// CLI, not the bundled manifest).
     static let cursorID = "cursor"
 
     /// The agent pre-selected when none is remembered (the recommended default).
@@ -333,8 +333,8 @@ enum DevAgentRegistry {
             installed: path != nil,
             absolutePath: path,
             // Claude Code's `--model` accepts an alias or a full model id (e.g.
-            // `claude-opus-4-8`), exactly the strings the anthropic manifest
-            // serves. Verified against `claude --help` (June 2026).
+            // `claude-opus-4-8`), exactly the strings the bundled anthropic
+            // manifest carries. Verified against `claude --help` (June 2026).
             modelFlagName: "--model",
             // No-MCP fence (§5a) — made CERTAIN. `--strict-mcp-config` says "use
             // ONLY servers from --mcp-config", so we ALSO pass an explicit EMPTY
@@ -393,8 +393,8 @@ enum DevAgentRegistry {
     ///     error, replacing the old `.text` spinner+tail (which fell back to the
     ///     diff-generated change line and had no real error detail).
     ///   • `-m/--model` selects the model; the ids come from Codex's OWN
-    ///     per-account list (see `DevAgentDetection.codexModels`), NOT the OpenAI
-    ///     API manifest (a ChatGPT-account Codex rejects the API codex ids).
+    ///     per-account list (see `DevAgentDetection.codexModels`), NOT the
+    ///     bundled manifest (a ChatGPT-account Codex uses its own slugs).
     nonisolated private static func makeCodex() -> DevAgentEntry {
         let path = DevAgentBinaryResolver.resolve("codex")
         return DevAgentEntry(
@@ -478,7 +478,7 @@ enum DevAgentRegistry {
     ///       watched, not autonomous.
     ///   • `--model <id>` selects the model; the ids come from `cursor-agent
     ///     models` (per-account; see `DevAgentDetection.cursorModels`), e.g.
-    ///     `auto` / `claude-opus-4-8-high` / `gpt-5.5-medium`, NOT a server
+    ///     `auto` / `claude-opus-4-8-high` / `gpt-5.5-medium`, NOT the bundled
     ///     manifest.
     nonisolated private static func makeCursor() -> DevAgentEntry {
         let path = DevAgentBinaryResolver.resolve("cursor-agent")

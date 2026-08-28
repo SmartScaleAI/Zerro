@@ -2,9 +2,9 @@
 //  OnboardingRouteTests.swift
 //  ZerroTests
 //
-//  Pins the redesigned route contract and the one-time migration from the
-//  currently-shipped six-step flow. These tests allow the visual refactor to
-//  happen in later phases without changing resume behavior underneath it.
+//  Pins the route contract and the one-time migration from the previously
+//  shipped six-step flow. These tests let the visual layer evolve without
+//  changing resume behavior underneath it.
 //
 
 import XCTest
@@ -30,40 +30,34 @@ final class OnboardingRouteTests: XCTestCase {
 
     // MARK: - Route contract
 
-    func testManagedPathUsesSharedEmailThenModeSelection() {
-        XCTAssertEqual(OnboardingPath.free.screens, [.setup, .mode, .permissions, .complete])
-    }
-
-    func testBYOKPathAddsKeysButNoTranscriptionChoice() {
+    func testTheOnePathIsSetupKeysPermissionsComplete() {
+        XCTAssertEqual(OnboardingPath.allCases, [.byok])
         XCTAssertEqual(
             OnboardingPath.byok.screens,
-            [.setup, .mode, .keys, .permissions, .complete]
+            [.setup, .keys, .permissions, .complete]
         )
     }
 
-    func testRouteNavigatesWithinItsSelectedPath() {
+    func testRouteNavigatesWithinThePath() {
         let setup = OnboardingRoute(path: .byok, screen: .setup)
         XCTAssertEqual(setup.progressIndex, 0)
-        XCTAssertEqual(setup.nextScreen, .mode)
+        XCTAssertEqual(setup.nextScreen, .keys)
         XCTAssertNil(setup.previousScreen)
 
         let permissions = OnboardingRoute(path: .byok, screen: .permissions)
-        XCTAssertEqual(permissions.progressIndex, 3)
+        XCTAssertEqual(permissions.progressIndex, 2)
         XCTAssertEqual(permissions.previousScreen, .keys)
         XCTAssertEqual(permissions.nextScreen, .complete)
     }
 
-    func testLegacyTranscriptionRouteNormalizesToBYOKKeys() {
-        let byok = OnboardingRoute(path: .byok, screen: .transcription)
-        XCTAssertEqual(byok.screen, .keys)
-
-        let route = OnboardingRoute(path: .free, screen: .transcription)
-        XCTAssertEqual(route.screen, .setup)
-        XCTAssertEqual(route.progressIndex, 0)
+    func testLegacyTranscriptionRouteNormalizesToKeys() {
+        let route = OnboardingRoute(path: .byok, screen: .transcription)
+        XCTAssertEqual(route.screen, .keys)
+        XCTAssertEqual(route.progressIndex, 1)
     }
 
     func testReconsentIsOutsideFirstRunProgress() {
-        let route = OnboardingRoute(path: .free, screen: .reconsent)
+        let route = OnboardingRoute(path: .byok, screen: .reconsent)
         XCTAssertNil(route.progressIndex)
         XCTAssertNil(route.nextScreen)
         XCTAssertNil(route.previousScreen)
@@ -71,7 +65,7 @@ final class OnboardingRouteTests: XCTestCase {
 
     // MARK: - Legacy migration
 
-    func testLegacyFreeStepsMapToRedesignedScreens() {
+    func testLegacyStepsMapToRedesignedScreens() {
         let mappings: [(OnboardingStep, OnboardingScreen)] = [
             (.welcome, .setup),
             (.consent, .setup),
@@ -85,7 +79,7 @@ final class OnboardingRouteTests: XCTestCase {
             let route = OnboardingRouteMigration.resolve(
                 input(legacyStep: legacyStep)
             )
-            XCTAssertEqual(route.path, .free)
+            XCTAssertEqual(route.path, .byok)
             XCTAssertEqual(route.screen, expectedScreen, "legacy step: \(legacyStep)")
         }
     }
@@ -112,13 +106,6 @@ final class OnboardingRouteTests: XCTestCase {
         XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .keys))
     }
 
-    func testPreviouslySelectedBYOKTrialRetainsPathAfterLegacyFlagWasCleared() {
-        let route = OnboardingRouteMigration.resolve(
-            input(legacyStep: .permissions, legacyBYOKSelected: true)
-        )
-        XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .permissions))
-    }
-
     func testValidStableRouteWinsOverLegacyState() {
         let route = OnboardingRouteMigration.resolve(
             input(
@@ -131,6 +118,20 @@ final class OnboardingRouteTests: XCTestCase {
         XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .complete))
     }
 
+    func testRetiredPersistedPathFallsBackToLegacyState() {
+        // An install that persisted the retired hosted path resumes on the
+        // one remaining path from its legacy step, never on a dead screen.
+        let route = OnboardingRouteMigration.resolve(
+            input(
+                persistedSchemaVersion: OnboardingRouteMigration.currentSchemaVersion,
+                persistedPath: "free",
+                persistedScreen: "mode",
+                legacyStep: .permissions
+            )
+        )
+        XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .permissions))
+    }
+
     func testCorruptStableRouteFallsBackToLegacyState() {
         let route = OnboardingRouteMigration.resolve(
             input(
@@ -140,7 +141,7 @@ final class OnboardingRouteTests: XCTestCase {
                 legacyStep: .permissions
             )
         )
-        XCTAssertEqual(route, OnboardingRoute(path: .free, screen: .permissions))
+        XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .permissions))
     }
 
     func testUnknownRouteSchemaFallsBackToLegacyState() {
@@ -152,14 +153,13 @@ final class OnboardingRouteTests: XCTestCase {
                 legacyStep: .permissions
             )
         )
-        XCTAssertEqual(route, OnboardingRoute(path: .free, screen: .permissions))
+        XCTAssertEqual(route, OnboardingRoute(path: .byok, screen: .permissions))
     }
 
     func testCompletedUserWithStaleTermsRoutesToFocusedReconsent() {
         let route = OnboardingRouteMigration.resolve(
             input(
                 legacyStep: .permissions,
-                legacyBYOKSelected: true,
                 hasCompletedOnboarding: true,
                 needsConsent: true
             )
@@ -186,30 +186,26 @@ final class OnboardingRouteTests: XCTestCase {
         )
     }
 
-    func testStableNavigationPersistsAndUsesDynamicPathOrder() {
+    func testStableNavigationPersists() {
         let state = OnboardingState(defaults: defaults)
-
-        state.selectPath(.byok)
-        XCTAssertEqual(state.progressScreens.count, 5)
-        XCTAssertEqual(state.currentScreen, .mode)
-        XCTAssertEqual(state.progressIndex, 1)
+        XCTAssertEqual(state.progressScreens.count, 4)
+        XCTAssertEqual(state.currentScreen, .setup)
+        XCTAssertEqual(state.progressIndex, 0)
 
         state.advanceScreen()
         XCTAssertEqual(state.currentScreen, .keys)
         XCTAssertEqual(defaults.string(forKey: OnboardingPersistenceKeys.screen), "keys")
 
         state.moveBack()
-        XCTAssertEqual(state.currentScreen, .mode)
+        XCTAssertEqual(state.currentScreen, .setup)
 
-        state.selectPath(.free)
+        state.advanceScreen()
         state.advanceScreen()
         XCTAssertEqual(state.currentScreen, .permissions)
-        XCTAssertEqual(state.progressScreens.count, 4)
     }
 
     func testLegacyMainStepNavigationKeepsStableRouteSynchronized() {
         let state = OnboardingState(defaults: defaults)
-        state.selectPath(.byok)
 
         state.jump(to: .permissions)
         XCTAssertEqual(state.currentScreen, .permissions)
@@ -226,7 +222,6 @@ final class OnboardingRouteTests: XCTestCase {
         legacyStep: OnboardingStep,
         legacyBYOKPathActive: Bool = false,
         legacyBYOKSetupStep: Int = 0,
-        legacyBYOKSelected: Bool = false,
         hasCompletedOnboarding: Bool = false,
         needsConsent: Bool = false
     ) -> OnboardingRouteMigration.Input {
@@ -237,7 +232,6 @@ final class OnboardingRouteTests: XCTestCase {
             legacyStepRawValue: legacyStep.rawValue,
             legacyBYOKPathActive: legacyBYOKPathActive,
             legacyBYOKSetupStep: legacyBYOKSetupStep,
-            legacyBYOKSelected: legacyBYOKSelected,
             hasCompletedOnboarding: hasCompletedOnboarding,
             needsConsent: needsConsent
         )

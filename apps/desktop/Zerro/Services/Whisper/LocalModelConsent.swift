@@ -16,9 +16,7 @@ enum LocalModelConsent {
     ///   • `!alreadyShown` — the one-time prompt hasn't fired before
     ///     (`PreferencesStore.localModelPromptShown`).
     ///   • `!modelReady` — the on-device model isn't already installed.
-    ///   • `!isManaged`  — managed users transcribe server-side, so they are never
-    ///     prompted to download a local model.
-    static func shouldPrompt(isFirstKey: Bool, alreadyShown: Bool, modelReady: Bool, isManaged: Bool) -> Bool {
-        isFirstKey && !alreadyShown && !modelReady && !isManaged
+    static func shouldPrompt(isFirstKey: Bool, alreadyShown: Bool, modelReady: Bool) -> Bool {
+        isFirstKey && !alreadyShown && !modelReady
     }
 }

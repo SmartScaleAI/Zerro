@@ -7,8 +7,8 @@
 //  conversion state — `OutputCardView`/`PillView` have no `conversion`/
 //  `onConvert` parameters, so the compiler is the primary guarantee there is
 //  no convert footer to render. These render-smoke tests pin the remaining
-//  behavior: a chat-only response still lays out cleanly with its text, the
-//  charge line (when managed), and the dismiss chrome — no layout break.
+//  behavior: a chat-only response still lays out cleanly with its text and
+//  the dismiss chrome — no layout break.
 //
 //  The card offers the two-tier copy model: the footer Copy copies the
 //  whole response and the artifact well's corner icon copies the artifact
@@ -35,9 +35,9 @@ final class ChatOnlyResultCardTests: XCTestCase {
         return try XCTUnwrap(renderer.nsImage, "ImageRenderer produced no image")
     }
 
-    /// The expanded chat-only card (managed → charge line present) lays out:
-    /// chat text + charge line + dismiss, with no convert footer.
-    func testChatOnlyExpandedWithChargeLineRenders() throws {
+    /// The expanded chat-only card with a longer explanation lays out:
+    /// chat text + dismiss, with no convert footer.
+    func testChatOnlyExpandedLongTextRenders() throws {
         let view = PillView(
             state: .resultExpanded,
             result: ResultPresentation(
@@ -46,8 +46,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
                     + "Nothing on screen needs a code change, so there\u{2019}s nothing to "
                     + "hand to an agent here.",
                 artifact: nil
-            ),
-            chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
+            )
         )
 
         let image = try render(view)
@@ -55,9 +54,9 @@ final class ChatOnlyResultCardTests: XCTestCase {
         XCTAssertGreaterThan(image.size.height, 0)
     }
 
-    /// The expanded chat-only card with no managed charge (BYOK/local) still
-    /// lays out — text + dismiss only, no convert footer.
-    func testChatOnlyExpandedWithoutChargeLineRenders() throws {
+    /// The expanded chat-only card with a short explanation still lays out —
+    /// text + dismiss only, no convert footer.
+    func testChatOnlyExpandedShortTextRenders() throws {
         let view = PillView(
             state: .resultExpanded,
             result: ResultPresentation(
@@ -81,8 +80,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
             result: ResultPresentation(
                 chatText: "Here is a prompt you can hand straight to your agent.",
                 artifact: sampleArtifact
-            ),
-            chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
+            )
         )
 
         let image = try render(view)
@@ -116,8 +114,7 @@ final class ChatOnlyResultCardTests: XCTestCase {
                 chatText: "That hydration error comes from rendering a non-deterministic "
                     + "value during SSR \u{2014} the server and client markup disagree.",
                 artifact: nil
-            ),
-            chargeLine: CreditDisplay.chargeLine(charged: 2, remaining: 98)
+            )
         )
 
         let image = try render(view)
@@ -266,7 +263,6 @@ final class ChatOnlyResultCardTests: XCTestCase {
         OutputCardView(
             artifact: artifact,
             chatText: chatText,
-            chargeLine: nil,
             noNarration: false,
             stoppedBySleep: false,
             onCopy: {},

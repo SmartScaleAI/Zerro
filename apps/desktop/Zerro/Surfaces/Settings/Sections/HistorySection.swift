@@ -34,7 +34,7 @@ struct HistorySection: View {
 
     var body: some View {
         // Phase A library-stays-readable rule: the prompt history must stay
-        // viewable and copyable in EVERY entitlement state, `.expired`
+        // viewable and copyable in EVERY entitlement state, `.localTrialExpired`
         // included. This surface is reached through Settings, NOT through
         // `handleHotkey` / the recording gate, and it reads only
         // RecentPromptStore — never EntitlementStore.canGenerate — so an

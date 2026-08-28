@@ -7,9 +7,9 @@
 //  event) that answers one question: does this recording carry any on-device
 //  signal a request could come from? When it doesn't — silent audio AND no
 //  clicks — generation would be a guaranteed `ZERRO_NO_REQUEST`, so we skip it
-//  entirely. That costs the user nothing (no credit) and us nothing (no
-//  round-trip), and surfaces a friendly "didn't catch that — nothing was
-//  charged" state instead of a failure that looks like a billing event.
+//  entirely. That costs the user nothing (no provider call), and surfaces a
+//  friendly "didn't catch that — nothing was charged" state instead of a
+//  failure that looks like a billing event.
 //
 //  Why "no speech AND no clicks" has NO false negatives (never drops a real
 //  request) — it's bounded to the model's own behavior, so we only short-circuit

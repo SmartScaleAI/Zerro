@@ -2,18 +2,16 @@
 //  PreflightGateTests.swift
 //  ZerroTests
 //
-//  Phase G UX — the record-start PRE-FLIGHT gate: catch every knowable failure
-//  BEFORE the user records, not after a wasted capture. Covers
-//  `EntitlementStore.preflightBlock(canGenerateLocally:)`, the single synchronous,
-//  local, fail-open decision the `handleHotkey` gate consults between the
-//  `.expired`/`canGenerate` gate and presenting the area selector.
+//  The record-start PRE-FLIGHT gate: catch every knowable failure BEFORE the
+//  user records, not after a wasted capture. Covers
+//  `EntitlementStore.preflightBlock(canGenerateLocally:)`, the single
+//  synchronous, local, fail-open decision the `handleHotkey` gate consults
+//  between the `canGenerate` gate and presenting the area selector.
 //
 //  Contract:
-//    • Managed + 0 credits         → .outOfCredits (blocked before recording)
-//    • Managed + non-live snapshot → .subscriptionInactive
-//    • BYOK + no key on file       → .apiKeyMissing
-//    • Everything inconclusive     → nil (FAIL OPEN — record; proxy is backstop)
-//    • Entitled with credits / a key → nil (no false blocks)
+//    • Granting state + no self-funding setup → .apiKeyMissing
+//    • Granting state + a usable setup        → nil (no false blocks)
+//    • Expired trial                          → nil (the `canGenerate` gate's job)
 //
 //  All dependencies are in-memory; no Keychain, no network.
 //
@@ -26,209 +24,98 @@ final class PreflightGateTests: XCTestCase {
 
     // MARK: - Builders
 
-    private func makeLicense(present: Bool, readFailure: Bool = false) -> LicenseService {
-        let keySlot = InMemoryKeychainSlot(present ? "KEY" : nil)
-        let instanceSlot = InMemoryKeychainSlot(present ? "instance" : nil)
-        keySlot.simulateReadFailure = readFailure
-        instanceSlot.simulateReadFailure = readFailure
-        return LicenseService(
-            licenseKeySlot: keySlot,
-            instanceIDSlot: instanceSlot,
+    private func makeLicense(present: Bool) -> LicenseService {
+        LicenseService(
+            licenseKeySlot: InMemoryKeychainSlot(present ? "KEY" : nil),
+            instanceIDSlot: InMemoryKeychainSlot(present ? "instance" : nil),
             lastValidatedSlot: InMemoryKeychainSlot(nil),
+            licensedProductIDSlot: InMemoryKeychainSlot(present ? "7" : nil),
+            licensedMajorSlot: InMemoryKeychainSlot(present ? "1" : nil),
+            policy: LicenseEditionPolicy(requiredMajor: 1, approvedProductIDs: [7]),
             transport: OfflineLicenseTransport()
         )
     }
 
-    /// An ephemeral `UserDefaults` pre-seeded with `snapshot` under the cache key
-    /// `EntitlementStore` reads at init, so a constructed store comes up `.managed`
-    /// with EXACTLY that snapshot (status + credits we choose) — the only way to
-    /// model a non-`.active` managed snapshot without driving the network.
-    private func defaultsSeeded(with snapshot: ManagedEntitlementSnapshot?) -> UserDefaults {
-        let defaults = UserDefaults.ephemeralPreview()
-        guard let snapshot else { return defaults }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .secondsSince1970
-        defaults.set(try! encoder.encode(snapshot), forKey: "managed_entitlement_snapshot_v1")
-        return defaults
-    }
-
-    /// A `.managed` store carrying `snapshot` (nil → no cached snapshot yet).
-    private func managedStore(snapshot: ManagedEntitlementSnapshot?) -> EntitlementStore {
-        EntitlementStore(
-            licenseService: makeLicense(present: true),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.managed.rawValue),
-            defaults: defaultsSeeded(with: snapshot)
+    /// A trial clock over in-memory slots, either freshly started (active)
+    /// or elapsed.
+    private func makeClock(expired: Bool) -> TrialManager {
+        let now = Date()
+        let start = expired ? now.addingTimeInterval(-Double(TrialManager.trialLengthDays + 1) * 86_400) : now
+        return TrialManager(
+            startDateSlot: InMemoryKeychainSlot(String(Int(start.timeIntervalSince1970))),
+            maxDateSeenSlot: InMemoryKeychainSlot(),
+            clock: { now }
         )
     }
 
-    private func snapshot(
-        _ status: ManagedStatus,
-        credits: Int
-    ) -> ManagedEntitlementSnapshot {
-        ManagedEntitlementSnapshot(
-            status: status,
-            creditsRemaining: credits,
-            creditsLimit: 100,
-            resetDate: nil
-        )
+    private func licensedStore() -> EntitlementStore {
+        EntitlementStore(enforcementMode: .official, licenseService: makeLicense(present: true))
     }
 
-    private func byokStore() -> EntitlementStore {
-        EntitlementStore(
-            licenseService: makeLicense(present: true),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.byok.rawValue),
-            defaults: .ephemeralPreview()
-        )
-    }
-
-    /// A trial store (no license). `expired: true` seeds confirmed-exhausted
-    /// trial credits so it computes to `.expired`; otherwise it's a live
-    /// (never-granted) trial.
     private func trialStore(expired: Bool = false) -> EntitlementStore {
-        var trialCredits: TrialCreditsManager?
-        if expired {
-            let mgr = TrialCreditsManager.inMemory()
-            mgr.applyCreditsRemaining(0)
-            trialCredits = mgr
-        }
-        return EntitlementStore(
+        EntitlementStore(
+            enforcementMode: .official,
             licenseService: makeLicense(present: false),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(nil),
-            trialCredits: trialCredits,
-            defaults: .ephemeralPreview()
+            trialManager: makeClock(expired: expired)
         )
     }
 
-    // MARK: - Managed: out of credits
+    // MARK: - Licensed: missing self-funding setup
 
-    func testManagedZeroCreditsBlocksOutOfCredits() {
-        let store = managedStore(snapshot: snapshot(.active, credits: 0))
-        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
-    }
-
-    func testManagedWithCreditsDoesNotBlock() {
-        let store = managedStore(snapshot: snapshot(.active, credits: 42))
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // records normally
-    }
-
-    func testManagedTrialFundedCombinedBalanceDoesNotBlock() {
-        // Cross-ledger fix: a converted user whose PLAN is exhausted but who still
-        // has linked trial credits has a positive COMBINED creditsRemaining (the
-        // server folds the trial remainder in). The preflight gate reads that
-        // combined number, so it must NOT block — the recording proceeds and the
-        // server drains the trial remainder via consume_combined_credit. Modeled
-        // as a snapshot whose combined balance is entirely trial-funded.
-        let combined = ManagedEntitlementSnapshot(
-            status: .active,
-            creditsRemaining: 5,            // == trial remainder; plan is spent
-            creditsLimit: 100,
-            resetDate: nil,
-            planCreditsUsed: 100,
-            planCreditsLimit: 100,
-            topupCreditsRemaining: 0,
-            trialCreditsRemaining: 5
-        )
-        let store = managedStore(snapshot: combined)
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // proceeds, charged across ledgers
-    }
-
-    func testManagedNoSnapshotFailsOpen() {
-        // Snapshot hasn't been fetched yet (launch refresh not landed) → records.
-        let store = managedStore(snapshot: nil)
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
-    }
-
-    // MARK: - Overspend → negative → blocked (the one final uncapped generation)
-
-    func testOverspendClampsSnapshotToZeroAndBlocksNextGeneration() {
-        // A small positive balance (5) runs ONE costlier generation: the server
-        // charges in full and returns a NEGATIVE remaining (−6). The toast gets
-        // the raw negative, but the cached snapshot clamps to 0 — never up to a
-        // positive, so the prior negative is never netted away — and the NEXT
-        // pre-flight blocks with .outOfCredits.
-        let store = managedStore(snapshot: snapshot(.active, credits: 5))
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false)) // 5 credits → records
-
-        // Apply the just-completed overspend (charged 10, server remaining −6).
-        let effective = store.applyGenerationSpend(charged: 10, remaining: -6, isTrial: false)
-        XCTAssertEqual(effective, -6) // the toast shows the true (negative) value
-
-        // The snapshot lands on 0 (not a raw negative, not clamped UP to positive)…
-        XCTAssertEqual(store.managedSnapshot?.creditsRemaining, 0)
-        // …so the next generation is blocked client-side, routed to the top-up paywall.
-        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
-    }
-
-    // MARK: - Managed: inactive subscription
-
-    func testManagedCancelledSnapshotBlocksSubscriptionInactive() {
-        let store = managedStore(snapshot: snapshot(.cancelled, credits: 50))
-        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .subscriptionInactive)
-    }
-
-    func testManagedExpiredSnapshotBlocksSubscriptionInactive() {
-        let store = managedStore(snapshot: snapshot(.expired, credits: 50))
-        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .subscriptionInactive)
-    }
-
-    // MARK: - Managed: past_due (§9.1) — still works on remaining credits
-
-    func testManagedPastDueWithCreditsDoesNotBlock() {
-        // past_due is LIVE — keeps working on remaining credits (§9.1).
-        let store = managedStore(snapshot: snapshot(.pastDue, credits: 10))
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
-    }
-
-    func testManagedPastDueZeroCreditsBlocksOutOfCredits() {
-        // past_due but nothing left to spend → still out of credits.
-        let store = managedStore(snapshot: snapshot(.pastDue, credits: 0))
-        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .outOfCredits)
-    }
-
-    // MARK: - BYOK: missing key
-
-    func testByokWithoutKeyBlocksApiKeyMissing() {
-        let store = byokStore()
+    func testLicensedWithoutKeyBlocksApiKeyMissing() {
+        let store = licensedStore()
+        XCTAssertEqual(store.state, .byok)
         XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .apiKeyMissing)
     }
 
-    func testByokWithKeyDoesNotBlock() {
-        let store = byokStore()
+    func testLicensedWithKeyDoesNotBlock() {
+        let store = licensedStore()
         XCTAssertNil(store.preflightBlock(canGenerateLocally: true))
     }
 
-    // MARK: - Trial / expired
+    // MARK: - Trial
 
-    func testActiveTrialDoesNotBlock() {
-        // A live trial with no own key is handled by the generation route
-        // (email capture), not a pre-flight failure block.
+    func testActiveTrialWithoutKeyBlocksApiKeyMissing() {
+        // The trial runs on the user's own keys, so a missing setup is caught
+        // before a wasted capture — same as a licensed user.
         let store = trialStore()
-        guard case .trial = store.state else { return XCTFail("expected .trial") }
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
+        guard case .localTrial = store.state else { return XCTFail("expected .localTrial") }
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .apiKeyMissing)
     }
 
-    func testExpiredIsHandledByCanGenerateNotPreflight() {
-        // Trial credits exhausted → `.expired`; the `canGenerate` gate (not
+    func testActiveTrialWithKeyDoesNotBlock() {
+        let store = trialStore()
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: true))
+    }
+
+    func testExpiredTrialIsHandledByCanGenerateNotPreflight() {
+        // Trial elapsed → `.localTrialExpired`; the `canGenerate` gate (not
         // pre-flight) routes it to the paywall, so pre-flight returns nil.
         let store = trialStore(expired: true)
-        XCTAssertEqual(store.state, .expired)
+        XCTAssertEqual(store.state, .localTrialExpired)
         XCTAssertFalse(store.canGenerate)
         XCTAssertNil(store.preflightBlock(canGenerateLocally: false))
     }
 
     // MARK: - The gate trusts the caller-resolved capability
 
-    func testByokHonorsReportedCapability() {
+    func testGateHonorsReportedCapability() {
         // `preflightBlock` is a PURE function of the caller-supplied
-        // `canGenerateLocally` — it never re-reads the Keychain/disk itself (that
-        // resolution lives in `AppState.canGenerateLocally`). So a `.byok` user
-        // whom the caller reports as self-funding-capable records, full stop;
-        // the capability read (and its own fail-open/closed policy) is exercised
-        // separately in the AppState-level matrix.
-        let store = byokStore()
-        XCTAssertNil(store.preflightBlock(canGenerateLocally: true)) // capable ⇒ record
+        // `canGenerateLocally` — it never re-reads the Keychain/disk itself
+        // (that resolution lives in `AppState.canGenerateLocally`). A user the
+        // caller reports as self-funding-capable records, full stop.
+        let store = licensedStore()
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: true))
+    }
+
+    // MARK: - Community
+
+    func testCommunityNeverBlocksOnEntitlementButStillPreflightsSetup() {
+        let store = EntitlementStore(enforcementMode: .community, licenseService: makeLicense(present: false))
+        XCTAssertTrue(store.canGenerate)
+        // A missing key is a setup problem, not an entitlement one — the
+        // pre-flight still surfaces it so the user is pointed at Settings.
+        XCTAssertEqual(store.preflightBlock(canGenerateLocally: false), .apiKeyMissing)
+        XCTAssertNil(store.preflightBlock(canGenerateLocally: true))
     }
 }

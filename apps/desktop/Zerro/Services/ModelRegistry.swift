@@ -2,38 +2,26 @@
 //  ModelRegistry.swift
 //  Zerro
 //
-//  Phase 6 (multi-model plan 6A/6B) — the app-side model registry.
+//  The app-side model registry — the RUNTIME source of truth for which
+//  models the picker offers and which provider API each one calls. Every
+//  generation runs against the user's own provider key, so the ids here are
+//  the exact model ids the provider APIs accept.
 //
-//  ⚠️ THIRD MIRROR — KEEP IN SYNC. This table intentionally duplicates:
-//    1. supabase/functions/generate/models.ts   (the server source of truth:
-//       request validation + the per-model fallback estimate; the charge
-//       itself is metered on real cost)
-//    2. apps/desktop/Scripts/eval-models.mjs    (the eval harness)
-//  Any change to the model list or the recommended default must land in all
-//  three places (F8-style contract; the server file carries the same note).
-//  The ids are the exact wire values `/generate` validates against
-//  ALLOWED_MODELS — a drifted id here means 400s for users.
+//  KEEP IN SYNC with apps/desktop/Scripts/eval-models.mjs (the eval
+//  harness), which carries the same list so evals exercise the shipped
+//  models. The app shows no per-model cost: the user pays their provider
+//  directly for usage.
 //
-//  APP-SIDE MIRROR CONTRACT (metered-credits Phase 4): the app no longer
-//  charges or displays any per-model cost, so it INTENTIONALLY OMITS the
-//  server's charge field (`fallbackCredits`, formerly the app's `creditPrice`)
-//  and the display-only `shortName`. The app-side mirror is now exactly
-//  id / provider / displayName / recommended / enabled. Charging is metered on
-//  the server; the only per-recording number the user sees is the actual
-//  `credits_charged` the server returns post-generation.
-//
-//  `enabled` mirrors the server's kill switch. The picker only renders
-//  enabled entries; a model disabled server-side after this build ships
-//  would 400, so flipping it here too (next release) keeps the UI honest.
+//  `enabled` is the app's own kill switch: the picker only renders enabled
+//  entries, while a disabled id stays resolvable for historic results.
 //
 
 import Foundation
 
 // MARK: - ModelProvider
 
-/// Which API vendor serves a model. In Managed mode this is invisible plumbing
-/// (the server routes); in BYOK mode it selects the user's per-provider key
-/// (Phase 6C) and gates selectability.
+/// Which API vendor serves a model. It selects the user's per-provider key
+/// and gates selectability (a model is unavailable without its key).
 enum ModelProvider: String, Codable, CaseIterable, Equatable, Sendable {
     case openai
     case gemini
@@ -51,13 +39,10 @@ enum ModelProvider: String, Codable, CaseIterable, Equatable, Sendable {
 
 // MARK: - ModelEntry
 
-/// One selectable model. Mirrors the server's `ModelEntry` for the fields the
-/// app needs — id/provider/displayName/recommended/enabled. The server's
-/// per-model charge field (`fallbackCredits`) is deliberately NOT mirrored: the
-/// app shows no per-model cost (metered-credits Phase 4).
+/// One selectable model: id / provider / displayName / recommended / enabled.
+/// The app shows no per-model cost — the user pays their provider directly.
 struct ModelEntry: Equatable, Identifiable, Sendable {
-    /// The exact wire value sent as `model` in the `/generate` body (and the
-    /// provider API model id the BYOK path calls directly).
+    /// The exact provider API model id the generation path calls.
     let id: String
     let provider: ModelProvider
     /// User-facing name in the picker.
@@ -120,16 +105,12 @@ enum ModelRegistry {
     static let defaultModelID: String =
         (all.first { $0.recommended && $0.enabled } ?? enabled[0]).id
 
-    /// The only generation model available during the free managed trial.
-    /// Kept separate from the user's persisted paid/BYOK selection so upgrading
-    /// restores their prior choice.
-    static let trialModelID = "gemini-3.5-flash"
 }
 
 // MARK: - Selection policy
 
-/// Shared rules for the menu-bar picker and recording start. Keeping the trial
-/// override and BYOK provider gating here prevents the configuration surface
+/// Shared rules for the menu-bar picker and recording start. Keeping the
+/// BYOK provider gating here prevents the configuration surface
 /// from drifting from the model that generation actually receives.
 enum ModelSelectionPolicy {
     static func effectiveModelID(
@@ -137,9 +118,6 @@ enum ModelSelectionPolicy {
         entitlement: EntitlementState?,
         availableProviders: Set<ModelProvider>
     ) -> String {
-        if isTrial(entitlement) {
-            return ModelRegistry.trialModelID
-        }
         guard entitlement?.usesOwnProviderKeys == true else {
             return persistedModelID
         }
@@ -149,13 +127,6 @@ enum ModelSelectionPolicy {
         )?.id ?? persistedModelID
     }
 
-    static func isTrialLocked(
-        _ model: ModelEntry,
-        entitlement: EntitlementState?
-    ) -> Bool {
-        isTrial(entitlement) && model.id != ModelRegistry.trialModelID
-    }
-
     static func isBYOKGated(
         _ model: ModelEntry,
         entitlement: EntitlementState?,
@@ -163,11 +134,6 @@ enum ModelSelectionPolicy {
     ) -> Bool {
         guard entitlement?.usesOwnProviderKeys == true else { return false }
         return !availableProviders.contains(model.provider)
-    }
-
-    private static func isTrial(_ entitlement: EntitlementState?) -> Bool {
-        if case .trial = entitlement { return true }
-        return false
     }
 }
 

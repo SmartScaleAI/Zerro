@@ -10,17 +10,16 @@
 //    • `AppState.canGenerateLocally(...)` — the pure capability predicate over
 //      hasAnyChatKey × engine × modelInstalled × openAIKeyPresent (Keychain/
 //      disk-free; the "fakes" are the explicit signals).
-//    • `EntitlementStore.generationRoute` / `preflightBlock` across
-//      plan {byok, trial, managed, expired} × keysets × modelInstalled ×
+//    • `EntitlementStore.preflightBlock` across
+//      state {licensed, trial, expired} × keysets × modelInstalled ×
 //      sttEngine, driving `canGenerateLocally` as the COMPUTED predicate.
 //    • The non-breaking guarantees + the single new (model-installed) behavior,
 //      called out as named tests so the evidence is legible.
 //    • The AppState resolver seam (the injectable closure) is honored.
 //
-//  All dependencies are in-memory; no Keychain, disk, or network. Trial token/
-//  email sub-branches stay covered by TrialCreditsTests — here every trial store
-//  is a FRESH unverified trial so the trial route is purely
-//  `canGenerateLocally ? .local : .trialNeedsEmail`, isolating the Phase-4 lever.
+//  All dependencies are in-memory; no Keychain, disk, or network. Every
+//  generation runs the local pipeline, so the only routing decision left is
+//  the pre-flight: whether the user can self-fund.
 //
 
 import XCTest
@@ -101,56 +100,13 @@ final class CanGenerateLocallyRoutingTests: XCTestCase {
         }
     }
 
-    // MARK: - generationRoute matrix
-
-    /// plan {byok, trial, managed, expired} × keysets × modelInstalled ×
-    /// sttEngine → expected route, with `canGenerateLocally` computed by the
-    /// predicate. The plan stores are pure reads, so one of each is reused.
-    func testGenerationRouteMatrix() {
-        let byok = byokStore()
-        let managed = managedStore()
-        let trial = trialStore()
-        let expired = expiredStore()
-
-        for ks in keysets {
-            for model in [true, false] {
-                for engine in engines {
-                    let cgl = AppState.canGenerateLocally(
-                        hasAnyChatKey: ks.hasAnyChatKey, engine: engine,
-                        modelInstalled: model, openAIKeyPresent: ks.openAIKeyPresent
-                    )
-                    let ctx = "keys=\(ks.label) model=\(model) engine=\(engine) cgl=\(cgl)"
-
-                    // BYOK: always .local — funds locally; fails gracefully at
-                    // record time if STT can't resolve (unchanged from today).
-                    XCTAssertEqual(byok.generationRoute(canGenerateLocally: cgl), .local, "byok \(ctx)")
-                    // Managed: always the proxy — the server is the spend
-                    // authority, independent of any local capability.
-                    XCTAssertEqual(managed.generationRoute(canGenerateLocally: cgl), .managedProxy, "managed \(ctx)")
-                    // Expired: defensive .local (the canGenerate gate blocks it
-                    // first); independent of capability.
-                    XCTAssertEqual(expired.generationRoute(canGenerateLocally: cgl), .local, "expired \(ctx)")
-                    // Trial (fresh, unverified): .local iff the user can self-fund,
-                    // else the email-capture flow. THIS is the Phase-4 lever.
-                    XCTAssertEqual(
-                        trial.generationRoute(canGenerateLocally: cgl),
-                        cgl ? .local : .trialNeedsEmail,
-                        "trial \(ctx)"
-                    )
-                }
-            }
-        }
-    }
-
     // MARK: - preflightBlock matrix
 
-    /// The pre-flight gate mirrored across the same matrix. Managed credit/status
-    /// blocking is independent of `canGenerateLocally` (covered exhaustively in
-    /// PreflightGateTests); here the managed store is active-with-credits, so it
-    /// must never block on capability.
+    /// The pre-flight gate across state × keysets × modelInstalled × sttEngine,
+    /// with `canGenerateLocally` computed by the predicate. The stores are pure
+    /// reads, so one of each is reused.
     func testPreflightBlockMatrix() {
-        let byok = byokStore()
-        let managed = managedStore()
+        let licensed = byokStore()
         let trial = trialStore()
         let expired = expiredStore()
 
@@ -163,13 +119,11 @@ final class CanGenerateLocallyRoutingTests: XCTestCase {
                     )
                     let ctx = "keys=\(ks.label) model=\(model) engine=\(engine) cgl=\(cgl)"
 
-                    // BYOK: blocks .apiKeyMissing iff it can't self-fund.
-                    let expectedByok: EntitlementStore.PreflightBlock? = cgl ? nil : .apiKeyMissing
-                    XCTAssertEqual(byok.preflightBlock(canGenerateLocally: cgl), expectedByok, "byok \(ctx)")
-                    // Managed (active, credits > 0): capability never blocks.
-                    XCTAssertNil(managed.preflightBlock(canGenerateLocally: cgl), "managed \(ctx)")
-                    // Trial / expired: pre-flight is never the gate (canGenerate is).
-                    XCTAssertNil(trial.preflightBlock(canGenerateLocally: cgl), "trial \(ctx)")
+                    // Granting states block .apiKeyMissing iff they can't self-fund.
+                    let expected: EntitlementStore.PreflightBlock? = cgl ? nil : .apiKeyMissing
+                    XCTAssertEqual(licensed.preflightBlock(canGenerateLocally: cgl), expected, "licensed \(ctx)")
+                    XCTAssertEqual(trial.preflightBlock(canGenerateLocally: cgl), expected, "trial \(ctx)")
+                    // Expired: pre-flight is never the gate (canGenerate is).
                     XCTAssertNil(expired.preflightBlock(canGenerateLocally: cgl), "expired \(ctx)")
                 }
             }
@@ -188,41 +142,35 @@ final class CanGenerateLocallyRoutingTests: XCTestCase {
                 "an OpenAI key is a usable transcription path (model=\(model))"
             )
         }
-        XCTAssertEqual(trialStore().generationRoute(canGenerateLocally: true), .local)
+        XCTAssertNil(trialStore().preflightBlock(canGenerateLocally: true))
         XCTAssertNil(byokStore().preflightBlock(canGenerateLocally: true))
     }
 
-    /// Claude-only / Gemini-only with NO model installed (production reality
-    /// until Phase 5): `.auto` can't resolve, so `canGenerateLocally` is false and
-    /// the trial routes EXACTLY as today (email capture), and BYOK pre-flight
-    /// blocks exactly as an OpenAI-less user did before. The phase is inert in
-    /// production until a model exists.
-    func testNonBreaking_NonOpenAIKeyNoModelUnchanged() {
+    /// Claude-only / Gemini-only with NO model installed: `.auto` can't
+    /// resolve, so `canGenerateLocally` is false and the pre-flight blocks
+    /// exactly as an OpenAI-less user did before — for the trial and the
+    /// license alike.
+    func testNonOpenAIKeyNoModelBlocksPreflight() {
         for ks in [keysets[2], keysets[3]] { // claude-only, gemini-only
             let cgl = AppState.canGenerateLocally(
                 hasAnyChatKey: ks.hasAnyChatKey, engine: .auto,
                 modelInstalled: false, openAIKeyPresent: ks.openAIKeyPresent
             )
             XCTAssertFalse(cgl, "\(ks.label): chat key but no transcription path")
-            XCTAssertEqual(trialStore().generationRoute(canGenerateLocally: cgl), .trialNeedsEmail, ks.label)
+            XCTAssertEqual(trialStore().preflightBlock(canGenerateLocally: cgl), .apiKeyMissing, ks.label)
             XCTAssertEqual(byokStore().preflightBlock(canGenerateLocally: cgl), .apiKeyMissing, ks.label)
         }
     }
 
-    /// THE new behavior (only once a model is installed): a Claude-only (no
-    /// OpenAI key) TRIAL user with the on-device model + `.auto` now self-funds
-    /// LOCALLY instead of consuming trial server credits.
-    func testNewBehavior_NonOpenAIKeyWithModelRoutesLocalOnTrial() {
+    /// A Claude-only (no OpenAI key) user with the on-device model + `.auto`
+    /// has a fully local path: no false `.apiKeyMissing` for the trial or the
+    /// license.
+    func testNonOpenAIKeyWithModelPassesPreflight() {
         let cgl = AppState.canGenerateLocally(
             hasAnyChatKey: true, engine: .auto, modelInstalled: true, openAIKeyPresent: false
         )
         XCTAssertTrue(cgl, "a chat key + an installed model is a usable local path")
-        XCTAssertEqual(
-            trialStore().generationRoute(canGenerateLocally: cgl), .local,
-            "Claude/Gemini-only trial + model → their dime, not trial credits"
-        )
-        // And the same setup lets a BYOK user past pre-flight (no false
-        // .apiKeyMissing now that a non-OpenAI local path exists).
+        XCTAssertNil(trialStore().preflightBlock(canGenerateLocally: cgl))
         XCTAssertNil(byokStore().preflightBlock(canGenerateLocally: cgl))
     }
 
@@ -247,58 +195,44 @@ final class CanGenerateLocallyRoutingTests: XCTestCase {
             licenseKeySlot: InMemoryKeychainSlot(present ? "KEY" : nil),
             instanceIDSlot: InMemoryKeychainSlot(present ? "instance" : nil),
             lastValidatedSlot: InMemoryKeychainSlot(nil),
+            licensedProductIDSlot: InMemoryKeychainSlot(present ? "7" : nil),
+            licensedMajorSlot: InMemoryKeychainSlot(present ? "1" : nil),
+            policy: LicenseEditionPolicy(requiredMajor: 1, approvedProductIDs: [7]),
             transport: OfflineLicenseTransport()
         )
     }
 
     private func byokStore() -> EntitlementStore {
-        EntitlementStore(
-            licenseService: makeLicense(present: true),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.byok.rawValue),
-            defaults: .ephemeralPreview()
+        EntitlementStore(enforcementMode: .official, licenseService: makeLicense(present: true))
+    }
+
+    /// A trial clock over in-memory slots, either freshly started or elapsed,
+    /// against a fixed `now`.
+    private func makeClock(expired: Bool) -> TrialManager {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let start = expired ? now.addingTimeInterval(-Double(TrialManager.trialLengthDays + 1) * 86_400) : now
+        return TrialManager(
+            startDateSlot: InMemoryKeychainSlot(String(Int(start.timeIntervalSince1970))),
+            maxDateSeenSlot: InMemoryKeychainSlot(),
+            clock: { now }
         )
     }
 
-    /// A `.managed` store, active with credits — so its pre-flight is gated only
-    /// by the (here-healthy) snapshot, never by `canGenerateLocally`.
-    private func managedStore() -> EntitlementStore {
-        let defaults = UserDefaults.ephemeralPreview()
-        let snapshot = ManagedEntitlementSnapshot(
-            status: .active, creditsRemaining: 100, creditsLimit: 100, resetDate: nil
-        )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .secondsSince1970
-        defaults.set(try! encoder.encode(snapshot), forKey: "managed_entitlement_snapshot_v1")
-        return EntitlementStore(
-            licenseService: makeLicense(present: true),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(LicenseProductKind.managed.rawValue),
-            defaults: defaults
-        )
-    }
-
-    /// A FRESH, unverified trial (no token, no remembered email) so the trial
-    /// route reduces to `canGenerateLocally ? .local : .trialNeedsEmail`.
+    /// An ACTIVE local trial (no license).
     private func trialStore() -> EntitlementStore {
         EntitlementStore(
+            enforcementMode: .official,
             licenseService: makeLicense(present: false),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(nil),
-            trialCredits: .inMemory(),
-            defaults: .ephemeralPreview()
+            trialManager: makeClock(expired: false)
         )
     }
 
+    /// An ELAPSED local trial (no license) → the gated state.
     private func expiredStore() -> EntitlementStore {
-        let trial = TrialCreditsManager.inMemory()
-        trial.applyCreditsRemaining(0) // confirmed-zero → .expired
-        return EntitlementStore(
+        EntitlementStore(
+            enforcementMode: .official,
             licenseService: makeLicense(present: false),
-            sessionTokens: .inMemory(),
-            productKindSlot: InMemoryKeychainSlot(nil),
-            trialCredits: trial,
-            defaults: .ephemeralPreview()
+            trialManager: makeClock(expired: true)
         )
     }
 }

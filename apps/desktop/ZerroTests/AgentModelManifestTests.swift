@@ -2,11 +2,12 @@
 //  AgentModelManifestTests.swift
 //  ZerroTests
 //
-//  Dev Mode (Phase 2) — the model-manifest layer: fallback chain (live → cache
-//  → bundled), provider mapping, the `--model` argv threading, the per-agent
-//  remembered-model resolution, and the Cursor CLI parser. The store's network
-//  goes through `StubManagedTransport`; UserDefaults is an ephemeral suite, so
-//  nothing here touches the real backend or the user's prefs.
+//  Dev Mode — the model-manifest layer: the BUNDLED AgentModels.json
+//  resource (loading, parsing, fail-safe behavior on missing/malformed
+//  data), provider mapping, the `--model` argv threading, the per-agent
+//  remembered-model resolution, and the Codex/Cursor CLI parsers. The store
+//  needs NO transport and NO persistent cache — its init takes only a
+//  Bundle — so nothing here touches any backend or the user's prefs.
 //
 
 import XCTest
@@ -14,10 +15,6 @@ import XCTest
 
 @MainActor
 final class AgentModelManifestTests: XCTestCase {
-
-    private func makeStore(transport: ManagedTransport) -> AgentModelManifestStore {
-        AgentModelManifestStore(transport: transport, defaults: .ephemeralPreview())
-    }
 
     private let manifestJSON = """
     {"providers":{
@@ -28,96 +25,76 @@ final class AgentModelManifestTests: XCTestCase {
     }}
     """
 
-    // MARK: - Fallback chain
+    // MARK: - Bundled resource
 
-    func testBundledFallbackBeforeAnyFetch() {
-        let store = makeStore(transport: StubManagedTransport())
-        // No cache, no fetch yet → the bundled defaults (never empty).
-        XCTAssertFalse(store.models(forProvider: "anthropic").isEmpty)
-        XCTAssertEqual(store.models(forProvider: "anthropic"), AgentModelManifestStore.bundled["anthropic"])
-        // OpenAI is retired — no bundled list, so an openai lookup is empty.
+    func testBundledResourceIsPresentInTheAppBundle() {
+        // Tests are hosted in Zerro.app, so Bundle.main IS the built app —
+        // this asserts the JSON actually ships inside the bundle.
+        XCTAssertNotNil(
+            Bundle.main.url(forResource: AgentModelManifestStore.resourceName, withExtension: "json"),
+            "AgentModels.json must be bundled into Zerro.app"
+        )
+    }
+
+    func testBundledManifestLoadsAndAnthropicListIsNonEmpty() {
+        let store = AgentModelManifestStore()
+        let models = store.models(forProvider: "anthropic")
+        XCTAssertFalse(models.isEmpty, "the bundled manifest must carry Anthropic models")
+        // Newest-first: rank 0 is the default pick.
+        XCTAssertEqual(models.first?.modelID, "claude-opus-4-8")
+        // Every entry has a real id + label.
+        for model in models {
+            XCTAssertFalse(model.modelID.isEmpty)
+            XCTAssertFalse(model.displayName.isEmpty)
+        }
+        // No manifest list for retired/unknown providers.
         XCTAssertTrue(store.models(forProvider: "openai").isEmpty)
     }
 
-    func testWarmAdoptsLiveManifestNewestFirst() async {
-        let transport = StubManagedTransport()
-        transport.enqueue(manifestJSON, status: 200)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        XCTAssertEqual(store.models(forProvider: "anthropic").map(\.modelID),
+    func testMissingResourceFailsSafelyToEmpty() {
+        // The TEST bundle carries no AgentModels.json — the store must come up
+        // empty (never crash), which downstream renders as "no picker" and the
+        // agent's own default model.
+        let store = AgentModelManifestStore(bundle: Bundle(for: AgentModelManifestTests.self))
+        XCTAssertTrue(store.providers.isEmpty)
+        XCTAssertTrue(store.models(forProvider: "anthropic").isEmpty)
+        XCTAssertTrue(store.models(forAgent: DevAgentRegistry.claudeCodeID).isEmpty)
+    }
+
+    func testDecodeParsesTheWireShapeNewestFirst() throws {
+        let resolved = try XCTUnwrap(AgentModelManifestStore.decode(Data(manifestJSON.utf8)))
+        XCTAssertEqual(resolved["anthropic"]?.map(\.modelID),
                        ["claude-opus-4-8", "claude-sonnet-4-6"])
-        XCTAssertEqual(store.models(forProvider: "anthropic").first?.displayName, "Claude Opus 4.8")
+        XCTAssertEqual(resolved["anthropic"]?.first?.displayName, "Claude Opus 4.8")
     }
 
-    func testWarmIgnoresAnyOpenAIInBody() async {
-        // A stray openai array in the body (e.g. a not-yet-cleaned backend) is
-        // ignored — OpenAI is retired, so it never surfaces.
-        let transport = StubManagedTransport()
-        transport.enqueue(#"{"providers":{"anthropic":[{"model_id":"claude-opus-4-8","display_name":"Claude Opus 4.8"}],"openai":[{"model_id":"gpt-5-codex","display_name":"GPT-5 Codex"}]}}"#, status: 200)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        XCTAssertEqual(store.models(forProvider: "anthropic").map(\.modelID), ["claude-opus-4-8"])
-        XCTAssertTrue(store.models(forProvider: "openai").isEmpty)
+    func testMalformedAndEmptyManifestsDecodeToNil() {
+        XCTAssertNil(AgentModelManifestStore.decode(Data("not json".utf8)))
+        XCTAssertNil(AgentModelManifestStore.decode(Data()))
+        XCTAssertNil(AgentModelManifestStore.decode(Data(#"{"providers":{}}"#.utf8)),
+                     "no providers must not look loaded")
+        XCTAssertNil(AgentModelManifestStore.decode(Data(#"{"providers":{"anthropic":[]}}"#.utf8)),
+                     "an empty model list must not look loaded")
     }
 
-    func testWarmTransportFailureKeepsBundled() async {
-        let transport = StubManagedTransport()
-        transport.error = URLError(.notConnectedToInternet)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        // Offline → fail open, keep the bundled list (picker never empties).
-        XCTAssertEqual(store.models(forProvider: "anthropic"), AgentModelManifestStore.bundled["anthropic"])
-    }
-
-    func testWarmNon200KeepsBundled() async {
-        let transport = StubManagedTransport()
-        transport.enqueue("{}", status: 500)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        XCTAssertEqual(store.models(forProvider: "anthropic"), AgentModelManifestStore.bundled["anthropic"])
-    }
-
-    func testWarmEmptyManifestKeepsBundled() async {
-        let transport = StubManagedTransport()
-        transport.enqueue(#"{"providers":{"anthropic":[]}}"#, status: 200)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        // A transient empty body must not blank a working list.
-        XCTAssertEqual(store.models(forProvider: "anthropic"), AgentModelManifestStore.bundled["anthropic"])
-    }
-
-    func testWarmPersistsCacheReadBackByNewStore() async {
-        let defaults = UserDefaults.ephemeralPreview()
-        let transport = StubManagedTransport()
-        transport.enqueue(manifestJSON, status: 200)
-        let store = AgentModelManifestStore(transport: transport, defaults: defaults)
-        await store.warm()
-        // A fresh store over the SAME defaults reads the cached manifest at init,
-        // before any fetch — the live→cache step of the fallback chain.
-        let reopened = AgentModelManifestStore(transport: StubManagedTransport(), defaults: defaults)
-        XCTAssertEqual(reopened.models(forProvider: "anthropic").map(\.modelID),
-                       ["claude-opus-4-8", "claude-sonnet-4-6"])
-    }
-
-    // MARK: - Provider mapping
+    // MARK: - Agent mapping
 
     func testAgentProviderMapping() {
-        XCTAssertEqual(AgentModelMapping.source(forAgent: DevAgentRegistry.claudeCodeID), .manifest(provider: "anthropic"))
-        // Codex is sourced from its OWN list now, not the OpenAI manifest.
+        XCTAssertEqual(AgentModelMapping.source(forAgent: DevAgentRegistry.claudeCodeID),
+                       .manifest(provider: "anthropic"))
         XCTAssertEqual(AgentModelMapping.source(forAgent: DevAgentRegistry.codexID), .codexCLI)
-        XCTAssertEqual(AgentModelMapping.source(forAgent: "cursor"), .cursorCLI)
-        XCTAssertEqual(AgentModelMapping.source(forAgent: "unknown-agent"), .none)
+        XCTAssertEqual(AgentModelMapping.source(forAgent: DevAgentRegistry.cursorID), .cursorCLI)
+        XCTAssertEqual(AgentModelMapping.source(forAgent: "someday-agent"), AgentModelSource.none)
     }
 
-    func testModelsForAgentResolvesManifestProvider() async {
-        let transport = StubManagedTransport()
-        transport.enqueue(manifestJSON, status: 200)
-        let store = makeStore(transport: transport)
-        await store.warm()
-        XCTAssertEqual(store.models(forAgent: DevAgentRegistry.claudeCodeID).map(\.modelID),
-                       ["claude-opus-4-8", "claude-sonnet-4-6"])
-        XCTAssertTrue(store.models(forAgent: "unknown-agent").isEmpty)
-        // Codex resolves to its own CLI list (DevAgentDetection), NOT the manifest.
+    func testModelsForAgentResolvesTheBundledManifest() {
+        let store = AgentModelManifestStore()
+        XCTAssertEqual(
+            store.models(forAgent: DevAgentRegistry.claudeCodeID),
+            store.models(forProvider: "anthropic"),
+            "Claude Code resolves through the bundled anthropic manifest"
+        )
+        XCTAssertFalse(store.models(forAgent: DevAgentRegistry.claudeCodeID).isEmpty)
     }
 
     // MARK: - Codex models cache parser

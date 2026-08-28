@@ -122,9 +122,8 @@ struct ProcessedRecording {
 
     /// Phase 6 — whether the isolated audio carries any detectable speech
     /// (`AudioActivity.hasSpeech`), computed post-hoc from `audio.m4a`. `false`
-    /// means a silent/screen-only clip: the generation paths skip the Whisper
-    /// call entirely (BYOK locally; Managed by sending `has_speech:false` so the
-    /// server short-circuits STT) and compose from frames + OCR + clicks alone.
+    /// means a silent/screen-only clip: the generation path skips the Whisper
+    /// call entirely and composes from frames + OCR + clicks alone.
     /// Mirrored into the manifest so the eval harness makes the same skip.
     let hasSpeech: Bool
 
@@ -132,17 +131,15 @@ struct ProcessedRecording {
     /// processed recording is produced, and carried unchanged across every
     /// generation retry of THIS recording — `retryFailedPrompt` re-runs against
     /// the same `ProcessedRecording` value, and a value copy preserves this
-    /// `let` rather than re-minting it. The Managed proxy sends it as the
-    /// `Idempotency-Key` header so a charged-but-dropped `/generate` response is
-    /// replayed on retry instead of charging a second credit. A genuinely new
-    /// recording yields a new `ProcessedRecording`, hence a new key.
+    /// `let` rather than re-minting it. It is the recording's stable identity
+    /// for retries and bookkeeping. A genuinely new recording yields a new
+    /// `ProcessedRecording`, hence a new key.
     ///
     /// Defaults to a fresh UUID for every NEW recording. An explicit initializer
-    /// (below) accepts it so a recording RECONSTRUCTED from disk for a
-    /// Continue-after-pay resume (`reconstruct(workingDirectory:idempotencyKey:)`)
-    /// can carry the ORIGINAL key — the proxy then replays the charged-but-blocked
-    /// `/generate` instead of charging a second credit. The default keeps every
-    /// existing call site (pipeline, tests) compiling unchanged.
+    /// (below) accepts it so a recording RECONSTRUCTED from disk
+    /// (`reconstruct(workingDirectory:idempotencyKey:)`) can carry the ORIGINAL
+    /// key. The default keeps every existing call site (pipeline, tests)
+    /// compiling unchanged.
     let idempotencyKey: String
 
     /// Explicit memberwise init with `idempotencyKey` defaulting to a fresh UUID,
@@ -292,8 +289,7 @@ extension ProcessedRecording {
     /// held recording's generation after the user pays.
     ///
     /// `idempotencyKey` is injected so the resumed generation reuses the ORIGINAL
-    /// recording's key (the proxy replays a charged-but-blocked response instead
-    /// of double-charging). The in-memory-only `ExtractedFrame.lines` aren't
+    /// recording's key. The in-memory-only `ExtractedFrame.lines` aren't
     /// rebuilt — clicks are already resolved in the manifest, so generation never
     /// needs them. Throws `ManifestReadError` on a missing/corrupt manifest.
     static func reconstruct(

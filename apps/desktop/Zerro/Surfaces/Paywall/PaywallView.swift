@@ -5,7 +5,7 @@
 //  Created by Colin Breeding on 6/1/26.
 //
 //  The paywall window's content. Opened ONLY by the recording-start gate
-//  when `EntitlementStore.canGenerate` is false (state `.expired`); it never
+//  when `EntitlementStore.canGenerate` is false (expired trial); it never
 //  auto-presents at launch (the Window scene uses
 //  `.defaultLaunchBehavior(.suppressed)`).
 //
@@ -14,29 +14,18 @@
 //  `vfPanelBackground`, and spacing tokens — so the two surfaces read as one
 //  app. Copy is non-punitive (the trial ended, here's how to keep going).
 //
-//  Three buy paths (billing-plan §8), laid out to mirror the website's
-//  pricing section (apps/web/…/axis/pricing.tsx): the two plans side by
-//  side — Managed leading left (the recommended path, accent-highlighted,
-//  "Most popular"), BYOK right — with the shared activate row below:
-//    • Managed — THE Zerro-hosted credit subscription (Phase E). Monthly vs
-//      yearly ($12/mo billed annually) is chosen on the LemonSqueezy
-//      checkout page. Sends the recording to Zerro's server for processing —
-//      surfaced honestly in the privacy note below.
-//    • BYOK — pay once, fund generation with your own provider keys. "Get a
-//      license" opens the LemonSqueezy hosted checkout (NSWorkspace). Fully
-//      LOCAL: recordings never leave the Mac.
-//    • Activate — one shared "enter your key" field (reusing the Phase C
-//      `LicenseService.activate` path) handles BOTH a BYOK license and a
-//      subscription key: `EntitlementStore.activate` probes the backend to
-//      resolve which, then sets `.byok` or `.managed`. On success the paywall
-//      dismisses (the gate now passes).
+//  One product, two affordances:
+//    • Buy — the Zerro license ($39 one-time, covers every Zerro 1.x.x
+//      release, two Macs). "Get a license" opens the Lemon Squeezy hosted
+//      checkout (NSWorkspace). Generation is funded by the user's own
+//      provider API keys; recordings never pass through Zerro's servers.
+//    • Activate — the shared "enter your key" field (the
+//      `LicenseService.activate` path). On success the paywall shows the
+//      confirmation (the gate now passes).
 //
-//  Checkout URLs + prices are `// TODO:` placeholders until the LS account /
-//  products are live (see `BillingLinks` / `Price`); each resolves-to-nil and
-//  no-ops cleanly when unset.
-//
-//  // DEFERRED: auto-pull the subscription license post-checkout (so the user
-//  doesn't have to paste a key). v1 reuses the Phase C enter-key path.
+//  A license that is on file but does not cover THIS build (wrong product,
+//  or a different Zerro major) gets a specific notice above the pitch
+//  instead of silently re-selling.
 //
 
 import AppKit
@@ -49,8 +38,8 @@ import SwiftUI
 /// WHY the window was opened (`EntitlementStore.paywallTrigger`) and the
 /// current entitlement (`EntitlementState`). The window is no longer only the
 /// blocked-trial wall — the menu-bar "Upgrade" entry point opens it in a
-/// voluntary-upgrade / add-credits / manage context too, so the copy adapts
-/// instead of always saying "You've used your free generations".
+/// voluntary-upgrade / manage context too, so the copy adapts
+/// instead of always showing the blocked-wall headline.
 ///
 /// Pure + `Equatable` so it's unit-tested directly (trigger + state → copy)
 /// without standing up the view.
@@ -58,84 +47,85 @@ struct PaywallCopy: Equatable {
     let headline: String
     let subheadline: String
     /// The window title-bar text, shown as "Zerro: <windowTitle>". Tracks
-    /// the context so the chrome matches the body (e.g. "Add Credits" when a
-    /// Managed user tops up, not the generic "Unlock").
+    /// the context so the chrome matches the body (e.g. "Manage License" for
+    /// a licensed user, not the generic "Unlock").
     let windowTitle: String
 
-    /// Resolves the copy. `.expired` is the genuinely-gated state, so it ALWAYS
-    /// gets the blocked copy even if a stale trigger survived; otherwise the
-    /// explicit trigger wins, and a `nil` trigger falls back to a sensible copy
-    /// for the state so the window never shows the wrong context.
+    /// Resolves the copy. `.localTrialExpired` is the genuinely-gated state,
+    /// so it ALWAYS gets the blocked copy even if a stale trigger survived;
+    /// otherwise the explicit trigger wins, and a `nil` trigger falls back to
+    /// a sensible copy for the state so the window never shows the wrong
+    /// context.
     static func resolve(trigger: EntitlementStore.PaywallTrigger?, state: EntitlementState) -> PaywallCopy {
-        if case .expired = state { return .blocked }
-        if case .byokTrialExpired = state { return .byokTrialComplete }
+        if case .localTrialExpired = state { return .localTrialComplete }
 
         switch trigger {
-        case .byokTrialExhausted:
-            return .byokTrialComplete
         case .blocked:
-            return .blocked
+            return .localTrialComplete
         case .voluntaryUpgrade:
-            return .upgrade
-        case .topup, .outOfCredits:
-            return .topup
-        case .manage, .subscriptionInactive, .apiKeyMissing:
+            return .localTrialUpgrade
+        case .manage, .apiKeyMissing:
             return .manage
         case nil:
             switch state {
-            case .trial, .byokTrial: return .upgrade
-            case .managed, .byok:   return .manage
-            case .expired:          return .blocked  // unreachable (handled above)
-            case .byokTrialExpired: return .byokTrialComplete
+            case .localTrial:        return .localTrialUpgrade
+            case .byok:              return .manage
+            case .localTrialExpired: return .localTrialComplete  // unreachable (handled above)
             }
         }
     }
 
-    /// Trial exhausted (the original wall). Copy unchanged from v1.
-    static let blocked = PaywallCopy(
-        headline: "You\u{2019}ve used your free generations",
-        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste result. Pick the option that fits how you work.",
-        windowTitle: "Unlock"
-    )
-    static let byokTrialComplete = PaywallCopy(
-        headline: "Your own-key trial is complete",
-        subheadline: "You finished 10 successful generations with your own provider keys. Get a BYOK license to keep your direct, private setup.",
-        windowTitle: "Keep Using Your Keys"
-    )
-    /// Voluntary upgrade from an active trial — lead with the Managed value,
-    /// reassure the trial still works.
-    static let upgrade = PaywallCopy(
-        headline: "Upgrade your plan",
-        subheadline: "Your Zerro Cloud Trial is still active, so upgrade whenever you\u{2019}re ready. Zerro Cloud gives you 300 credits a month across all \(ModelRegistry.selectableCountWord) models, with no API keys required.",
+    /// Voluntary upgrade from an ACTIVE local trial — reassure that the
+    /// trial keeps working and frame the license as continuing on the user's
+    /// own provider keys. Deliberately no mention of credits, generations,
+    /// email, accounts, or subscriptions: the local trial has none of those.
+    static let localTrialUpgrade = PaywallCopy(
+        headline: "Get a Zerro license",
+        subheadline: "Your free trial is still active, so buy whenever you\u{2019}re ready. A license keeps Zerro working on your own provider keys after the trial ends.",
         windowTitle: "Upgrade"
     )
-    /// Managed user adding credits — point straight at the top-up packs.
-    /// Carries the B-07 metering-floor note (the shared CreditDisplay string)
-    /// so the credits-focused paywall states it too.
-    static let topup = PaywallCopy(
-        headline: "Add Credits",
-        subheadline: "Top up now to keep generating, or wait for next month's credits to renew. Credits attach to your subscription instantly and carry over for 12 months. \(CreditDisplay.minimumChargeNote)",
-        windowTitle: "Add Credits"
+    /// The local free trial has ended — the blocked purchase surface for
+    /// official builds. Deliberately no mention of credits, generations,
+    /// email, or accounts: the local trial has none of those.
+    static let localTrialComplete = PaywallCopy(
+        headline: "Your free trial has ended",
+        subheadline: "Keep turning a quick screen recording and a sentence of narration into a ready-to-paste result on your own provider keys.",
+        windowTitle: "Unlock"
     )
-    /// Entitled user managing their plan — de-emphasize the sell.
+    /// A licensed user managing their license — de-emphasize the sell.
     static let manage = PaywallCopy(
-        headline: "Manage your plan",
-        subheadline: "Switch options, activate a key, or manage your devices and billing. Everything for your plan lives here.",
-        windowTitle: "Manage Plan"
+        headline: "Manage your license",
+        subheadline: "Activate a key, or manage your devices and billing. Everything for your license lives here.",
+        windowTitle: "Manage License"
     )
 
-    /// The Managed plan card's subtitle. Hoisted out of `PaywallView.body` so the
-    /// model-count copy guard can assert on it like the other copy constants.
-    static let managedCardSubtitle =
-        "Zerro handles model access. 300 credits a month across all \(ModelRegistry.selectableCountWord) models, no API key required. $12/mo if you choose yearly billing."
+    /// The license card's feature lines — the whole purchase story, one line
+    /// per fact. Hoisted so the copy tests can pin the exact wording.
+    static let licenseFeatureLines: [String] = [
+        "Includes all Zerro \(LicenseEditionPolicy.current.requiredMajor).x.x updates",
+        "Use on up to 2 Macs",
+        "Bring your own OpenAI, Anthropic, or Gemini API keys",
+        "You pay providers directly for usage",
+        "A future major version may be sold separately",
+    ]
+
+    /// The notice for a license that is on file but doesn't cover THIS build.
+    /// Names the covered major when the cached record knows it (the
+    /// wrong-major case); otherwise falls back to the generic wrong-product
+    /// line — the same copy activation uses.
+    static func incompatibleLicenseLine(licensedMajor: Int?, requiredMajor: Int) -> String {
+        if let licensedMajor, licensedMajor != requiredMajor {
+            return "Your license covers Zerro \(licensedMajor).x. This version requires a Zerro \(requiredMajor) license."
+        }
+        return "This license key is for a different Zerro product or version."
+    }
 }
 
 struct PaywallView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(EntitlementStore.self) private var entitlements
 
-    /// Window width. Sized for the two side-by-side plan cards (website
-    /// pricing parity) with comfortable padding — each card gets ~350pt.
+    /// Window width. Sized for the license card with comfortable padding.
     /// The Window scene uses `.windowResizability(.contentSize)`, so this
     /// frame IS the window size; nothing else pins it.
     private static let windowWidth: CGFloat = 760
@@ -149,15 +139,6 @@ struct PaywallView: View {
     @State private var capturedTrigger: EntitlementStore.PaywallTrigger?
     @State private var didCaptureTrigger = false
 
-    /// Latched true when a checkout-return deep link delivers a key while the
-    /// user is already `.managed` (E-01). The Managed surface otherwise shows
-    /// only the top-up packs, so without this the prefilled key would be stranded
-    /// with no field to enter it. The latch persists for the window's lifetime so
-    /// the field stays mounted after `ActivateLicenseCard` consumes the one-shot
-    /// prefill flags. Only a Managed subscriber activating a DIFFERENT key (e.g.
-    /// a separately-bought BYOK license) reaches it.
-    @State private var managedActivatePending = false
-
     private var copy: PaywallCopy {
         let trigger = didCaptureTrigger ? capturedTrigger : entitlements.paywallTrigger
         return PaywallCopy.resolve(trigger: trigger, state: entitlements.state)
@@ -165,8 +146,8 @@ struct PaywallView: View {
 
     var body: some View {
         // The purchase-success confirmation takes precedence over the whole
-        // PaywallCopy matrix: once an activation/top-up lands, the window shows
-        // "you're all set" instead of the headline + plan cards + activate field.
+        // PaywallCopy matrix: once an activation lands, the window shows
+        // "you're all set" instead of the headline + license card + activate field.
         Group {
             if let success = entitlements.purchaseSuccess {
                 PurchaseSuccessView(info: success)
@@ -178,7 +159,7 @@ struct PaywallView: View {
             .background(Color.vfPanelBackground)
             // Title-bar text tracks the context (the static Window() label is
             // the generic "Unlock"; this overrides it per trigger so e.g. a
-            // top-up reads "Zerro — Add Credits").
+            // licensed user reads "Zerro: Manage License").
             .navigationTitle("Zerro: \(copy.windowTitle)")
             .onAppear {
                 // Tier 3 analytics: the gate stashes WHY the paywall opened
@@ -190,7 +171,6 @@ struct PaywallView: View {
                 capturedTrigger = entitlements.paywallTrigger
                 didCaptureTrigger = true
                 entitlements.paywallTrigger = nil
-                latchManagedActivateIfNeeded()
             }
             .onChange(of: entitlements.paywallTrigger) { _, newValue in
                 // A fresh open while the window is already on screen (the menu
@@ -201,25 +181,6 @@ struct PaywallView: View {
                 didCaptureTrigger = true
                 entitlements.paywallTrigger = nil
             }
-            // A deep-link key arriving while the (Managed) window is already open
-            // re-routes here rather than re-firing onAppear — latch then too, so
-            // the activate field appears for the Managed user (E-01).
-            .onChange(of: entitlements.prefillLicenseKey) { _, key in
-                if key != nil { latchManagedActivateIfNeeded() }
-            }
-    }
-
-    /// Latches `managedActivatePending` when a checkout-return prefill is pending
-    /// for a Managed user. Keyed strictly on `prefillLicenseKey` (the deep-link-
-    /// with-key path always sets it) — NOT `focusActivationFieldOnOpen`, which the
-    /// no-key "brand-new buyer must paste" path also sets and which, if left stale
-    /// on the long-lived store, would otherwise surface an empty activate field to
-    /// a Managed user. Safe to read the flag here: the Managed branch doesn't
-    /// mount `ActivateLicenseCard` until this latch flips, so nothing has consumed
-    /// (cleared) it yet.
-    private func latchManagedActivateIfNeeded() {
-        guard case .managed = entitlements.state, entitlements.prefillLicenseKey != nil else { return }
-        managedActivatePending = true
     }
 
     // MARK: - Main panel
@@ -248,75 +209,43 @@ struct PaywallView: View {
 
     // MARK: - Options
 
-    /// The option stack adapts to the entitlement (the consolidation target):
-    ///   • Managed   → the single "Add Credits" card (the one purchasable thing
-    ///                 left). No re-sell, no manage link, no activate field — a
-    ///                 Managed user already holds the plan and a key — EXCEPT when
-    ///                 a checkout-return deep link delivered a different key to
-    ///                 activate (E-01), where the activate card is surfaced so the
-    ///                 key isn't stranded.
-    ///   • BYOK      → a manage link only (BYOK funds locally; no credits to
-    ///                 top up, no plan to upgrade to) + the activate field.
-    ///   • Trial/Expired → the plan sell: Managed + BYOK side by side + activate.
-    @ViewBuilder
+    /// The option stack adapts to the entitlement:
+    ///   • Licensed  → a manage link (change devices/billing in the portal) +
+    ///                 the activate field. No re-sell.
+    ///   • Trial / expired trial → the license card + activate.
+    /// This window is an official-build surface only; community builds never
+    /// open it (see `AppDelegate.openPaywall`).
     private var optionStack: some View {
-        // Managed is its own self-contained surface: the "Add Credits" card (plus,
-        // only when a deep-link key is pending, the activate field). Return early
-        // so none of the manage/sell affordances below render for this state.
-        if case .managed = entitlements.state {
-            VStack(spacing: VFSpacing.md) {
-                AddCreditsCard()
-                if managedActivatePending {
-                    ActivateLicenseCard(onActivated: showActivationSuccess)
-                }
-            }
-        } else {
-            nonManagedOptions
-        }
-    }
-
-    /// Everything for the non-Managed states (trial/expired/byok): the plan sell
-    /// cards (trial/expired), a manage link (byok), and the shared activate field.
-    private var nonManagedOptions: some View {
         VStack(spacing: VFSpacing.md) {
-            if showsPlanCards {
-                // The two plans SIDE BY SIDE (website pricing parity): Managed
-                // leads left — the recommended path, accent-highlighted — BYOK
-                // right. Shown only to users without a plan yet (trial/expired);
-                // an entitled user sees the manage link instead, not a re-sell.
-                HStack(alignment: .top, spacing: VFSpacing.md) {
-                    // Managed — THE plan (multi-model §1.3): Zerro-hosted
-                    // credits, all five models, no API keys to manage. Monthly vs
-                    // yearly ($12/mo billed annually) is chosen on the
-                    // LemonSqueezy page.
-                    SubscriptionOptionCard(
-                        title: "Zerro Cloud",
-                        subtitle: PaywallCopy.managedCardSubtitle
-                    )
-
-                    // BYOK — $69 one-time license; the user funds generation with
-                    // their own provider API keys. Fully local.
-                    BuyOnceCard()
-                }
-                // Size the row to the TALLER card's natural content height rather
-                // than a fixed pixel height: both cards still fill it (`fillsHeight`)
-                // so they stay EQUAL height with bottom-aligned CTAs, but there's no
-                // dead space above the buttons when the copy is short.
-                .fixedSize(horizontal: false, vertical: true)
-
-                // Honest privacy note (§14.5): Managed transits the server; BYOK
-                // stays local. Don't let the local-first claim cover Managed.
-                ManagedPrivacyNote()
+            // A present-but-incompatible license (wrong product, or a
+            // different Zerro major) gets the specific notice ABOVE the
+            // pitch, so the user understands why they're seeing a purchase
+            // surface at all.
+            if entitlements.hasIncompatibleLicense {
+                IncompatibleLicenseNotice(
+                    licensedMajor: entitlements.incompatibleLicensedMajor
+                )
             }
 
-            // An entitled user (Managed/BYOK) gets a manage affordance instead of
-            // the sell cards — change card / plan / devices in the portal.
+            if showsPlanCards {
+                // The single license card. Shown only to users without a
+                // license yet (trial/expired); a licensed user sees the
+                // manage link instead, not a re-sell.
+                LicenseCard()
+
+                // Honest privacy note (§14.5): generation runs on the user's
+                // own keys and never transits Zerro's servers.
+                PrivacyNote()
+            }
+
+            // A licensed user gets a manage affordance instead of the sell
+            // card — change devices / billing in the portal.
             if showsManageLink {
                 ManagePlanLink()
             }
 
-            // One shared activation path for an already-purchased key (BYOK or
-            // subscription) — whether the user pasted it or the checkout-return
+            // One shared activation path for an already-purchased key —
+            // whether the user pasted it or the checkout-return
             // deep link prefilled it. On success, show the same "you're all set"
             // confirmation the deep-link path uses — don't bare-dismiss.
             ActivateLicenseCard(
@@ -340,50 +269,36 @@ struct PaywallView: View {
         Analytics.capture("purchase_success_shown", ["method": method, "plan": info.analyticsPlan])
     }
 
-    /// The plan sell shows only to users who don't have a plan yet.
+    /// The license sell shows only to users who don't hold one yet.
     private var showsPlanCards: Bool {
-        switch entitlements.state {
-        case .trial, .expired, .byokTrial, .byokTrialExpired: return true
-        case .byok, .managed:  return false
-        }
+        !entitlements.hasActiveLicense
     }
 
-    /// The manage link shows only to users who already hold a plan.
+    /// The manage link shows only to users who already hold the license.
     private var showsManageLink: Bool {
-        switch entitlements.state {
-        case .byok, .managed:  return true
-        case .trial, .expired, .byokTrial, .byokTrialExpired: return false
-        }
+        entitlements.hasActiveLicense
     }
 }
 
 // MARK: - Price labels
 
-/// DISPLAY-ONLY price labels for the paywall cards. LemonSqueezy is the actual
-/// source of truth for what the customer is charged — these strings are just
-/// the labels we render, and MUST be kept in sync with the LemonSqueezy product
-/// prices by hand (the app never sets the charge). The cards currently show the
-/// monthly price; the yearly option is presented on the LemonSqueezy checkout
-/// page (no in-app period toggle), and `*Yearly` are kept here as the canonical
-/// record of those numbers. One place, no scattered literals.
+/// DISPLAY-ONLY price label for the license card. Lemon Squeezy is the
+/// actual source of truth for what the customer is charged — this string is
+/// just the label we render, and MUST be kept in sync with the Lemon Squeezy
+/// product price by hand (the app never sets the charge). One place, no
+/// scattered literals.
 private enum Price {
-    // Multi-model plan §1.3: BYOK is a $69 one-time license with 1 year of
-    // updates; the SINGLE Managed plan is $15/mo (or $12/mo billed yearly).
-    // KEEP IN SYNC with the LemonSqueezy variant prices — see the release
-    // checklist in docs/DEPLOY-RUNBOOK.md §5 (E-05). The Managed card
-    // subtitle's "$12/mo if you choose yearly billing" repeats the yearly
-    // number in prose and must move with it.
-    static let byok = "$69 one-time"
-    static let managedMonthly = "$15/mo"
-    static let managedYearly = "$144/yr"
+    // The Zerro license is $39 one-time. KEEP IN SYNC with the Lemon Squeezy
+    // product price by hand — the app never sets the charge.
+    static let license = "$39 one-time"
 }
 
 // MARK: - Activation model
 
 /// Drives the shared "enter your key" flow. Mirrors `APIKeyFieldModel`'s shape:
 /// a small `@Observable` field model with an explicit phase the pill renders
-/// against. Works for BOTH a BYOK license and a subscription key — the store's
-/// `activate` probes the backend to resolve which.
+/// against. Activates the one product we sell — the Zerro license — through
+/// `EntitlementStore.activate`, which verifies the key's product identity.
 @MainActor
 @Observable
 final class PaywallActivationModel {
@@ -409,9 +324,8 @@ final class PaywallActivationModel {
         case deeplink
     }
 
-    /// License/subscription keys aren't as sensitive as API keys, so the field
-    /// is shown in plain text with a paste affordance — friendlier than a
-    /// masked field.
+    /// License keys aren't as sensitive as API keys, so the field is shown in
+    /// plain text with a paste affordance — friendlier than a masked field.
     var licenseKey: String = ""
     var phase: Phase = .idle
     /// Defaults to manual paste; flipped to `.deeplink` when the checkout-return
@@ -438,8 +352,7 @@ final class PaywallActivationModel {
 
     /// Runs activation through the shared `EntitlementStore`. On success calls
     /// `onSuccess` (the paywall shows the confirmation); on a `LicenseError`
-    /// renders the typed copy. No product hint — the backend probe in `activate`
-    /// decides BYOK vs Managed.
+    /// renders the typed copy (including the wrong-product refusal).
     ///
     /// This is the SINGLE place an activation attempt the user initiated emits
     /// `purchase_activated` (deep-link origin only — see `Origin`). The
@@ -465,8 +378,8 @@ final class PaywallActivationModel {
         do {
             try await entitlements.activate(licenseKey: key)
             phase = .activated
-            // Resolve the product from the now-paid state (byok/managed); the
-            // outcome is real and server-confirmed, so the funnel can record it.
+            // The outcome is real and server-confirmed, so the funnel can
+            // record it.
             capturePurchaseOutcome("success", product: PurchaseSuccessInfo.fromActivatedState(entitlements.state)?.analyticsPlan ?? "unknown")
             return true
         } catch LicenseError.replaceCancelled {
@@ -504,131 +417,93 @@ final class PaywallActivationModel {
     }
 }
 
-// MARK: - Buy-once (BYOK) card
+// MARK: - License card
 
-/// The BYOK purchase card: pay once, fund with your own provider keys.
-/// Activation of the resulting key happens through the shared
-/// `ActivateLicenseCard` below. Fills the plan-cards row so it matches the
-/// Managed card's height; the Spacer pins the CTA to the bottom edge.
-private struct BuyOnceCard: View {
+/// The purchase card for the one product we sell: the Zerro license. Pay
+/// once, covered for every release of this major version, fund generation
+/// with your own provider keys. Activation of the resulting key happens
+/// through the shared `ActivateLicenseCard` below.
+private struct LicenseCard: View {
     var body: some View {
-        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true) {
+        OptionCardChrome(padding: VFSpacing.lg) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Bring your own key")
+                Text("Zerro license")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
                 Spacer(minLength: VFSpacing.sm)
-                Text(Price.byok)
+                Text(Price.license)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.vfTextPrimary)
             }
 
-            Text("Pay once, and it includes 1 year of updates. Use your own API keys (OpenAI, Gemini, Anthropic) and pay providers directly. Recordings never pass through Zerro\u{2019}s servers; they go straight to your provider.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(PaywallCopy.licenseFeatureLines, id: \.self) { line in
+                    HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.vfTextSecondary)
+                        Text(line)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.vfTextSecondary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
 
             Spacer(minLength: VFSpacing.xs)
 
             // E-06: softens to disabled while the checkout URL is still a
-            // placeholder (mirrors the top-up card) — no enabled-looking
-            // button that dead-clicks into the placeholder log below.
+            // placeholder — no enabled-looking button that dead-clicks into
+            // the placeholder log below.
             OnboardingPrimaryButton(
                 "Get a license",
-                isEnabled: BillingLinks.byokCheckoutURL != nil,
+                isEnabled: BillingLinks.licenseCheckoutURL != nil,
                 action: openCheckout
             )
         }
     }
 
     private func openCheckout() {
-        guard let url = BillingLinks.byokCheckoutURL else {
-            Log.billing.notice("paywall: BYOK checkout URL not configured yet (placeholder)")
+        guard let url = BillingLinks.licenseCheckoutURL else {
+            Log.billing.notice("paywall: license checkout URL not configured yet (placeholder)")
             return
         }
-        Log.billing.notice("paywall: opening BYOK checkout in browser")
+        Log.billing.notice("paywall: opening license checkout in browser")
         // Tier 3 analytics: fire `checkout_opened` and open the custom-data-
-        // decorated URL (carries ph_distinct_id + product for webhook stitching).
+        // decorated URL (carries ph_distinct_id + product for server-side
+        // purchase-event stitching).
         Analytics.capture("checkout_opened", [
-            "product": BillingLinks.CheckoutProduct.byok.rawValue,
+            "product": BillingLinks.checkoutProductValue,
             "placement": "paywall"
         ])
-        // Resolve the affiliate referral (server-side IP match) before opening so
-        // the sale is attributed; nil-safe + time-boxed so it never blocks checkout.
-        Task {
-            let affRef = await AffiliateAttribution.referralCode()
-            let checkout = BillingLinks.checkoutURL(url, product: .byok, affRef: affRef)
-            await MainActor.run { NSWorkspace.shared.open(checkout) }
-        }
+        NSWorkspace.shared.open(BillingLinks.checkoutURL(url))
     }
 }
 
-// MARK: - Subscription (Managed) card
+// MARK: - Incompatible-license notice
 
-/// The Managed subscription card — the recommended path, so it carries the
-/// website pricing section's hierarchy cues: an accent-highlighted chrome
-/// and a "Most popular" badge (pricing.tsx renders the same pair). Opens the
-/// LemonSqueezy subscription checkout in the browser (same pattern as BYOK) —
-/// monthly vs yearly is chosen on the checkout page. The user activates the
-/// issued key afterward via the shared `ActivateLicenseCard`.
-private struct SubscriptionOptionCard: View {
-    @Environment(EntitlementStore.self) private var entitlements
-    let title: String
-    let subtitle: String
+/// Shown when a license IS on file but doesn't cover this build (wrong
+/// product, or a different Zerro major). States the specific reason above
+/// the purchase pitch — never a silent re-sell.
+private struct IncompatibleLicenseNotice: View {
+    let licensedMajor: Int?
 
     var body: some View {
-        OptionCardChrome(padding: VFSpacing.lg, fillsHeight: true, highlighted: true) {
+        OptionCardChrome(alignment: .leading) {
             HStack(alignment: .firstTextBaseline, spacing: VFSpacing.sm) {
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.vfWarningAmber)
+                Text(PaywallCopy.incompatibleLicenseLine(
+                    licensedMajor: licensedMajor,
+                    requiredMajor: LicenseEditionPolicy.current.requiredMajor
+                ))
+                    .font(.system(size: 12))
                     .foregroundStyle(Color.vfTextPrimary)
-                MostPopularBadge()
-                Spacer(minLength: VFSpacing.sm)
-                Text(Price.managedMonthly)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.vfTextPrimary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: VFSpacing.xs)
-
-            // E-06: softens to disabled while the checkout URL is still a
-            // placeholder (mirrors the top-up card) — no dead clicks.
-            OnboardingPrimaryButton(
-                "Subscribe to \(title)",
-                isEnabled: BillingLinks.subscriptionCheckoutURL() != nil,
-                tint: .vfDevAccent,
-                action: openCheckout
-            )
-        }
-    }
-
-    private func openCheckout() {
-        guard let url = BillingLinks.subscriptionCheckoutURL() else {
-            Log.billing.notice("paywall: managed checkout URL not configured yet (placeholder)")
-            return
-        }
-        Log.billing.notice("paywall: opening managed subscription checkout")
-        // Tier 3 analytics: the single Managed subscription is sold here.
-        Analytics.capture("checkout_opened", [
-            "product": BillingLinks.CheckoutProduct.subscriptionPro.rawValue,
-            "placement": "paywall"
-        ])
-        // A converting trial user carries their grant id so the webhook links
-        // this subscription to that exact trial grant (combined-spend un-stranding).
-        // Affiliate referral (server-side IP match) is resolved first so the sale
-        // is attributed; nil-safe + time-boxed so it never blocks checkout.
-        let grantId = entitlements.trialGrantIdForCheckout
-        Task {
-            let affRef = await AffiliateAttribution.referralCode()
-            let checkout = BillingLinks.checkoutURL(url, product: .subscriptionPro, trialGrantId: grantId, affRef: affRef)
-            await MainActor.run { NSWorkspace.shared.open(checkout) }
         }
     }
 }
@@ -636,9 +511,9 @@ private struct SubscriptionOptionCard: View {
 // MARK: - Privacy note
 
 /// Honest one-liner on where recordings go (§14.5). Understated secondary text.
-private struct ManagedPrivacyNote: View {
+private struct PrivacyNote: View {
     var body: some View {
-        Text("Zerro Cloud sends your recording to Zerro\u{2019}s server, which forwards it to a third-party AI provider (OpenAI, Google, or Anthropic) to generate your prompt. Bring-your-own-key skips our servers and goes straight to that provider on your own key.")
+        Text("Your recordings go straight from your Mac to your AI provider (OpenAI, Anthropic, or Google) on your own key. They never pass through Zerro\u{2019}s servers.")
             .font(.system(size: 11))
             .foregroundStyle(Color.vfTextTertiary)
             .multilineTextAlignment(.leading)
@@ -647,66 +522,15 @@ private struct ManagedPrivacyNote: View {
     }
 }
 
-// MARK: - Add credits (Managed only)
+// MARK: - Manage license link (licensed users)
 
-/// The Managed "Add Credits" surface: a single card that opens the one
-/// multi-variant "Credit Packs" checkout. The customer picks WHICH pack
-/// (50–10,000 credits, $5–$300) on the LemonSqueezy page, so the app links out
-/// once rather than rendering a card per pack. Managed-only by construction —
-/// `optionStack` gates on `.managed`, and BYOK/trial never reach it. Fires
-/// `checkout_opened` (Tier 3 §0, `paywall` placement) and opens the custom-data-
-/// decorated URL; the button softens to disabled when the checkout URL is still
-/// a placeholder (`topupCheckoutURL == nil`) rather than opening a dead link.
-private struct AddCreditsCard: View {
-    var body: some View {
-        OptionCardChrome(
-            padding: VFSpacing.lg,
-            backgroundColor: .vfCardBackground
-        ) {
-            Text("Choose a pack on the next screen, from 50 to 10,000 credits. Credits are added to your balance and carry over for 12 months.")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextPrimary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            OnboardingPrimaryButton(
-                "Add Credits",
-                isEnabled: BillingLinks.topupCheckoutURL != nil,
-                action: openCheckout
-            )
-        }
-    }
-
-    private func openCheckout() {
-        guard let url = BillingLinks.topupCheckoutURL else {
-            Log.billing.notice("paywall: top-up checkout URL not configured yet (placeholder)")
-            return
-        }
-        Log.billing.notice("paywall: opening top-up checkout")
-        Analytics.capture("checkout_opened", [
-            "product": BillingLinks.CheckoutProduct.topup.rawValue,
-            "placement": "paywall"
-        ])
-        // Affiliate referral (server-side IP match) resolved first so the sale is
-        // attributed; nil-safe + time-boxed so it never blocks checkout.
-        Task {
-            let affRef = await AffiliateAttribution.referralCode()
-            let checkout = BillingLinks.checkoutURL(url, product: .topup, affRef: affRef)
-            await MainActor.run { NSWorkspace.shared.open(checkout) }
-        }
-    }
-}
-
-// MARK: - Manage plan link (entitled users)
-
-/// Shown to an entitled user (Managed/BYOK) in place of the sell cards: a quiet
-/// link to the LemonSqueezy customer portal to change card / plan / devices or
-/// cancel. No-op (with a log) until the portal URL placeholder is filled.
+/// Shown to a licensed user in place of the license card: a quiet link to
+/// the Lemon Squeezy customer portal to manage devices and the order.
+/// No-op (with a log) until the portal URL placeholder is filled.
 private struct ManagePlanLink: View {
     var body: some View {
         OptionCardChrome(alignment: .leading) {
-            OnboardingSecondaryButton("Manage plan & billing") {
+            OnboardingSecondaryButton("Manage license & devices") {
                 guard let url = BillingLinks.customerPortalURL else {
                     Log.billing.notice("paywall: customer portal URL not configured yet (placeholder)")
                     return
@@ -719,9 +543,8 @@ private struct ManagePlanLink: View {
 
 // MARK: - Activate-license card (shared)
 
-/// The shared "already purchased? enter your key" flow. Accepts BOTH a BYOK
-/// license and a subscription key — `EntitlementStore.activate` resolves which
-/// via a backend probe. Self-contained so the field state lives with the card.
+/// The shared "already purchased? enter your key" flow for the Zerro
+/// license. Self-contained so the field state lives with the card.
 private struct ActivateLicenseCard: View {
     @Environment(EntitlementStore.self) private var entitlements
     /// Called when activation succeeds — the paywall shows the confirmation. The
@@ -736,7 +559,7 @@ private struct ActivateLicenseCard: View {
     var body: some View {
         OptionCardChrome(alignment: .leading) {
             if isEntering {
-                Text("Enter your license or subscription key")
+                Text("Enter your license key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.vfTextPrimary)
                 activationField
@@ -795,7 +618,7 @@ private struct ActivateLicenseCard: View {
     private var activationField: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
             HStack(spacing: VFSpacing.sm) {
-                TextField("License or subscription key", text: $model.licenseKey)
+                TextField("License key", text: $model.licenseKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -859,9 +682,9 @@ private struct ActivateLicenseCard: View {
 
 /// The shared card chrome (background fill + hairline border + padding) every
 /// paywall option uses, so the cards read as one set. `fillsHeight` makes the
-/// card stretch to its container (the fixed plan-cards row → equal heights);
-/// `highlighted` is the website pricing section's recommended-plan treatment
-/// (accent border + slightly lifted fill) for the Managed card.
+/// card stretch to its container; `highlighted` is the website pricing
+/// section's recommended-plan treatment (accent border + slightly lifted
+/// fill).
 private struct OptionCardChrome<Content: View>: View {
     var alignment: HorizontalAlignment = .leading
     var padding: CGFloat = VFSpacing.md
@@ -882,8 +705,8 @@ private struct OptionCardChrome<Content: View>: View {
             ZStack {
                 RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
                     .fill(backgroundColor)
-                // The recommended Managed card keeps a quiet lift in addition
-                // to its green border without reverting to a near-black fill.
+                // A highlighted card keeps a quiet lift in addition to its
+                // accent border without reverting to a near-black fill.
                 RoundedRectangle(cornerRadius: VFRadius.lg, style: .continuous)
                     .fill(Color.white.opacity(highlighted ? 0.04 : 0))
             }
@@ -895,24 +718,6 @@ private struct OptionCardChrome<Content: View>: View {
                     lineWidth: 1
                 )
         )
-    }
-}
-
-// MARK: - Most-popular badge
-
-/// The Managed card's "Most popular" chip — the same hierarchy cue the website
-/// pricing section puts on its highlighted card. Rendered in Dev-Mode green
-/// (`vfDevAccent`) to match the green "Subscribe" CTA, so the highlight reads as
-/// one cue.
-private struct MostPopularBadge: View {
-    var body: some View {
-        Text("Most popular")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.vfDevAccent)
-            .padding(.horizontal, VFSpacing.sm)
-            .padding(.vertical, 3)
-            .background(Capsule(style: .continuous).fill(Color.vfDevAccent.opacity(0.16)))
-            .fixedSize()
     }
 }
 
@@ -946,7 +751,7 @@ private struct ManageDevicesLink: View {
 // MARK: - Purchase-success confirmation
 
 /// The shared "you're all set" screen shown after an activation (deep-link OR
-/// manual paste) or a Managed top-up. Mirrors the onboarding window chrome
+/// manual paste). Mirrors the onboarding window chrome
 /// (`OnboardingStepLayout` + logo-tile-sized badge) so it reads as one app. The
 /// detail copy + analytics plan live on `PurchaseSuccessInfo`; this view only
 /// renders them and owns the dismiss / route-to-Settings actions.
@@ -954,14 +759,6 @@ private struct PurchaseSuccessView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(EntitlementStore.self) private var entitlements
     let info: PurchaseSuccessInfo
-
-    /// Medium-style date for the Managed reset line (e.g. "Jul 1, 2026").
-    private static let resetDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
 
     var body: some View {
         OnboardingStepLayout {
@@ -973,7 +770,7 @@ private struct PurchaseSuccessView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text(info.detailLine(formatDate: Self.resetDateFormatter.string(from:)))
+                Text(info.detailLine)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -982,11 +779,10 @@ private struct PurchaseSuccessView: View {
         } actions: {
             OnboardingPrimaryButton("Start using Zerro") { finish() }
 
-            // BYOK still needs the user's own provider key before generating —
-            // give them a direct route to the Settings API-key section.
-            if case .byok = info {
-                OnboardingSecondaryButton("Open Settings") { openSettings() }
-            }
+            // The license still needs the user's own provider key before
+            // generating — give them a direct route to the Settings API-key
+            // section.
+            OnboardingSecondaryButton("Open Settings") { openSettings() }
         }
         .frame(minHeight: 600)
     }
@@ -997,7 +793,7 @@ private struct PurchaseSuccessView: View {
         dismissWindow(id: PaywallScene.windowID)
     }
 
-    /// Route to the Settings API-key (Account & Billing) section, then close the
+    /// Route to the Settings API-key (API Keys & License) section, then close the
     /// paywall. Clears the confirmation first so the paywall doesn't flash the
     /// success screen if it's reopened later.
     private func openSettings() {
@@ -1051,49 +847,27 @@ private func paywallPreviewStore(
     return store
 }
 
-#Preview("Paywall \u{00B7} Blocked (expired)") {
+#Preview("Paywall \u{00B7} Blocked (trial expired)") {
     PaywallView()
-        .environment(paywallPreviewStore(.expired, trigger: .blocked))
+        .environment(paywallPreviewStore(.localTrialExpired, trigger: .blocked))
 }
 
 #Preview("Paywall \u{00B7} Voluntary upgrade (trial)") {
     PaywallView()
-        .environment(paywallPreviewStore(.trial(creditsRemaining: 8), trigger: .voluntaryUpgrade))
+        .environment(paywallPreviewStore(.localTrial(daysRemaining: 9), trigger: .voluntaryUpgrade))
 }
 
-#Preview("Paywall \u{00B7} Add credits (managed)") {
-    PaywallView()
-        .environment(paywallPreviewStore(
-            .managed(creditsRemaining: 4, resetDate: .now.addingTimeInterval(86_400 * 12)),
-            trigger: .topup
-        ))
-}
-
-#Preview("Paywall \u{00B7} Manage (byok)") {
+#Preview("Paywall \u{00B7} Manage (licensed)") {
     PaywallView()
         .environment(paywallPreviewStore(.byok, trigger: .manage))
 }
 
-// The three purchase-success confirmation variants (Step 5). Each pins the
-// matching entitlement state, then sets the one-shot `purchaseSuccess` so the
-// view renders the success screen instead of the buy/manage matrix.
-private let previewResetDate = Date().addingTimeInterval(60 * 60 * 24 * 30)
-
-#Preview("Paywall \u{00B7} Success (managed)") {
-    let store = EntitlementStore.preview(.managed(creditsRemaining: 300, resetDate: previewResetDate))
-    store.purchaseSuccess = .managed(credits: 300, resetDate: previewResetDate)
-    return PaywallView().environment(store)
-}
-
-#Preview("Paywall \u{00B7} Success (byok)") {
+// The purchase-success confirmation: pins the licensed state, then sets the
+// one-shot `purchaseSuccess` so the view renders the success screen instead
+// of the buy/manage matrix.
+#Preview("Paywall \u{00B7} Success (license)") {
     let store = EntitlementStore.preview(.byok)
-    store.purchaseSuccess = .byok
-    return PaywallView().environment(store)
-}
-
-#Preview("Paywall \u{00B7} Success (top-up)") {
-    let store = EntitlementStore.preview(.managed(creditsRemaining: 220, resetDate: previewResetDate))
-    store.purchaseSuccess = .topup(added: 100, total: 220)
+    store.purchaseSuccess = .license
     return PaywallView().environment(store)
 }
 #endif

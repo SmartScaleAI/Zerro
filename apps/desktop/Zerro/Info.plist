@@ -13,12 +13,12 @@
 	<string>phc_tW2QmWsUwgn2pAAq7ynDWTxcHiP97vG5LdQfRtXD9dAy</string>
 	<key>POSTHOG_HOST</key>
 	<string>https://us.i.posthog.com</string>
-	<!-- Managed backend base URL. Wired to the per-configuration
-	     ZERRO_FUNCTIONS_BASE_URL build setting (see apps/desktop/Config/*.xcconfig)
-	     so the Staging build talks to the staging Supabase project while the
-	     production build stays pinned to prod. Read by ManagedBackend. -->
-	<key>ZerroFunctionsBaseURL</key>
-	<string>$(ZERRO_FUNCTIONS_BASE_URL)</string>
+	<!-- Build channel marker: "community" for every build from a plain source
+	     checkout (the xcconfig default); the release workflows override
+	     ZERRO_BUILD_CHANNEL=official (paired with the OFFICIAL_BUILD Swift
+	     condition) and verify this key in the exported app before packaging. -->
+	<key>ZerroBuildChannel</key>
+	<string>$(ZERRO_BUILD_CHANNEL)</string>
 	<!-- Sparkle appcast. Wired to the per-configuration SU_FEED_URL build
 	     setting so each build checks its own update feed. -->
 	<key>SUFeedURL</key>
