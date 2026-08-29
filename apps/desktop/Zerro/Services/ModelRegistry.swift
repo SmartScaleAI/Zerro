@@ -73,12 +73,12 @@ struct ModelEntry: Equatable, Identifiable, Sendable {
 /// persistence (the user's selection lives in `PreferencesStore`).
 enum ModelRegistry {
 
-    /// Registry order mirrors the server's (the historical cheapest-first
-    /// ordering, plan 6A). The app shows no per-model cost, so this is just the
-    /// stable render order; ids/order stay in lockstep with models.ts.
+    /// Registry order is the historical cheapest-first ordering (plan 6A). The
+    /// app shows no per-model cost, so this is just the stable render order;
+    /// ModelRegistryTests pins the ids and order literally.
     static let all: [ModelEntry] = [
-        // Kill-switched (enabled:false) — mirrors the server's models.ts. Out of
-        // the picker (`enabled`), still in `.all` so historic results resolve its
+        // Kill-switched (enabled: false) — a product decision. Out of the
+        // picker (`enabled`), still in `.all` so historic results resolve its
         // name via `entry(id:)`.
         ModelEntry(id: "gpt-5.4-mini", provider: .openai, displayName: "GPT-5.4 mini", enabled: false),
         ModelEntry(id: "gemini-3.5-flash", provider: .gemini, displayName: "Gemini 3.5 Flash", recommended: true),
@@ -88,20 +88,19 @@ enum ModelRegistry {
         ModelEntry(id: "gpt-5.5", provider: .openai, displayName: "GPT-5.5"),
     ]
 
-    /// What the picker renders (mirrors the server's ALLOWED_MODELS gate).
+    /// What the picker renders (the enabled subset).
     static let enabled: [ModelEntry] = all.filter(\.enabled)
 
     /// Registry lookup by wire id (enabled or not — disabled entries stay
-    /// resolvable for displaying historic results, same as the server).
+    /// resolvable for displaying historic results).
     static func entry(id: String) -> ModelEntry? {
         all.first { $0.id == id }
     }
 
     /// The default selection: the recommended enabled entry, falling back to
-    /// the cheapest enabled one if the recommendation is ever kill-switched —
-    /// the same resolution rule as the server's DEFAULT_MODEL_ID, so a fresh
-    /// install and an un-updated app (which sends no `model`) get the same
-    /// model.
+    /// the cheapest enabled one if the recommendation is ever kill-switched, so
+    /// a fresh install and a fallback from an unknown persisted selection get
+    /// the same model.
     static let defaultModelID: String =
         (all.first { $0.recommended && $0.enabled } ?? enabled[0]).id
 

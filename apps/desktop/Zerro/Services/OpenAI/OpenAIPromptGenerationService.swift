@@ -307,9 +307,9 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     }
 
     // Cost estimation moved to `BYOKCostEstimator` (multi-model 6C) — the
-    // single Swift pricing mirror of the server's cost.ts CHAT_PRICING,
-    // covering all three providers (this file's gpt-4o constants would have
-    // been a fourth, drift-prone copy).
+    // single Swift pricing table (kept in sync with the eval harness's
+    // CHAT_PRICING), covering all three providers (this file's gpt-4o
+    // constants would have been another drift-prone copy).
 
     // MARK: - Wire types — response
 

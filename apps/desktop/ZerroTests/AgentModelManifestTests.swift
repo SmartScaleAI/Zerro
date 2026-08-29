@@ -118,8 +118,8 @@ final class AgentModelManifestTests: XCTestCase {
     func testParseCodexModelsCacheExcludesGPT54Mini() {
         // Dev Mode product exclusion: GPT-5.4 mini AND its effort/latency variants
         // are filtered out even though the user's Codex account lists them; every
-        // other model survives. (DevAgentDetection.devModelExclusions — the
-        // app-side mirror of the models.ts / ModelRegistry.swift `enabled:false`.)
+        // other model survives. (DevAgentDetection.devModelExclusions — the Dev
+        // Mode counterpart of ModelRegistry.swift's `enabled: false` kill switch.)
         let json = #"""
         {"fetched_at":"x","models":[
           {"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","visibility":"list","priority":23},

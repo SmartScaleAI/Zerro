@@ -30,8 +30,9 @@
 //    — thoughts billed as output, folded in}, modelVersion.
 //
 //  The interleaved text/image rendering (timestamp tags, OCR lines, click
-//  lines) is byte-identical to the OpenAI impl, the Managed interleave.ts,
-//  and the eval harness — KEEP IN SYNC if you touch the format.
+//  lines) is byte-identical to the OpenAI impl and the eval harness
+//  (InterleaveGoldenFixtureTests pins it) — KEEP IN SYNC if you touch the
+//  format.
 //
 
 import Foundation
@@ -128,7 +129,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
 
         // A prompt-level block (safety/recitation) means no candidate at all;
         // a non-STOP finish yields no usable text. Both are the model's
-        // choice, not an outage → emptyContent (mirrors the server adapter).
+        // choice, not an outage → emptyContent (as the original server adapter did).
         if decoded.promptFeedback?.blockReason != nil {
             throw PromptGenerationError.emptyContent
         }
@@ -188,7 +189,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
                 parts.append(Part(
                     inlineData: InlineData(mimeType: "image/jpeg", data: base64),
                     // Per-part media resolution (Gemini 3) — the analog of
-                    // OpenAI detail:"high"; matches the server adapter.
+                    // OpenAI detail:"high" (as the original server adapter did).
                     mediaResolution: MediaResolution(level: "media_resolution_high")
                 ))
                 if let ocr = ocrText, !ocr.isEmpty {

@@ -10,10 +10,9 @@
 //      run time from Scripts/artifact-eval/prompt-v2.md).
 //   3. Interleaves frames + transcript chronologically with the
 //      frame-before-speech tiebreak and [M:SS] tags — same algorithm as
-//      InterleavedTimeline.swift (and the archived interleave.ts).
+//      InterleavedTimeline.swift.
 //   4. Sends the identical payload to each requested model (OpenAI or
-//      Gemini wire format, matching the app's provider requests and the
-//      archived providers/openai.ts / gemini.ts).
+//      Gemini wire format, matching the app's provider requests).
 //   5. Writes side-by-side outputs + token/cost/latency to an output dir.
 //
 // KEEP IN SYNC (read-only mirrors; the app's Swift pipeline is the live
@@ -22,9 +21,10 @@
 //     never copied here; the Swift copy is byte-identity-tested against the
 //     same mirror)
 //   - Zerro/Services/InterleavedTimeline.swift     (mmss, tiebreak, tags)
-//   (The original server-side generate function — interleave.ts,
-//   providers/openai.ts, providers/gemini.ts, and cost.ts — was removed from
-//   the repository; this harness and the Swift pipeline are its mirrors.)
+//   (Historical: the prompt, interleaving, wire shapes, and pricing were
+//   first mirrored from the server-side generate function — interleave.ts,
+//   providers/openai.ts, providers/gemini.ts, cost.ts — which has since been
+//   removed from the repository and is no longer a copy to keep in sync.)
 //
 // INPUT: a Zerro working directory (manifest.json + audio + frame JPEGs).
 // Find one by recording with the app; the working dir is cleaned up after a
@@ -74,9 +74,9 @@ import { fileURLToPath } from "node:url";
 // ---------- system prompt (extracted from the locked in-repo mirror) ---------
 // Typed-artifact refactor: the v1 BASE/INSTRUCT/EXPLAIN copies are gone. The
 // harness now reads the LOCKED v2 prompt from Scripts/artifact-eval/
-// prompt-v2.md (first fenced block) at run time — the same mirror the Swift
-// copy and the archived backend copy are byte-identity-tested against — so
-// this file can no longer drift from the app's prompt text.
+// prompt-v2.md (first fenced block) at run time — the same mirror
+// PromptV2MirrorTests holds the Swift copy byte-identical to — so this file
+// can no longer drift from the app's prompt text.
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROMPT_MIRROR_PATH = join(SCRIPT_DIR, "artifact-eval", "prompt-v2.md");
@@ -91,18 +91,18 @@ function composedSystemPrompt() {
   return m[1];
 }
 
-// ---------- pricing (mirrored from the original generate/cost.ts) -----------
-// This table was mirrored from CHAT_PRICING in the original server-side
-// generate function (cost.ts, since removed from the repository) —
+// ---------- pricing (CHAT_PRICING; Swift twin: BYOKCostEstimator) ----------
 // EVERY model in the eval matrix (README-eval.md) must be priced here so no
 // run shows "unpriced". If a model is added to the matrix, add it here. USD per 1M tokens; Gemini
 // output rates already fold in thinking tokens (we add thoughtsTokenCount into
-// outputTokens, matching the server). Anthropic output rates likewise fold in
-// any thinking tokens that ride in output_tokens.
+// outputTokens, matching the app's Gemini adapter). Anthropic output rates
+// likewise fold in any thinking tokens that ride in output_tokens.
 //
-// SOURCE OF TRUTH: cost.ts is now the metered-charge pricing table (the server
-// charges ceil(est_cost_usd / $0.01) off it). This block must AGREE with it
-// exactly — neither table leads the other; a rate change lands in BOTH.
+// KEEP IN SYNC: the app's BYOKCostEstimator (Zerro/Services/BYOKRouting.swift)
+// carries the same rates for the in-app cost display, pinned literally by
+// BYOKRoutingTests. Neither table leads the other; a rate change lands in
+// BOTH. (This table was originally mirrored from the server-side cost.ts,
+// since removed from the repository.)
 //
 // Rates verified against provider docs 2026-06-09:
 //   OpenAI    https://developers.openai.com/api/docs/pricing
@@ -111,7 +111,7 @@ function composedSystemPrompt() {
 //
 // NOTE: `gpt-5.4-mini` is the cheapest GPT-5-family mini that actually exists at
 // OpenAI (the plan's §1.1 "gpt-5-mini" id was a non-existent placeholder). It is
-// now DISABLED in the registry (models.ts `enabled:false`), so it is not part of
+// now DISABLED in the app registry (ModelRegistry.swift `enabled: false`), so it is not part of
 // the harness's default model set — but its price row stays so an explicitly
 // `--models openai:gpt-5.4-mini` run (e.g. re-pricing a historic eval) still
 // prices instead of showing "unpriced".
@@ -139,7 +139,7 @@ function chatCostUsd(key, inputTokens, outputTokens) {
   return (inputTokens / 1e6) * inRate + (outputTokens / 1e6) * outRate;
 }
 
-// ---------- interleaving (mirror of generate/interleave.ts) ------------------
+// ---------- interleaving (mirror of InterleavedTimeline.swift) --------------
 
 function mmss(seconds) {
   const total = Math.floor(Math.max(0, seconds));
@@ -161,10 +161,10 @@ function buildTimeline(frames, segments, clicks = []) {
     if (it.kind === "frame") {
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}] ` });
       blocks.push({ type: "image", mime: "image/jpeg", base64: it.base64 });
-      // Phase 3: redacted on-screen text after the image (mirror interleave.ts).
+      // Phase 3: redacted on-screen text after the image (mirror InterleavedTimeline.swift).
       if (it.ocrText) blocks.push({ type: "text", text: `\n[${mmss(it.start)}] on-screen text: ${it.ocrText}` });
     } else if (it.kind === "click") {
-      // Phase 4: a click line (mirror interleave.ts / encodeBody).
+      // Phase 4: a click line (mirror InterleavedTimeline.swift / encodeBody).
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}] clicked "${it.label}"` });
     } else {
       blocks.push({ type: "text", text: `\n[${mmss(it.start)}–${mmss(it.end)}] "${it.text}"` });
@@ -197,7 +197,7 @@ async function transcribe(audioPath, openaiKey) {
   };
 }
 
-// ---------- chat adapters (mirror providers/openai.ts + gemini.ts) -----------
+// ---------- chat adapters (mirror the app's OpenAI / Gemini services) --------
 
 // Exponential backoff with jitter on a transient fault (429 / 5xx / network),
 // honoring a 429's Retry-After header. This deliberately RAMPS GENTLY instead of
@@ -340,8 +340,9 @@ async function chatGemini(model, systemPrompt, blocks, key, thinkingLevel) {
   };
 }
 
-// chatAnthropic — Phase 0 mirror of what Phase 3's providers/anthropic.ts will
-// send on the Messages API. Maps the neutral interleaved blocks to Anthropic
+// chatAnthropic — mirror of the app's AnthropicPromptGenerationService.swift
+// request on the Messages API (written in Phase 0, before that adapter
+// existed). Maps the neutral interleaved blocks to Anthropic
 // content blocks: text → {type:"text"}, image → {type:"image", source:{base64}}.
 // The system prompt rides the top-level `system` field (Anthropic's analog of
 // OpenAI's system message / Gemini's systemInstruction), so `model` never

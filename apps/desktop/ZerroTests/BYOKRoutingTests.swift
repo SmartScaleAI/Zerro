@@ -6,10 +6,11 @@
 //    • effectiveEntry routing (selection honored when its provider has a
 //      key; cheapest-available fallback; nil when no chat key) — the same
 //      pure function the key-gated picker derives row state from.
-//    • The BYOK pricing mirror (cost.ts CHAT_PRICING parity, incl. the
-//      Gemini 3.1 Pro input-token tier).
+//    • The BYOK pricing table (BYOKCostEstimator — literal rate expectations,
+//      incl. the Gemini 3.1 Pro input-token tier; eval-models.mjs CHAT_PRICING
+//      carries the same rates).
 //    • The Gemini / Anthropic wire encodings, decoded back and asserted
-//      against the server adapters' documented shapes.
+//      against the documented provider request shapes.
 //
 
 import XCTest
@@ -75,10 +76,11 @@ final class BYOKRoutingTests: XCTestCase {
         XCTAssertEqual((openai as? OpenAIPromptGenerationService)?.model, "gpt-5.5")
     }
 
-    // MARK: - Pricing mirror (cost.ts parity — literal expectations)
+    // MARK: - Pricing table (literal expectations)
 
     func testPricingMirrorsServerTable() throws {
-        // 1000 in / 1000 out on each model, against the cost.ts rates.
+        // 1000 in / 1000 out on each model, against the list rates (the same
+        // rates as eval-models.mjs CHAT_PRICING).
         let usage = TokenUsage(inputTokens: 1_000, outputTokens: 1_000, model: "x")
         func cost(_ id: String) -> Double? { BYOKCostEstimator.chatCostUSD(modelID: id, usage: usage) }
         XCTAssertEqual(try XCTUnwrap(cost("gpt-5.4-mini")), (0.75 + 4.5) / 1_000, accuracy: 1e-12)

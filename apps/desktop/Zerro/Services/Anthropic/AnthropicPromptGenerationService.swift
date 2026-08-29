@@ -32,8 +32,9 @@
 //    {input_tokens, output_tokens}, model.
 //
 //  The interleaved text/image rendering (timestamp tags, OCR lines, click
-//  lines) is byte-identical to the OpenAI impl, the Managed interleave.ts,
-//  and the eval harness — KEEP IN SYNC if you touch the format.
+//  lines) is byte-identical to the OpenAI impl and the eval harness
+//  (InterleaveGoldenFixtureTests pins it) — KEEP IN SYNC if you touch the
+//  format.
 //
 
 import Foundation
@@ -48,8 +49,8 @@ struct AnthropicPromptGenerationService: PromptGenerationService {
     /// old 8192 ceiling truncated ~2-minute recordings — handoff-artifact-fence
     /// -leak). A response that still hits this limit is detected via
     /// `stop_reason == "max_tokens"` and surfaced as `.truncated`, never handed
-    /// to the parser half-formed. KEEP IN SYNC with the server adapter's
-    /// ANTHROPIC_MAX_TOKENS.
+    /// to the parser half-formed. (Historically kept in sync with the server
+    /// adapter's ANTHROPIC_MAX_TOKENS; that adapter has since been removed.)
     private nonisolated static let maxTokens = 16384
 
     /// The registry model id to run (e.g. "claude-sonnet-4-6"). Selected per
