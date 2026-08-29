@@ -19,12 +19,12 @@
 // KEEP IN SYNC (read-only mirrors; the app's Swift pipeline is the live
 // counterpart — if it changes, update here):
 //   - Scripts/artifact-eval/prompt-v2.md           (prompt — READ AT RUN TIME,
-//     never copied here; the Swift copy and the archived backend copy are
-//     byte-identity-tested against the same mirror)
+//     never copied here; the Swift copy is byte-identity-tested against the
+//     same mirror)
 //   - Zerro/Services/InterleavedTimeline.swift     (mmss, tiebreak, tags)
-//   Archived legacy backend reference (kept for reference only, no longer
-//   runs): supabase/functions/generate/interleave.ts, providers/openai.ts,
-//   providers/gemini.ts (wire shapes), and cost.ts (pricing table).
+//   (The original server-side generate function — interleave.ts,
+//   providers/openai.ts, providers/gemini.ts, and cost.ts — was removed from
+//   the repository; this harness and the Swift pipeline are its mirrors.)
 //
 // INPUT: a Zerro working directory (manifest.json + audio + frame JPEGs).
 // Find one by recording with the app; the working dir is cleaned up after a
@@ -91,9 +91,9 @@ function composedSystemPrompt() {
   return m[1];
 }
 
-// ---------- pricing (mirrored from the archived generate/cost.ts) ------------
-// This table was mirrored from CHAT_PRICING in the archived legacy backend
-// (supabase/functions/generate/cost.ts, reference only; no longer runs) —
+// ---------- pricing (mirrored from the original generate/cost.ts) -----------
+// This table was mirrored from CHAT_PRICING in the original server-side
+// generate function (cost.ts, since removed from the repository) —
 // EVERY model in the eval matrix (README-eval.md) must be priced here so no
 // run shows "unpriced". If a model is added to the matrix, add it here. USD per 1M tokens; Gemini
 // output rates already fold in thinking tokens (we add thoughtsTokenCount into

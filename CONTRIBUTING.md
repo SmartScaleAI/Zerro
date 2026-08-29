@@ -32,8 +32,6 @@ layout and builds. In short:
 - **macOS app:** `open apps/desktop/Zerro.xcodeproj` and build the Zerro
   scheme with a current Xcode.
 - **Website:** `cd apps/web && npm install && npm run dev`.
-- **`supabase/`** is archived legacy backend material kept for
-  reference; it is not required to build or run Zerro.
 
 ## Branches and pull requests
 

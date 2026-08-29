@@ -2,13 +2,13 @@
 //  ModelRegistryTests.swift
 //  ZerroTests
 //
-//  Phase 6 (multi-model) — the Swift model registry (the third mirror of
-//  supabase/functions/generate/models.ts). These tests pin the CONTRACT the
-//  server enforces: the exact wire ids + provider + ordering + the recommended
-//  default. The app-side mirror omits the server's charge field and shows no
-//  per-model cost (metered-credits Phase 4), so there's nothing to assert about
-//  prices here. If a server registry change lands without this mirror
-//  following, the literal id/order expectations fail — the sync alarm working.
+//  Phase 6 (multi-model) — the Swift model registry (originally a mirror of
+//  the server-side models.ts, since removed from the repository). These tests
+//  pin the CONTRACT: the exact wire ids + provider + ordering + the
+//  recommended default. The registry shows no per-model cost (metered-credits
+//  Phase 4), so there's nothing to assert about prices here. If a registry
+//  change lands without these expectations following, the literal id/order
+//  expectations fail — the sync alarm working.
 //
 
 import XCTest

@@ -3,10 +3,9 @@
 The fenced block below is the LOCKED prompt v2, byte-identical to the
 canonical copy in `zerro-prompt-system.md` v2
 (`~/Documents/SmartScale/Zerro/Documents/` — outside this repo). This file is
-the in-repo mirror that `PromptGenerationSystemPrompt.swift`, the
-`eval-models.mjs` prompt mirror, and the archived legacy backend's
-`supabase/functions/generate/prompt.ts` (kept for reference, no longer runs)
-are propagated from — byte-identical, no re-wrapping.
+the in-repo mirror that `PromptGenerationSystemPrompt.swift` and the
+`eval-models.mjs` prompt mirror are propagated from — byte-identical, no
+re-wrapping.
 
 Do not edit the fence without re-running the artifact eval
 (`eval-models.mjs --artifact`), updating the canonical doc, and adding a dated

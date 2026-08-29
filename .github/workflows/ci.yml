@@ -1,17 +1,9 @@
 name: CI
 
 # Pull-request checks for the two long-lived branches we merge into.
-# Unit-level only: Swift (desktop app) + Deno (Supabase edge functions) + SQL
-# (the supabase/test/*_test.sql money-logic assertions — A-02, sql-tests below).
-#
-# Why no DB-lint / migration-validation job here:
-#   Database migrations are already validated on every PR by the Supabase
-#   preview branch's `migrate` step (it applies supabase/migrations against a
-#   throwaway branch database and fails the PR on a bad migration). Duplicating
-#   that here would only add a slower, less authoritative second signal, so this
-#   workflow deliberately omits it. (sql-tests below also applies the migrations
-#   to a throwaway LOCAL database, but that is setup for the *_test.sql
-#   assertions — the preview branch stays the authoritative migration gate.)
+# Unit-level only: Swift (desktop app), the website's release-routing
+# contract, and the repository guard that keeps the removed Supabase backend
+# from returning (supabase-removal-guard below).
 on:
   pull_request:
     branches:
@@ -69,8 +61,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
-      edge: ${{ steps.filter.outputs.edge }}
-      db: ${{ steps.filter.outputs.db }}
     steps:
       # Pinned to a full commit SHA (supply-chain hardening, matching
       # release-app.yml). Trailing comment is the human-readable tag the SHA
@@ -82,12 +72,6 @@ jobs:
           filters: |
             desktop:
               - 'apps/desktop/**'
-            edge:
-              - 'supabase/functions/**'
-            db:
-              - 'supabase/migrations/**'
-              - 'supabase/test/**'
-              - 'supabase/config.toml'
 
   # ---------------------------------------------------------------------------
   # Swift unit tests for the macOS app. Only runs when the desktop app changed.
@@ -305,107 +289,6 @@ jobs:
           echo "All quarantined suites executed: $QUARANTINE_SUITES"
 
   # ---------------------------------------------------------------------------
-  # Deno unit tests for the Supabase edge functions. Only runs when a function
-  # changed.
-  edge-tests:
-    needs: changes
-    if: needs.changes.outputs.edge == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: supabase/functions
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-      # Pinned to a full commit SHA (supply-chain hardening). deno-version is
-      # pinned to the runtime the suite was verified against locally; bump both
-      # the SHA and the version deliberately.
-      - name: Setup Deno
-        uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282  # v2.0.4
-        with:
-          deno-version: "2.8.3"
-
-      # Discover and run every *_test.ts suite under supabase/functions.
-      #   --allow-env  : config.ts reads function settings from env (and the
-      #                  generate/test_setup.ts harness sets test env).
-      #   --allow-read : the prompt-mirror tests read the locked prompt files
-      #                  under apps/desktop/Scripts/artifact-eval, so the read
-      #                  grant is intentionally NOT path-scoped.
-      # (deno test auto-discovers *_test.ts, so no explicit file list is needed.)
-      - name: Run edge-function tests
-        run: deno test --allow-env --allow-read
-
-  # ---------------------------------------------------------------------------
-  # SQL money-logic tests (A-02). The supabase/test/*_test.sql files pin the
-  # overspend + yearly-refresh invariants: each runs in ONE transaction that is
-  # rolled back at the end and signals failure via RAISE EXCEPTION, so
-  # `psql -v ON_ERROR_STOP=1` exits non-zero on any violated invariant. This job
-  # applies the FULL migration set to a throwaway local Postgres and runs every
-  # test file against it.
-  #
-  # Why the Supabase CLI's local DB and not a stock `postgres` service
-  # container: the migration set enables pg_cron + pg_net (20260611120000,
-  # 20260618120100), which the stock image lacks — the Supabase Postgres image
-  # ships both, so `supabase db start` replays all migrations cleanly.
-  sql-tests:
-    needs: changes
-    if: needs.changes.outputs.db == 'true'
-    runs-on: ubuntu-latest
-    env:
-      # The CLI's local-db defaults: supabase/config.toml sets no [db] port
-      # override, so the container listens on 54322 as postgres/postgres.
-      DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-      # Pinned to a full commit SHA (supply-chain hardening, matching the other
-      # actions here). The CLI version is pinned too; bump both deliberately.
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520  # v3.0.0
-        with:
-          version: "2.106.0"
-
-      # Brings up the local database container (Supabase Postgres image — has
-      # pg_cron/pg_net) and applies every migration under supabase/migrations.
-      # A migration that can't replay from scratch fails HERE, before any test.
-      - name: Start local database (applies all migrations)
-        run: supabase db start
-
-      # Guard against a silently empty schema (e.g. a CLI behavior change that
-      # stops `db start` from applying migrations): a function created by a
-      # late migration must exist, or the ROLLED-BACK tests below could pass
-      # vacuously against the wrong database.
-      - name: Confirm migrations applied
-        run: |
-          set -euo pipefail
-          COUNT="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -tAc \
-            "select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'refresh_yearly_credit_periods'")"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::Migrations did not apply (refresh_yearly_credit_periods missing) — supabase db start no longer replays supabase/migrations?"
-            exit 1
-          fi
-          echo "Migrations applied (refresh_yearly_credit_periods present)."
-
-      # Run every SQL test file. ON_ERROR_STOP makes any RAISE EXCEPTION (or
-      # SQL error) exit psql non-zero and fail the job. The glob guard keeps
-      # this gate from going silently green if the test files move.
-      - name: Run SQL tests
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          FILES=(supabase/test/*_test.sql)
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "::error::No supabase/test/*_test.sql files found — the SQL test gate would be silently empty."
-            exit 1
-          fi
-          for f in "${FILES[@]}"; do
-            echo "== $f"
-            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$f"
-          done
-
-  # ---------------------------------------------------------------------------
   # Routing guard for the public release artifacts. GitHub Releases on this
   # repository are the sole public source for the official dmg and the
   # Sparkle feed; the website (apps/web) serves the two stable URLs installed
@@ -486,19 +369,117 @@ jobs:
           echo "No Storage-hosted destination in the site's release routing — OK."
 
   # ---------------------------------------------------------------------------
+  # Supabase-removal guard. The Supabase backend (edge functions, database,
+  # Storage compatibility mirror) was removed from this repository: GitHub
+  # hosts the source code, the release downloads, and the Sparkle update
+  # feeds, and nothing is published anywhere else. This job fails the PR if
+  # operational Supabase material returns — the supabase/ directory, the
+  # retired Storage-mirror / account-reset / eval-matrix scripts, a Supabase
+  # endpoint anywhere in the tree, a service-role secret in any workflow, a
+  # Supabase SDK or CLI dependency, or Supabase named as a provider in the
+  # website copy. Files that name Supabase only to REJECT it (the appcast
+  # validators' test fixtures) are excluded where noted; this workflow is
+  # excluded from the text scans because it is the one file that spells the
+  # patterns out, and is instead required to read no secret at all.
+  # Read-only: checkout + git grep, no network.
+  supabase-removal-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: No operational Supabase files, endpoints, secrets, or dependencies
+        run: |
+          set -euo pipefail
+          status=0
+          fail() { echo "::error::$1"; status=1; }
+          # scan LABEL PATTERN PATHSPEC… — any match fails; a git grep error
+          # (exit status > 1, e.g. a bad pathspec) fails too, so the guard can
+          # never go green by scanning nothing.
+          scan() {
+            local label="$1" pattern="$2" hits="" rc=0
+            shift 2
+            hits="$(git grep -nIiE -e "$pattern" -- "$@")" || rc=$?
+            case "$rc" in
+              0) echo "$hits"; fail "$label" ;;
+              1) ;;
+              *) fail "git grep exited $rc while checking: $label" ;;
+            esac
+          }
+
+          # 1. The removed backend directory and its retired scripts stay gone.
+          if [ -e supabase ] || [ -n "$(git ls-files -- supabase)" ]; then
+            fail "supabase/ is back — the Supabase backend was removed from this repository."
+          fi
+          for f in \
+            apps/desktop/Scripts/publish_storage_release.py \
+            apps/desktop/Scripts/test_publish_storage_release.py \
+            apps/desktop/Scripts/storage_mirror_seed.py \
+            apps/desktop/Scripts/test_storage_mirror_seed.py \
+            apps/desktop/Scripts/reset-environment.sh \
+            apps/desktop/Scripts/reset-local.sh \
+            apps/desktop/Scripts/reset-staging.sh \
+            apps/desktop/Scripts/reset-production.sh \
+            apps/desktop/Scripts/reset-user-data.sql \
+            apps/desktop/Scripts/run-phase0-matrix.sh; do
+            [ ! -e "$f" ] || fail "$f is back — it depended on Supabase and was removed."
+          done
+
+          # 2. No other workflow may mention Supabase at all: not an endpoint,
+          #    a service-role secret, the CLI action, or a mirror step. This
+          #    workflow is read-only and reads no secret whatsoever, so it can
+          #    never hold a service-role key either.
+          scan "a workflow references Supabase" 'supabase|storage/v1|SERVICE_ROLE' \
+            '.github/workflows' ':!.github/workflows/ci.yml'
+          scan "ci.yml reads a secret; CI is read-only and holds no credentials" 'secrets\.' \
+            '.github/workflows/ci.yml'
+
+          # 3. No Supabase endpoint anywhere in the tree: a project host
+          #    (<ref>.supabase.co) or a Storage object URL. The release test
+          #    suites are excluded — they hand such URLs to the appcast
+          #    validators as fixtures that must be REJECTED.
+          scan "a Supabase endpoint is referenced" '[a-z0-9-]+\.supabase\.(co|in)|storage/v1/' \
+            '.' ':!.github/workflows/ci.yml' ':!apps/desktop/Scripts/test_*.py'
+
+          # 4. No service-role secret reference anywhere else (a script or
+          #    document that would read one).
+          scan "a Supabase service-role key is referenced" 'SERVICE_ROLE_KEY' \
+            '.' ':!.github/workflows/ci.yml' ':!apps/desktop/Scripts/test_*.py'
+
+          # 5. No Supabase SDK, CLI, or Actions dependency: package manifests
+          #    and lockfiles, the Xcode project, workflows, sources. (One Swift
+          #    test feeds a fake package.json naming @supabase/supabase-js to the
+          #    Dev Mode dictionary as an EXAMPLE dependency; it is excluded.)
+          scan "a Supabase SDK/CLI dependency is declared" \
+            '@supabase/|supabase-js|supabase-swift|supabase/setup-cli|supabase-community|(^|[[:space:]])supabase (start|stop|db|functions|link|login|secrets|gen)([[:space:]]|$)' \
+            '.' ':!.github/workflows/ci.yml' ':!apps/desktop/ZerroTests/DevWordTimingTests.swift'
+
+          # 6. The website names GitHub, not Supabase, as the host of the app
+          #    download and update feed (its release routing is pinned by
+          #    release-routing-guard).
+          scan "website copy references Supabase" 'supabase' \
+            'apps/web/app' 'apps/web/components' 'apps/web/public'
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Supabase material returned to the repository. GitHub hosts the source code, release downloads, and Sparkle update feeds — see apps/desktop/Scripts/RELEASE-AUTOMATION.md."
+            exit 1
+          fi
+          echo "No operational Supabase files, endpoints, service-role secrets, or dependencies — OK."
+
+  # ---------------------------------------------------------------------------
   # Aggregate gate. THIS is the single job to mark as the required status check
-  # in branch protection — never swift-tests / edge-tests directly. Because
-  # those two are path-gated, a PR that doesn't touch apps/desktop (or
-  # supabase/functions) leaves the corresponding job `skipped`; a `skipped`
-  # required check never resolves and would block the PR forever. This job
-  # always runs (`if: always()`) and treats `skipped` as OK, so it goes green on
-  # such PRs — while still failing if a job that DID run failed or was cancelled.
+  # in branch protection — never swift-tests directly. swift-tests is
+  # path-gated, so a PR that doesn't touch apps/desktop leaves it `skipped`; a
+  # `skipped` required check never resolves and would block the PR forever.
+  # This job always runs (`if: always()`) and treats `skipped` as OK, so it
+  # goes green on such PRs — while still failing if a job that DID run failed
+  # or was cancelled.
   #
   # The advisory swift-subprocess-tests job is intentionally NOT in `needs`: the
   # quarantined subprocess suites must never block the gate, so their flakes (or
   # real failures) stay advisory-only and are surfaced as that job's own check.
   ci-passed:
-    needs: [swift-tests, edge-tests, sql-tests, release-routing-guard]
+    needs: [swift-tests, release-routing-guard, supabase-removal-guard]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -506,18 +487,16 @@ jobs:
         run: |
           set -euo pipefail
           swift='${{ needs.swift-tests.result }}'
-          edge='${{ needs.edge-tests.result }}'
-          sql='${{ needs.sql-tests.result }}'
           routing='${{ needs.release-routing-guard.result }}'
-          echo "swift-tests:           $swift"
-          echo "edge-tests:            $edge"
-          echo "sql-tests:             $sql"
-          echo "release-routing-guard: $routing"
+          guard='${{ needs.supabase-removal-guard.result }}'
+          echo "swift-tests:            $swift"
+          echo "release-routing-guard:  $routing"
+          echo "supabase-removal-guard: $guard"
           # A path-gated job that didn't run is `skipped` — that's fine.
-          # release-routing-guard is not path-gated, so it is `success`/`failure`.
-          # Anything that isn't `success`/`skipped` (i.e. failure or cancelled)
-          # fails the gate.
-          for r in "$swift" "$edge" "$sql" "$routing"; do
+          # release-routing-guard and supabase-removal-guard are not path-gated,
+          # so each is `success`/`failure`. Anything that isn't
+          # `success`/`skipped` (i.e. failure or cancelled) fails the gate.
+          for r in "$swift" "$routing" "$guard"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::A required CI job did not pass (result=$r)."; exit 1 ;;

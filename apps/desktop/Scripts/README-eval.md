@@ -266,10 +266,10 @@ of it. Add a case to the JSON whenever a new real-world malformation shows up.
 ## Keep in sync
 
 The system prompt, interleaving, wire formats, and pricing were mirrored from
-the archived legacy backend under `supabase/functions/generate/`
-(`{prompt,interleave,cost}.ts` and `providers/{openai,gemini}.ts`); that code
-is kept for reference only and no longer runs. The app's Swift generation
-pipeline is the live counterpart: if it changes, update `eval-models.mjs`. The
+the original server-side generation backend (`{prompt,interleave,cost}.ts`
+and `providers/{openai,gemini}.ts`), which has since been removed from the
+repository. The app's Swift generation pipeline is the live counterpart: if
+it changes, update `eval-models.mjs`. The
 `CHAT_PRICING` table must price every model in the matrix above so no run shows
 "unpriced".
 

@@ -8,10 +8,10 @@
 //  either on-device (whisper.cpp, no key) or on OpenAI cloud, so a Claude-only
 //  user can transcribe with the on-device model and never needs an OpenAI key.
 //
-//  Wire format ported from the original server-side adapter
-//  (supabase/functions/generate/providers/anthropic.ts — verified against
-//  the Messages API 2026-06-10) and the Phase 0 eval harness. KEEP IN SYNC
-//  with that adapter if either changes:
+//  Wire format ported from the original server-side adapter (since removed
+//  from the repository; verified against the Messages API 2026-06-10) and
+//  the Phase 0 eval harness (Scripts/eval-models.mjs). KEEP IN SYNC with the
+//  harness if either changes:
 //    POST https://api.anthropic.com/v1/messages
 //    Headers:  x-api-key: <key>   (NOT Authorization)
 //              anthropic-version: 2023-06-01

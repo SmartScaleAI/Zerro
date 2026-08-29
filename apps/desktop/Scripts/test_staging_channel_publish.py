@@ -2,7 +2,7 @@
 """
 Tests for staging_channel_publish.py against an in-memory GitHub, plus the
 repository contracts around the GitHub-hosted staging channel (workflow,
-Staging.xcconfig, and the untouched Production Storage mirror).
+Staging.xcconfig) and the GitHub-only production release workflow.
 
 Run from apps/desktop:  python3 -m unittest Scripts/test_staging_channel_publish.py -v
 """
@@ -262,7 +262,7 @@ class LocalFeedTests(Fixture):
         bad = self.tmp / "bad.xml"
         for data, msg in ((feed_xml("1.0.1", 1001, url=f"https://github.com/{REPO}/releases/download/staging-v1.0.1/ZerroStaging.dmg"), "not an immutable"),
                           (feed_xml("1.0.1", 1001, url=f"https://github.com/{REPO}/releases/latest/download/ZerroStaging-1001.dmg"), "not an immutable GitHub"),
-                          (feed_xml("1.0.1", 1001, url="https://wjxq.supabase.co/storage/v1/object/public/downloads/ZerroStaging-1001.dmg"), "not an immutable GitHub"),
+                          (feed_xml("1.0.1", 1001, url="https://storage.example.test/downloads/ZerroStaging-1001.dmg"), "not an immutable GitHub"),
                           (feed_xml("1.0.1", 1001, sig=None), "edSignature"),
                           (feed_xml("1.0.1", 1001, length=0), "positive integer length"),
                           (feed_xml("1.0.1", 1001, enclosures=2), "exactly one enclosure"),
@@ -418,12 +418,21 @@ ROOT = HERE.parent.parent.parent
 
 
 class RepositoryContractTests(unittest.TestCase):
-    STAGING_HOST = "waripvlpcpwdmacpjiqc"
+    # GitHub Releases are the only publication target of both channels. A
+    # workflow or xcconfig that names a Supabase host, a Storage object URL, a
+    # service-role key, or one of the retired Storage-mirror scripts has
+    # regressed (the CI supabase-removal-guard job checks the same from the
+    # shell).
+    NON_GITHUB_NEEDLES = ("supabase", "storage/v1", "service_role", "publish_storage_release", "storage_mirror_seed")
 
-    def test_staging_workflow_has_no_supabase_dependency(self) -> None:
+    def assert_github_only(self, text: str, label: str) -> None:
+        lowered = text.lower()
+        for needle in self.NON_GITHUB_NEEDLES:
+            self.assertNotIn(needle, lowered, f"{label} references {needle!r}")
+
+    def test_staging_workflow_is_github_only(self) -> None:
         wf = (ROOT / ".github/workflows/release-staging.yml").read_text(encoding="utf-8")
-        for needle in (self.STAGING_HOST, "STAGING_PROJECT_REF", "STAGING_SERVICE_ROLE_KEY", "publish_storage_release", "supabase.co", "storage/v1"):
-            self.assertNotIn(needle, wf, needle)
+        self.assert_github_only(wf, "release-staging.yml")
         self.assertIn("staging_channel_publish.py", wf)
         self.assertIn("bootstrap_staging_channel", wf)
         inputs = wf[wf.index("workflow_dispatch:"):wf.index("permissions:")]
@@ -436,21 +445,26 @@ class RepositoryContractTests(unittest.TestCase):
         line = next(l for l in cfg.splitlines() if l.startswith("SU_FEED_URL"))
         value = line.split("=", 1)[1].strip().replace("$()", "")
         self.assertEqual(value, CHANNEL_URL)
-        self.assertNotIn(self.STAGING_HOST, cfg)
-        self.assertNotIn("supabase", cfg)
+        self.assert_github_only(cfg, "Staging.xcconfig")
         self.assertIn("PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging", cfg)
         self.assertIn("DEEPLINK_SCHEME = zerro-staging", cfg)
         self.assertIn("SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) STAGING", cfg)
 
-    def test_production_workflow_and_storage_mirror_are_unchanged(self) -> None:
+    def test_production_workflow_publishes_only_through_github_releases(self) -> None:
         prod = (ROOT / ".github/workflows/release-app.yml").read_text(encoding="utf-8")
-        self.assertIn("SUPABASE_SERVICE_ROLE_KEY", prod)
-        self.assertIn("Publish dmgs + appcast to Supabase Storage", prod)
-        self.assertIn("storage_mirror_seed.py check", prod)
-        self.assertIn("wjxqmurgwyxwkezncxke.supabase.co", prod)
-        self.assertNotIn(self.STAGING_HOST, prod)
-        head = subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", "HEAD", "--", ".github/workflows/release-app.yml", "apps/desktop/Scripts/publish_storage_release.py", "apps/desktop/Config/Production.xcconfig"], check=False)
-        self.assertEqual(head.returncode, 0, "release-app.yml, publish_storage_release.py, and Production.xcconfig must be unchanged")
+        self.assert_github_only(prod, "release-app.yml")
+        self.assertNotIn("bootstrap_storage_mirror", prod)
+        for step in ('github_release_publish.py --repo "$GITHUB_REPOSITORY" prepare',
+                     'github_release_publish.py --repo "$GITHUB_REPOSITORY" upload',
+                     'github_release_publish.py --repo "$GITHUB_REPOSITORY" verify',
+                     'github_release_publish.py --repo "$GITHUB_REPOSITORY" publish',
+                     "appcast_release_line.py compose",
+                     "appcast_github_feed.py verify",
+                     "Publish the verified draft as the latest release",
+                     'verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease'):
+            self.assertIn(step, prod, step)
+        cfg = (ROOT / "apps/desktop/Config/Production.xcconfig").read_text(encoding="utf-8")
+        self.assert_github_only(cfg, "Production.xcconfig")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@ import appcast_github_feed as feed  # noqa: E402
 
 SPARKLE = feed.SPARKLE_NS
 REPO = "SmartScaleAI/Zerro"
-STORAGE = "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
+# A retired Storage-host URL shape (example host): every validator must reject it.
+STORAGE = "https://example.supabase.co/storage/v1/object/public/downloads/"
 
 
 def make_feed(items: list[dict], *, version_as_attribute: bool = False) -> str:

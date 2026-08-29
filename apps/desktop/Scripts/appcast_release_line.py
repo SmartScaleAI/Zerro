@@ -20,9 +20,9 @@ Sources, and what is never read:
 
   • The FIRST release of the line is exactly version 1.0.0 / build 1000 /
     tag app-v1.0.0 and is composed from its own freshly generated single-item
-    feed alone. No earlier tag, release, asset, Storage feed, or appcast is
-    read. Build 1000 under any other version or tag, or version 1.0.0 under
-    any other build, fails closed.
+    feed alone. No earlier tag, release, asset, or appcast is read. Build
+    1000 under any other version or tag, or version 1.0.0 under any other
+    build, fails closed.
   • Every LATER release composes from exactly two inputs: its own fresh
     single-item feed and the previous release-line feed — the appcast.xml
     asset of the line's latest release, downloaded by the workflow, which also

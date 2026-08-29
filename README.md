@@ -17,7 +17,6 @@ your accounts to do the work.
 apps/
   desktop/   macOS app (Swift / Xcode). Open apps/desktop/Zerro.xcodeproj
   web/       Website at getzerro.app (Next.js). Deployed by Vercel
-supabase/    Archived legacy backend material. Not required to build or use Zerro
 docs/        Cross-cutting docs
 .github/     CI and release automation
 ```
@@ -65,18 +64,20 @@ permitted.
 
 ## Releases and updates
 
-Official builds are produced from this repository:
+Official builds are produced from this repository, and GitHub hosts the
+source code, the release downloads, and the Sparkle update feeds:
 
 - [getzerro.app](https://getzerro.app) is the official download location
-  for the signed and notarized build. Installed official builds check for
-  updates through Sparkle.
+  for the signed and notarized build; it redirects `getzerro.app/Zerro.dmg`
+  and `getzerro.app/appcast.xml` to the assets of the latest
+  [GitHub Release](https://github.com/SmartScaleAI/Zerro/releases).
+  Installed official builds check for updates through Sparkle.
 - Pushing a production tag (`app-v<version>`) makes GitHub Actions build,
-  sign, notarize, and staple the official DMG and publish it as a GitHub
-  Release. No official production build is currently published on
-  GitHub.
-- [GitHub Releases](https://github.com/SmartScaleAI/Zerro/releases)
-  currently contain staging prereleases (`staging-v<version>`) used for
-  testing. They are not production releases.
+  sign, notarize, and staple the official DMG and publish it, together with
+  its signed `appcast.xml`, as a GitHub Release.
+- Staging builds are published as GitHub prereleases
+  (`staging-v<version>`) whose update feed is the permanent
+  `staging-channel` prerelease. They are not production releases.
 - No DMG or appcast is stored in the repository.
 
 ## License
