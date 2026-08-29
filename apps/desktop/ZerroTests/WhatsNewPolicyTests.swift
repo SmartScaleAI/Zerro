@@ -116,11 +116,15 @@ final class WhatsNewPolicyTests: XCTestCase {
         XCTAssertNil(Changelog.entry(for: "0.0.0-never-shipped"))
     }
 
-    func testShippedChangelogContainsExactlyTheCurrentRelease() {
+    func testShippedChangelogContainsExactlyTheReleasedVersions() {
         // Settings → About & Support → What's New shows every entry, so the
-        // shipped list is exactly the 1.0.0 release and nothing older.
-        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.0"])
-        XCTAssertEqual(Changelog.entries.first?.highlights.count, 4)
+        // shipped list is exactly the released 1.x versions, newest first,
+        // and nothing older than the 1.0.0 reset.
+        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.1", "1.0.0"])
+        // Newest release: the single GitHub Releases update-channel note.
+        XCTAssertEqual(Changelog.entry(for: "1.0.1")?.highlights.count, 1)
+        // The 1.0.0 entry is preserved unchanged beneath it.
+        XCTAssertEqual(Changelog.entry(for: "1.0.0")?.highlights.count, 4)
     }
 
     func testEntriesAreUniquePerVersion() {

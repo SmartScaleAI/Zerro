@@ -309,14 +309,14 @@ class ShellEntryPointTests(unittest.TestCase):
 
 
 class ChangelogResetTests(unittest.TestCase):
-    """The shipped What's New list is exactly the current release."""
+    """The shipped What's New list is exactly the released 1.x versions, newest first."""
 
-    def test_shipped_changelog_contains_exactly_1_0_0(self) -> None:
+    def test_shipped_changelog_contains_exactly_the_released_versions(self) -> None:
         src = (HERE.parent / "Zerro" / "WhatsNew" / "Changelog.swift").read_text(encoding="utf-8")
         versions = re.findall(r'version:\s*"([^"]+)"', src)
-        self.assertEqual(versions, ["1.0.0"])
+        self.assertEqual(versions, ["1.0.1", "1.0.0"])
         self.assertNotIn("releaseDate", src, "the unused date helper is gone")
-        self.assertEqual(rm.read_version(), "1.0.0", "the shipped entry matches the checked-in VERSION")
+        self.assertEqual(rm.read_version(), versions[0], "the newest entry matches the checked-in VERSION")
 
 
 class RepositoryMetadataTests(unittest.TestCase):
