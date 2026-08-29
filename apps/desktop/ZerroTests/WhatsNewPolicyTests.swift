@@ -120,10 +120,12 @@ final class WhatsNewPolicyTests: XCTestCase {
         // Settings → About & Support → What's New shows every entry, so the
         // shipped list is exactly the released 1.x versions, newest first,
         // and nothing older than the 1.0.0 reset.
-        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.1", "1.0.0"])
-        // Newest release: the single GitHub Releases update-channel note.
+        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.2", "1.0.1", "1.0.0"])
+        // Newest release: the single GitHub Releases update-verification note.
+        XCTAssertEqual(Changelog.entry(for: "1.0.2")?.highlights.count, 1)
+        // 1.0.1 (the single update-channel note) is preserved beneath it.
         XCTAssertEqual(Changelog.entry(for: "1.0.1")?.highlights.count, 1)
-        // The 1.0.0 entry is preserved unchanged beneath it.
+        // The 1.0.0 entry is preserved unchanged at the bottom.
         XCTAssertEqual(Changelog.entry(for: "1.0.0")?.highlights.count, 4)
     }
 
