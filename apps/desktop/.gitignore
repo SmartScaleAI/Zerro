@@ -18,7 +18,7 @@ eval-recordings-*/
 eval-results/
 eval-results-*/
 
-# Secrets / local env — never commit. (Backend secrets live in Supabase, not the repo.)
+# Secrets / local env — never commit.
 .env
 .env.*
 !.env.example

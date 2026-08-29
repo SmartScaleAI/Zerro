@@ -243,8 +243,9 @@ export default function PrivacyPage() {
           merchant of record, and license activation and validation),{" "}
           <Strong>PostHog</Strong> (app and website analytics and crash
           reporting), <Strong>Vercel</Strong> (website hosting), and{" "}
-          <Strong>Supabase</Strong> (static file hosting for the app download
-          and update feed). We do not sell your personal information to anyone.
+          <Strong>GitHub</Strong> (hosting for the source code, the app
+          download, and the update feed). We do not sell your personal
+          information to anyone.
         </P>
         <P>
           <Strong>OpenAI</Strong>, <Strong>Google (Gemini)</Strong>, and{" "}

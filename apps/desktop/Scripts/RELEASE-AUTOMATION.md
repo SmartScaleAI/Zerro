@@ -60,22 +60,10 @@ and redirects each to the matching asset on the latest release
 The routing contract is `apps/web/lib/release-routes.ts`; `next.config.ts`
 installs it, `apps/web/lib/release-routes.test.ts` verifies it, and the CI
 `release-routing-guard` job rejects any static `appcast.xml`/`Zerro.dmg` under
-`apps/web/public` or any routing change away from GitHub Releases.
-
-**Storage compatibility mirror.** After the GitHub Release is published, the
-workflow also upserts the dmgs and a Storage feed into the public Supabase
-Storage `downloads` bucket (`Zerro-<build>.dmg`, `Zerro.dmg`, `appcast.xml`)
-for clients that read the Storage objects directly. The mirror keeps its own
-cumulative, multi-item feed history, so the two feeds intentionally differ:
-GitHub starts fresh at 1.0.0 / build 1000 and then carries the newest release
-of each major; Storage carries its existing history plus each new item. The
-mirror is seeded only from its own published Storage appcast — never from the
-website or the GitHub feed — and the run fails closed before touching Storage
-if that appcast is missing, unreadable, empty, malformed, or not a Storage
-feed (`Scripts/storage_mirror_seed.py`). A genuine first-time mirror can start
-without a seed only through the explicit `bootstrap_storage_mirror` manual-run
-input, which is off by default. The mirror is guarded so its objects can never
-move backwards. It is not what the website routes to.
+`apps/web/public` or any routing change away from GitHub Releases. GitHub
+is the only publication target: the workflow uploads nothing anywhere else,
+and the CI `supabase-removal-guard` job fails a PR that reintroduces the
+former Supabase Storage mirror, its scripts, or its service-role secret.
 
 ### Why one repo, and why the dmg lives on GitHub Releases
 
@@ -135,61 +123,49 @@ Triggered by a pushed tag matching `app-v*` (or a manual run with a version):
    build, then **verify** the official marker, the version, the signature, and
    the hardened runtime.
 6. **Package** the dmg, **notarize** via `notarytool --wait`, and **staple**.
-7. **Generate the Storage-mirror appcast** with `generate_appcast` and the
-   Sparkle private key, seeded from the currently published Storage feed so
-   its prior items are preserved, and check it (versioned enclosure present,
-   newest build, no mutable URL). This feed is only for the Storage mirror.
-8. **Prepare a draft GitHub Release** for the tag
+7. **Prepare a draft GitHub Release** for the tag
    (`Scripts/github_release_publish.py prepare`). A published release for the
    tag fails the run (a re-cut is a deliberate manual act); a single existing
    draft is reused and repaired (target/title reset, every stale asset
    deleted); more than one draft is ambiguous and fails.
-9. **Upload `Zerro-<build>.dmg` and the byte-identical `Zerro.dmg`** to the
+8. **Upload `Zerro-<build>.dmg` and the byte-identical `Zerro.dmg`** to the
    draft (same-name assets are replaced, never duplicated).
-10. **Generate and upload the GitHub `appcast.xml`** to the draft. This
-    release's own signed item is generated from the immutable
-    `Zerro-<build>.dmg` alone (enclosure
-    `releases/download/app-v<version>/Zerro-<build>.dmg`) and validated by
-    `Scripts/appcast_publish_guard.py check` and
-    `Scripts/appcast_github_feed.py verify`. `Scripts/appcast_release_line.py`
-    then composes the release-line feed: for the first release, that item
-    alone; for later releases, that item plus the newest item of every other
-    major from the previous release-line feed, each retained item re-verified
-    against its own release (published, `Zerro-<build>.dmg` present, size
-    equal to the recorded length). Missing or invalid previous feeds fail
-    closed; no other feed, inventory, or pin is consulted.
-11. **Verify the draft** — exactly the three assets, each the local size and
+9. **Generate and upload the GitHub `appcast.xml`** to the draft. This
+   release's own signed item is generated from the immutable
+   `Zerro-<build>.dmg` alone (enclosure
+   `releases/download/app-v<version>/Zerro-<build>.dmg`) and validated by
+   `Scripts/appcast_publish_guard.py check` and
+   `Scripts/appcast_github_feed.py verify`. `Scripts/appcast_release_line.py`
+   then composes the release-line feed: for the first release, that item
+   alone; for later releases, that item plus the newest item of every other
+   major from the previous release-line feed, each retained item re-verified
+   against its own release (published, `Zerro-<build>.dmg` present, size
+   equal to the recorded length). Missing or invalid previous feeds fail
+   closed; no other feed, inventory, or pin is consulted.
+10. **Verify the draft** — exactly the three assets, each the local size and
     byte-identical after download, on a draft pinned to this commit; the
     downloaded feed re-passes every feed rule. A verification manifest is
     written.
-12. **Publish** — only with that manifest, and only if the draft still
+11. **Publish** — only with that manifest, and only if the draft still
     matches it exactly: `draft=false` + `make_latest=true`, then confirm the
     release is `releases/latest`, then confirm the real tag ref names this
     commit. From here `getzerro.app/appcast.xml` and `getzerro.app/Zerro.dmg`
     resolve this release.
-13. **Storage compatibility mirror** — after a monotonic guard against the
-    live objects, upsert the dmgs and feed into Supabase Storage and verify
-    them.
-14. **Notify Slack** with the What's New notes (best-effort; skipped without
+12. **Notify Slack** with the What's New notes (best-effort; skipped without
     the webhook secret).
 
 ### What a failure leaves behind
 
-- **Before step 8:** nothing exists anywhere — no release, no draft, no
-  Storage change.
-- **Steps 8–11, or step 12 before its publish call:** a *draft* release for
+- **Before step 7:** nothing exists anywhere — no release and no draft.
+- **Steps 7–10, or step 11 before its publish call:** a *draft* release for
   the tag (invisible to `releases/latest` and to the website's URLs). The
   previous latest release and both website URLs are unchanged. A same-tag
   re-run reuses and repairs that draft.
-- **Step 12 after publication (the release did not become latest / the tag
+- **Step 11 after publication (the release did not become latest / the tag
   check failed):** the release is published and complete but the job fails;
-  inspect before re-running.
-- **Step 13 (Storage compatibility mirror):** the workflow fails, but the
-  GitHub Release is already complete, verified, published, and latest — it is
-  not invalidated. Only the mirror's Storage objects need repair (re-run the
-  failed uploads by hand). A same-tag re-run of the workflow fails closed at
-  step 8 because the release is already published.
-- **Step 14:** warning only; the release is already live.
+  inspect before re-running. A same-tag re-run of the workflow fails closed
+  at step 7 because the release is already published.
+- **Step 12:** warning only; the release is already live.
 
 ### Staging (`release-staging.yml`)
 
@@ -222,15 +198,15 @@ build may publish, an equal build only as a proven same-commit re-run with
 identical bytes, and the channel never moves backwards; the candidate is
 uploaded and verified before the stable asset is renamed aside and replaced,
 with the previous feed restored on any failure; the run ends with exactly one
-asset, downloaded again and re-validated. Staging uses no Supabase project.
+asset, downloaded again and re-validated.
 The permanent channel is created only once, by a manual staging-branch run
 with the `bootstrap_staging_channel` input set to true (off by default).
 Anonymous Sparkle checks against the channel URL work only while the
 repository is public. It never touches the website or the production feed.
 
-Operational note: the already-released staging 1.0.0 (build 1000) still
-points at the former Storage feed, which is no longer served, so it cannot
-update itself from GitHub. The first complete GitHub update test is
+Operational note: the already-released staging 1.0.0 (build 1000) was built
+with a feed URL that is no longer served, so it cannot update itself from
+GitHub. The first complete GitHub update test is
 1.0.1 → 1.0.2: install 1.0.1 (built with the channel URL), publish 1.0.2, and
 confirm the in-app update.
 
@@ -249,7 +225,6 @@ git push origin app-v1.0.2
 # Watch the Actions tab. Green check =
 #   • GitHub Release app-v1.0.2 carries Zerro-<build>.dmg, Zerro.dmg, appcast.xml
 #   • getzerro.app/appcast.xml and getzerro.app/Zerro.dmg resolve to those assets
-#   • the Storage compatibility mirror was updated to match
 #   • users on older builds get offered the update
 ```
 

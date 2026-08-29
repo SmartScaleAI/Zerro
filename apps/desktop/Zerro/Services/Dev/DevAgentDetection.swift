@@ -110,11 +110,12 @@ final class DevAgentDetection {
     // MARK: - Dev Mode model exclusions
 
     /// Models we deliberately keep OUT of every Dev Mode agent picker even when
-    /// the user's own Codex/Cursor account advertises them. This is an app-side
-    /// product decision (the GPT-5.4 mini removal — mirrored server-side by
-    /// models.ts / ModelRegistry.swift `enabled:false`). Dev Mode sources its
-    /// models from the agent's own per-account list, so there is NO server kill
-    /// switch for it; this exclusion is that switch. Keyed by canonical family
+    /// the user's own Codex/Cursor account advertises them. This is a local
+    /// app-side product / provider-routing decision (the GPT-5.4 mini removal —
+    /// the same call ModelRegistry.swift makes with `enabled: false` for the
+    /// chat picker). Dev Mode sources its models from the agent's own
+    /// per-account list, so the registry's kill switch does not reach it; this
+    /// exclusion is that switch. Keyed by canonical family
     /// (effort/latency suffixes stripped), so a family also excludes its variants.
     nonisolated private static let devModelExclusions: Set<String> = ["gpt-5.4-mini"]
 

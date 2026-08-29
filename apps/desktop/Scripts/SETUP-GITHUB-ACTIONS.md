@@ -130,30 +130,7 @@ needs no token beyond your normal push access.
 
 ---
 
-## Part 5 — Storage compatibility-mirror secret → 1 secret  *(in: Supabase dashboard)*
-
-After the production GitHub Release is published, `release-app.yml` also
-mirrors the dmg and feed to Supabase Storage for clients that read the Storage
-objects directly (see `RELEASE-AUTOMATION.md`). The upload authenticates with
-the production project's service-role key:
-
-- `SUPABASE_SERVICE_ROLE_KEY` → production project, used by `release-app.yml`
-
-It comes from the project's **Settings → API** page. It is a full-access key:
-never echo it, and rotate it if it is ever exposed. Staging uses no Supabase
-project and needs no Storage secret: its update feed is the permanent
-`staging-channel` GitHub prerelease.
-
----
-
-## Part 6 — Optional secrets and variables
-
-Manual-run input (Actions tab → Release (macOS app) → Run workflow):
-`bootstrap_storage_mirror` — off by default. Set it to true only for a genuine
-first-time Storage compatibility mirror with no `appcast.xml` published in the
-bucket; it allows a *missing* seed and nothing else. An existing mirror never
-needs it, and the run fails closed if the published Storage appcast cannot be
-read.
+## Part 5 — Optional secrets and variables
 
 The release succeeds without these; each step skips or degrades cleanly when
 its value is unset.
@@ -166,7 +143,7 @@ its value is unset.
 
 ---
 
-## Part 7 — Commit the automation files
+## Part 6 — Commit the automation files
 
 Make sure these are on `main`:
 
@@ -175,8 +152,7 @@ Make sure these are on `main`:
 - `apps/desktop/VERSION`, `apps/desktop/BUILD_NUMBER`
 - `apps/desktop/Scripts/release_metadata.py`, `github_release_publish.py`,
   `appcast_release_line.py`, `appcast_github_feed.py`, `appcast_publish_guard.py`,
-  `publish_storage_release.py`, `verify_release_tag.sh`,
-  `verify_release_source.sh`
+  `verify_release_tag.sh`, `verify_release_source.sh`
 
 The Sparkle CLI tools are downloaded (and checksum-verified) by the workflow at
 runtime — nothing to commit for that.
@@ -197,12 +173,13 @@ Required for a production release:
 - [ ] `AC_API_ISSUER_ID`
 - [ ] `SPARKLE_PRIVATE_KEY`
 - [ ] `RELEASE_PAT` (auto-release tagging)
-- [ ] `SUPABASE_SERVICE_ROLE_KEY` (Storage compatibility mirror)
 
-Staging releases need no additional secret. The permanent `staging-channel`
-prerelease is created once by a manual `Release (macOS app — Staging)` run
-from the `staging` branch with the `bootstrap_staging_channel` input set to
-true (off by default); every later staging release replaces its feed asset.
+No other service is involved: GitHub hosts the source code, the release
+downloads, and the Sparkle update feeds. Staging releases need no additional
+secret. The permanent `staging-channel` prerelease is created once by a manual
+`Release (macOS app — Staging)` run from the `staging` branch with the
+`bootstrap_staging_channel` input set to true (off by default); every later
+staging release replaces its feed asset.
 
 Optional:
 
@@ -228,9 +205,8 @@ Optional:
 The release is built and uploaded to a *draft* GitHub Release, which is
 invisible to `releases/latest` and to the website's URLs; it is published and
 marked latest only after all three assets verify. A failure before that point
-leaves only the draft (a same-tag re-run repairs it); a failure in the Storage
-compatibility mirror afterwards fails the job without invalidating the
-already-published release. See "What a failure leaves behind" in `RELEASE-AUTOMATION.md`. Read
+leaves only the draft (a same-tag re-run repairs it). See "What a failure
+leaves behind" in `RELEASE-AUTOMATION.md`. Read
 the failing step's log in the Actions tab. Common first-run issues:
 
 - **Notarization rejected** — the workflow prints Apple's log naming the exact file.
@@ -243,8 +219,8 @@ the failing step's log in the Actions tab. Common first-run issues:
   build and version on its immutable GitHub asset URL with the dmg's byte
   length and a signature; a later release could not load or validate the
   previous release-line feed (the latest release's `appcast.xml`) or a
-  retained release's asset; or the Storage-mirror feed's newest build is not
-  this build (the tag is on an old or duplicate commit).
+  retained release's asset; or this build is not newer than that previous
+  feed (the tag is on an old or duplicate commit).
 
 Retry an unpublished version by re-running the workflow (it repairs the draft)
 or by deleting and re-pushing the tag:

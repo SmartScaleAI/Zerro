@@ -3,13 +3,14 @@
 //  ZerroTests
 //
 //  J-07 — the Swift half of the shared interleave golden fixture. The
-//  interleave wire-rendering is implemented three times (Interleaver +
-//  the BYOK encodeBody renderers here, interleave.ts on the server,
-//  buildTimeline in Scripts/eval-models.mjs) and kept aligned only by
-//  KEEP IN SYNC comments. This test and the server's interleave_test.ts
-//  both assert the SAME fixture (Scripts/artifact-eval/interleave-golden
-//  .json, read via #filePath like PromptV2MirrorTests), so a format
-//  drift on either side fails a suite instead of shipping.
+//  interleave wire-rendering is implemented twice (Interleaver + the BYOK
+//  encodeBody renderers here, and buildTimeline in Scripts/eval-models.mjs)
+//  and kept aligned only by KEEP IN SYNC comments. This test asserts the
+//  fixture (Scripts/artifact-eval/interleave-golden.json, read via #filePath
+//  like PromptV2MirrorTests) on the Swift side, so a format drift here fails
+//  a suite instead of shipping; the harness is matched to the same fixture
+//  by hand. (The original server-side interleave.ts and its interleave_test.ts
+//  asserted the same fixture until that backend was removed.)
 //
 //  The fixture pins: frame < click < speech tie-break at an equal start
 //  second, the `on-screen text:` block riding right after its frame,

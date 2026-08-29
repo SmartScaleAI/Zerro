@@ -20,22 +20,17 @@
 //    - canonical doc:   zerro-prompt-system.md v2 (product-IP doc, outside repo)
 //    - in-repo mirror:  Scripts/artifact-eval/prompt-v2.md (first fenced block)
 //    - THIS FILE        (the live copy — the app's generation pipeline)
-//    - archived copy:   supabase/functions/generate/prompt.ts (archived legacy
-//                       backend, kept for reference only; no longer runs)
 //    - eval mirror:     Scripts/eval-models.mjs (extracts from prompt-v2.md)
 //  Byte-identity with prompt-v2.md is ENFORCED by
 //  ZerroTests/PromptV2MirrorTests.swift (reads the mirror via #filePath) —
-//  drift fails the suite; the archived copy's prompt_test.ts checks the same.
+//  drift fails the suite.
 //
 //  The Dev Mode prompt (`devText`, J-01) is its OWN byte-mirror set with the
 //  same all-or-none rule:
 //    - in-repo mirror:  Scripts/artifact-eval/prompt-dev.md
 //                       (first FOUR-backtick fenced block)
 //    - THIS FILE        (`devText`, the live copy)
-//    - archived copy:   supabase/functions/generate/prompt.ts PROMPT_DEV
-//                       (archived legacy backend; no longer runs)
-//  Enforced by ZerroTests/PromptDevMirrorTests.swift and, for the archived
-//  copy, its prompt_test.ts against the same mirror.
+//  Enforced by ZerroTests/PromptDevMirrorTests.swift.
 //
 //  Change discipline: tuning this is a product decision, not an
 //  implementation one. Re-run the artifact eval (eval-models.mjs --artifact)
@@ -195,10 +190,7 @@ enum PromptGenerationSystemPrompt {
 
     /// Dev Mode system prompt (design §6 + §11). Byte-identical to the first
     /// fenced block of `Scripts/artifact-eval/prompt-dev.md` (enforced by
-    /// PromptDevMirrorTests, J-01) and to the archived legacy backend's
-    /// `PROMPT_DEV` in `supabase/functions/generate/prompt.ts` (reference
-    /// only, no longer runs; enforced against the same mirror by its
-    /// prompt_test.ts) — every edit updates all three or none.
+    /// PromptDevMirrorTests, J-01) — every edit updates both or neither.
     /// The output still uses the ZERRO_ARTIFACT fence with
     /// `type="agent_prompt"`, so the existing OutputParser extracts the body;
     /// the BODY follows the Goal/Changes/Scope spec the local agent acts on.

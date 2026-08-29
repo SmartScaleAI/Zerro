@@ -6,8 +6,7 @@
 //  prompt: the dev twin of PromptV2MirrorTests. The in-repo source of truth is
 //  the first fenced block of Scripts/artifact-eval/prompt-dev.md; this test
 //  reads it via #filePath and compares character-for-character, so a drifting
-//  copy fails the suite instead of relying on "sync by review" (the server's
-//  PROMPT_DEV is enforced against the same mirror by prompt_test.ts). The
+//  copy fails the suite instead of relying on "sync by review". The
 //  mirror's fence is FOUR backticks — the dev prompt itself contains a
 //  three-backtick zerro_anchors block, so extraction splits on ```` lines.
 //

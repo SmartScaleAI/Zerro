@@ -24,7 +24,8 @@ import appcast_release_line as line  # noqa: E402
 
 SPARKLE = line.SPARKLE_NS
 REPO = "SmartScaleAI/Zerro"
-STORAGE = "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
+# A retired Storage-host URL shape (example host): every validator must reject it.
+STORAGE = "https://example.supabase.co/storage/v1/object/public/downloads/"
 
 
 def gh_url(tag: str, name: str) -> str:

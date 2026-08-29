@@ -4,9 +4,9 @@
 //
 //  J-06 — full generatePrompt() coverage for the three Swift BYOK CHAT
 //  adapters (OpenAI / Anthropic / Gemini) through a URLProtocol stub,
-//  mirroring the server adapter suites (providers/openai_test.ts,
-//  anthropic_test.ts, gemini_test.ts). What already lives elsewhere is
-//  deliberately NOT duplicated here:
+//  modeled on the original server adapter suites (providers/openai_test.ts,
+//  anthropic_test.ts, gemini_test.ts — since removed from the repository).
+//  What already lives elsewhere is deliberately NOT duplicated here:
 //    - OpenAIStatusMappingTests — error(forStatus:) unit mapping
 //    - ProviderQuota429Tests — quota-429 detection + retry behavior
 //    - RetryAfterClampTests — the J-04 Retry-After clamp
