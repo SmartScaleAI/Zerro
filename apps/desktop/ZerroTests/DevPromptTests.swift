@@ -5,9 +5,8 @@
 //  Dev Mode (Phase 1, Milestone 5) — the `mode:"dev"` system-prompt variant on
 //  the BYOK path. Structural assertions on the CONTRACT (body shape, fences,
 //  constraints); byte-identity with the in-repo mirror
-//  Scripts/artifact-eval/prompt-dev.md — and thus with the server's PROMPT_DEV,
-//  which prompt_test.ts enforces against the same file — is enforced by
-//  PromptDevMirrorTests (J-01), replacing the old "sync by review" regime.
+//  Scripts/artifact-eval/prompt-dev.md is enforced by PromptDevMirrorTests
+//  (J-01), replacing the old "sync by review" regime.
 //  Also pins that selecting a mode never disturbs the locked normal prompt.
 //
 

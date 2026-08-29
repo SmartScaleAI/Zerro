@@ -26,7 +26,8 @@ Every rule fails closed with a ::error:: line and a non-zero exit:
     always pass this option;
   • every enclosure is an https://github.com URL of --repo of the form
     /releases/download/<tag>/<archive> — no query, no fragment, never a
-    mutable /releases/latest/ URL, never a Supabase Storage host;
+    mutable /releases/latest/ URL, never a foreign host (the retired Supabase
+    Storage hosts are rejected by name);
   • <tag> has the flavor's shape (production app-v<X.Y.Z>, staging
     staging-v<X.Y.Z>, components without leading zeros) and <archive> is the
     flavor's immutable versioned name (Zerro-<build>.dmg /

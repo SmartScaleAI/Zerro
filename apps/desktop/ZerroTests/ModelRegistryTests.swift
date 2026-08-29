@@ -2,13 +2,13 @@
 //  ModelRegistryTests.swift
 //  ZerroTests
 //
-//  Phase 6 (multi-model) — the Swift model registry (the third mirror of
-//  supabase/functions/generate/models.ts). These tests pin the CONTRACT the
-//  server enforces: the exact wire ids + provider + ordering + the recommended
-//  default. The app-side mirror omits the server's charge field and shows no
-//  per-model cost (metered-credits Phase 4), so there's nothing to assert about
-//  prices here. If a server registry change lands without this mirror
-//  following, the literal id/order expectations fail — the sync alarm working.
+//  Phase 6 (multi-model) — the app's model registry (ModelRegistry.swift).
+//  These tests pin the CONTRACT: the exact wire ids + provider + ordering +
+//  the recommended default, as literal expectations that are intentionally
+//  NOT derived from the registry. The registry shows no per-model cost
+//  (metered-credits Phase 4), so there's nothing to assert about prices here.
+//  If a registry change lands without these expectations following, the
+//  literal id/order expectations fail — the drift alarm working.
 //
 
 import XCTest
@@ -17,12 +17,13 @@ import XCTest
 @MainActor
 final class ModelRegistryTests: XCTestCase {
 
-    // MARK: - Mirror contract (literal — intentionally NOT derived)
+    // MARK: - Registry contract (literal — intentionally NOT derived)
 
-    func testRegistryMirrorsServerIdsAndProviders() {
-        // (id, provider, enabled) and ORDER exactly as in generate/models.ts. No
-        // price mirror — the app shows no per-model cost (metered-credits Phase 4).
-        // GPT-5.4 mini is kill-switched (enabled:false) but stays in `.all`.
+    func testRegistryPinsExpectedIdsProvidersAndOrdering() {
+        // (id, provider, enabled) and ORDER exactly as ModelRegistry.all declares
+        // them. No price expectations — the app shows no per-model cost
+        // (metered-credits Phase 4). GPT-5.4 mini is kill-switched
+        // (enabled: false) but stays in `.all`.
         let expected: [(String, ModelProvider, Bool)] = [
             ("gpt-5.4-mini", .openai, false),
             ("gemini-3.5-flash", .gemini, true),
@@ -40,9 +41,9 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testGPT54MiniDisabledButStillResolvable() {
-        // The kill-switch contract (mirrors models.ts ALLOWED_MODELS-excludes /
-        // modelById-resolves): out of the picker (`enabled`), still in `.all` and
-        // resolvable via `entry(id:)` so historic generations render its name.
+        // The kill-switch contract: out of the picker (`enabled`), still in
+        // `.all` and resolvable via `entry(id:)` so historic generations render
+        // its name.
         XCTAssertFalse(
             ModelRegistry.enabled.contains { $0.id == "gpt-5.4-mini" },
             "disabled model must not appear in the picker"
@@ -58,8 +59,9 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testDefaultModelIsTheRecommendedOne() {
-        // Matches the server's DEFAULT_MODEL_ID resolution, so an explicit
-        // default-send and an absent field (un-updated app, D1) are identical.
+        // ModelRegistry.defaultModelID resolves to the recommended enabled entry,
+        // so a fresh install and a fallback from an unknown persisted id land on
+        // the same model.
         XCTAssertEqual(ModelRegistry.defaultModelID, "gemini-3.5-flash")
     }
 
@@ -90,7 +92,8 @@ final class ModelRegistryTests: XCTestCase {
     }
 
     func testUnknownPersistedModelFallsBackToDefault() {
-        // A kill-switched / drifted id must never ride to the server (400).
+        // A kill-switched / drifted persisted id must never be used for a
+        // generation; it falls back to the default instead.
         let defaults = freshDefaults()
         defaults.set("gpt-4o", forKey: PreferencesStore.Keys.selectedModelID)
         XCTAssertEqual(PreferencesStore(defaults: defaults).selectedModelID, ModelRegistry.defaultModelID)

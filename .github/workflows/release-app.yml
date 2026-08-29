@@ -12,22 +12,12 @@ on:
       version:
         description: "Marketing version (e.g. 1.0.7). Used only for manual runs."
         required: true
-      # Explicit, off-by-default opt-in for a TRUE first-time Storage
-      # compatibility mirror (no appcast.xml published in the bucket yet). It
-      # only allows a MISSING seed — an unreadable, empty, malformed, or
-      # non-Storage feed still fails closed. Never needed for an existing
-      # mirror; leave it false.
-      bootstrap_storage_mirror:
-        description: "Bootstrap the Storage compatibility mirror when NO Storage appcast is published yet (first-time only; leave false)"
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: write          # create the GitHub Release and upload its assets (no git push is involved)
 
 # Never run two releases at once: both would race the same GitHub release
-# tag and upsert the same Storage compatibility-mirror objects.
+# tag.
 concurrency:
   group: release-app
   cancel-in-progress: false
@@ -51,14 +41,9 @@ env:
   # The line starts at app-v1.0.0 / build 1000; the first release composes
   # from its own feed alone and later releases from their own feed plus the
   # previous release-line feed — never from anything before the line. The
-  # Storage mirror is never seeded from GitHub or the website. The website
-  # (apps/web/lib/release-routes.ts)
-  # redirects getzerro.app/appcast.xml and getzerro.app/Zerro.dmg to those
-  # assets on the latest release. The Supabase Storage publication at the end
-  # of the job maintains a compatibility mirror for clients that read the
-  # Storage objects directly; that mirror keeps its own cumulative feed
-  # history and is not what the website routes to. No git push to the
-  # (PR-protected) main branch is involved.
+  # website (apps/web/lib/release-routes.ts) redirects getzerro.app/appcast.xml
+  # and getzerro.app/Zerro.dmg to those assets on the latest release. No git
+  # push to the (PR-protected) main branch is involved.
   SPARKLE_VERSION: "2.9.2"                        # must match the app's pinned Sparkle
   # First build of the GitHub release line (app-v1.0.0). The line's feeds carry
   # only releases at or above this build; nothing before it is ever read.
@@ -468,104 +453,6 @@ jobs:
           done
 
       # ----------------------------------------------------------------------
-      # STORAGE COMPATIBILITY-MIRROR FEED. This is the feed for the Supabase
-      # Storage mirror only; it is NOT the GitHub appcast (composed further
-      # below as the newest release of each major). The mirror keeps its own
-      # cumulative, multi-item history: the new item's download URL points at
-      # this release's permanent versioned Storage object, generate_appcast
-      # computes its length + edSignature from the actual build, and every
-      # prior Storage item is preserved verbatim (its recorded
-      # pubDate/length/edSignature/versioned URL). A license covers every
-      # release of one major version and the app offers only its installed
-      # major (UpdateMajorPolicy), so clients still reading the mirror keep
-      # seeing every release of their major.
-      #
-      # The mirror is seeded ONLY from its own published Storage appcast.
-      # The website feed and the GitHub release-line feed carry just the
-      # newest release of each major, so seeding from either would silently
-      # truncate the mirror: Scripts/storage_mirror_seed.py fails this run
-      # closed — before any Storage object is touched — when the published
-      # feed is missing, unreadable, empty, malformed, or not a Storage feed.
-      # A genuine first-time mirror is the only case that may start without
-      # a seed, and only through the explicit bootstrap_storage_mirror
-      # workflow_dispatch input (off by default).
-      - name: Generate signed appcast (Storage mirror)
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          BOOTSTRAP_STORAGE_MIRROR: ${{ github.event.inputs.bootstrap_storage_mirror }}
-        run: |
-          set -euo pipefail
-          DL_PREFIX="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/"
-          PUB_STORAGE="${DL_PREFIX}appcast.xml"
-
-          # Download the published mirror feed (cache-busted). A fetch failure
-          # leaves no file; the gate below decides — it never falls back.
-          rm -f dist/appcast.xml
-          if ! curl -fsS "${PUB_STORAGE}?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-seed" -o dist/appcast.xml; then
-            rm -f dist/appcast.xml
-            echo "The published Storage appcast could not be downloaded."
-          fi
-          SEED_OPTS=()
-          if [ "${BOOTSTRAP_STORAGE_MIRROR:-false}" = "true" ]; then
-            echo "::warning::bootstrap_storage_mirror=true — a missing Storage appcast will start the mirror from this release alone."
-            SEED_OPTS=(--bootstrap)
-          fi
-          python3 Scripts/storage_mirror_seed.py check \
-            --feed dist/appcast.xml \
-            --storage-prefix "$DL_PREFIX" \
-            ${SEED_OPTS[@]+"${SEED_OPTS[@]}"}
-
-          # generate_appcast MERGES into the seed (appends the new item, keeps
-          # every existing one) and preserves items whose archives are absent —
-          # it does NOT need the old dmgs present (verified against the pinned
-          # Sparkle ${SPARKLE_VERSION} generate_appcast/FeedXML.swift).
-          # --maximum-versions 0 = preserve ALL items (Sparkle's documented
-          # "keep everything"), so the mirror's full history survives.
-          echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
-            --ed-key-file - \
-            --download-url-prefix "$DL_PREFIX" \
-            --maximum-versions 0 \
-            --link "https://getzerro.app/" \
-            -o "dist/appcast.xml" \
-            "dist"
-
-          # Invariants (fail the release rather than ship a bad feed):
-          #   • the new build resolves to its versioned, immutable URL, and
-          #   • NO item references the mutable marketing Zerro.dmg (which is
-          #     overwritten every release and would race its signature — L-07).
-          if ! grep -qF "downloads/${DMG_NAME}\"" "dist/appcast.xml"; then
-            echo "::error::appcast is missing the versioned enclosure for ${DMG_NAME}"; exit 1
-          fi
-          if grep -qF "downloads/${APP_NAME}.dmg\"" "dist/appcast.xml"; then
-            echo "::error::appcast references the mutable ${APP_NAME}.dmg — only versioned URLs are allowed (run the L-07 build-238 migration first)"; exit 1
-          fi
-          # Guard: the just-built version must be the NEWEST the feed advertises —
-          # its build number must be the max <sparkle:version> in the generated
-          # appcast. Catches a tag placed on an old or duplicate commit (e.g.
-          # 1.4.18 was tagged on 1.4.17's commit → reused build 242), which would
-          # otherwise publish a feed that never offers this build.
-          MAX_VER="$(grep -oE '<sparkle:version>[0-9]+</sparkle:version>' dist/appcast.xml | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
-          if [ -z "$MAX_VER" ]; then
-            echo "::error::generated appcast has no <sparkle:version> element — generate_appcast produced an unexpected format."; exit 1
-          fi
-          if [ "$MAX_VER" != "${{ steps.ver.outputs.build }}" ]; then
-            echo "::error::built build ${{ steps.ver.outputs.build }} is not the newest in the appcast (max sparkle:version=$MAX_VER) — the tag is likely on an old/duplicate commit; bump VERSION on a fresh commit before tagging."
-            exit 1
-          fi
-          # Structural check of the generated feed BEFORE anything is
-          # published: this build is present exactly once and is the newest,
-          # with this version, the versioned public URL, the dmg's real byte
-          # length, and a signature.
-          python3 Scripts/appcast_publish_guard.py check \
-            --feed dist/appcast.xml \
-            --expect-build "${{ steps.ver.outputs.build }}" \
-            --expect-version "${{ steps.ver.outputs.marketing }}" \
-            --expect-url "${DL_PREFIX}${DMG_NAME}" \
-            --expect-length "$(stat -f %z "dist/${DMG_NAME}")"
-          echo "----- appcast.xml -----"
-          cat dist/appcast.xml
-
-      # ----------------------------------------------------------------------
       # GitHub Release asset set — the canonical public artifacts. Every
       # release carries exactly three assets:
       #   • Zerro-<build>.dmg  — the immutable Sparkle enclosure
@@ -599,12 +486,11 @@ jobs:
       #                 then confirm the release IS releases/latest.
       # Any failure in 1–3, or in 4 before its PATCH, leaves the release a
       # draft: the previous latest release and both website URLs are
-      # unchanged. Storage is untouched until the final mirror block.
+      # unchanged.
       #
-      # The two GitHub copies live in separate directories, outside dist/, so
-      # generate_appcast (which scans a directory) sees only the immutable
-      # archive when it builds the GitHub feed, and the Storage-mirror
-      # generator (which scans dist/) never treats either as a second archive.
+      # The two GitHub copies live in separate directories so generate_appcast
+      # (which scans a directory) sees only the immutable archive when it
+      # builds the GitHub feed.
       - name: Stage GitHub Release assets
         run: |
           set -euo pipefail
@@ -652,7 +538,7 @@ jobs:
       # with the length and EdDSA signature computed from the actual bytes.
       # Both validators run on it: exactly one item, this build and version,
       # the immutable tag-specific URL, the dmg's real byte length, a
-      # signature, no mutable alias, no /releases/latest/ URL, no Storage host.
+      # signature, no mutable alias, no /releases/latest/ URL, no foreign host.
       - name: Generate this release's signed GitHub appcast item
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -691,7 +577,7 @@ jobs:
       # 2.0.1 → [final 1.x, 2.0.1].
       #   • The FIRST release of the line (build == RELEASE_LINE_START_BUILD)
       #     composes from its own item alone. Nothing before the line — no
-      #     tag, release, asset, Storage feed, or appcast — is read.
+      #     tag, release, asset, or appcast — is read.
       #   • Every LATER release requires the previous release-line feed: the
       #     appcast.xml asset of the line's current latest release, fetched
       #     through gh. It must be a valid release-line feed (immutable GitHub
@@ -894,131 +780,8 @@ jobs:
           Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
           echo "Release metadata target_commitish (informational): $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
 
-      # ----------------------------------------------------------------------
-      # STORAGE COMPATIBILITY MIRROR — the only steps that touch the
-      # production Storage bucket, and the last thing the job does before the
-      # notification. The GitHub Release above is the canonical public source
-      # and is already published and latest by now; these steps mirror the
-      # same artifacts to the Storage objects (downloads/Zerro-<build>.dmg,
-      # downloads/Zerro.dmg, downloads/appcast.xml) so any client or link
-      # that reads Storage directly sees the same build as GitHub. A failure
-      # anywhere before this block leaves the Storage objects untouched. A
-      # failure INSIDE this block fails the workflow but does not invalidate
-      # the GitHub Release: it is complete, verified, and what the website
-      # resolves — only the mirror objects need repair (re-run the failed
-      # uploads by hand; a same-tag re-run of this workflow fails closed at
-      # "Prepare draft GitHub Release" because the release is already
-      # published).
-      #
-      # Immediately before the first mutation a monotonic guard reads the LIVE
-      # feed (cache-busted): a newer build may publish; an equal build only
-      # when its version matches and the release tag resolves to this commit
-      # (a same-tag re-run); an older build, or a missing/unreadable/malformed
-      # live feed, fails closed. This is what keeps the mutable Zerro.dmg from
-      # ever being overwritten by an older build.
-      - name: Publication guard (live feed must not move backwards)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/live"
-          if ! curl -fsS "https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads/appcast.xml?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-guard" -o "$RUNNER_TEMP/live/appcast.xml"; then
-            echo "::error::could not read the live appcast — refusing to publish over an unknown live state"
-            exit 1
-          fi
-          Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
-          python3 Scripts/appcast_publish_guard.py guard \
-            --live "$RUNNER_TEMP/live/appcast.xml" \
-            --current-build "${{ steps.ver.outputs.build }}" \
-            --current-version "${{ steps.ver.outputs.marketing }}" \
-            --tag-matches-commit
-
-      # Two dmg destinations, same bytes (L-07):
-      #   • downloads/Zerro-<build>.dmg — PERMANENT, immutable. The only object
-      #     the appcast references, so every past release's advertised
-      #     edSignature stays valid forever and old builds remain downloadable.
-      #     Build numbers are monotonic, so a future release never targets it.
-      #   • downloads/Zerro.dmg — the stable "download latest" object,
-      #     overwritten every release and never referenced by the appcast. The
-      #     guard above guarantees it only ever moves forward.
-      # Then the mirror's cumulative feed, with Cache-Control: no-cache so it is always
-      # revalidated (Vercel would otherwise edge-cache a stale feed for up to
-      # an hour). --fail-with-body makes any HTTP error FAIL the release.
-      #
-      # SECURITY — L-01 (over-privileged upload credential; remediation pending):
-      #   SUPABASE_SERVICE_ROLE_KEY is full backend access (bypasses all RLS)
-      #   and is over-privileged for upserting three objects in the downloads
-      #   bucket, but the bucket has ZERO RLS write policies, so service_role is
-      #   currently the only path that can write — a least-privilege swap
-      #   REQUIRES a Supabase-side change (a path-scoped signed upload URL minted
-      #   by an edge function; CI would then hold no Supabase key). Until then the
-      #   key is a registered GitHub secret (auto-masked in logs) and is never
-      #   echoed — no `set -x`, no `curl -v`. ROTATE it as part of that change.
-      - name: Publish dmgs + appcast to Supabase Storage
-        env:
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          BASE="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/downloads"
-          curl --fail-with-body -X POST \
-            "$BASE/${DMG_NAME}" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/x-apple-diskimage" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/${DMG_NAME}"
-          curl --fail-with-body -X POST \
-            "$BASE/${APP_NAME}.dmg" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/x-apple-diskimage" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/${DMG_NAME}"
-          curl --fail-with-body -X POST \
-            "$BASE/appcast.xml" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/xml" \
-            -H "Cache-Control: no-cache" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/appcast.xml"
-
-      # Read the live objects straight back (cache-busted, with a short retry
-      # for propagation) and require them to be byte-identical to what was
-      # just built: both dmgs to the local notarized dmg, the feed to the
-      # generated cumulative feed — and the live feed must advertise this
-      # build as the newest, with this version, length, and signature.
-      - name: Verify live Supabase Storage
-        run: |
-          set -euo pipefail
-          PUB="https://wjxqmurgwyxwkezncxke.supabase.co/storage/v1/object/public/downloads"
-          OUT="$RUNNER_TEMP/live-verify"
-          rm -rf "$OUT" && mkdir -p "$OUT"
-          for attempt in 1 2 3 4 5 6; do
-            curl -fsS "$PUB/${DMG_NAME}?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/${DMG_NAME}"
-            curl -fsS "$PUB/${APP_NAME}.dmg?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/${APP_NAME}.dmg"
-            curl -fsS "$PUB/appcast.xml?cb=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}" -o "$OUT/appcast.xml"
-            if cmp -s "$OUT/${DMG_NAME}" "dist/${DMG_NAME}" && cmp -s "$OUT/${APP_NAME}.dmg" "dist/${DMG_NAME}" && cmp -s "$OUT/appcast.xml" dist/appcast.xml; then
-              echo "live objects match the built artifacts on attempt $attempt."
-              break
-            fi
-            if [ "$attempt" -eq 6 ]; then
-              cmp "$OUT/${DMG_NAME}" "dist/${DMG_NAME}" || echo "::error::live ${DMG_NAME} is not byte-identical to the notarized dmg"
-              cmp "$OUT/${APP_NAME}.dmg" "dist/${DMG_NAME}" || echo "::error::live ${APP_NAME}.dmg is not byte-identical to the notarized dmg"
-              cmp "$OUT/appcast.xml" dist/appcast.xml || echo "::error::live appcast.xml is not byte-identical to the generated feed"
-              exit 1
-            fi
-            echo "attempt $attempt: live objects not settled yet; retrying in 10s…"
-            sleep 10
-          done
-          python3 Scripts/appcast_publish_guard.py check \
-            --feed "$OUT/appcast.xml" \
-            --expect-build "${{ steps.ver.outputs.build }}" \
-            --expect-version "${{ steps.ver.outputs.marketing }}" \
-            --expect-url "$PUB/${DMG_NAME}" \
-            --expect-length "$(stat -f %z "dist/${DMG_NAME}")"
-          echo "Live Supabase Storage verified: ${DMG_NAME}, ${APP_NAME}.dmg, and appcast.xml are byte-identical to the built artifacts."
-
       - name: Done
-        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). GitHub Release ${{ env.RELEASE_TAG }} carries ${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg, Zerro.dmg, and appcast.xml — getzerro.app/appcast.xml and getzerro.app/Zerro.dmg redirect to the latest release's assets. The Supabase Storage compatibility mirror was updated to match."
+        run: echo "Released ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }}). GitHub Release ${{ env.RELEASE_TAG }} carries ${{ env.APP_NAME }}-${{ steps.ver.outputs.build }}.dmg, Zerro.dmg, and appcast.xml — getzerro.app/appcast.xml and getzerro.app/Zerro.dmg redirect to the latest release's assets."
 
       # ----------------------------------------------------------------------
       # Post the release to Slack: the user-facing What's New highlights (the

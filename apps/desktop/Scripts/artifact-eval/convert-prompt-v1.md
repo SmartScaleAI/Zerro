@@ -4,11 +4,9 @@ The fenced block below is the conversion system prompt v1 (Phase 6 of the
 typed-artifact refactor: the "Write agent prompt" fallback), byte-identical to
 the canonical copy in `zerro-prompt-system.md`
 (`~/Documents/SmartScale/Zerro/Documents/` — outside this repo). This file is
-the in-repo mirror that the archived legacy backend's
-`supabase/functions/convert/prompt.ts` (kept for reference, no longer runs)
-was propagated from — byte-identical, no re-wrapping. That copy is enforced
-by the byte-identity test `convert/prompt_test.ts`. The app has no Swift copy
-of this prompt.
+the in-repo mirror; the server-side `convert` function that was propagated
+from it has been removed from the repository. The app has no Swift copy of
+this prompt.
 
 Unlike prompt v2, this prompt's input is plain text (the previous response's
 chat text + the recording's Attached Context block) — no frames, no audio. Its

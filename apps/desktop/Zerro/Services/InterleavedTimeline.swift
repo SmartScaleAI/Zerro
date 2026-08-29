@@ -158,7 +158,7 @@ enum Interleaver {
     /// Tie-break rank at an equal start time: a frame precedes a click that
     /// precedes speech beginning the same second — the frame is in context
     /// before the click that happened on it, and both before the narration of
-    /// that beat. KEEP IN SYNC with interleave.ts / eval-models.mjs.
+    /// that beat. KEEP IN SYNC with eval-models.mjs (buildTimeline).
     private static func tieRank(_ item: TimelineItem) -> Int {
         switch item {
         case .frame:   return 0
@@ -198,8 +198,8 @@ extension InterleavedTimeline {
             case .speech(_, _, let text):
                 lines.append("\(item.timestampTag) \"\(text)\"")
             case .click(_, let label):
-                // Mirror the payload's click line (encodeBody / interleave.ts /
-                // eval-models.mjs): `[M:SS] clicked "<label>"`.
+                // Mirror the payload's click line (encodeBody / eval-models.mjs):
+                // `[M:SS] clicked "<label>"`.
                 lines.append("\(item.timestampTag) clicked \"\(label)\"")
             case .rawText(let text):
                 lines.append(text)

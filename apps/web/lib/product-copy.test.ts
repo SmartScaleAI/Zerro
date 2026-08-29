@@ -76,8 +76,8 @@ const STALE_CLAIMS: { pattern: RegExp; why: string }[] = [
     why: "generation never passes through a Zerro server",
   },
   {
-    pattern: /Supabase \((authentication|database)|Supabase Auth|handled by Supabase/i,
-    why: "Supabase no longer provides authentication, a database, or generation",
+    pattern: /\bSupabase\b/i,
+    why: "Supabase is gone; GitHub hosts the source code, release downloads, and update feeds",
   },
   {
     pattern: /10 (successful )?(BYOK )?(trial )?generations|30 (Zerro Cloud )?Trial|Managed mode|Limited offer|Most popular|Save ~20%|Cancel anytime/i,

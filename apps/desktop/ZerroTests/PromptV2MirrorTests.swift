@@ -3,8 +3,9 @@
 //  ZerroTests
 //
 //  Phase 4 of the typed-artifact refactor: byte-identity enforcement for the
-//  BYOK copy of the locked prompt v2 — the Swift twin of the server's
-//  prompt_test.ts. The in-repo source of truth is the first fenced block of
+//  BYOK copy of the locked prompt v2 (originally the Swift twin of the
+//  server-side prompt_test.ts, since removed). The in-repo source of truth is
+//  the first fenced block of
 //  Scripts/artifact-eval/prompt-v2.md; this test reads it via #filePath and
 //  compares character-for-character, so a drifting copy fails the suite
 //  instead of relying on the KEEP IN SYNC comment.

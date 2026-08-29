@@ -17,9 +17,8 @@
 //    to a usable model, not fail). `nil` = no chat key at all.
 //  • `BYOKRouting.service` — the `PromptGenerationService` conformer for an
 //    entry's provider.
-//  • `BYOKCostEstimator` — the BYOK cost-display mirror of
-//    supabase/functions/generate/cost.ts CHAT_PRICING (the third pricing
-//    mirror after the server and the eval harness, F8 — KEEP IN SYNC).
+//  • `BYOKCostEstimator` — the BYOK cost-display mirror of the eval
+//    harness's CHAT_PRICING (Scripts/eval-models.mjs, F8 — KEEP IN SYNC).
 //
 
 import Foundation
@@ -88,9 +87,9 @@ enum BYOKRouting {
 /// BYOK cost-DISPLAY estimation (the console cost log) for the registry
 /// models across all three providers.
 ///
-/// ⚠️ THIRD PRICING MIRROR — KEEP IN SYNC with:
-///   1. supabase/functions/generate/cost.ts        (CHAT_PRICING — source of truth)
-///   2. apps/desktop/Scripts/eval-models.mjs       (CHAT_PRICING)
+/// ⚠️ PRICING MIRROR — KEEP IN SYNC with
+///   apps/desktop/Scripts/eval-models.mjs (CHAT_PRICING; the server-side
+///   cost.ts both were mirrored from has been removed from the repository).
 /// Rates are June-2026 list prices; Gemini 3.1 Pro is TIERED (both rates rise
 /// above 200k input tokens); Gemini output rates already include thinking
 /// tokens (folded into outputTokens by the adapter).
@@ -120,8 +119,8 @@ enum BYOKCostEstimator {
 
     /// Estimated USD chat cost for `usage` on the REQUESTED model id (the
     /// price table keys on what we asked for — a provider may report a dated
-    /// alias the table doesn't carry, same rule as the server). `nil` for an
-    /// unpriced id (logged as unpriced, never guessed).
+    /// alias the table doesn't carry; such ids remain unpriced rather than
+    /// guessed). `nil` for an unpriced id (logged as unpriced, never guessed).
     static func chatCostUSD(modelID: String, usage: TokenUsage) -> Double? {
         guard let price = pricing[modelID] else { return nil }
         let tiered = price.tierThreshold.map { usage.inputTokens > $0 } ?? false

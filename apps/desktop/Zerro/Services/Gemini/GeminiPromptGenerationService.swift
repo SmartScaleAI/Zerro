@@ -8,10 +8,10 @@
 //  either on-device (whisper.cpp, no key) or on OpenAI cloud, so a Gemini-only
 //  user can transcribe with the on-device model and never needs an OpenAI key.
 //
-//  Wire format ported from the original server-side adapter
-//  (supabase/functions/generate/providers/gemini.ts — verified against
-//  ai.google.dev docs 2026-06-04) and the Phase 0 eval harness. KEEP IN SYNC
-//  with that adapter if either changes:
+//  Wire format ported from the original server-side adapter (since removed
+//  from the repository; verified against ai.google.dev docs 2026-06-04) and
+//  the Phase 0 eval harness (Scripts/eval-models.mjs). KEEP IN SYNC with the
+//  harness if either changes:
 //    POST {base}/models/{model}:generateContent
 //    Headers:  x-goog-api-key: <key>   (header, never the URL — it would log)
 //    Body: {
@@ -30,8 +30,9 @@
 //    — thoughts billed as output, folded in}, modelVersion.
 //
 //  The interleaved text/image rendering (timestamp tags, OCR lines, click
-//  lines) is byte-identical to the OpenAI impl, the Managed interleave.ts,
-//  and the eval harness — KEEP IN SYNC if you touch the format.
+//  lines) is byte-identical to the OpenAI impl and the eval harness
+//  (InterleaveGoldenFixtureTests pins it) — KEEP IN SYNC if you touch the
+//  format.
 //
 
 import Foundation
@@ -43,15 +44,14 @@ struct GeminiPromptGenerationService: PromptGenerationService {
     // under the project's MainActor-default isolation (same as the OpenAI
     // impl's `model` static).
     private nonisolated static let base = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
-    /// Mirrors the server's GEMINI_THINKING_LEVEL default — the rewrite task
-    /// rarely benefits from deep thinking, and "high" bills thinking tokens.
+    /// Uses low thinking because the rewrite task rarely benefits from deep
+    /// thinking, and higher levels bill additional thinking tokens.
     private nonisolated static let thinkingLevel = "low"
 
     /// B-04 — output-token cap so a BYOK generation on the user's own key is
     /// bounded instead of running to the model's default max. Mirrors the
-    /// server adapter's GEMINI_MAX_OUTPUT_TOKENS
-    /// (supabase/functions/generate/providers/gemini.ts) — the value can't be
-    /// shared across Swift/TS, so KEEP IN SYNC. Typical output is ~1k tokens;
+    /// original server adapter's GEMINI_MAX_OUTPUT_TOKENS. Typical output is
+    /// ~1k tokens;
     /// 16384 is ample headroom (a normal response never truncates — only a
     /// runaway is cut, surfaced as `.truncated` via finishReason MAX_TOKENS).
     private nonisolated static let maxOutputTokens = 16384
@@ -129,7 +129,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
 
         // A prompt-level block (safety/recitation) means no candidate at all;
         // a non-STOP finish yields no usable text. Both are the model's
-        // choice, not an outage → emptyContent (mirrors the server adapter).
+        // choice, not an outage → emptyContent (as the original server adapter did).
         if decoded.promptFeedback?.blockReason != nil {
             throw PromptGenerationError.emptyContent
         }
@@ -189,7 +189,7 @@ struct GeminiPromptGenerationService: PromptGenerationService {
                 parts.append(Part(
                     inlineData: InlineData(mimeType: "image/jpeg", data: base64),
                     // Per-part media resolution (Gemini 3) — the analog of
-                    // OpenAI detail:"high"; matches the server adapter.
+                    // OpenAI detail:"high" (as the original server adapter did).
                     mediaResolution: MediaResolution(level: "media_resolution_high")
                 ))
                 if let ocr = ocrText, !ocr.isEmpty {

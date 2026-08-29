@@ -11,9 +11,9 @@ name: Release (macOS app — Staging)
 #     what the staging app's SUFeedURL points at
 #     (https://github.com/<owner>/<repo>/releases/download/staging-channel/appcast-staging.xml)
 #     and is replaced, fail-closed, with each release's verified feed.
-# Staging uses no Supabase project. Nothing here touches the website or the
-# production appcast. Anonymous Sparkle checks against the channel URL work
-# only while the repository is public.
+# Nothing here touches the website or the production appcast. Anonymous
+# Sparkle checks against the channel URL work only while the repository is
+# public.
 #
 # Trigger: push a plain staging tag that names the checked-in
 # apps/desktop/VERSION of the tagged commit:

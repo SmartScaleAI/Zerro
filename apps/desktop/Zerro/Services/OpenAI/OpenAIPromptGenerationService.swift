@@ -68,13 +68,12 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
 
     /// B-04 — output-token cap so a BYOK generation on the user's own key is
     /// bounded instead of running to the model's default max. Mirrors the
-    /// server adapter's OPENAI_MAX_OUTPUT_TOKENS
-    /// (supabase/functions/generate/providers/openai.ts) — the value can't be
-    /// shared across Swift/TS, so KEEP IN SYNC. Typical output is ~1k tokens;
+    /// original server adapter's OPENAI_MAX_OUTPUT_TOKENS. Typical output is
+    /// ~1k tokens;
     /// 16384 is ample headroom (a normal response never truncates — only a
     /// runaway is cut, surfaced as `.truncated` via finish_reason "length").
-    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` —
-    /// matching the server and required by the GPT-5.x family.
+    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` — as
+    /// required by the GPT-5.x family.
     private nonisolated static let maxCompletionTokens = 16384
 
     init(model: String = OpenAIPromptGenerationService.defaultModel) {
@@ -308,9 +307,9 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     }
 
     // Cost estimation moved to `BYOKCostEstimator` (multi-model 6C) — the
-    // single Swift pricing mirror of the server's cost.ts CHAT_PRICING,
-    // covering all three providers (this file's gpt-4o constants would have
-    // been a fourth, drift-prone copy).
+    // single Swift pricing table (kept in sync with the eval harness's
+    // CHAT_PRICING), covering all three providers (this file's gpt-4o
+    // constants would have been another drift-prone copy).
 
     // MARK: - Wire types — response
 

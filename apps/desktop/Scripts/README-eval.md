@@ -107,8 +107,9 @@ Flags:
 Anthropic models run with **thinking off** and no sampling params — the minimal
 Messages-API shape (`model` + `max_tokens` + `system` + one user turn). That is
 the cleanest test of whether the model obeys "Output ONLY the final result"
-without a thinking scaffold doing the work, and it mirrors what Phase 3's
-`providers/anthropic.ts` is expected to send.
+without a thinking scaffold doing the work, and it is the same minimal shape
+the app's Swift Anthropic adapter (`AnthropicPromptGenerationService.swift`)
+sends.
 
 ### 5. Compare
 
@@ -265,23 +266,34 @@ of it. Add a case to the JSON whenever a new real-world malformation shows up.
 
 ## Keep in sync
 
-The system prompt, interleaving, wire formats, and pricing were mirrored from
-the archived legacy backend under `supabase/functions/generate/`
-(`{prompt,interleave,cost}.ts` and `providers/{openai,gemini}.ts`); that code
-is kept for reference only and no longer runs. The app's Swift generation
-pipeline is the live counterpart: if it changes, update `eval-models.mjs`. The
-`CHAT_PRICING` table must price every model in the matrix above so no run shows
-"unpriced".
+The harness is a read-only mirror of the app's Swift generation pipeline,
+which is the live implementation. Whenever the Swift side changes, update
+`eval-models.mjs` to match:
 
-Sync status (2026-06-12, typed-artifact refactor Phase 7):
-- `prompt.ts` (the unified `PROMPT_V2`) — **in sync by construction**: the
-  harness reads the same `Scripts/artifact-eval/prompt-v2.md` mirror at RUN
-  TIME, and `prompt_test.ts` / `PromptV2MirrorTests` enforce byte-identity on
-  the server/Swift copies. (The v1 BASE/INSTRUCT/EXPLAIN sync note here is
-  retired with the modes themselves.)
-- `interleave.ts` (mmss, tiebreak, tags, OCR/click lines) — **in sync**.
-- `providers/{openai,gemini,anthropic}.ts` wire shapes — **in sync** (the
-  anthropic adapter shipped in multi-model Phase 3, matching the harness's
-  `chatAnthropic`).
-- `cost.ts` `CHAT_PRICING` — **in sync** since multi-model Phase 2 (all six
-  registry models priced both places).
+- **System prompt** — in sync by construction: the harness reads
+  `Scripts/artifact-eval/prompt-v2.md` (first fenced block) at RUN TIME, and
+  `PromptV2MirrorTests` holds `PromptGenerationSystemPrompt.swift`
+  byte-identical to that same mirror. The Dev Mode prompt has the same
+  arrangement through `prompt-dev.md` and `PromptDevMirrorTests`. (The v1
+  BASE/INSTRUCT/EXPLAIN sync note is retired with the modes themselves.)
+- **Interleaving** (mmss, tiebreak, tags, OCR/click lines) —
+  `InterleavedTimeline.swift` plus the BYOK `encodeBody` renderers vs. the
+  harness's `buildTimeline`. `InterleaveGoldenFixtureTests` pins the Swift
+  side to `Scripts/artifact-eval/interleave-golden.json`; the harness is
+  matched to the same fixture by hand.
+- **Wire shapes** — the OpenAI / Gemini / Anthropic `PromptGenerationService`
+  implementations vs. the harness's `chatOpenAI` / `chatGemini` /
+  `chatAnthropic`.
+- **Pricing** — `CHAT_PRICING` here vs. `BYOKCostEstimator` in
+  `BYOKRouting.swift` (`BYOKRoutingTests` pins the Swift rates literally).
+  `CHAT_PRICING` must price every model in the matrix above so no run shows
+  "unpriced".
+- **Output parsing** — `parseArtifactResponse` here vs. `OutputParser.swift`,
+  both held to `Scripts/artifact-eval/parser-tests.json`.
+
+Historical note: the prompt, interleaving, wire formats, and pricing were
+originally mirrored from the server-side generation backend
+(`{prompt,interleave,cost}.ts` and `providers/{openai,gemini,anthropic}.ts`).
+That backend has since been removed from the repository and is no longer a
+copy to keep in sync; the last dated sync check against it was 2026-06-12
+(typed-artifact refactor Phase 7).
