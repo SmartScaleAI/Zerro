@@ -18,22 +18,19 @@ final class LocalModelConsentTests: XCTestCase {
 
     // MARK: - Consent prompt gating
 
-    func testShouldPromptOnlyWhenFirstKeyFreshNotReadyNotManaged() {
+    func testShouldPromptOnlyWhenFirstKeyFreshAndModelNotReady() {
         XCTAssertTrue(LocalModelConsent.shouldPrompt(
-            isFirstKey: true, alreadyShown: false, modelReady: false, isManaged: false))
+            isFirstKey: true, alreadyShown: false, modelReady: false))
 
         XCTAssertFalse(LocalModelConsent.shouldPrompt(
-            isFirstKey: false, alreadyShown: false, modelReady: false, isManaged: false),
+            isFirstKey: false, alreadyShown: false, modelReady: false),
             "not the first key → no prompt")
         XCTAssertFalse(LocalModelConsent.shouldPrompt(
-            isFirstKey: true, alreadyShown: true, modelReady: false, isManaged: false),
+            isFirstKey: true, alreadyShown: true, modelReady: false),
             "already shown → never re-prompt")
         XCTAssertFalse(LocalModelConsent.shouldPrompt(
-            isFirstKey: true, alreadyShown: false, modelReady: true, isManaged: false),
+            isFirstKey: true, alreadyShown: false, modelReady: true),
             "model already installed → no prompt")
-        XCTAssertFalse(LocalModelConsent.shouldPrompt(
-            isFirstKey: true, alreadyShown: false, modelReady: false, isManaged: true),
-            "managed users transcribe server-side → never prompt")
     }
 
     // MARK: - Engine picker selectability

@@ -165,10 +165,6 @@ enum Log {
     /// belong to a more specific category.
     nonisolated static let ui = Logger(subsystem: subsystem, category: "ui")
 
-    /// In-app feedback / issue-report submissions to the Slack relay. Logs
-    /// only the kind + outcome — NEVER the message body (it's user content).
-    nonisolated static let feedback = Logger(subsystem: subsystem, category: "feedback")
-
     /// Analytics / error-tracking bootstrap notices (API key missing, init
     /// confirmation). Separate from the PostHog SDK's own logs.
     nonisolated static let crashReporting = Logger(subsystem: subsystem, category: "crashReporting")

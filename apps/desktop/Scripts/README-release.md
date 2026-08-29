@@ -1,8 +1,10 @@
-# Releasing Zerro — Phase 1 (local script)
+# Zerro local release diagnostic (`release.sh`)
 
 `Scripts/release.sh` builds, signs, notarizes, staples, packages a `.dmg`, and
-regenerates the signed Sparkle `appcast.xml` — all on your Mac. It stops before
-uploading and prints exactly what to publish + the git tag to push.
+regenerates the signed Sparkle `appcast.xml` — all on your Mac — so the signing
+and notarization chain can be debugged by hand. It stops before uploading:
+official publication happens through the automated release workflow (see the
+end of this document).
 
 ## One-time setup
 
@@ -77,10 +79,21 @@ Scripts/sparkle/bin/generate_keys -x sparkle_private_key.txt
 ./Scripts/release.sh 1.0.2 3
 ```
 
-- `build_number` is what Sparkle compares (`CURRENT_PROJECT_VERSION`). It **must**
-  be higher than the last shipped build (currently `2`). The script refuses to go
+- `build_number` is what Sparkle compares (`CURRENT_PROJECT_VERSION`). It must be
+  a **positive integer** — digits only, no `0`, no sign, no decimals, no leading
+  zeros — and it **must** exceed the latest published build (see the newest
+  `Zerro-<build>.dmg` on the GitHub Releases page). The script refuses to go
   backwards.
-- `marketing_version` is the cosmetic string (`MARKETING_VERSION`).
+- `marketing_version` is the cosmetic string (`MARKETING_VERSION`). It must be
+  **exactly `X.Y.Z`** — three dot-separated integers with no prefix (`v`), no
+  suffix (`-beta`), no missing component (`1.0`), and no leading zeros.
+- Both values are validated by `Scripts/release_metadata.py validate` before the
+  script touches anything; the same rules govern the checked-in files.
+- The checked-in `apps/desktop/VERSION` and `apps/desktop/BUILD_NUMBER` are
+  what the automated workflows ship (read through
+  `Scripts/release_metadata.py`, which also checks that the Xcode project
+  carries the same values). Pass the same numbers here; the script warns when
+  they differ.
 
 What the script does: preflight checks → version bump → archive → export
 Developer ID app → verify signature + hardened runtime → build dmg → notarize
@@ -91,28 +104,30 @@ Artifacts land in `dist/` (gitignored): `dist/Zerro.dmg` and `dist/appcast.xml`.
 
 ## After the script finishes
 
-1. **Test the update path** on the previously shipped build before going live.
-2. **Publish** `Zerro.dmg` and `appcast.xml` by upserting them into the public
-   Supabase Storage `downloads` bucket (see the upload steps in
-   `.github/workflows/release-app.yml`) so these URLs serve the new files:
-   - `https://getzerro.app/Zerro.dmg` (Vercel redirect to Storage)
-   - `https://getzerro.app/appcast.xml` (Vercel redirect to Storage)
-3. **Commit + tag:**
-   ```bash
-   git add -A
-   git commit -m "Release 1.0.2 (build 3)"
-   git tag v1.0.2   # bookkeeping only — deliberately NOT app-v1.0.2, which
-                    # would trigger the CI release (release-app.yml) on top
-                    # of this manual one
-   git push && git push --tags
-   ```
+The local artifacts are for **testing the signing and update chain only**. The
+official artifacts are the assets of the GitHub Release that
+`.github/workflows/release-app.yml` creates (`Zerro-<build>.dmg`, `Zerro.dmg`,
+and the signed release-line `appcast.xml` — this release plus the newest
+release of each other major); `https://getzerro.app/Zerro.dmg`
+and `https://getzerro.app/appcast.xml` redirect to those assets on the latest
+release. Nothing built here should be uploaded anywhere public: the CI feed
+references the release's immutable per-build GitHub URL, and a hand-published
+feed or a mutable enclosure would break that contract.
+
+1. **Test the update path** on the previously shipped build against a local
+   feed host (Sparkle only needs the feed URL to serve `dist/appcast.xml`).
+2. **Ship through CI** when satisfied: bump `apps/desktop/VERSION` in the
+   staging → main promotion PR (or run `Scripts/cut-release.sh <version>` from
+   `main`). The `app-v<version>` tag triggers the release workflow.
+3. If you commit the local version bump for bookkeeping, tag it `v1.0.2`, **not**
+   `app-v1.0.2` — only `app-v*` tags trigger the CI release.
 
 ## Overridable settings (env vars)
 
 | Var | Default | Purpose |
 |---|---|---|
 | `NOTARY_PROFILE` | `Zerro-Notary` | notarytool keychain profile name |
-| `DOWNLOAD_URL_PREFIX` | `https://getzerro.app/` | Prefix for the appcast enclosure URL |
+| `DOWNLOAD_URL_PREFIX` | `https://getzerro.app/` | Prefix for the appcast enclosure URL (local testing only; the CI feed uses immutable GitHub Release asset URLs) |
 | `APPCAST_LINK` | `https://getzerro.app/` | "Find out more" link in the appcast |
 | `SPARKLE_BIN` | `Scripts/sparkle/bin` | Where the Sparkle CLI tools live |
 
@@ -131,10 +146,9 @@ Artifacts land in `dist/` (gitignored): `dist/Zerro.dmg` and `dist/appcast.xml`.
 When in doubt, read the notary log the script prints on failure — it names the
 exact offending file.
 
-## Next: Phase 2 (GitHub Actions)
+## The automated release workflow
 
-Phase 2 exists and is the normal release path:
-`.github/workflows/release-app.yml`, triggered by `app-v*` tags (created by
-`auto-release.yml` on an `apps/desktop/VERSION` bump, or manually via
-`Scripts/cut-release.sh`). This local script remains only for debugging the
-signing/notarization chain by hand.
+Official releases are cut by `.github/workflows/release-app.yml`, triggered by
+`app-v*` tags (created by `auto-release.yml` on an `apps/desktop/VERSION` bump,
+or manually via `Scripts/cut-release.sh`). See `RELEASE-AUTOMATION.md`. This
+local script is a diagnostic for the signing/notarization chain only.

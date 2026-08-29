@@ -4,18 +4,18 @@
 //
 //  Created by Colin Breeding on 5/27/26.
 //
-//  Minimal Keychain wrapper for secrets (API keys, tokens). Backed by
+//  Minimal Keychain wrapper for secrets (API keys, license credentials). Backed by
 //  `SecItem*` Security framework calls — no third-party dependency.
 //  Instances are configured with a service identifier + account name;
-//  the static `.openAIAPIKey` convenience covers the API key, and the
-//  Phase B trial slots (and incoming Phase C license slot) share the
-//  same shape.
+//  the provider-key statics (`.openAIAPIKey` etc.), the local trial-clock
+//  slots (`.trialStartDate` / `.trialMaxDateSeen`), and the license slots
+//  all share the same shape.
 //
-//  MARK: - Persistence & access-group scoping (read before Phase C)
-//  ---------------------------------------------------------------
-//  Several values here must SURVIVE app deletion + reinstall: the trial
-//  start date (Phase B) is the trial's abuse-resistance, and the BYOK
-//  license (Phase C) is a convenience the user shouldn't have to re-enter.
+//  MARK: - Persistence & access-group scoping
+//  ------------------------------------------
+//  Several values here must SURVIVE app deletion + reinstall: the local
+//  trial-clock start date is the trial's abuse-resistance, and the BYOK
+//  license is a convenience the user shouldn't have to re-enter.
 //  Keychain generic-password items give us that for free — the OS retains
 //  them past app deletion — but the durability depends on item SCOPE:
 //
@@ -44,11 +44,13 @@
 //       after the first post-reboot unlock. This does not weaken persistence;
 //       it's the right class for app-lifecycle secrets not tied to active
 //       user interaction. No `kSecAttrSynchronizable` — these are
-//       device-local, not iCloud-Keychain-synced. E-03: the TRIAL slots
-//       (`trialEmail` / `trialToken`) use the `…ThisDeviceOnly` variant so
-//       trial data — device-bound server-side via the per-Mac grant cap — is
-//       additionally excluded from encrypted backups and Migration Assistant;
-//       the license/BYOK and provider-key slots deliberately stay
+//       device-local, not iCloud-Keychain-synced. TRIAL slots use the
+//       `…ThisDeviceOnly` variant so trial state is additionally excluded
+//       from encrypted backups and Migration Assistant (a migrated Mac gets
+//       its own trial rather than inheriting another machine's clock): the
+//       local trial-clock slots (`trialStartDate` / `trialMaxDateSeen`,
+//       read by `TrialManager`). The
+//       license and provider-key slots deliberately stay
 //       AfterFirstUnlock so they survive a backup restore / migration.
 //
 //  MARK: - How to actually test reinstall persistence
@@ -61,7 +63,8 @@
 //    install the signed build to /Applications, start the trial and advance
 //    it (DEBUG trial controls if testing a debug-signed build in isolation),
 //    move the app to Trash + empty it, reinstall the SAME signed build, and
-//    relaunch — the trial must RESUME at the same day count, not reset to 7.
+//    relaunch — the trial must RESUME at the same day count, never reset to
+//    a fresh clock.
 //
 
 import Foundation
@@ -90,7 +93,7 @@ enum KeychainReadResult: Equatable {
 // MARK: - KeychainSlot
 
 /// The narrow read/write/delete surface the billing layers depend on, so
-/// `LicenseService` / `TrialCreditsManager` / `EntitlementStore` can be driven
+/// `LicenseService` / `TrialManager` / `EntitlementStore` can be driven
 /// by in-memory fakes in tests and previews without ever touching the real
 /// Keychain. `KeychainStore` is the production conformer; `InMemoryKeychainSlot`
 /// is the fake.
@@ -176,9 +179,9 @@ struct KeychainStore: KeychainSlot {
         // Accessibility is set on BOTH paths so the value is readable from
         // launch / background lifecycle points after first unlock, and so an
         // item written before this attribute existed — or under a previous
-        // class — gets UPGRADED on its next write (that's how pre-E-03 trial
-        // items migrate to ThisDeviceOnly without a forced re-write: the
-        // token rewrites on every verify/resume, the email on verify).
+        // class — gets UPGRADED on its next write (that's how an older trial
+        // clock item migrates to ThisDeviceOnly without a forced re-write:
+        // `trialMaxDateSeen` rewrites on every evaluation).
         // `kSecAttrAccessible` is a write-time attribute only — reads (see
         // `readResult()`) match on class+service+account and are unaffected.
         // See the file header for the per-slot class choice.
@@ -252,97 +255,61 @@ extension KeychainStore {
     /// activate/validate, deleted together on deactivate/revocation).
     static let byokLastValidated = KeychainStore(service: defaultService, account: "byok_last_validated")
 
-    /// Epoch-seconds string of the license's `created_at` (purchase/issue
-    /// instant from the LemonSqueezy License API) — the START of the BYOK
-    /// "1 year of updates" window (E7/Appendix F). Written on every successful
-    /// activate/validate (so pre-E7 activations backfill on their next
-    /// throttled re-validation) and cleared with the license. NOT a secret and
-    /// NOT license validity: it gates which appcast items the updater offers
-    /// (`UpdateWindowPolicy`), never activation, validation, or generation.
-    /// Absent/unreadable → the updater FAILS OPEN (updates offered normally).
-    static let byokLicenseCreatedAt = KeychainStore(service: defaultService, account: "byok_license_created_at")
-
-    // MARK: - License product disambiguation (Phase E)
+    // MARK: - License edition metadata
     //
-    // A BYOK one-time license and a Managed subscription license look identical
-    // locally — both are LemonSqueezy keys activated through the SAME path and
-    // stored in `byokLicenseKey`. This slot records WHICH product the on-file
-    // key belongs to, resolved at activation by probing `/session` (a Managed
-    // key returns a tier; a BYOK key comes back `not_entitled`). Kept in the
-    // Keychain beside the license — and cleared with it — so it survives a
-    // reinstall and never drifts apart from the key it describes. Values are the
-    // raw strings of `LicenseProductKind` ("byok" / "managed"); absent means
-    // "not yet resolved" and triggers a background re-probe at launch.
+    // The two values that bind the on-file key to the product and major it
+    // licenses, written ONLY after Lemon Squeezy confirmed the product
+    // identity (activation or a validated round-trip against the running
+    // `LicenseEditionPolicy`). Kept in the Keychain beside the key — and
+    // cleared with it — so they survive a reinstall and never drift apart
+    // from the key they describe. NOT secrets, but they gate offline access:
+    // a cached key whose metadata is absent or mismatched fails closed in an
+    // official build until it re-activates/validates against the current
+    // product.
 
-    /// Which product the on-file license unlocks — "byok" or "managed". Read
-    /// SYNCHRONOUSLY at startup so `EntitlementStore.computeState` can pick the
-    /// right precedence branch without a network call.
-    static let licenseProductKind = KeychainStore(service: defaultService, account: "license_product_kind")
+    /// The Lemon Squeezy `meta.product_id` the on-file key was confirmed
+    /// against, as a decimal string.
+    static let licensedProductID = KeychainStore(service: defaultService, account: "licensed_product_id")
 
-    // MARK: - Trial credits (Phase F)
+    /// The license major the on-file key covers (e.g. "1" for every Zerro
+    /// 1.x.x build), as a decimal string. A Zerro 2.x build reading a cached
+    /// major-1 record fails closed into the new-version purchase flow.
+    static let licensedMajor = KeychainStore(service: defaultService, account: "licensed_major")
+
+    // MARK: - Local trial clock
     //
-    // The email a trial user verified for server-funded credits. NOT the spend
-    // credential — that's the short-lived trial token (see `TrialCreditsManager`
-    // and the `trialToken` slot below: persisted, but only a ≤30-min bearer). This
-    // is remembered only so the email-capture sheet can PRE-FILL it on a later
-    // launch / reinstall (the trial cap is enforced server-side against the
-    // verified email regardless).
-    // Kept in the Keychain (not UserDefaults) so it survives a reinstall, matching
-    // the other billing slots.
+    // The two dates behind the local free trial (see `TrialManager`): purely
+    // on-device, no account and no network. Both are ThisDeviceOnly — the
+    // trial clock must not ride encrypted backups or Migration Assistant to
+    // another Mac — and both survive a reinstall of the SAME signed app (per
+    // the scoping rules in the file header, a debug-signed and a Developer ID
+    // build keep separate clocks).
 
-    /// The last email a trial user successfully verified, for re-display only.
-    /// E-03: ThisDeviceOnly — trial slots must not ride backups / Migration
-    /// Assistant to another Mac (the grant is device-bound server-side).
-    static let trialEmail = KeychainStore(
+    /// The instant the local trial began. Written once, on first launch,
+    /// never overwritten.
+    static let trialStartDate = KeychainStore(
         service: defaultService,
-        account: "trial_email",
+        account: "trial_start_date",
         accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     )
 
-    /// The short-lived trial session token + its expiry (encoded `token|epoch`).
-    /// PERSISTED (not just in-memory) because, unlike the Managed session token —
-    /// which is silently re-derivable from the stored license key — the trial
-    /// token's only credential is the emailed code, so it can't be re-minted
-    /// without user action. It MUST survive an app relaunch within its TTL, in
-    /// particular the SIGKILL macOS issues when Screen Recording is granted
-    /// DURING onboarding (the email step precedes the screen-recording step), or
-    /// the just-granted trial would read as unverified the moment the user
-    /// records. Low-sensitivity (a ≤30-min bearer for capped trial credits); the
-    /// abuse bound is the server-side per-email grant cap, not this token.
-    /// E-03: ThisDeviceOnly — same rationale as `trialEmail` above.
-    static let trialToken = KeychainStore(
+    /// The latest wall-clock instant the app has ever observed. The trial's
+    /// elapsed time is measured against `max(now, maxDateSeen)`, so winding
+    /// the system clock backward can't rewind the trial. See `TrialManager`.
+    static let trialMaxDateSeen = KeychainStore(
         service: defaultService,
-        account: "trial_token",
-        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    )
-
-    /// Mailbox proof collected before the user chooses Managed or BYOK during
-    /// onboarding. It cannot authorize generation; it can only activate the
-    /// Managed trial for the verified contact. Persisted so quitting between
-    /// email verification and path selection does not force another code.
-    static let onboardingContactToken = KeychainStore(
-        service: defaultService,
-        account: "onboarding_contact_token",
-        accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    )
-
-    /// Short-lived bearer for the anonymous BYOK-trial counter. It authorizes
-    /// only the `byok-trial` endpoint; it cannot be used for generation and
-    /// carries no email, API key, prompt, or recording content.
-    static let byokTrialToken = KeychainStore(
-        service: defaultService,
-        account: "byok_trial_token",
+        account: "trial_max_date_seen",
         accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     )
 
     #if DEBUG
     /// DEBUG launch diagnostic: logs only the DISPOSITION (`found` / `absent`
-    /// / `failure`) of the trial email slot read — never the value — so the
-    /// reinstall-persistence of the Phase F grant is observable without
-    /// attaching a debugger. On a true same-build reinstall (same verified
-    /// email) the slot should read `found`; on a first-ever launch (or a
-    /// different signing scope, per the header) it reads `absent`. The
-    /// disposition is `.public` — it carries no secret.
+    /// / `failure`) of the trial slot reads — never the values — so reinstall
+    /// persistence is observable without attaching a debugger. Covers the
+    /// local trial-clock slots (start/maxSeen; on a true same-build reinstall
+    /// the start slot should read `found`, on a first-ever launch or a
+    /// different signing scope it reads `absent`).
+    /// Dispositions are `.public` — they carry no secret.
     static func debugLogTrialSlotDisposition() {
         func disposition(_ result: KeychainReadResult) -> String {
             switch result {
@@ -351,7 +318,7 @@ extension KeychainStore {
             case .failure: return "failure"
             }
         }
-        Log.state.notice("trial keychain @launch — email=\(disposition(trialEmail.readResult()), privacy: .public)")
+        Log.state.notice("trial keychain @launch — start=\(disposition(trialStartDate.readResult()), privacy: .public) maxSeen=\(disposition(trialMaxDateSeen.readResult()), privacy: .public)")
     }
     #endif
 }
@@ -370,7 +337,8 @@ extension KeychainStore {
 final class InMemoryKeychainSlot: KeychainSlot {
     private var value: String?
     /// When `true`, every `readResult()` reports `.failure` regardless of
-    /// stored value — lets tests exercise the fail-open path deterministically.
+    /// stored value — lets tests exercise the read-failure paths
+    /// deterministically.
     var simulateReadFailure = false
 
     init(_ initialValue: String? = nil) {

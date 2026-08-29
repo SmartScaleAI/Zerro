@@ -69,19 +69,11 @@ extension AppState {
             return isResultExpanded ? .resultExpanded : .resultCompact
 
         case .failed(let reason):
-            // Record-START out-of-credits block (preflight, nothing captured):
-            // its own paywall-routed pill — Dismiss + "Add Credits", NO Retry.
-            // Checked FIRST so it never falls through to the Cancel/Retry `.error`
-            // card (whose non-retryable "Retry" would nonsensically reopen the
-            // area selector) or the post-capture Discard/Upgrade resume card.
-            if case .outOfCreditsAtStart = reason {
-                return .outOfCreditsStart(headline: reason.headline, detail: reason.detail)
-            }
             // Config-type failure (missing/invalid API key, or the on-device model
             // not installed): route the PRIMARY to open Settings at the right pane
             // instead of Retry / reopen-area-selector — the fix lives in Settings,
-            // and a re-run fails identically until it's made. Checked here (like
-            // `.outOfCreditsAtStart`) so it never falls through to the generic
+            // and a re-run fails identically until it's made. Checked FIRST so it
+            // never falls through to the generic
             // Cancel/Retry `.error` card. These reasons are non-retryable, so
             // `canRetryFailure` is already false for them; this just gives them a
             // more useful primary than the reopen-area-selector fallback.
@@ -97,32 +89,6 @@ extension AppState {
                 return .failureExpanded(
                     headline: reason.headline,
                     detail: lastFailureDetail ?? reason.detail
-                )
-            }
-            // M5: a paid-blocked failure (trial credits exhausted / out of
-            // credits / inactive subscription) with a held recording gets the
-            // dedicated resume pill so the user can pay and continue the SAME
-            // recording. `entitled` is read from the entitlement store HERE so
-            // Observation tracks it — when the user activates a license and
-            // entitlement flips to `.byok`/`.managed`, the primary button's label
-            // re-renders from "Upgrade" to "Generate" without any extra plumbing.
-            if canResumePaidGeneration {
-                // Once the user is entitled (subscription active / credits added),
-                // the held recording is ready — flip from the amber paid-block
-                // warning to a calm blue "you're all set" confirmation (themed in
-                // PillView off `entitled`). Discard stays as the secondary.
-                let entitled = entitlements?.canGenerate == true
-                if entitled {
-                    return .paidBlockResume(
-                        headline: "You\u{2019}re all set",
-                        detail: "Your subscription is active and the recording you set aside is ready to generate. Pick up right where you left off.",
-                        entitled: true
-                    )
-                }
-                return .paidBlockResume(
-                    headline: reason.headline,
-                    detail: reason.detail,
-                    entitled: false
                 )
             }
             return .error(headline: reason.headline, detail: reason.detail, retryable: false)
@@ -203,13 +169,10 @@ extension AppState {
 
     /// The `.devDone` success card's render model: a fixed title, the summary
     /// (agent text when present, else a generated change line), the readable diff
-    /// text, the diff stat counts (the collapsed pill renders "Changes applied
-    /// (+a −r)" from these; the expanded card uses summary/diffText), and — for a
-    /// MANAGED run — the "−N credits · M left" charge line. Managed Dev Mode meters
-    /// its prompt-generation step just like ask mode, so the same readout
-    /// belongs here; it's formatted via the SAME `CreditDisplay.chargeLine` the
-    /// artifact path uses (see PillWindowController) so the two read identically.
-    /// `lastGenerationCharge` is nil for BYOK → the charge line is nil → nothing shows.
+    /// text, and the diff stat counts (the collapsed pill renders "Changes
+    /// applied (+a −r)" from these; the expanded card uses summary/diffText).
+    /// No billing state: Dev Mode always runs locally, so a dev result is never
+    /// charged.
     var devResultCard: DevResultCard {
         DevResultCard(
             title: "Changes applied",
@@ -217,10 +180,7 @@ extension AppState {
             diffText: devDiffText ?? "",
             linesAdded: devDiffStat?.added ?? 0,
             linesRemoved: devDiffStat?.removed ?? 0,
-            filesChanged: devDiffStat?.filesChanged ?? 0,
-            chargeLine: lastGenerationCharge.map {
-                CreditDisplay.chargeLine(charged: $0.charged, remaining: $0.remaining)
-            }
+            filesChanged: devDiffStat?.filesChanged ?? 0
         )
     }
 

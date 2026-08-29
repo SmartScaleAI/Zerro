@@ -378,16 +378,12 @@ private struct PillHostView: View {
             // Error pill's "Retry" fallback (non-retryable failure): dismiss
             // the pill and reopen the screen-region selector to record again.
             onErrorRetryRegion: { appState.retryRecordingFromRegion() },
-            // M5 — resume a paid-blocked recording after the user pays.
-            onResumePaidGeneration: { appState.resumePaidGeneration() },
-            // Record-start out-of-credits "Add Credits" → open the top-up paywall.
-            onAddCredits: { appState.openOutOfCreditsTopUp() },
             // Config-failure "Open Settings" → activate + open Settings at the
-            // deep-linked pane (Account & Billing), then dismiss the pill.
+            // deep-linked pane (API Keys & License), then dismiss the pill.
             onOpenSettings: { pane in appState.openSettings(to: pane) },
             onDismissResult: { appState.resetToIdle() },
             // M2 — recovery offer resolutions, exactly two outcomes. Generate
-            // runs the recovered recording (spends the credit, with consent);
+            // runs the recovered recording (makes the provider call, with consent);
             // Discard deletes it. There is no separate dismiss affordance — any
             // other dismissal routes to Discard (delete), never leave-on-disk.
             onRecoveryGenerate: { appState.resolveRecovery(generate: true) },
@@ -410,11 +406,6 @@ private struct PillHostView: View {
             result: appState.resultPresentation,
             resultHadNoNarration: appState.resultHadNoNarration,
             stoppedBySleep: appState.stoppedBySleep,
-            // Multi-model 6B: the "−N credits · M left" toast, formatted once
-            // here so PillView stays a pure renderer of a ready-made string.
-            chargeLine: appState.lastGenerationCharge.map {
-                CreditDisplay.chargeLine(charged: $0.charged, remaining: $0.remaining)
-            },
             audioLevels: appState.audioLevels
         )
         // Phase 5: surface content-size changes that bypass the state

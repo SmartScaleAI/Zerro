@@ -4,7 +4,7 @@
 //
 //  Pure launch-time decision for the "What's New" window — should this
 //  launch auto-pop the changelog? Split from the view/scene the same way
-//  `UpdateWindowPolicy` is split from `UpdaterView`: all inputs injected,
+//  `UpdateMajorPolicy` is split from `UpdaterView`: all inputs injected,
 //  no Bundle/UserDefaults reads, so the rule is unit-testable without
 //  SwiftUI or AppKit (see WhatsNewPolicyTests' decision matrix).
 //

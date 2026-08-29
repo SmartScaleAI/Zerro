@@ -1,30 +1,53 @@
 name: Release (macOS app — Staging)
 
 # Side-by-side "Zerro Staging" release. Adapted from release-app.yml (the prod
-# release) but pointed entirely at the STAGING channel: it builds the Staging
-# configuration, ships the dmg + appcast to the staging Supabase project, and
-# NEVER touches the website or the production appcast.
+# release) but pointed entirely at the STAGING channel, which lives on GitHub:
+#   • each release gets its own versioned prerelease (staging-v<X.Y.Z>) that
+#     holds the immutable ZerroStaging-<build>.dmg, a byte-identical
+#     ZerroStaging.dmg manual-download copy, and that release's one-item
+#     appcast-staging.xml;
+#   • the permanent `staging-channel` prerelease ("Staging Update Channel")
+#     holds the mutable staging feed — its single appcast-staging.xml asset is
+#     what the staging app's SUFeedURL points at
+#     (https://github.com/<owner>/<repo>/releases/download/staging-channel/appcast-staging.xml)
+#     and is replaced, fail-closed, with each release's verified feed.
+# Staging uses no Supabase project. Nothing here touches the website or the
+# production appcast. Anonymous Sparkle checks against the channel URL work
+# only while the repository is public.
 #
-# Trigger: push a staging version tag like staging-v1.0.7
-#   git tag staging-v1.0.7 && git push origin staging-v1.0.7
+# Trigger: push a plain staging tag that names the checked-in
+# apps/desktop/VERSION of the tagged commit:
+#   git tag staging-v1.0.0 && git push origin staging-v1.0.0
+# Every new staging release increments BOTH apps/desktop/VERSION and
+# apps/desktop/BUILD_NUMBER (staging-v1.0.0 / build 1000, then staging-v1.0.1 /
+# build 1001, then staging-v1.0.2 / build 1002, …): one visible version per
+# staging release, and a tag is never moved or reused.
 on:
   push:
     tags:
       - "staging-v*"
-  # Allow manually re-running for a given version from the Actions tab.
+  # Manual run from the Actions tab: allowed only from the staging branch;
+  # the version and build come from the checked-in files, never from inputs.
   workflow_dispatch:
     inputs:
-      version:
-        description: "Marketing version (e.g. 1.0.7). Used only for manual runs."
-        required: true
+      # First-time only, off by default: create the permanent `staging-channel`
+      # prerelease when it does not exist yet. Without it, a missing channel
+      # fails the run closed. It never alters an existing channel.
+      bootstrap_staging_channel:
+        description: "Create the permanent staging-channel prerelease if it does not exist (first time only; leave false)"
+        type: boolean
+        required: false
+        default: false
 
-# Read-only: unlike the prod release this never creates a GitHub Release and
-# never pushes an appcast commit — the staging appcast lives in Supabase Storage.
+# Default read-only. The one job below raises itself to contents: write —
+# the narrowest scope that lets it create the versioned staging PRERELEASE,
+# attach its assets, and replace the staging-channel feed asset. No commit is
+# ever pushed.
 permissions:
   contents: read
 
-# Never run two staging releases at once: both would upsert the same dmg +
-# appcast object in the staging bucket.
+# Never run two staging releases at once: both would race the same
+# staging-channel feed asset.
 concurrency:
   group: release-staging
   cancel-in-progress: false
@@ -41,14 +64,19 @@ env:
   DMG_NAME: ZerroStaging.dmg          # dmg filename — NO spaces (task requirement)
   BUNDLE_ID: com.cbreeding.Zerro.staging
   TEAM_ID: H6NWCRRAHV
-  # Staging Supabase project. The downloads bucket is public; reads resolve at
-  # …/storage/v1/object/public/downloads/<name>.
-  STAGING_PROJECT_REF: waripvlpcpwdmacpjiqc
   SPARKLE_VERSION: "2.9.2"            # must match the app's pinned Sparkle
+  # The permanent staging update channel (see the header comment).
+  CHANNEL_TAG: staging-channel
+  CHANNEL_ASSET: appcast-staging.xml
 
 jobs:
   release:
     runs-on: macos-26      # default Xcode 26.4.x — required for the macOS 26.4 deployment target
+    # contents: write is needed ONLY to create the versioned prerelease,
+    # upload its three assets, and replace the staging-channel feed asset;
+    # every other step here is read-only.
+    permissions:
+      contents: write
     steps:
       # ----------------------------------------------------------------------
       - name: Checkout app repo
@@ -57,25 +85,74 @@ jobs:
         # together when upgrading.
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
-          fetch-depth: 0          # tags + full history for build-number derivation
+          fetch-depth: 0          # tags + full history for the tag-target checks
 
       # ----------------------------------------------------------------------
-      # Derive versions. Marketing version comes from the tag
-      # (staging-v1.0.2 -> 1.0.2). Build number = total commit count, which is
-      # monotonically increasing and therefore always greater than the last
-      # staging release (Sparkle requires this).
-      - name: Derive version + build number
+      # Release metadata comes from the checked-in files apps/desktop/VERSION
+      # (marketing version, exactly X.Y.Z) and apps/desktop/BUILD_NUMBER (the
+      # integer Sparkle compares), read and validated through
+      # Scripts/release_metadata.py. Nothing is derived from Git history, and
+      # the Xcode project must already carry the same values (drift check), so
+      # a local build reports exactly what CI ships.
+      #
+      # Every new staging release increments BOTH files (staging-v1.0.0 /
+      # build 1000, then staging-v1.0.1 / build 1001, …) and gets its own
+      # plain staging-v<X.Y.Z> tag; BUILD_NUMBER drives Sparkle
+      # (CURRENT_PROJECT_VERSION) and the immutable ZerroStaging-<build>.dmg.
+      #   • tag push:         the tag must be exactly staging-v<X.Y.Z>
+      #                       (build-qualified or otherwise decorated tags are
+      #                       rejected) and name EXACTLY the VERSION checked in
+      #                       at the tagged commit, or the run fails here,
+      #                       before any build.
+      #   • workflow_dispatch: allowed only from the staging branch; the tag
+      #                       is computed from VERSION and created at
+      #                       publication, pinned to this commit.
+      - name: Read release metadata (VERSION + BUILD_NUMBER)
         id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MARKETING="${{ github.event.inputs.version }}"
-          else
-            MARKETING="${GITHUB_REF_NAME#staging-v}"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/staging" ]; then
+            echo "::error::manual staging releases may only be dispatched from the staging branch (got $REF)."
+            exit 1
           fi
-          BUILD="$(git rev-list --count HEAD)"
+          python3 Scripts/release_metadata.py read > "$RUNNER_TEMP/metadata.txt"
+          MARKETING="$(sed -n 's/^marketing=//p' "$RUNNER_TEMP/metadata.txt")"
+          BUILD="$(sed -n 's/^build=//p' "$RUNNER_TEMP/metadata.txt")"
+          python3 Scripts/release_metadata.py check-project
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            RELEASE_TAG="$(python3 Scripts/release_metadata.py staging-tag)"
+          else
+            python3 Scripts/release_metadata.py parse-staging-tag "$REF_NAME" --require-match
+            RELEASE_TAG="$REF_NAME"
+          fi
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
-          echo "Releasing Staging $MARKETING (build $BUILD)"
+          # The tag this run publishes under and the immutable per-build
+          # archive name of the versioned prerelease asset the feed references.
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "VERSIONED_DMG_NAME=ZerroStaging-$BUILD.dmg" >> "$GITHUB_ENV"
+          echo "Releasing Staging $MARKETING (build $BUILD) as $RELEASE_TAG"
+
+      # ----------------------------------------------------------------------
+      # Fail-closed tag-target check BEFORE the expensive build. A tag-push run
+      # must have the tag, and it must resolve (peeling any annotated tag
+      # object) to the checked-out commit; a workflow_dispatch run may have no
+      # tag yet, in which case the release step below creates it pinned to
+      # this commit (target_commitish). A tag that already exists at another
+      # commit fails the run here: the release would otherwise advertise
+      # assets built from a different commit than its tag names. The script
+      # checks the real Git ref, never the release's target_commitish
+      # metadata, and treats anything other than a genuine 404 (auth, rate
+      # limit, network) as a failure.
+      - name: Verify release tag targets this commit (preflight)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" preflight "$EVENT_NAME"
 
       # ----------------------------------------------------------------------
       # Select the Xcode toolchain. Pinned to 26.4.x to keep the build toolchain
@@ -153,6 +230,17 @@ jobs:
       # ----------------------------------------------------------------------
       # Archive the Staging configuration. Versions are passed directly to
       # xcodebuild (command-line build settings always override the pbxproj).
+      # The official staging build needs the Swift conditions
+      # ('STAGING OFFICIAL_BUILD', explicit resolved value) AND the C macro
+      # (GCC_PREPROCESSOR_DEFINITIONS='$(inherited) OFFICIAL_BUILD=1', which
+      # compiles the exported marker in OfficialBuildMarker.c). The C macro
+      # MUST keep $(inherited): a command-line build setting applies to every
+      # target, including the Swift package dependencies, and a bare value
+      # would wipe their own macros (PLCrashReporter stops compiling); the
+      # app's Staging configuration defines no baseline macros, so the app
+      # resolves to exactly OFFICIAL_BUILD=1. The two flags are paired at
+      # link time — one without the other fails the build instead of
+      # producing a half-official app.
       #
       # NOTE: the app target's "Upload dSYMs to PostHog" Run Script phase self-
       # skips when POSTHOG_CLI_API_KEY is unset, so staging archives do NOT upload
@@ -171,7 +259,10 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}"
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='STAGING OFFICIAL_BUILD' \
+            'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) OFFICIAL_BUILD=1' \
+            ZERRO_BUILD_CHANNEL=official
 
       - name: Export Developer ID app
         run: |
@@ -181,6 +272,49 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "Scripts/ExportOptions.plist"
           test -d "$RUNNER_TEMP/export/$APP_NAME.app"
+
+      # Deterministic official-build gate (see release-app.yml): the exported
+      # ARTIFACT must carry both official markers. The archive step passes the
+      # COMPLETE resolved condition list explicitly — 'STAGING OFFICIAL_BUILD'
+      # — with no reliance on $(inherited); this verification re-queries the
+      # build system with that same explicit value and confirms BOTH
+      # conditions remain present in the resolved settings.
+      - name: Verify official build marker (staging keeps STAGING)
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/export/$APP_NAME.app"
+          CHANNEL="$(/usr/libexec/PlistBuddy -c 'Print ZerroBuildChannel' "$APP/Contents/Info.plist")"
+          [ "$CHANNEL" = "official" ] \
+            || { echo "::error::ZerroBuildChannel is '$CHANNEL', expected 'official' — OFFICIAL_BUILD settings were not applied"; exit 1; }
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$APP/Contents/Info.plist")"
+          # The marker is an exported C symbol (`_zerroOfficialBuildMarker`,
+          # see BuildEnvironment.swift), the only kind that survives the
+          # exported app's STRIP_STYLE=all post-processing. List the DEFINED
+          # GLOBAL symbol names and require the exact name as a whole line —
+          # never a substring. Capture nm's output first: `nm | grep -q`
+          # would let grep exit early, nm take SIGPIPE, and the pipeline fail
+          # with 141 under `set -euo pipefail` on a PERFECTLY GOOD artifact.
+          GLOBAL_SYMBOLS="$(nm -g --defined-only "$APP/Contents/MacOS/$EXECUTABLE" | awk '{print $NF}')"
+          grep -qx "_zerroOfficialBuildMarker" <<< "$GLOBAL_SYMBOLS" \
+            || { echo "::error::the exported app has no _zerroOfficialBuildMarker global symbol — either the OFFICIAL_BUILD condition was not applied to this archive, or the marker did not survive export stripping; refusing to ship it as official"; exit 1; }
+          # Query the build system with EXACTLY the settings the archive step
+          # passed (the explicit resolved value, no $(inherited)) and assert
+          # both conditions survive to the resolved settings.
+          SETTINGS="$(xcodebuild -project "Zerro.xcodeproj" -scheme "$SCHEME" -configuration "$CONFIGURATION" \
+            -showBuildSettings SWIFT_ACTIVE_COMPILATION_CONDITIONS='STAGING OFFICIAL_BUILD' 'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) OFFICIAL_BUILD=1' 2>/dev/null)"
+          CONDITIONS="$(awk -F' = ' '/SWIFT_ACTIVE_COMPILATION_CONDITIONS/ { v=$2 } END { print v }' <<< "$SETTINGS")"
+          MACROS="$(awk -F' = ' '/GCC_PREPROCESSOR_DEFINITIONS/ { v=$2 } END { print v }' <<< "$SETTINGS")"
+          echo "Resolved conditions: $CONDITIONS"
+          echo "Resolved preprocessor macros: $MACROS"
+          case "$CONDITIONS" in
+            *STAGING*OFFICIAL_BUILD*|*OFFICIAL_BUILD*STAGING*) ;;
+            *) echo "::error::Staging build must carry BOTH STAGING and OFFICIAL_BUILD (got: $CONDITIONS)"; exit 1 ;;
+          esac
+          case "$MACROS" in
+            *OFFICIAL_BUILD=1*) ;;
+            *) echo "::error::Staging build must carry the C macro OFFICIAL_BUILD=1 for the exported marker (got: $MACROS)"; exit 1 ;;
+          esac
+          echo "Official staging build markers verified (plist channel + exported _zerroOfficialBuildMarker symbol + STAGING retained)."
 
       # Fail fast if the built app's versions don't match the tag — this is what
       # generate_appcast reads, so a mismatch here ships a bad appcast.
@@ -274,79 +408,244 @@ jobs:
           done
 
       # ----------------------------------------------------------------------
-      # Upload the notarized + stapled dmg to the staging downloads bucket. The
-      # staging app's SUFeedURL points at this same project's public downloads
-      # path, so this is the only place the staging build is served from.
-      #
-      # The dmg name is constant (ZerroStaging.dmg) and the appcast is regenerated
-      # to match on every run, so a single mutable object is correct here — there
-      # is no cross-release signature-immutability constraint (unlike prod's
-      # versioned objects). x-upsert lets a re-run replace the object in place.
-      #
-      # SECURITY (mirrors prod's L-01): STAGING_SERVICE_ROLE_KEY is full backend
-      # access (bypasses RLS) and is over-privileged for a bucket upsert, but the
-      # bucket has no RLS write policy so service_role is currently the only write
-      # path. The key is a registered GitHub secret (auto-masked) and is never
-      # echoed — no `set -x`, no `curl -v`.
-      - name: Upload notarized dmg to staging Storage
-        env:
-          STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+      # The versioned GitHub PRERELEASE on the staging-v* tag carrying exactly
+      # three assets:
+      #   • ZerroStaging-<build>.dmg — the immutable staging archive (the
+      #                                only enclosure the feed references)
+      #   • ZerroStaging.dmg         — a byte-identical manual-download copy
+      #   • appcast-staging.xml      — this release's signed one-item feed
+      # The staging-channel feed is replaced LAST, after this prerelease and
+      # its assets are verified. `prerelease: true` + `make_latest: false`
+      # keep it from ever becoming the repository's "latest" release. The two
+      # copies live in separate directories so generate_appcast (which scans
+      # a directory) sees only the immutable one.
+      - name: Stage GitHub prerelease assets
         run: |
-          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          curl --fail-with-body -X POST \
-            "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/${DMG_NAME}" \
-            -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/x-apple-diskimage" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/${DMG_NAME}"
+          set -euo pipefail
+          mkdir -p dist/github dist/github-stable
+          cp "dist/$DMG_NAME" "dist/github/$VERSIONED_DMG_NAME"
+          cp "dist/$DMG_NAME" dist/github-stable/ZerroStaging.dmg
+          cmp "dist/$DMG_NAME" "dist/github/$VERSIONED_DMG_NAME" \
+            || { echo "::error::$VERSIONED_DMG_NAME is not byte-identical to $DMG_NAME"; exit 1; }
+          cmp "dist/$DMG_NAME" dist/github-stable/ZerroStaging.dmg \
+            || { echo "::error::the stable ZerroStaging.dmg copy is not byte-identical to $DMG_NAME"; exit 1; }
+          echo "Staged $VERSIONED_DMG_NAME and a byte-identical ZerroStaging.dmg."
 
-      # ----------------------------------------------------------------------
-      # Generate the signed STAGING appcast. dist holds only ZerroStaging.dmg, so
-      # this is a single-item feed whose enclosure resolves to the public,
-      # constant dmg URL; generate_appcast computes its length + edSignature from
-      # the actual build, so the feed can never drift from the shipped dmg. We do
-      # NOT seed from a previous appcast: the dmg object is mutable, so a
-      # cumulative feed would carry stale signatures for the same URL. A fresh
-      # single-item feed always matches the dmg just uploaded.
-      - name: Generate signed staging appcast
+      - name: Generate signed GitHub staging appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          DL_PREFIX="https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/"
-
+          # dist/github holds ONLY the immutable archive, so this is a fresh
+          # single-item feed whose enclosure is the tag-specific asset URL
+          # (from $GITHUB_REPOSITORY, so a rename cannot break it).
           echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
             --ed-key-file - \
-            --download-url-prefix "$DL_PREFIX" \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
             --link "https://getzerro.app/" \
-            -o "dist/appcast-staging.xml" \
-            "dist"
+            -o "dist/github/appcast-staging.xml" \
+            "dist/github"
+          # Exact-artifact gate before anything is uploaded: exactly one item
+          # carrying this build and marketing version, the tag-specific
+          # ZerroStaging-<build>.dmg URL, the local dmg's byte length, and a
+          # signature; then the structural rules (immutable staging archive
+          # name, GitHub URL shape, no mutable alias).
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed dist/github/appcast-staging.xml \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
+            --expect-items 1
+          python3 Scripts/appcast_github_feed.py verify \
+            --flavor staging \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --feed dist/github/appcast-staging.xml \
+            --expect-items 1
+          echo "----- appcast-staging.xml (GitHub) -----"
+          cat dist/github/appcast-staging.xml
 
-          # Invariant: the feed must reference the staging dmg's public URL. Fail
-          # the release rather than publish a feed that points nowhere.
-          if ! grep -qF "downloads/${DMG_NAME}\"" "dist/appcast-staging.xml"; then
-            echo "::error::staging appcast is missing the enclosure for ${DMG_NAME}"; exit 1
-          fi
-          echo "----- appcast-staging.xml -----"
-          cat "dist/appcast-staging.xml"
+      - name: Create GitHub prerelease + upload staging assets
+        # Same SHA-pinned action as the prod release (supply-chain hardening L-03).
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          # Pin a newly created tag to the commit this workflow checked out.
+          # Without this the action creates a missing tag (workflow_dispatch
+          # runs) at the repository's DEFAULT branch head — exactly what
+          # mis-tagged staging-v1.4.45 — so the prerelease would name a commit
+          # its assets were not built from.
+          target_commitish: ${{ github.sha }}
+          name: Staging ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            apps/desktop/dist/github/${{ env.VERSIONED_DMG_NAME }}
+            apps/desktop/dist/github-stable/ZerroStaging.dmg
+            apps/desktop/dist/github/appcast-staging.xml
+
+      # Re-resolve the REAL tag ref after the release step: it must now exist
+      # and name the checked-out commit (target_commitish pins a tag the step
+      # just created; a pre-existing tag was checked in preflight). The
+      # release metadata is printed for information only.
+      - name: Verify release tag targets this commit (post-release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          Scripts/verify_release_tag.sh "$RELEASE_TAG" "$GITHUB_SHA" postrelease "$EVENT_NAME"
+          echo "Release metadata target_commitish (informational): $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+
+      # Authenticated verification: the release is a prerelease, carries
+      # exactly the three assets, both dmgs match the local notarized
+      # artifact byte-for-byte, and the uploaded feed references only
+      # ZerroStaging-<build>.dmg on this tag — never the manual-download
+      # copy. Nothing secret is read or printed.
+      - name: Verify GitHub prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERIFY="$RUNNER_TEMP/gh-verify"
+          rm -rf "$VERIFY" && mkdir -p "$VERIFY"
+          EXPECTED="$(printf '%s\n' "$VERSIONED_DMG_NAME" "ZerroStaging.dmg" "appcast-staging.xml" | sort)"
+          for attempt in 1 2 3 4 5 6; do
+            ACTUAL="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)"
+            [ "$ACTUAL" = "$EXPECTED" ] && break
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::prerelease $RELEASE_TAG must carry exactly [$VERSIONED_DMG_NAME, ZerroStaging.dmg, appcast-staging.xml]; it has:"
+              echo "$ACTUAL"
+              exit 1
+            fi
+            echo "attempt $attempt: asset list not settled yet; retrying in 10s…"
+            sleep 10
+          done
+          IS_PRERELEASE="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')"
+          [ "$IS_PRERELEASE" = "true" ] \
+            || { echo "::error::$RELEASE_TAG is not marked as a prerelease — a staging build must never become the latest release"; exit 1; }
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$VERIFY" \
+            --pattern "$VERSIONED_DMG_NAME" --pattern "ZerroStaging.dmg" --pattern "appcast-staging.xml"
+          LOCAL="$(shasum -a 256 "dist/$DMG_NAME" | awk '{print $1}')"
+          for f in "$VERSIONED_DMG_NAME" "ZerroStaging.dmg"; do
+            GOT="$(shasum -a 256 "$VERIFY/$f" | awk '{print $1}')"
+            [ "$GOT" = "$LOCAL" ] \
+              || { echo "::error::downloaded $f does not match the notarized $DMG_NAME (sha256 $GOT vs $LOCAL)"; exit 1; }
+          done
+          cmp "$VERIFY/appcast-staging.xml" dist/github/appcast-staging.xml \
+            || { echo "::error::downloaded appcast-staging.xml differs from the generated GitHub feed"; exit 1; }
+          # The asset set was just verified above (exact three assets,
+          # byte-identical dmgs); the downloaded feed is re-checked against
+          # the exact artifacts: one item, this build and version, the
+          # tag-specific ZerroStaging-<build>.dmg URL, the local dmg's byte
+          # length, a signature — then the structural rules.
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed "$VERIFY/appcast-staging.xml" \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
+            --expect-items 1
+          python3 Scripts/appcast_github_feed.py verify \
+            --flavor staging \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --feed "$VERIFY/appcast-staging.xml" \
+            --expect-items 1
+          echo "GitHub prerelease $RELEASE_TAG verified: $VERSIONED_DMG_NAME and ZerroStaging.dmg are byte-identical to the notarized build; appcast-staging.xml references only the immutable asset."
 
       # ----------------------------------------------------------------------
-      # Publish the staging appcast to the SAME staging bucket (NOT the website,
-      # NOT the prod appcast). The staging app reads it from the public path.
-      - name: Upload staging appcast to staging Storage
+      # CHANNEL PUBLICATION — the only step that touches the permanent
+      # staging-channel prerelease, and the last mutation of the job.
+      # Everything above (archive, export, official marker, signing,
+      # notarization + stapling, the versioned prerelease with its tag-target
+      # and asset verification) has already passed, so a failure anywhere
+      # before this step leaves the live staging channel untouched.
+      #
+      # Scripts/staging_channel_publish.py (fail-closed, transport-injectable):
+      #   • the channel must exist as a published prerelease named "Staging
+      #     Update Channel"; a missing channel is created ONLY on a manual
+      #     staging-branch run with bootstrap_staging_channel=true (first
+      #     time only); a draft or non-prerelease channel fails;
+      #   • the local feed must be this release's one-item feed whose
+      #     enclosure is the immutable archive on THIS versioned prerelease,
+      #     which must be published with that asset uploaded at the feed's
+      #     length;
+      #   • the live feed is downloaded and validated: a newer build may
+      #     publish; an equal build only as a proven same-tag/same-commit
+      #     re-run with identical bytes (the tag → commit binding was
+      #     re-proven by the post-release step above); an older build, a
+      #     malformed/missing live feed, or unexpected channel assets fail;
+      #   • the new feed is uploaded as a candidate, downloaded back,
+      #     required byte-identical and valid BEFORE the stable asset is
+      #     touched; the stable asset is renamed to a backup, the candidate
+      #     promoted, downloaded again and required byte-identical, and only
+      #     then is the backup deleted — any failure after the rename
+      #     restores the previous feed. The channel ends with exactly one
+      #     asset, appcast-staging.xml.
+      - name: Publish the verified feed to the staging channel
         env:
-          STAGING_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          BOOTSTRAP_STAGING_CHANNEL: ${{ github.event.inputs.bootstrap_staging_channel }}
         run: |
-          set -euo pipefail   # NOTE: never add `set -x` here — it would echo the bearer token.
-          curl --fail-with-body -X POST \
-            "https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/downloads/appcast-staging.xml" \
-            -H "Authorization: Bearer $STAGING_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/xml" \
-            -H "x-upsert: true" \
-            --data-binary @"dist/appcast-staging.xml"
+          set -euo pipefail
+          BOOT=()
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "${BOOTSTRAP_STAGING_CHANNEL:-false}" = "true" ]; then
+            echo "::warning::bootstrap_staging_channel=true — the permanent ${CHANNEL_TAG} prerelease will be created if it does not exist."
+            BOOT=(--bootstrap)
+          fi
+          python3 Scripts/staging_channel_publish.py --repo "$GITHUB_REPOSITORY" publish \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --build "${{ steps.ver.outputs.build }}" \
+            --version "${{ steps.ver.outputs.marketing }}" \
+            --feed "$RUNNER_TEMP/gh-verify/appcast-staging.xml" \
+            --download-dir "$RUNNER_TEMP/channel" \
+            --tag-matches-commit \
+            ${BOOT[@]+"${BOOT[@]}"}
+
+      # Independent read-back of the live channel: the stable asset must be
+      # the only asset, byte-identical to the locally verified feed, and pass
+      # both validators against this release's exact artifacts.
+      - name: Verify the staging channel feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/channel-verify"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          ASSETS="$(gh release view "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort | tr '\n' ' ')"
+          [ "$ASSETS" = "$CHANNEL_ASSET " ] \
+            || { echo "::error::${CHANNEL_TAG} must carry exactly [$CHANNEL_ASSET]; it has: $ASSETS"; exit 1; }
+          STATE="$(gh release view "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          [ "$STATE" = "false true" ] \
+            || { echo "::error::${CHANNEL_TAG} must be a published prerelease (draft prerelease = $STATE)"; exit 1; }
+          gh release download "$CHANNEL_TAG" --repo "$GITHUB_REPOSITORY" --dir "$OUT" --pattern "$CHANNEL_ASSET"
+          cmp "$OUT/$CHANNEL_ASSET" "$RUNNER_TEMP/gh-verify/appcast-staging.xml" \
+            || { echo "::error::the live ${CHANNEL_TAG} feed is not byte-identical to the verified feed"; exit 1; }
+          python3 Scripts/appcast_publish_guard.py check \
+            --feed "$OUT/$CHANNEL_ASSET" \
+            --expect-build "${{ steps.ver.outputs.build }}" \
+            --expect-version "${{ steps.ver.outputs.marketing }}" \
+            --expect-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${VERSIONED_DMG_NAME}" \
+            --expect-length "$(stat -f %z "dist/${DMG_NAME}")" \
+            --expect-items 1
+          python3 Scripts/appcast_github_feed.py verify \
+            --flavor staging \
+            --repo "$GITHUB_REPOSITORY" \
+            --current-build "${{ steps.ver.outputs.build }}" \
+            --current-tag "$RELEASE_TAG" \
+            --feed "$OUT/$CHANNEL_ASSET" \
+            --expect-items 1
+          echo "Staging channel verified: https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL_TAG}/${CHANNEL_ASSET} → ${VERSIONED_DMG_NAME} on ${RELEASE_TAG}."
 
       - name: Done
         run: |
           echo "Released Staging ${{ steps.ver.outputs.marketing }} (build ${{ steps.ver.outputs.build }})."
-          echo "dmg:     https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/${DMG_NAME}"
-          echo "appcast: https://${STAGING_PROJECT_REF}.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml"
+          echo "Versioned prerelease: ${{ env.RELEASE_TAG }} (${{ env.VERSIONED_DMG_NAME }}, ZerroStaging.dmg, appcast-staging.xml)"
+          echo "Staging channel feed: https://github.com/${GITHUB_REPOSITORY}/releases/download/${CHANNEL_TAG}/${CHANNEL_ASSET} → ${VERSIONED_DMG_NAME} (immutable); ZerroStaging.dmg on the versioned prerelease is the manual-download copy only."

@@ -9,13 +9,10 @@
 //  `CaseIterable` so the step-dots indicator and the dev panel both
 //  iterate the same source-of-truth ordering.
 //
-//  Phase F (revised): `email` is a REQUIRED step right after `welcome` —
-//  every new user verifies their email there, which grants the server-funded
-//  trial credits up front so the trial works with no mid-task interruption.
-//  The old API-key step was removed (it's only relevant to the post-trial BYOK
-//  path, which the paywall + Settings already cover): trial users use
-//  server-funded credits and Managed subscribers never need a key, so onboarding
-//  no longer asks for one.
+//  This legacy step list is the persistence bridge for the redesigned route
+//  (`OnboardingRoute`): the `email` value is kept so an install that saved it
+//  still resumes, but no screen renders an email step anymore — the setup
+//  screen advances straight to provider keys.
 //
 
 import Foundation

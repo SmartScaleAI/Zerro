@@ -23,8 +23,8 @@ const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Every shipped surface that states, or could state, a model count. */
 const COPY_FILES = [
   "components/structured-data.tsx",
-  "components/templates/axis/pricing.tsx",
-  "components/templates/axis/faq-data.ts",
+  "components/marketing/pricing.tsx",
+  "components/marketing/faq-data.ts",
   "public/llms-full.txt",
 ];
 

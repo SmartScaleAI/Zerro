@@ -2,26 +2,29 @@
 // =============================================================================
 // eval-models.mjs — standalone model A/B harness for Zerro recordings.
 // =============================================================================
-// Compares chat/vision models on a REAL recording without the app, Supabase,
-// JWTs, or credits. It replicates the production pipeline faithfully:
+// Compares chat/vision models on a REAL recording without the app, using your
+// own provider keys. It replicates the app's generation pipeline faithfully:
 //   1. Transcribes the recording's audio with whisper-1 (verbose_json,
-//      segment granularity) — same request as the BYOK/Managed paths.
-//   2. Composes the EXACT server-owned system prompt (the locked v2 text,
-//      extracted at run time from Scripts/artifact-eval/prompt-v2.md).
+//      segment granularity) — same request as the app.
+//   2. Composes the EXACT locked system prompt (the v2 text, extracted at
+//      run time from Scripts/artifact-eval/prompt-v2.md).
 //   3. Interleaves frames + transcript chronologically with the
 //      frame-before-speech tiebreak and [M:SS] tags — same algorithm as
-//      interleave.ts / InterleavedTimeline.swift.
+//      InterleavedTimeline.swift (and the archived interleave.ts).
 //   4. Sends the identical payload to each requested model (OpenAI or
-//      Gemini wire format, matching providers/openai.ts / gemini.ts).
+//      Gemini wire format, matching the app's provider requests and the
+//      archived providers/openai.ts / gemini.ts).
 //   5. Writes side-by-side outputs + token/cost/latency to an output dir.
 //
-// KEEP IN SYNC (read-only mirrors — if these change upstream, update here):
+// KEEP IN SYNC (read-only mirrors; the app's Swift pipeline is the live
+// counterpart — if it changes, update here):
 //   - Scripts/artifact-eval/prompt-v2.md           (prompt — READ AT RUN TIME,
-//     never copied here; the Swift and server copies are byte-identity-tested
-//     against the same mirror)
-//   - supabase/functions/generate/interleave.ts    (mmss, tiebreak, tags)
-//   - supabase/functions/generate/providers/openai.ts, gemini.ts (wire shapes)
-//   - supabase/functions/generate/cost.ts          (pricing table)
+//     never copied here; the Swift copy and the archived backend copy are
+//     byte-identity-tested against the same mirror)
+//   - Zerro/Services/InterleavedTimeline.swift     (mmss, tiebreak, tags)
+//   Archived legacy backend reference (kept for reference only, no longer
+//   runs): supabase/functions/generate/interleave.ts, providers/openai.ts,
+//   providers/gemini.ts (wire shapes), and cost.ts (pricing table).
 //
 // INPUT: a Zerro working directory (manifest.json + audio + frame JPEGs).
 // Find one by recording with the app; the working dir is cleaned up after a
@@ -72,8 +75,8 @@ import { fileURLToPath } from "node:url";
 // Typed-artifact refactor: the v1 BASE/INSTRUCT/EXPLAIN copies are gone. The
 // harness now reads the LOCKED v2 prompt from Scripts/artifact-eval/
 // prompt-v2.md (first fenced block) at run time — the same mirror the Swift
-// and server copies are byte-identity-tested against — so this file can no
-// longer drift from the deployed prompt text.
+// copy and the archived backend copy are byte-identity-tested against — so
+// this file can no longer drift from the app's prompt text.
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROMPT_MIRROR_PATH = join(SCRIPT_DIR, "artifact-eval", "prompt-v2.md");
@@ -88,11 +91,11 @@ function composedSystemPrompt() {
   return m[1];
 }
 
-// ---------- pricing (PINNED MIRROR of generate/cost.ts) ----------------------
-// Keep this a complete, 1:1 mirror of CHAT_PRICING in
-// supabase/functions/generate/cost.ts — EVERY model in the eval matrix
-// (README-eval.md) must be priced here so no run shows "unpriced". If a model
-// is added to the matrix, add it here AND in cost.ts. USD per 1M tokens; Gemini
+// ---------- pricing (mirrored from the archived generate/cost.ts) ------------
+// This table was mirrored from CHAT_PRICING in the archived legacy backend
+// (supabase/functions/generate/cost.ts, reference only; no longer runs) —
+// EVERY model in the eval matrix (README-eval.md) must be priced here so no
+// run shows "unpriced". If a model is added to the matrix, add it here. USD per 1M tokens; Gemini
 // output rates already fold in thinking tokens (we add thoughtsTokenCount into
 // outputTokens, matching the server). Anthropic output rates likewise fold in
 // any thinking tokens that ride in output_tokens.
@@ -267,7 +270,7 @@ function requireDevKey(provider) {
       "  request bursts can rate-limit your live users. Mint a separate, rate-capped\n" +
       "  development key (in its own project/workspace) and export it:\n" +
       `    export ${envVar}=...\n` +
-      "  (Production keys belong only in your deployed Supabase secrets — never here.)",
+      "  (Keep production keys out of this harness entirely.)",
   );
   process.exit(1);
 }
@@ -970,8 +973,8 @@ if (existsSync(metaPath)) {
 
 // Transcribe once, cache beside the recording.
 // Phase 6 mirror: when the manifest says the audio carried no detectable speech
-// (hasSpeech === false), skip Whisper entirely — exactly as the live BYOK and
-// Managed paths do — and run on an empty transcript (timeline = frames + OCR +
+// (hasSpeech === false), skip Whisper entirely — exactly as the app does — and
+// run on an empty transcript (timeline = frames + OCR +
 // clicks only). Additive: a manifest without the key (older extraction) defaults
 // to transcribing, the safe direction.
 const hasSpeech = manifest.hasSpeech !== false;

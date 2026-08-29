@@ -219,7 +219,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// Detected on-device AFTER processing but BEFORE any provider dispatch, so
     /// generation never ran and NOTHING was charged. Routed here rather than
     /// dispatching a call that the model would answer with `ZERRO_NO_REQUEST`
-    /// anyway — that would cost the user a credit for an unusable result. The
+    /// anyway — that would cost the user a provider call for an unusable result. The
     /// copy reads as informational ("didn't catch that — nothing was charged"),
     /// NOT a billing failure. Non-retryable: re-running the same silent clip
     /// fails identically; the fix is to record again with the mic working. The
@@ -256,13 +256,12 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// adapters' 429 branches).
     case providerQuotaExhausted
     /// The provider answered but the CONTENT was wrong: decode failures,
-    /// schema drift, empty content, the proxy's `malformedResponse` /
-    /// `inputRejected`. These mean our contract with the provider broke —
+    /// schema drift, empty content. These mean our contract with the provider broke —
     /// an engineering signal, reported to the error tracker. User-facing copy is
     /// shared with `.providerUnavailable` on purpose: the user can't act
     /// on the distinction; what matters is "try again later".
     case providerError
-    /// The provider (or the managed proxy) is having an outage: 5xx,
+    /// The provider is having an outage: 5xx,
     /// 502/503, transport-level URLError weather that isn't offline-class.
     /// Third-party weather, NOT a Zerro bug — excluded from error-tracker capture
     /// so a regional OpenAI outage can't flood the dashboard (Phase 13B
@@ -270,8 +269,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// as `.providerError`.
     case providerUnavailable
     /// The generation hit the provider's output-token limit and was cut off
-    /// before finishing (BYOK `PromptGenerationError.truncated`; Managed
-    /// `ManagedGenerationError.responseTruncated` via the server's 422). The
+    /// before finishing (`PromptGenerationError.truncated`). The
     /// partial output is withheld rather than rendered, because a cut-off
     /// response can carry an unterminated `<<<ZERRO_ARTIFACT` fence that would
     /// otherwise leak into the pill as raw wire syntax
@@ -283,59 +281,13 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// not a bug to triage).
     case responseTooLong
     /// A locally-stored artifact (frame JPEG, audio.m4a) could not be read
-    /// off disk when building the provider request — the BYOK services
-    /// wrap this in their `.network` case, and the managed client surfaces
-    /// it as `ManagedGenerationError.outputUnreadable`. Local I/O on
+    /// off disk when building the provider request — the provider services
+    /// wrap this in their `.network` case. Local I/O on
     /// files Zerro itself wrote, so it IS reported to the error tracker, under its
     /// own errorCode rather than polluting the provider or processing
     /// buckets. (Out-of-space is detected earlier and routes to
     /// `.diskFull`.)
     case outputUnreadable
-    /// F-07 — the managed client's pre-upload size fuse tripped: the
-    /// recording's audio or encoded payload exceeds the server's `/generate`
-    /// input limit, so NOTHING was uploaded and nothing was charged
-    /// (`ManagedGenerationError.payloadTooLarge`). A real recording (3-minute
-    /// cap, bounded frames) can't produce this, so tripping it means the
-    /// pipeline mis-sized something — reported to the error tracker. NOT
-    /// retryable: the same payload fails identically; the copy points at a
-    /// shorter recording.
-    case recordingTooLarge
-
-    // Phase E — Managed proxy failures
-    /// Managed: the month's credits are spent and a recording WAS captured — the
-    /// post-generation 402, with the processed recording held on disk. The copy
-    /// is finish/resume-oriented ("…finish this recording", "…this recording stay
-    /// available") and the pill is the `.paidBlockResume` Discard/Upgrade card so
-    /// the user can pay and continue the SAME recording. Non-punitive — the user
-    /// keeps library access. NOT retryable (another attempt fails identically
-    /// until credits reset or the plan upgrades). For the record-START block
-    /// (nothing captured yet) use `.outOfCreditsAtStart` instead.
-    case outOfCredits
-    /// Managed: credits are spent and the user tried to START a new recording —
-    /// the record-start PRE-FLIGHT block, before anything is captured. Split from
-    /// `.outOfCredits` so the copy is start-oriented (no "finish this recording" /
-    /// "this recording stay available") and the presentation is the paywall-routed
-    /// "Add Credits" pill rather than the Cancel/Retry or Discard/Upgrade cards —
-    /// there is no recording to retry or resume. NOT retryable, and NOT a
-    /// `PaidBlockReason` (nothing to hold/resume). Set only by
-    /// `presentPreflightBlock`.
-    case outOfCreditsAtStart
-    /// Managed: the subscription is no longer active (cancelled/expired, or the
-    /// session resolved to nothing — `generate` returned 403/404). Routes the
-    /// user back toward the paywall on their next record attempt; the
-    /// entitlement layer drops them out of `.managed` on the next refresh.
-    case subscriptionInactive
-
-    // Phase F — trial server-funded credits
-    /// Trial: the user (mid-trial, no own OpenAI key) tried to generate but
-    /// hasn't verified an email yet, OR the trial token was rejected/expired and
-    /// needs re-verifying. Non-punitive — the recording is discarded and the
-    /// capture sheet is the way forward; the next record attempt re-offers it.
-    case trialVerificationRequired
-    /// Trial: the server-funded trial credits are spent (`generate` returned
-    /// 402). The trial is over (one of the two expiry conditions) — the next
-    /// record attempt routes to the paywall. Non-punitive, non-retryable.
-    case trialCreditsExhausted
 
     // Phase 6 (Local Whisper) — on-device transcription prerequisite
     /// On-device transcription is required (engine `.local`, or `.auto` with no
@@ -372,13 +324,11 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
              .displayUnavailable, .displayChanged,
              .processingFailed, .recordingTooShort, .diskFull,
              .noInputCaptured,
-             .outputUnreadable, .recordingTooLarge,
+             .outputUnreadable,
              .apiKeyMissing, .apiAuth,
              .localModelUnavailable,
              .providerQuotaExhausted,
-             .responseTooLong,
-             .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
-             .trialVerificationRequired, .trialCreditsExhausted:
+             .responseTooLong:
             return false
         }
     }
@@ -386,7 +336,7 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
     /// Config-type failures are fixed in SETTINGS, not by retrying or re-recording:
     /// the failure pill routes its PRIMARY button to open Settings at this pane
     /// instead of "Retry" / reopen-area-selector. All three are non-`isRetryable`
-    /// and land on Account & Billing, where the API-key + Transcription controls
+    /// and land on API Keys & License, where the API-key + Transcription controls
     /// live. `nil` for every other reason (pill behavior unchanged).
     var settingsDeepLink: SettingsCategory? {
         switch self {
@@ -447,18 +397,6 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response was too long to finish. Try a shorter recording."
         case .outputUnreadable:
             return "Couldn\u{2019}t process the recording."
-        case .recordingTooLarge:
-            return "This recording is too large to send. Try a shorter recording."
-        case .outOfCredits:
-            return "Not enough credits to finish this recording. Top up from the menu bar, or wait for your monthly reset. Your library stays open."
-        case .outOfCreditsAtStart:
-            return "You\u{2019}re out of credits. Top up to start a new recording."
-        case .subscriptionInactive:
-            return "Your subscription isn\u{2019}t active right now. Check Billing in Settings."
-        case .trialVerificationRequired:
-            return "Verify your email to use your free trial generations."
-        case .trialCreditsExhausted:
-            return "You\u{2019}ve used all your free trial credits. Subscribe or add your own API keys to keep going."
         }
     }
 
@@ -492,12 +430,6 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
         case .providerUnavailable:       return "Service unavailable"
         case .responseTooLong:           return "Response too long"
         case .outputUnreadable:        return "Couldn\u{2019}t read result"
-        case .recordingTooLarge:         return "Recording too large"
-        case .outOfCredits:              return "Out of credits"
-        case .outOfCreditsAtStart:       return "Out of credits"
-        case .subscriptionInactive:      return "Subscription inactive"
-        case .trialVerificationRequired: return "Verify your email"
-        case .trialCreditsExhausted:     return "Free trial used up"
         }
     }
 
@@ -558,18 +490,6 @@ public enum RecordingFailureReason: Equatable, CaseIterable {
             return "The response grew too long to finish. Try a shorter recording, or one focused on a single change, so it can complete."
         case .outputUnreadable:
             return "Zerro couldn\u{2019}t read the result that came back from the service. Press Retry to run your saved recording again."
-        case .recordingTooLarge:
-            return "This recording\u{2019}s audio and frames exceed the upload limit, so nothing was sent and nothing was charged. Record a shorter session, or one focused on a single change, and try again."
-        case .outOfCredits:
-            return "You\u{2019}re out of credits to finish this recording. Top up from the menu bar or wait for your monthly reset. Your library and this recording stay available."
-        case .outOfCreditsAtStart:
-            return "You\u{2019}re out of credits. Top up from the menu bar or wait for your monthly reset to start a new recording."
-        case .subscriptionInactive:
-            return "Your subscription isn\u{2019}t active right now, so this recording can\u{2019}t be generated. Reactivate under Settings \u{203A} Billing, then try again."
-        case .trialVerificationRequired:
-            return "Verify your email to unlock your free trial generations. Check your inbox for the verification link, then start a new recording."
-        case .trialCreditsExhausted:
-            return "You\u{2019}ve used all your free trial generations. Subscribe, or add your own API keys under Settings, to keep generating results."
         }
     }
 }
@@ -604,14 +524,6 @@ final class AppState {
             // dev tail.
             if case .processing = oldValue, state != .processing {
                 stopThinkingRotation()
-            }
-            // M5: a delivered result (including a resumed paid generation that
-            // succeeded) no longer needs the held-recording pointer. Clearing on
-            // every `.done` also reaps any stale pending record left by a normal
-            // success. Removes the UserDefaults pointer + the marker; the working
-            // dir stays for the normal result lifecycle (next record / dismiss).
-            if case .done = state {
-                pendingPaidStore.clear()
             }
             // I-02: release anything parked on the next return to idle — e.g.
             // a Sparkle install-and-relaunch postponed mid-recording or
@@ -683,10 +595,9 @@ final class AppState {
     /// device / output mode) and handed to the processing pipeline in
     /// `runProcessing`, so a Settings change applies to the next recording.
     /// Defaults to the privacy-on config default for call sites that don't pass
-    /// one (tests, menu-bar paths). F-04: this is the EFFECTIVE flag — the
-    /// user's toggle FLOORED to ON whenever generation routes through Zerro's
-    /// servers (see `effectiveRedactSecrets`), so the toggle can only loosen
-    /// the BYOK path, never a third-party upload.
+    /// one (tests, menu-bar paths). The user's toggle governs redaction
+    /// directly — frames only ever egress to the user's own provider, on
+    /// their own key.
     var recordingRedactSecrets: Bool = ProcessingConfig.redactSecretsDefault
 
     /// Multi-model: the generation model for THIS recording — the capture
@@ -764,8 +675,7 @@ final class AppState {
 
     /// The client-resolved anchors for THIS dev recording (M4 deixis + M5 OCR/
     /// marker/client-confidence). Builds the prompt and the review card's target
-    /// label list. Empty for a normal recording or a managed dev recording (no
-    /// client resolver without the 2-call). Rendered by the bridge → not
+    /// label list. Empty for a normal recording. Rendered by the bridge → not
     /// observation-ignored is unnecessary; the pill reads a derived summary.
     @ObservationIgnored var devResolvedAnchors: [ResolvedDeixisAnchor] = []
     /// The model's structured anchors parsed from the generation response (M5).
@@ -840,7 +750,7 @@ final class AppState {
 
     /// Typed-artifact refactor (Phase 4): the §2 parse of `generatedPrompt` —
     /// chat text plus at most one typed artifact. Set alongside
-    /// `generatedPrompt` on BOTH generation paths (Managed and BYOK) and
+    /// `generatedPrompt` when a generation lands and
     /// reset wherever it is. The pill's rendering shim and the Copy button's
     /// per-type payload read this; `generatedPrompt` stays the raw fallback.
     var output: Output?
@@ -877,22 +787,6 @@ final class AppState {
     /// RecordingSession.abandon.)
     var stoppedBySleep: Bool = false
 
-    /// Multi-model 6B — the SERVER-reported spend of the result currently
-    /// shown: `(credits_charged, credits_remaining)` from the `/generate` 200
-    /// (D2). Drives the result pill's "−N credits · M left" toast line.
-    /// `charged` is exact: the server METERS the real cost of each generation
-    /// (an idempotent replay reports the original charge), so this is never
-    /// derived from any local per-model number. `nil` for BYOK/local results,
-    /// on a pre-D2 backend, and outside `.done`; reset wherever `generatedPrompt`
-    /// is.
-    var lastGenerationCharge: GenerationCharge?
-
-    /// The toast payload, as a value type so the pill stays a pure renderer.
-    struct GenerationCharge: Equatable {
-        let charged: Int
-        let remaining: Int
-    }
-
     // MARK: Recents
     //
     // Phase 11: history moved off AppState onto a dedicated
@@ -903,23 +797,13 @@ final class AppState {
 
     @ObservationIgnored weak var recentPromptStore: RecentPromptStore?
 
-    // Phase E (billing): the entitlement source of truth and the Managed proxy
-    // client, wired by `ZerroApp.init` (same lifetime + weak-ref contract as
-    // `permissions` / `recentPromptStore`). The generation pipeline reads
-    // `entitlements.routesThroughManagedProxy` to pick its single branch point:
-    // `.managed` → upload audio+frames to the proxy (no local transcription);
-    // everything else → the direct BYOK OpenAI path. A `nil` entitlements (not
-    // yet wired, or in a unit test) keeps the existing local path — fail-safe.
+    // Billing: the entitlement source of truth, wired by `ZerroApp.init`
+    // (same lifetime + weak-ref contract as `permissions` /
+    // `recentPromptStore`). Generation always runs the local/provider-key
+    // path; the store only drives the record-start gate and the paywall
+    // trigger. A `nil` entitlements (not yet wired, or in a unit test)
+    // keeps everything local — fail-safe.
     @ObservationIgnored weak var entitlements: EntitlementStore?
-    @ObservationIgnored var managedProxyClient: ManagedProxyClient?
-
-    // M5 (resume after purchase): owner of the persisted "pending paid
-    // generation" pointer. When generation is blocked for a paid reason
-    // (trial credits exhausted / out of credits / inactive subscription) the
-    // processed recording is held so the failure pill can offer Continue.
-    // Owned (not weak) and `var` so tests can inject an ephemeral
-    // `UserDefaults`-backed store; the default uses `.standard`.
-    @ObservationIgnored var pendingPaidStore = PendingPaidGenerationStore()
 
     // Dev Mode (quit-recovery): owner of the durable on-disk marker that records
     // an in-flight dispatch's git checkpoint, so a quit (⌘Q / kill -9) mid-edit
@@ -945,11 +829,10 @@ final class AppState {
     @ObservationIgnored var devRecoveryRevertFailed = false
 
     // Phase 6 (multi-model): the preferences store, wired by `ZerroApp.init`
-    // (same lifetime + weak-ref contract as `entitlements`). The proxy
+    // (same lifetime + weak-ref contract as `entitlements`). The
     // generation path reads `selectedModelID` fresh at request time — the same
     // fresh-read pattern as `redactSecrets` — so a picker change applies to
-    // the next generation. `nil` (tests) falls back to the registry default,
-    // which matches what the server resolves for an absent field (D1).
+    // the next generation. `nil` (tests) falls back to the registry default.
     @ObservationIgnored weak var preferences: PreferencesStore?
 
     /// §7 — presents the Unrestricted record-time warning and returns the user's
@@ -961,42 +844,21 @@ final class AppState {
         DevUnrestrictedWarning.runModal()
     }
 
-    // Phase F (billing): the server-funded trial-credits layer, wired by
-    // `ZerroApp.init`. Used as the proxy's token provider for a trial generation
-    // and read for trial-credit display. Weak — owned by ZerroApp @State for the
-    // app's lifetime (same contract as `entitlements`). A `nil` trialCredits
-    // means the trial proxy path is unavailable and generation falls back to
-    // local (fail-safe), exactly like a `nil` entitlements.
-    @ObservationIgnored weak var trialCredits: TrialCreditsManager?
-
-    /// Anonymous BYOK-trial successful-generation counter. The direct provider
-    /// path remains unchanged; only terminal successful recording UUIDs reach
-    /// this service.
-    @ObservationIgnored weak var byokTrial: BYOKTrialManager?
-
-    /// Phase 4 (Local Whisper) — whether the user can run a generation ENTIRELY
-    /// on their own dime: they hold at least one CHAT provider key AND have a
-    /// usable transcription path for their `sttEngine` (a local model installed,
-    /// or an OpenAI key for cloud Whisper). Decides whether a TRIAL user funds
-    /// generation themselves (their keys/model) or falls back to server credits.
-    ///
-    /// This GENERALIZES the old OpenAI-only `hasOwnAPIKeyProvider`: pre-Local-
-    /// Whisper, "own key" had to mean an OpenAI key (the only transcription
-    /// path), so a Claude/Gemini-only keyholder routed through server credits.
-    /// Now a Claude-only user WITH the on-device model installed has a fully
-    /// local path and funds it themselves. Until a model exists in production
-    /// (Phase 5+), `canResolve(.auto, false, false)` is false, so this stays
-    /// byte-identical to the old behavior for a non-OpenAI keyholder.
+    /// Whether the user can run a generation ENTIRELY on their own setup:
+    /// they hold at least one CHAT provider key AND have a usable
+    /// transcription path for their `sttEngine` (a local model installed, or
+    /// an OpenAI key for cloud Whisper). The record-start pre-flight consults
+    /// it so a missing prerequisite is surfaced before a wasted capture.
     ///
     /// Optional closure (the Phase-3 `resolveTranscriptionService` pattern) so
     /// tests drive routing without a Keychain/disk; `nil` (the default) uses
-    /// `defaultCanGenerateLocally`. Both entitlement readers consult it through
+    /// `defaultCanGenerateLocally`. The entitlement reader consults it through
     /// `canGenerateLocally()`.
     @ObservationIgnored var canGenerateLocallyProvider: (() -> Bool)?
 
     /// Resolves `canGenerateLocallyProvider` (or its built-in default) — the
-    /// capability predicate the entitlement readers pass to
-    /// `EntitlementStore.generationRoute` / `preflightBlock`. Internal (not
+    /// capability predicate the entitlement reader passes to
+    /// `EntitlementStore.preflightBlock`. Internal (not
     /// private) so `ZerroApp`'s pre-flight gate can call it too (it can't reach
     /// the private default).
     func canGenerateLocally() -> Bool {
@@ -1085,8 +947,8 @@ final class AppState {
     /// Phase 6 (Local Whisper): the ONE shared on-device-model download/state
     /// manager (created in `ZerroApp.init`, the same instance the Settings
     /// Transcription section and the first-key consent prompt drive). Weak, wired
-    /// by `ZerroApp.init` — same lifetime + weak-ref contract as `entitlements` /
-    /// `trialCredits`. The transcription step reads its `state` (via
+    /// by `ZerroApp.init` — same lifetime + weak-ref contract as
+    /// `entitlements`. The transcription step reads its `state` (via
     /// `currentLocalModelState()`) to decide whether to WAIT for an in-flight
     /// download before resolving the STT service. AppState only READS `state`; it
     /// never touches the manager's `stateDidChange` (ZerroApp owns that for the
@@ -1337,27 +1199,6 @@ final class AppState {
         (freeBytes ?? 0) < minimumFreeBytesToRecord
     }
 
-    /// F-04 — the EFFECTIVE per-recording redaction flag: the user's Settings
-    /// toggle, FLOORED to ON whenever generation routes through Zerro's
-    /// servers (Managed subscription, or a trial holding a live token — the
-    /// same `EntitlementStore.routesThroughManagedProxy` signal the generation
-    /// routing reads). Frames that egress to a third party are always
-    /// redacted; the toggle can only loosen the BYOK path, where the user's
-    /// own key talks straight to their own provider. Evaluated at
-    /// `startRecording` time because the frames are baked during processing,
-    /// before the routing branch runs. Fail-safe: an unavailable routing
-    /// signal (`nil` — no entitlement store wired) errs toward redaction.
-    /// (`routesThroughManagedProxy` is deliberately a SUPERSET of the actual
-    /// dispatch decision — a self-funding trial user whose generation ends up
-    /// running locally still gets the floor. Over-redaction is the safe
-    /// direction.) Pure, so the truth table is unit-testable.
-    nonisolated static func effectiveRedactSecrets(
-        toggle: Bool,
-        routesThroughManagedProxy: Bool?
-    ) -> Bool {
-        toggle || (routesThroughManagedProxy ?? true)
-    }
-
     /// Wired by ZerroApp.init to the shared `PermissionsManager`. AppState
     /// uses it to start/stop the mid-session TCC monitor around an active
     /// recording so a revocation in System Settings turns into a clean
@@ -1490,10 +1331,6 @@ final class AppState {
         if let priorWorkingDir = processedRecording?.workingDirectory {
             Task.detached(priority: .utility) { WorkingDirectory.remove(at: priorWorkingDir) }
         }
-        // M5: a brand-new recording supersedes any held paid-block recording —
-        // clear its persisted pointer (its working dir is the prior one removed
-        // just above) so we never restore or resume a stale recording.
-        pendingPaidStore.clear()
         isResultExpanded = false
         activeSelection = selection
         // H-07: pin the pill's target display for this recording's whole
@@ -1501,14 +1338,9 @@ final class AppState {
         // no-selection record captures the primary display, which is what
         // RecordingSession's resolveDisplay pairs with NSScreen.main.
         recordingDisplayID = selection?.screenDisplayID ?? NSScreen.main?.displayID
-        // F-04: floor the toggle to ON when this recording's frames will
-        // egress to Zerro's servers (Managed/trial) — the toggle only governs
-        // the BYOK path. Evaluated here because the frames are redacted at
-        // processing time, before the generation routing branch runs.
-        recordingRedactSecrets = Self.effectiveRedactSecrets(
-            toggle: redactSecrets,
-            routesThroughManagedProxy: entitlements?.routesThroughManagedProxy
-        )
+        // The user's Settings toggle governs redaction directly: frames only
+        // ever egress to the user's own provider, on their own key.
+        recordingRedactSecrets = redactSecrets
         recordingModelID = modelID
         // Dev Mode: carry the toolbar's agent + folder into the recording. nil
         // for a normal recording, which leaves the dev path entirely inert.
@@ -1521,7 +1353,6 @@ final class AppState {
         generatedPrompt = nil
         output = nil
         attachedContextBlock = nil
-        lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
         failureRetryAttempts = 0
@@ -1708,44 +1539,25 @@ final class AppState {
     }
 
     /// Surfaces a record-start PRE-FLIGHT block: a failure that is knowable
-    /// before the user records (out of credits, inactive subscription, missing
-    /// BYOK key) is shown NOW with the same copy the post-recording path uses,
+    /// before the user records (a missing provider key / transcription path)
+    /// is shown NOW with the same copy the post-recording path uses,
     /// instead of after a wasted capture. Called by the gate (`handleHotkey`)
     /// only when no recording is in flight (it has already returned for
     /// recording/processing/confirming states), so this just sets the failure
     /// state directly — the same mechanism as `handleMidSessionRevocation`.
     ///
-    /// Returns the surfaced reason (for the gate's log line). For an inactive
-    /// subscription it also kicks the async, non-blocking entitlement refresh so
-    /// a confirmed-lapsed subscription drops out of `.managed` for the next
-    /// attempt — exactly as the post-recording `.subscriptionInactive` path does.
+    /// Returns the surfaced reason (for the gate's log line).
     @discardableResult
     func presentPreflightBlock(_ block: EntitlementStore.PreflightBlock) -> RecordingFailureReason {
         let reason: RecordingFailureReason
         switch block {
-        // Record-START block: nothing is captured yet, so this gets the
-        // start-oriented `.outOfCreditsAtStart` (paywall-routed "Add Credits"
-        // pill, no Retry/Resume) — NOT the post-capture `.outOfCredits` resume
-        // copy. The paywall trigger below stays `.outOfCredits` so the top-up
-        // paywall copy/analytics are unchanged.
-        case .outOfCredits: reason = .outOfCreditsAtStart
-        case .subscriptionInactive: reason = .subscriptionInactive
         case .apiKeyMissing: reason = .apiKeyMissing
         }
         // Tier 3 analytics: stash the gate reason so a paywall opened off this
         // block carries the right `paywall_shown.trigger` (read + cleared in
         // PaywallView). Harmless when the failure pill is shown instead.
-        entitlements?.paywallTrigger = {
-            switch block {
-            case .outOfCredits: return .outOfCredits
-            case .subscriptionInactive: return .subscriptionInactive
-            case .apiKeyMissing: return .apiKeyMissing
-            }
-        }()
+        entitlements?.paywallTrigger = .apiKeyMissing
         state = .failed(reason: reason)
-        if block == .subscriptionInactive, let entitlements {
-            Task { await entitlements.refreshManagedEntitlement() }
-        }
         return reason
     }
 
@@ -1819,7 +1631,6 @@ final class AppState {
         generatedPrompt = nil
         output = nil
         attachedContextBlock = nil
-        lastGenerationCharge = nil
         resultHadNoNarration = false
         stoppedBySleep = false
         pendingRecoveryURL = nil
@@ -1874,12 +1685,6 @@ final class AppState {
         devFailure = nil
         devCheckpoint = nil
         devCheckpointService = nil
-        // M5: every teardown path that runs through here (cancel, reset-to-idle,
-        // mid-session revocation, the cancelled/interrupted session finishes) is
-        // a "no longer holding this" point — reap any persisted paid-block
-        // pointer + marker. The working dir itself is removed by the call sites
-        // that own disk cleanup (they key on `processedRecording.workingDirectory`).
-        pendingPaidStore.clear()
     }
 
     /// Tears down the live session and discards the partial file.
@@ -1969,7 +1774,7 @@ final class AppState {
     ///   narrow window where state is still active but `lifecycleState` is
     ///   `.finishing`), the abandon's `== .running` guard makes this a safe
     ///   no-op — same double-fire convergence as sleep.
-    /// • `.processing`: cancel the in-flight pipeline / proxy work (its awaits
+    /// • `.processing`: cancel the in-flight pipeline work (its awaits
     ///   are cancellation-aware) and DELETE the source `.mov` synchronously. A
     ///   .processing-stage recording is a post-recording artifact the user is
     ///   abandoning, NOT a recoverable recording, and only a surviving `.mov`
@@ -1977,10 +1782,7 @@ final class AppState {
     ///   (`orphanedRecordings()` matches `.mov` only — the `zerro-work-*`
     ///   working dir is never offered). Deletion is synchronous (not the usual
     ///   detached task) because `.terminateNow` may exit before a detached
-    ///   delete runs. We accept that an in-flight proxy generation already sent
-    ///   to the server may spend a credit server-side without the user
-    ///   receiving the result — a rare, narrow case; blocking quit to salvage it
-    ///   is the worse tradeoff.
+    ///   delete runs.
     /// • everything else: nothing to do. In particular a `.confirmingRecovery`
     ///   offer open at quit must NOT delete its un-acted-on orphan — left
     ///   untouched, it is simply re-offered on the next launch.
@@ -2206,10 +2008,10 @@ final class AppState {
     /// Detect a recording that a prior/just-interrupted session abandoned for
     /// sleep (`RecordingSession.abandon` left a fragmented `.mov` on
     /// disk WITHOUT finalizing it — readable up to its last flushed fragment).
-    /// Instead of auto-generating (rev 2) — which would silently spend a
-    /// possibly-trial credit on a recording the user may have been abandoning —
+    /// Instead of auto-generating (rev 2) — which would silently spend the
+    /// user's provider budget on a recording they may have been abandoning —
     /// we OFFER it: enter `.confirmingRecovery` and let the user choose Generate
-    /// / Discard / dismiss. Generation (the credit spend) happens only on an
+    /// / Discard / dismiss. Generation (the provider call) happens only on an
     /// explicit Generate (`resolveRecovery`).
     ///
     /// Double-recovery / preemption safety: gated on `state == .idle`, so a wake
@@ -2250,7 +2052,7 @@ final class AppState {
         }
         // One offer at a time: clear the OTHER orphans + work-dir junk now,
         // keeping only the one we're about to offer. Then OFFER (do not
-        // auto-generate). The credit is spent only if the user picks Generate.
+        // auto-generate). The provider call runs only if the user picks Generate.
         Task.detached(priority: .utility) { WorkingDirectory.sweep(keeping: newest) }
         Log.breadcrumb(category: .stateMachine, message: "offering sleep-interrupted recording recovery")
         pendingRecoveryURL = newest
@@ -2273,7 +2075,7 @@ final class AppState {
     /// Resolve the recovery offer. `generate == true` runs the recovered
     /// recording through the normal finished-recording path (processing →
     /// generation → result, with the "recovered after sleep" note) — this is
-    /// where the credit/API call is spent, now with explicit consent. `false`
+    /// where the API call is spent, now with explicit consent. `false`
     /// (Discard) deletes the orphan and returns to idle, spending nothing.
     /// No-op outside `.confirmingRecovery`. Discard (and any non-Generate
     /// dismissal of the pill, which the UI routes here) deletes the orphan —
@@ -2609,29 +2411,19 @@ final class AppState {
     /// `.transcribing` while Whisper runs; generation then runs straight
     /// through (the v1 mode-switch pause is gone with modes themselves).
     /// The `.processing → .done` transition fires from `runGeneration`.
-    /// Phase E — the SINGLE routing branch point between the two generation
-    /// architectures. A `.managed` user uploads the recording's audio + frames
-    /// to the proxy, which transcribes + composes server-side; everyone else
-    /// (BYOK / trial-on-own-key) runs the existing fully-local path (Whisper +
-    /// interleaving + direct OpenAI). Reading the decision off
-    /// `EntitlementStore.routesThroughManagedProxy` here — rather than inline in
-    /// the pipeline — keeps the two paths from entangling, and crucially keeps
-    /// the Managed path from DOUBLE-TRANSCRIBING (the server does Whisper).
-    ///
-    /// Fail-safe: if entitlements/proxy aren't wired (unit tests, or a managed
-    /// state without a proxy), fall back to the local path rather than failing.
+    /// Every generation — normal and Dev Mode — runs the local pipeline on
+    /// the user's own provider keys; there is no other route.
     ///
     /// Internal (not private) so the Layer 0 no-input gate test can drive this
-    /// routing entry point directly — asserting a no-input recording is skipped
-    /// before dispatch — without a live proxy/entitlement stack (like the G-01
+    /// entry point directly — asserting a no-input recording is skipped
+    /// before dispatch — without a live entitlement stack (like the G-01
     /// teardown tests reach `devAgentStarted`).
     func runPromptGeneration(processed: ProcessedRecording) {
         // Layer 0 — the local no-input gate. A recording with no on-device signal
         // a request could come from (silent audio AND no clicks) would be a
         // guaranteed `ZERRO_NO_REQUEST`, so short-circuit it HERE — before the
-        // `generation_started` event, route resolution, or any provider/local
-        // dispatch — so an empty recording costs the user nothing (no credit) and
-        // us nothing (no round-trip). One insertion point covers every route. See
+        // `generation_started` event or any provider dispatch — so an empty
+        // recording costs the user nothing (no provider call). See
         // `RecordingInputGate` for why this never drops a real request.
         if RecordingInputGate.shouldSkipGeneration(
             hasSpeech: processed.hasSpeech,
@@ -2640,59 +2432,24 @@ final class AppState {
             handleNoInputCaptured(processed: processed)
             return
         }
-        // Phase F made this a four-way decision (was Managed-vs-local in Phase E).
-        // The policy lives in `EntitlementStore.generationRoute`; this is just the
-        // mechanism. A nil entitlements falls back to local (fail-safe).
-        let route = entitlements?.generationRoute(canGenerateLocally: canGenerateLocally()) ?? .local
         // Tier 1 analytics: mark the start (for latency_ms on the outcome) and
-        // fire the funnel-entry event — but only for the routes that actually
-        // dispatch a request. `.trialNeedsEmail` dispatches nothing (it routes
-        // to email capture), so it gets no start event and no latency clock.
-        if let analyticsRoute = Self.analyticsRoute(for: route) {
-            let model = recordingModelID ?? preferences?.selectedModelID ?? ModelRegistry.defaultModelID
-            generationStartInstant = ContinuousClock.now
-            generationModelID = model
-            Analytics.capture("generation_started", [
-                "model": model,
-                "route": analyticsRoute,
-                "provider": ModelRegistry.entry(id: model)?.provider.rawValue ?? "unknown",
-            ])
-        }
-        switch route {
-        case .managedProxy:
-            if let proxy = managedProxyClient {
-                // Managed subscription → proxy with the subscription session token
-                // (the proxy's default provider).
-                runProxyGeneration(processed: processed, proxy: proxy, tokenProvider: nil, isTrial: false)
-            } else {
-                runLocalPromptGeneration(processed: processed)
-            }
-        case .trialProxy:
-            if let proxy = managedProxyClient, let trial = trialCredits {
-                // Trial with a live token → SAME proxy, trial token.
-                runProxyGeneration(processed: processed, proxy: proxy, tokenProvider: trial, isTrial: true)
-            } else {
-                runLocalPromptGeneration(processed: processed)
-            }
-        case .trialNeedsEmail:
-            // Trial, no own key, not verified yet. Email verification is now a
-            // REQUIRED onboarding step (Phase F revised), so for a normally
-            // onboarded user this never happens. It's reachable only by an
-            // existing user (onboarded before the email step) or one who took the
-            // infra-failure fallback — surface a gentle, non-abrupt failure that
-            // points them to the Settings/Billing "verify email" affordance. NO
-            // mid-task popup.
-            state = .failed(reason: .trialVerificationRequired)
-        case .local:
-            runLocalPromptGeneration(processed: processed)
-        }
+        // fire the funnel-entry event.
+        let model = recordingModelID ?? preferences?.selectedModelID ?? ModelRegistry.defaultModelID
+        generationStartInstant = ContinuousClock.now
+        generationModelID = model
+        Analytics.capture("generation_started", [
+            "model": model,
+            "route": "byok",
+            "provider": ModelRegistry.entry(id: model)?.provider.rawValue ?? "unknown",
+        ])
+        runLocalPromptGeneration(processed: processed)
     }
 
     /// Layer 0 skip handler — a recording the local no-input gate flagged as
     /// having nothing to act on (silent audio AND no clicks). Lands on the
     /// friendly `.noInputCaptured` pill (informational, nothing charged) and
     /// discards the working directory: there's nothing to retry or resume (no
-    /// Continue/Revert), so it must NOT be held as a pending paid generation.
+    /// Continue/Revert).
     /// Reuses the same processed-recording discard teardown the cancel/reset
     /// paths use — a best-effort detached delete keyed on the working dir, then
     /// `resetTransientRecordingState()` to clear the in-memory ref. Runs entirely
@@ -2709,25 +2466,13 @@ final class AppState {
         ])
         // Discard the working dir — nothing to retry/resume. Same best-effort
         // detached delete the cancel/reset discard paths use; the in-memory ref is
-        // cleared synchronously by `resetTransientRecordingState()` below so it's
-        // never resumed as a pending paid generation.
+        // cleared synchronously by `resetTransientRecordingState()` below.
         let workingDirectory = processed.workingDirectory
         Task.detached(priority: .utility) { WorkingDirectory.remove(at: workingDirectory) }
         resetTransientRecordingState()
         state = .failed(reason: .noInputCaptured)
     }
 
-    /// Phase E/F — the proxy generation path (Managed subscription OR trial).
-    /// Uploads audio + frames (NEVER a transcript or system prompt — the
-    /// server owns those, §6.1; since the typed-artifact refactor there is no
-    /// mode either) to the proxy and lands the returned result on the same
-    /// `.done` tail the local path uses (pill + history unchanged). Does NOT
-    /// run local Whisper — the server transcribes on this path.
-    ///
-    /// `tokenProvider` nil = the Managed subscription token (proxy default);
-    /// non-nil = the trial token (`isTrial == true`). The two differ only in how
-    /// the post-success credit balance is applied and how failures are mapped;
-    /// the upload + result tail are identical.
     // MARK: - Processing pill label + elapsed timer
 
     /// Starts the global elapsed timer for the `.processing` state. Driven
@@ -2836,399 +2581,6 @@ final class AppState {
             return "\(seconds)s"
         }
         return "\(seconds / 60)min"
-    }
-
-    private func runProxyGeneration(
-        processed: ProcessedRecording,
-        proxy: ManagedProxyClient,
-        tokenProvider: ProxyTokenProviding?,
-        isTrial: Bool
-    ) {
-        let audioURL = processed.workingDirectory.appendingPathComponent("audio.m4a")
-        let durationSeconds = CMTimeGetSeconds(processed.duration)
-        let label = isTrial ? "trial" : "managed"
-        processingTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            // The generation stage is one opaque round-trip: rotate witty
-            // "thinking" sayings instead of a static label, and tear the
-            // rotation down on every exit (success, failure, cancellation).
-            defer { self.stopThinkingRotation() }
-            do {
-                // One server round-trip covers upload → STT → generation; the
-                // rotating "thinking" sayings stand in for the single stage. (A
-                // Dev Mode recording is a TWO-call flow — see
-                // `runManagedDevGeneration` — but the same rotation spans both.)
-                self.startThinkingRotation()
-                Log.breadcrumb(category: .pipelineStage, message: "proxy generation started")
-                let managed: ManagedGenerationResult
-                if self.recordingIsDevMode {
-                    // Phase 2 — the managed/trial hover-deixis 2-call flow:
-                    // devTranscribe (free) → shared resolveDevAnchors → enriched
-                    // generate. Populates `devResolvedAnchors` along the way.
-                    managed = try await self.runManagedDevGeneration(
-                        processed: processed,
-                        proxy: proxy,
-                        tokenProvider: tokenProvider,
-                        audioURL: audioURL,
-                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil
-                    )
-                } else {
-                    managed = try await proxy.generate(
-                        audioURL: audioURL,
-                        frames: processed.frames,
-                        durationSeconds: durationSeconds.isFinite ? durationSeconds : nil,
-                        clicks: processed.clicks,
-                        // Phase 6: tell the server whether to bother with Whisper.
-                        // On false it short-circuits STT (empty segments) — no
-                        // transcript round-trip — and composes from
-                        // frames/OCR/clicks alone.
-                        hasSpeech: processed.hasSpeech,
-                        // Multi-model 6B: the menu-bar selection captured when
-                        // recording began, else the user's persisted selection
-                        // (registry-validated in
-                        // PreferencesStore). Selects the provider adapter
-                        // SERVER-side (charging is metered on real cost); never
-                        // steers the prompt. (Dev mode routes through
-                        // `runManagedDevGeneration` above, so this is the normal
-                        // path — no `mode`, byte-identical body.)
-                        model: self.recordingModelID
-                            ?? self.preferences?.selectedModelID
-                            ?? ModelRegistry.defaultModelID,
-                        tokenProvider: tokenProvider,
-                        // M1: the recording's stable key — reused across every
-                        // retry (here and `retryFailedPrompt`) so a
-                        // charged-but-dropped response is replayed, not re-billed.
-                        idempotencyKey: processed.idempotencyKey
-                    )
-                }
-                let result = managed.result
-                Log.promptGen.info(
-                    "\(label, privacy: .public) OK — model=\(result.usage.model, privacy: .public) in=\(result.usage.inputTokens, privacy: .public) out=\(result.usage.outputTokens, privacy: .public) prompt.count=\(result.prompt.count, privacy: .public) creditsRemaining=\(managed.creditsRemaining ?? -1, privacy: .public)"
-                )
-
-                guard self.state == .processing else { return }
-                self.acceptGenerationResult(rawPrompt: result.prompt)
-                // Phase 2 (Dev Mode): the model's structured anchors for the M6
-                // confirm gate. Prefer the server-parsed `anchors[]`; fall back to
-                // parsing the raw prompt's `zerro_anchors` block (older server /
-                // deploy skew) — the SAME parse BYOK runs. `devResolvedAnchors`
-                // (the client half) was set inside `runManagedDevGeneration`.
-                if self.recordingIsDevMode {
-                    self.devModelAnchors = managed.modelAnchors.isEmpty
-                        ? DevAnchorParser.parse(result.prompt)
-                        : managed.modelAnchors
-                }
-                // Multi-model 6B: the exact server spend for the result pill's
-                // "−N credits · M left" line (both fields or no toast — a
-                // pre-D2 backend omits credits_charged).
-                if let charged = managed.creditsCharged, let remaining = managed.creditsRemaining {
-                    self.lastGenerationCharge = GenerationCharge(charged: charged, remaining: remaining)
-                }
-                // The proxy path has no client transcript, so the no-narration
-                // note (a BYOK affordance) doesn't apply — never flag it here.
-                self.resultHadNoNarration = false
-                self.finishGenerationOrDispatch()
-                Analytics.capture("generation_succeeded", [
-                    "route": "managed",
-                    "model": self.generationModelID ?? "unknown",
-                    "artifact_type": self.output?.artifact?.type.rawValue ?? "chat",
-                    "latency_ms": self.generationLatencyMs() ?? 0
-                ])
-                Log.breadcrumb(category: .pipelineStage, message: "proxy generation completed")
-
-                // Reflect the spent credit immediately. For a subscription, also
-                // refresh the authoritative /entitlement snapshot in the
-                // background; for a trial, applying the balance recomputes the
-                // entitlement (and flips it to `.expired` once credits hit zero,
-                // for the NEXT record attempt — the current result is unaffected).
-                if let remaining = managed.creditsRemaining {
-                    let effective = self.entitlements?.applyGenerationSpend(
-                        charged: managed.creditsCharged,
-                        remaining: remaining,
-                        isTrial: isTrial
-                    ) ?? remaining
-                    // Keep the result pill's "M left" consistent with the
-                    // (possibly DEBUG-sandboxed) displayed balance.
-                    if let charged = managed.creditsCharged {
-                        self.lastGenerationCharge = GenerationCharge(charged: charged, remaining: effective)
-                    }
-                }
-                // Refresh the authoritative /entitlement snapshot in the
-                // background (subscription only). Under a DEBUG dev override this
-                // is suppressed inside the store so a pinned test balance holds.
-                if !isTrial, let entitlements = self.entitlements {
-                    Task { await entitlements.refreshManagedEntitlement() }
-                }
-            } catch {
-                guard self.state == .processing else { return }
-                let reason = isTrial
-                    ? self.trialFailureReason(from: error)
-                    : Self.managedFailureReason(from: error)
-                Log.promptGen.error("\(label, privacy: .public) generation failed: \(String(describing: reason), privacy: .public)")
-                Analytics.capture("generation_failed", [
-                    "route": isTrial ? "trial" : "managed",
-                    "reason": Self.errorCodeString(reason),
-                    "latency_ms": self.generationLatencyMs() ?? 0,
-                    "model": self.generationModelID ?? "unknown"
-                ])
-                if Self.shouldCapture(reason) {
-                    // Provider-RETURNED failures (5xx/429/422) now reach the
-                    // error tracker carrying the HTTP status + a short, bounded
-                    // server message, so they're triageable instead of an opaque
-                    // `error 0`. Those get a reason+status fingerprint so an
-                    // outage collapses into a single issue. The reasons that were
-                    // ALREADY captured here before this change (.providerError,
-                    // .outputUnreadable) have no provider HTTP detail, so they
-                    // get NO explicit fingerprint — PostHog keeps their existing
-                    // automatic grouping untouched (we only regroup the new
-                    // provider cases, not the pre-existing signal).
-                    var ctx = ["errorCode": Self.errorCodeString(reason)]
-                    let httpDetail = Self.providerHTTPDetail(from: error)
-                    if let httpDetail {
-                        ctx["providerStatus"] = String(httpDetail.status)
-                        if let body = httpDetail.body { ctx["providerMessage"] = body }
-                    }
-                    CrashReporting.capture(
-                        error,
-                        message: "Proxy generation failed",
-                        stage: "proxyGeneration",
-                        context: ctx,
-                        fingerprint: httpDetail.map {
-                            ["proxyGeneration", Self.errorCodeString(reason), String($0.status)]
-                        }
-                    )
-                }
-                // Carry the real error for the expanded failure card BEFORE
-                // mapping down to the value-less reason (decision 1).
-                self.lastFailureDetail = Self.failureDetail(from: error)
-                self.state = .failed(reason: reason)
-                // M5: if this is a PAID block (trial credits exhausted / out of
-                // credits / inactive subscription), hold the processed recording
-                // so the failure pill can offer Continue once the user pays. The
-                // recording's artifacts are still intact on disk (this catch left
-                // them in place), so resume re-runs generation with no re-record.
-                self.capturePendingPaidGenerationIfNeeded(reason: reason, processed: processed)
-                // A definitive Managed not-entitled means the subscription lapsed
-                // mid-use — recompute so the app drops out of `.managed`.
-                if !isTrial, reason == .subscriptionInactive, let entitlements = self.entitlements {
-                    Task { await entitlements.refreshManagedEntitlement() }
-                }
-            }
-        }
-    }
-
-    /// Phase 2 — the Managed/trial Dev Mode hover-deixis 2-CALL flow (handoff
-    /// Part 3). Mirrors BYOK's `runLocalPromptGeneration` dev path, differing ONLY
-    /// in where the transcript comes from (call 1, free server STT) and where
-    /// generation runs (call 2, the `/generate` edge function). The client-side
-    /// resolution (`resolveDevAnchors`), the confirm gate, and the dispatch tail
-    /// are all SHARED. Returns the call-2 result; the caller lands it on the same
-    /// `.done`/dispatch tail the single-call managed path uses.
-    ///
-    /// 1. CALL 1 `devTranscribe` → word transcript (no slot; consumes nothing,
-    ///    but X-02 places a 1-credit HOLD under the recording's idempotency key
-    ///    that call 2's settle releases — see below). Skipped when the recording
-    ///    has no speech (empty transcript → the resolver yields no anchors and
-    ///    the run degrades to click/dwell), mirroring BYOK's local Whisper skip.
-    ///    A 402 here means the spendable balance can't cover even the floor —
-    ///    it maps to the same out-of-credits UX as a call-2 402.
-    /// 2. Domain-dictionary snap (Versel→Vercel) + the SHARED `resolveDevAnchors`
-    ///    → client anchors + marked `DEIXIS REFERENCE` frames. Sets
-    ///    `devResolvedAnchors` (the client half of the M6 gate).
-    /// 3. CALL 2 `generateDev` with the PRE-SUPPLIED transcript + marked frames
-    ///    (NO audio re-upload) → `agent_prompt` + structured model anchors. The
-    ///    credit is consumed exactly once here.
-    private func runManagedDevGeneration(
-        processed: ProcessedRecording,
-        proxy: ManagedProxyClient,
-        tokenProvider: ProxyTokenProviding?,
-        audioURL: URL,
-        durationSeconds: Double?
-    ) async throws -> ManagedGenerationResult {
-        // Reset the dev anchor state for this run (mirrors the BYOK dev block);
-        // `devModelAnchors` is populated by the caller from the call-2 result.
-        self.devResolvedAnchors = []
-        self.devModelAnchors = []
-
-        let model = self.recordingModelID
-            ?? self.preferences?.selectedModelID
-            ?? ModelRegistry.defaultModelID
-
-        // CALL 1 — free word-level transcription (server STT). No speech → skip
-        // the round-trip entirely and resolve on an empty transcript, exactly as
-        // BYOK skips its local Whisper pass.
-        var transcript: Transcript
-        if processed.hasSpeech {
-            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe started")
-            transcript = try await proxy.devTranscribe(
-                audioURL: audioURL,
-                durationSeconds: durationSeconds,
-                hasSpeech: true,
-                tokenProvider: tokenProvider,
-                // X-02: the SAME per-recording key call 2 sends. The server keys
-                // the call-1 credit HOLD on it, and call 2's settle finds and
-                // releases that hold by the shared key — a distinct/suffixed key
-                // would orphan the hold until its TTL. (The server still
-                // normalizes the legacy ":dev-transcribe" suffix older shipped
-                // clients send, so this is convention alignment, not a protocol
-                // break.)
-                idempotencyKey: processed.idempotencyKey
-            )
-        } else {
-            Log.breadcrumb(category: .pipelineStage, message: "managed dev-transcribe skipped (no speech)")
-            transcript = Transcript(segments: [], fullText: "", words: [])
-        }
-
-        // Domain-dictionary snap before resolve + generation, exactly as BYOK
-        // (§11) — improves both anchor resolution and the dev prompt. Best-effort
-        // + Dev-Mode-only (an empty/seedless dictionary is a no-op).
-        if let projectURL = self.recordingProjectURL, !transcript.fullText.isEmpty {
-            let dictionary = await Task.detached { DevDomainDictionary.seed(projectURL: projectURL) }.value
-            transcript = dictionary.corrected(transcript)
-        }
-
-        // SHARED client-side resolution (Part 1) — byte-identical to BYOK.
-        let (resolved, anchorFrames) = await Self.resolveDevAnchors(
-            words: transcript.words,
-            cursorTrack: processed.cursorTrack,
-            clicks: processed.clicks,
-            sourceVideoURL: processed.sourceVideoURL,
-            baseTimestamp: processed.duration,
-            workingDirectory: processed.workingDirectory,
-            redactSecrets: self.recordingRedactSecrets
-        )
-        self.devResolvedAnchors = resolved
-
-        // Don't fire the BILLABLE call 2 if the recording was cancelled/superseded
-        // during call 1 or resolution. The catch in `runProxyGeneration` returns
-        // early when `state != .processing`, so a cancellation surfaces no failure
-        // card and — crucially — no charge.
-        guard self.state == .processing else { throw CancellationError() }
-
-        // CALL 2 — enriched generation. The pre-supplied transcript skips server
-        // STT (no double STT round-trip / charge); the marked DEIXIS frames + OCR
-        // ride as trailing frames; NO audio (it went up in call 1). Bill against
-        // call 1's SERVER-measured duration (the same one the normal managed path
-        // meters on), falling back to the local container duration when call 1 was
-        // skipped (no speech) or an older server omitted it.
-        Log.breadcrumb(category: .pipelineStage, message: "managed dev generation started")
-        let transcriptUpload = ManagedProxyClient.DevTranscriptUpload(
-            segments: transcript.segments.map {
-                ManagedProxyClient.DevTranscriptUpload.Segment(start: $0.start, end: $0.end, text: $0.text)
-            },
-            durationSeconds: transcript.durationSeconds ?? durationSeconds
-        )
-        return try await proxy.generateDev(
-            frames: processed.frames + anchorFrames,
-            transcript: transcriptUpload,
-            clicks: processed.clicks,
-            hasSpeech: processed.hasSpeech,
-            model: model,
-            tokenProvider: tokenProvider,
-            idempotencyKey: processed.idempotencyKey
-        )
-    }
-
-    /// Maps a trial `/generate` failure to the user-facing taxonomy and performs
-    /// the trial-side state side effects (credit-exhaustion → `.expired` next
-    /// attempt; a rejected token → re-verify). Non-trial errors fall back to the
-    /// shared `failureReason(from:)`.
-    private func trialFailureReason(from error: Error) -> RecordingFailureReason {
-        guard let managed = error as? ManagedGenerationError else {
-            return Self.failureReason(from: error)
-        }
-        switch managed {
-        case .outOfCredits:
-            // Trial credits spent → the trial is over. Zero the balance so the
-            // entitlement recomputes to `.expired` (→ paywall on the next record).
-            entitlements?.applyTrialCreditsRemaining(0)
-            return .trialCreditsExhausted
-        case .notEntitled, .authFailed:
-            // Grant gone / token rejected → drop the trial token so the next
-            // attempt re-triggers the email capture.
-            entitlements?.resetTrialToken()
-            return .trialVerificationRequired
-        case .rateLimited:
-            return .rateLimited
-        case .providerUnavailable:
-            // 502/503 from the proxy or OpenAI. Now captured for triage (with
-            // HTTP status + bounded body + a reason+status fingerprint at the
-            // generation catch site) so a real outage is visible and grouped.
-            return .providerUnavailable
-        case .responseTruncated:
-            // 422 — output-token truncation; partial prompt withheld
-            // (handoff-artifact-fence-leak).
-            return .responseTooLong
-        case .malformedResponse, .inputRejected:
-            // Contract broke between client and proxy — captured.
-            return .providerError
-        case .network:
-            // Transport failure (offline/DNS/timeout). The description is
-            // display-only — there's no underlying URLError to classify, so
-            // treat the whole class as connectivity. Not captured.
-            return .networkOffline
-        case .outputUnreadable:
-            return .outputUnreadable
-        case .payloadTooLarge:
-            // F-07: the client-side pre-upload fuse — nothing left the machine.
-            return .recordingTooLarge
-        }
-    }
-
-    // MARK: - Trial email verification (Phase F)
-
-    /// Called after a successful email verification (the required onboarding step,
-    /// or the Settings/Billing "verify email" affordance for existing /
-    /// infra-fallback users). The trial token + email + credits are already
-    /// stored by `TrialCreditsManager`; this just recomputes the entitlement so
-    /// the new trial credits are reflected in the menu-bar line / Billing readout
-    /// and the gate. There is no longer any mid-recording capture to resume —
-    /// verification happens up front in onboarding, not after a recording.
-    func handleTrialVerified() {
-        entitlements?.refresh()
-    }
-
-    /// Maps a `ManagedGenerationError` to the user-facing failure taxonomy.
-    /// Anything that isn't a managed error falls back to the shared
-    /// `failureReason(from:)` (covers offline/disk/etc. raised before the
-    /// request).
-    private static func managedFailureReason(from error: Error) -> RecordingFailureReason {
-        guard let managed = error as? ManagedGenerationError else {
-            return failureReason(from: error)
-        }
-        switch managed {
-        case .outOfCredits:
-            return .outOfCredits
-        case .notEntitled:
-            return .subscriptionInactive
-        case .rateLimited:
-            return .rateLimited
-        case .providerUnavailable:
-            // 502/503 — proxy/OpenAI, retryable. Now captured for triage (with
-            // HTTP status + bounded body + a reason+status fingerprint at the
-            // generation catch site) so a real outage is visible and grouped.
-            return .providerUnavailable
-        case .responseTruncated:
-            // 422 — the server's chat hit the output-token limit; the partial
-            // prompt is withheld (handoff-artifact-fence-leak).
-            return .responseTooLong
-        case .malformedResponse, .inputRejected, .authFailed:
-            // Contract/token machinery broke — engineering signal, captured.
-            // (A real recording can't trip the input fuse; a managed-path
-            // authFailed means OUR session plumbing rejected a token the
-            // entitlement layer thought was valid.)
-            return .providerError
-        case .network:
-            // Transport failure (offline/DNS/timeout). The description is
-            // display-only — there's no underlying URLError to classify, so
-            // treat the whole class as connectivity. Not captured.
-            return .networkOffline
-        case .outputUnreadable:
-            return .outputUnreadable
-        case .payloadTooLarge:
-            // F-07: the client-side pre-upload fuse — nothing left the machine.
-            return .recordingTooLarge
-        }
     }
 
     /// The BYOK/local generation path (Phase 9 + 17): Whisper transcribe →
@@ -3342,11 +2694,8 @@ final class AppState {
                 self.devModelAnchors = []
                 var anchorFrames: [ExtractedFrame] = []
                 if self.recordingIsDevMode {
-                    // The client-side resolution is SHARED with the Managed/trial
-                    // path (`runProxyGeneration`) so the resolver/pipeline/marked-
-                    // frame logic lives in exactly one place. Only the transcript
-                    // source (local Whisper here; call 1 there) and where
-                    // generation runs differ.
+                    // Client-side hover-deixis resolution over the local word
+                    // transcript (see `resolveDevAnchors`).
                     let (resolved, frames) = await Self.resolveDevAnchors(
                         words: transcript.words,
                         cursorTrack: processed.cursorTrack,
@@ -3384,9 +2733,7 @@ final class AppState {
                 // (.providerError), unreadable local artifacts, and — since the
                 // shared shouldCapture gate was widened — provider 5xx
                 // (.providerUnavailable) and 429 (.rateLimited). Gated OUT:
-                // user/environment failures and .networkOffline. This BYOK path
-                // carries no providerStatus/fingerprint (that enrichment is only
-                // attached to ManagedGenerationError at the managed/trial site).
+                // user/environment failures and .networkOffline.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -3504,9 +2851,7 @@ final class AppState {
                 // shouldCapture gate was widened, provider 5xx
                 // (.providerUnavailable), 429 (.rateLimited) and 422-truncation
                 // (.responseTooLong) are now ALSO captured here — as plain
-                // reason-coded errors, with no providerStatus/fingerprint (that
-                // enrichment is only attached to ManagedGenerationError at the
-                // managed/trial site).
+                // reason-coded errors.
                 if Self.shouldCapture(reason) {
                     CrashReporting.capture(
                         error,
@@ -3525,7 +2870,7 @@ final class AppState {
 
     // MARK: - Typed-artifact result handling (Phase 4)
 
-    /// The shared `.done` tail for BOTH generation paths (Managed and BYOK):
+    /// The shared `.done` tail for a landed generation:
     /// parse the raw model output against the §2 contract, surface
     /// recovery/coercion telemetry, and persist the v2 history entry (model
     /// artifact title preferred). `generatedPrompt` keeps the raw text as
@@ -3646,31 +2991,9 @@ final class AppState {
     private func finishGenerationOrDispatch() {
         guard recordingIsDevMode else {
             state = .done
-            recordBYOKTrialSuccessIfNeeded()
             return
         }
         beginDevDispatch()
-    }
-
-    /// The anonymous BYOK trial counts usable, terminal results only. Ask counts
-    /// after `.done`; Dev counts separately after the agent reaches `.devDone`.
-    /// The recording's stable UUID makes retries idempotent server-side.
-    private func recordBYOKTrialSuccessIfNeeded() {
-        guard let entitlements, case .byokTrial = entitlements.state,
-              let id = processedRecording?.idempotencyKey,
-              let byokTrial
-        else { return }
-        let counted = byokTrial.recordSuccessfulGenerationLocally(id: id)
-        if counted {
-            // Flip the tenth result to the exhausted state before this main-actor
-            // event returns, so a queued hotkey cannot start generation eleven.
-            entitlements.refresh()
-        }
-        Task { @MainActor [weak entitlements, weak byokTrial] in
-            guard let byokTrial else { return }
-            await byokTrial.syncPending()
-            entitlements?.refresh()
-        }
     }
 
     /// Hand the generated `agent_prompt` to the coding agent: checkpoint → run →
@@ -3969,12 +3292,9 @@ final class AppState {
         ])
     }
 
-    /// Phase 2 — the SHARED client-side hover-deixis resolution, reused by BOTH
-    /// generation paths (BYOK `runLocalPromptGeneration` + Managed/trial
-    /// `runProxyGeneration`) so the resolver / pipeline / marked-frame logic lives
-    /// in exactly ONE place (no duplication). Given the WORD transcript (local
-    /// Whisper for BYOK; the free server call 1 for Managed) plus the recording's
-    /// cursor track + clicks + retained source video, it runs
+    /// The client-side hover-deixis resolution for a Dev Mode recording.
+    /// Given the WORD transcript (local Whisper, or the user's own STT key)
+    /// plus the recording's cursor track + clicks + retained source video, it runs
     /// `DeixisResolver.resolve` → `DevAnchorPipeline.build` and writes the cropped,
     /// crosshair-MARKED native-res anchor frames.
     ///
@@ -4003,7 +3323,7 @@ final class AppState {
         )
         // F-01: honor the redaction toggle on the anchor path, exactly as the
         // keyframe pipeline does — the crop pixels + OCR hint are masked in lock
-        // step before they egress to the managed/trial proxy or the BYOK provider.
+        // step before they egress to the user's provider.
         let resolved = await DevAnchorPipeline.build(
             candidates: candidates,
             sourceVideoURL: sourceVideoURL,
@@ -4088,7 +3408,6 @@ final class AppState {
             // two states never coexist.
             isResultExpanded = false
             state = .devDone
-            recordBYOKTrialSuccessIfNeeded()
             Log.dev.notice("Dev dispatch succeeded — files: \(success.diff.filesChanged, privacy: .public)")
             // M8 analytics — metadata only (counts/durations; no path/content).
             Analytics.capture("dev_run_succeeded", [
@@ -4356,15 +3675,7 @@ final class AppState {
     /// User-driven dismissal of the failure pill. Same as cancel —
     /// returns to .idle so the next hotkey press starts cleanly.
     func dismissFailure() {
-        guard case .failed(let reason) = state else { return }
-        // M5: dismissing a PAID-blocked failure means "give up on this
-        // recording" — delete the held working dir and clear the pending
-        // pointer so it isn't restored at the next launch. (`resetToIdle` also
-        // removes `processedRecording`'s working dir; this additionally covers a
-        // recording restored at launch and clears the persisted pointer.)
-        if PaidBlockReason(reason) != nil {
-            discardPendingPaidGeneration()
-        }
+        guard case .failed = state else { return }
         resetToIdle()
     }
 
@@ -4380,24 +3691,10 @@ final class AppState {
         requestAreaSelector?()
     }
 
-    /// The record-START out-of-credits pill's primary ("Add Credits"). Unlike
-    /// `resumePaidGeneration`, there is no held recording to continue (nothing was
-    /// captured), so this does no entitlement re-check and reconstructs nothing —
-    /// it routes the user straight to the top-up paywall and clears the block. The
-    /// `.outOfCredits` trigger is re-asserted here (it may have been read-and-
-    /// cleared by an earlier paywall open) so PaywallView shows the top-up copy and
-    /// reports the right `paywall_shown.trigger`.
-    func openOutOfCreditsTopUp() {
-        entitlements?.paywallTrigger = .outOfCredits
-        AppDelegate.openPaywall()
-        dismissFailure()
-    }
-
     /// The config-failure pill's "Open Settings" primary (reasons whose
     /// `settingsDeepLink` is non-nil: `.apiKeyMissing` / `.localModelUnavailable` /
     /// `.apiAuth`). Preselects the target pane, activates the app, opens the
-    /// Settings window, then dismisses the failure pill. Mirrors
-    /// `openOutOfCreditsTopUp` (open a window + dismiss); the window open itself
+    /// Settings window, then dismisses the failure pill. The window open itself
     /// runs through `AppDelegate.openSettings()` because AppState has no SwiftUI
     /// `openWindow` environment. `SettingsView.onAppear` consumes
     /// `pendingSettingsCategory` to land on the pane.
@@ -4453,178 +3750,6 @@ final class AppState {
         runPromptGeneration(processed: processed)
     }
 
-    // MARK: - Resume after purchase (M5)
-
-    /// Persists a held-recording pointer when generation is blocked for a PAID
-    /// reason, so the failure pill can offer Continue and survive a quit during
-    /// checkout. No-op for any non-paid reason or when there's no processed
-    /// recording to hold. Writes both the `UserDefaults` pointer and the
-    /// in-working-dir marker (which spares the dir from the launch sweep).
-    private func capturePendingPaidGenerationIfNeeded(
-        reason: RecordingFailureReason,
-        processed: ProcessedRecording
-    ) {
-        guard let paidReason = PaidBlockReason(reason) else { return }
-        let model = recordingModelID
-            ?? preferences?.selectedModelID
-            ?? ModelRegistry.defaultModelID
-        let pending = PendingPaidGeneration(
-            workingDirectoryName: processed.workingDirectory.lastPathComponent,
-            idempotencyKey: processed.idempotencyKey,
-            modelID: model,
-            reason: paidReason,
-            createdAt: Date(),
-            // E-04: carry the Dev-Mode context so a crash-restored resume
-            // re-runs the dev path (dev prompt + agent dispatch) instead of
-            // degrading to the clipboard flow. All nil for a normal recording.
-            devProjectPath: recordingIsDevMode ? recordingProjectURL?.path : nil,
-            devAgentID: recordingIsDevMode ? recordingAgentID : nil,
-            devAgentModelID: recordingIsDevMode ? recordingAgentModelID : nil
-        )
-        pendingPaidStore.save(pending)
-        Log.billing.notice("paid block held for resume (reason=\(String(describing: paidReason), privacy: .public))")
-    }
-
-    /// True when the current failure is a PAID block AND we have a held
-    /// recording to resume — either still in memory or persisted on disk. The
-    /// pill reads this via the bridge to decide whether to render the Continue
-    /// button alongside Dismiss.
-    var canResumePaidGeneration: Bool {
-        guard case .failed(let reason) = state, PaidBlockReason(reason) != nil else {
-            return false
-        }
-        return processedRecording != nil || pendingPaidStore.load() != nil
-    }
-
-    /// User-driven Continue from a paid-blocked failure pill. Re-checks
-    /// entitlement (the user may have just subscribed / added BYOK keys in the
-    /// browser); if they can now generate, reconstructs the held recording if
-    /// needed and re-runs generation reusing the original idempotency key (so the
-    /// proxy replays a charged-but-blocked response instead of double-charging).
-    /// If they still can't generate, opens the paywall and LEAVES the pending
-    /// record intact so they can pay and tap Continue again.
-    func resumePaidGeneration() {
-        guard canResumePaidGeneration else { return }
-        Analytics.capture("resume_paid_generation_tapped")
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            // Re-check entitlement against the freshest truth: refresh the
-            // synchronous compute, and for a managed user also pull the
-            // authoritative /entitlement snapshot (fail-open on a network blip).
-            self.entitlements?.refresh()
-            await self.entitlements?.refreshManagedEntitlement()
-            // The user could have dismissed / started something during the await.
-            guard self.canResumePaidGeneration else { return }
-
-            // Still not entitled → route to the paywall, keep the held recording.
-            guard self.entitlements?.canGenerate == true else {
-                Analytics.capture("resume_paid_generation_paywalled")
-                Log.billing.notice("resume: still not entitled — opening paywall, keeping held recording")
-                AppDelegate.openPaywall()
-                return
-            }
-
-            // Entitled now → reconstruct the recording from disk if it isn't
-            // already in memory, then re-run generation. A missing/corrupt working
-            // dir means the held recording is gone — clear it and fall back to idle.
-            let processed: ProcessedRecording?
-            if let inMemory = self.processedRecording {
-                processed = inMemory
-            } else if let pending = self.pendingPaidStore.load() {
-                processed = try? ProcessedRecording.reconstruct(
-                    workingDirectory: pending.workingDirectoryURL,
-                    idempotencyKey: pending.idempotencyKey
-                )
-                // E-04: with nothing in memory, the persisted pointer is the
-                // only carrier of the Dev-Mode context — reapply it so the
-                // resumed generation keeps the dev path.
-                if processed != nil {
-                    self.restoreDevContext(from: pending)
-                }
-            } else {
-                processed = nil
-            }
-            guard let processed else {
-                Log.billing.error("resume: held recording missing/corrupt — clearing pending and resetting")
-                self.discardPendingPaidGeneration()
-                self.state = .idle
-                return
-            }
-
-            Analytics.capture("resume_paid_generation_started")
-            Log.billing.notice("resume: entitled — re-running generation against held recording")
-            self.processedRecording = processed
-            self.lastFailureDetail = nil
-            // The success path clears the pending record (state didSet on `.done`);
-            // a fresh paid block re-captures it.
-            self.state = .processing
-            self.runPromptGeneration(processed: processed)
-        }
-    }
-
-    /// Deletes the held recording's working directory AND clears the persisted
-    /// pointer + marker — the "give up on this recording" teardown. Resolves the
-    /// directory from the in-memory recording when present, else from the
-    /// persisted pointer (the restore-but-not-yet-reconstructed path). Best-effort.
-    private func discardPendingPaidGeneration() {
-        if let dir = processedRecording?.workingDirectory {
-            Task.detached(priority: .utility) { WorkingDirectory.remove(at: dir) }
-        } else if let pending = pendingPaidStore.load() {
-            let dir = pending.workingDirectoryURL
-            Task.detached(priority: .utility) { WorkingDirectory.remove(at: dir) }
-        }
-        pendingPaidStore.clear()
-    }
-
-    /// Restores a held paid-blocked recording at launch (called from the launch
-    /// path BEFORE the blanket sweep). If a pending record is persisted, fresh
-    /// enough, and its working directory is intact with a readable manifest,
-    /// rebuilds `processedRecording` and re-enters `.failed(reason:)` so the pill
-    /// comes back up with Continue. Anything stale/missing/corrupt is cleared and
-    /// we proceed normally. Returns true when a recording was restored (so the
-    /// caller can skip the recovery/sweep that would otherwise run).
-    @discardableResult
-    func restorePendingPaidGenerationIfAny() -> Bool {
-        guard state == .idle, let pending = pendingPaidStore.load() else { return false }
-        // Drop a record that has outlived any plausible checkout.
-        if Date().timeIntervalSince(pending.createdAt) > PendingPaidGenerationStore.maxAge {
-            Log.billing.notice("restore: pending paid generation is stale — clearing")
-            discardPendingPaidGeneration()
-            return false
-        }
-        // Rebuild the recording from disk; a missing/corrupt working dir means the
-        // held recording is gone.
-        guard let processed = try? ProcessedRecording.reconstruct(
-            workingDirectory: pending.workingDirectoryURL,
-            idempotencyKey: pending.idempotencyKey
-        ) else {
-            Log.billing.notice("restore: held recording missing/corrupt — clearing pending")
-            // Pointer clear only; if the dir exists but the manifest is unreadable
-            // the launch sweep reclaims it (the marker no longer protects it).
-            pendingPaidStore.clear()
-            return false
-        }
-        processedRecording = processed
-        recordingModelID = pending.modelID
-        restoreDevContext(from: pending)
-        state = .failed(reason: pending.reason.failureReason)
-        Log.billing.notice("restore: held paid recording restored — pill back with Continue")
-        return true
-    }
-
-    /// E-04: re-applies a held recording's Dev-Mode context (project folder,
-    /// agent, agent model) so a resumed generation runs the SAME dev path the
-    /// blocked one did — the dev prompt mode, the managed 2-call dev flow, and
-    /// the agent dispatch tail. A pre-E-04 record or a normal recording carries
-    /// no dev fields → no-op, so the non-dev resume stays byte-identical.
-    private func restoreDevContext(from pending: PendingPaidGeneration) {
-        guard let projectURL = pending.devProjectURL else { return }
-        recordingIsDevMode = true
-        recordingProjectURL = projectURL
-        recordingAgentID = pending.devAgentID
-        recordingAgentModelID = pending.devAgentModelID
-    }
-
     /// Below this many non-whitespace characters, the transcript is
     /// treated as "no usable narration" — almost certainly a silent
     /// recording (muted mic, user never spoke) where Whisper either
@@ -4665,20 +3790,14 @@ final class AppState {
     /// not bugs in Zerro.
     ///
     /// Provider-RETURNED failures (5xx / 429 / 422-truncation) ARE captured
-    /// (the `true` arm): they're an HTTP response from the proxy/provider worth
-    /// triaging. The managed/trial capture site attaches the HTTP status + a
-    /// short server message and a reason+status fingerprint, so a single
-    /// upstream outage collapses into ONE error-tracking issue rather than
-    /// flooding the dashboard. `.networkOffline` stays OUT — it's local
+    /// (the `true` arm): they're an HTTP response from the provider worth
+    /// triaging. `.networkOffline` stays OUT — it's local
     /// connectivity with no provider response to triage.
     static func shouldCapture(_ reason: RecordingFailureReason) -> Bool {
         switch reason {
         case .streamStartFailed, .writerStartFailed, .captureInterrupted,
              .audioSetupFailed,
              .processingFailed, .outputUnreadable,
-             // F-07: a real recording can't exceed the pre-upload fuse, so
-             // tripping it means the pipeline mis-sized something — triage it.
-             .recordingTooLarge,
              .providerError,
              .rateLimited, .providerUnavailable, .responseTooLong:
             return true
@@ -4689,9 +3808,7 @@ final class AppState {
              .apiKeyMissing, .apiAuth, .localModelUnavailable, .networkOffline,
              // J-03: the user's own provider account is out of quota —
              // user-fixable billing, not a Zerro bug.
-             .providerQuotaExhausted,
-             .outOfCredits, .outOfCreditsAtStart, .subscriptionInactive,
-             .trialVerificationRequired, .trialCreditsExhausted:
+             .providerQuotaExhausted:
             return false
         }
     }
@@ -4705,48 +3822,7 @@ final class AppState {
         String(describing: reason)
     }
 
-    /// HTTP status + short server message for a provider-RETURNED
-    /// `ManagedGenerationError` (the proxy/provider's own 5xx/429/422 response),
-    /// used to enrich + group the error-tracker capture at the managed/trial
-    /// generation site. Returns `nil` for anything that isn't a provider
-    /// response — transport (`network`), billing/entitlement
-    /// (`outOfCredits`/`notEntitled`), contract
-    /// (`malformedResponse`/`inputRejected`/`authFailed`), local I/O
-    /// (`outputUnreadable`), and any non-managed error — so only genuine
-    /// provider responses carry a `providerStatus`/fingerprint. `body` is
-    /// already bounded (≤80, single line) at the throw site; it's a
-    /// transport/server message, NEVER content.
-    static func providerHTTPDetail(from error: Error) -> (status: Int, body: String?)? {
-        guard let managed = error as? ManagedGenerationError else { return nil }
-        switch managed {
-        case .rateLimited(let status, let body):
-            return (status, body)
-        case .providerUnavailable(let status, let body):
-            return (status, body)
-        case .responseTruncated:
-            // Always HTTP 422 (the value-less case predates carrying a status).
-            return (422, nil)
-        case .outOfCredits, .notEntitled, .authFailed, .inputRejected,
-             .network, .malformedResponse, .outputUnreadable,
-             // Client-side pre-upload fuse (F-07) — no HTTP response exists.
-             .payloadTooLarge:
-            return nil
-        }
-    }
-
     // MARK: - Generation analytics helpers (Tier 1)
-
-    /// Maps the internal `GenerationRoute` to the analytics `route` value
-    /// (`managed` / `trial` / `byok`), or `nil` for `.trialNeedsEmail` — which
-    /// dispatches no request, so it has no `generation_started`/latency.
-    private static func analyticsRoute(for route: EntitlementStore.GenerationRoute) -> String? {
-        switch route {
-        case .managedProxy:    return "managed"
-        case .trialProxy:      return "trial"
-        case .local:           return "byok"
-        case .trialNeedsEmail: return nil
-        }
-    }
 
     /// Milliseconds since `generationStartInstant`, for `latency_ms` on the
     /// generation outcomes. `nil` only if no start was recorded (defensive —
@@ -4759,39 +3835,12 @@ final class AppState {
 
     /// A human-readable, privacy-safe description of a generation error, shown
     /// in the expanded failure card's body (decision 1 of the failure-card
-    /// handoff). Pulls the carried detail out of a `ManagedGenerationError`
-    /// where one exists; everything else falls back to `localizedDescription`.
+    /// handoff).
     /// Privacy: every string returned here is a transport- or server-level
     /// error description — NEVER transcript or response content. Keep it that
     /// way; this is what gets rendered to the user.
     private static func failureDetail(from error: Error) -> String {
-        if let managed = error as? ManagedGenerationError {
-            switch managed {
-            case .network(let detail):
-                return detail
-            case .inputRejected(let detail):
-                return detail
-            case .outOfCredits:
-                return "The server reported your credits are spent."
-            case .notEntitled:
-                return "The server reported your subscription is no longer active."
-            case .rateLimited:
-                return "The generation service is rate-limiting requests right now."
-            case .authFailed:
-                return "Couldn\u{2019}t authenticate with the generation service."
-            case .providerUnavailable:
-                return "The generation service is temporarily unavailable."
-            case .responseTruncated:
-                return "The response was too long and got cut off before it finished."
-            case .malformedResponse:
-                return "The generation service returned an unexpected response."
-            case .outputUnreadable:
-                return "Couldn\u{2019}t read the recording\u{2019}s files from disk."
-            case .payloadTooLarge:
-                return "The recording exceeds the upload size limit, so nothing was sent."
-            }
-        }
-        return error.localizedDescription
+        error.localizedDescription
     }
 
     /// Maps a RecordingSession.SessionError (or anything else) into the
@@ -4843,9 +3892,7 @@ final class AppState {
                 return Self.networkClassReason(underlying)
             case .server:
                 // 5xx — provider outage. Now captured (the shared shouldCapture
-                // gate lets `.providerUnavailable` through). This BYOK path
-                // carries no providerStatus/fingerprint — that enrichment is only
-                // attached to ManagedGenerationError at the managed/trial site.
+                // gate lets `.providerUnavailable` through).
                 return .providerUnavailable
             case .decodeFailure:
                 // Response contract broke — captured.
@@ -4874,9 +3921,7 @@ final class AppState {
                 return Self.networkClassReason(underlying)
             case .server:
                 // 5xx — provider outage. Now captured (the shared shouldCapture
-                // gate lets `.providerUnavailable` through). This BYOK path
-                // carries no providerStatus/fingerprint — that enrichment is only
-                // attached to ManagedGenerationError at the managed/trial site.
+                // gate lets `.providerUnavailable` through).
                 return .providerUnavailable
             case .decodeFailure, .emptyContent:
                 // Response contract broke — captured.

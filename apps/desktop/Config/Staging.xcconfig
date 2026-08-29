@@ -1,18 +1,21 @@
 // Staging.xcconfig
 // Build settings for the side-by-side "Zerro Staging" app. Wired to the Staging
 // configuration of the app target (see Zerro.xcodeproj). A distinct bundle id
-// and product name let Staging install and run alongside the production Zerro;
-// the backend URL points at the staging Supabase project.
+// and product name let Staging install and run alongside the production Zerro.
 //
 // NOTE on URLs: xcconfig treats `//` as a comment, which would swallow the
 // `https://` scheme. The `$()` between the scheme's slashes is an empty
 // variable reference — it parses without starting a comment and expands to
 // nothing, so the resolved value is a normal `https://…` URL.
 //
-// SU_FEED_URL is provisional here — finalized in the staging release step.
+// SU_FEED_URL is the permanent GitHub staging update channel: the
+// `appcast-staging.xml` asset of the `staging-channel` prerelease, which the
+// staging release workflow replaces with each release's verified feed. The
+// feed's enclosure points at the immutable ZerroStaging-<build>.dmg on that
+// release's own staging-v<X.Y.Z> prerelease. Anonymous Sparkle checks against
+// this URL work only while the repository is public.
 
-ZERRO_FUNCTIONS_BASE_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/functions/v1
-SU_FEED_URL = https:/$()/waripvlpcpwdmacpjiqc.supabase.co/storage/v1/object/public/downloads/appcast-staging.xml
+SU_FEED_URL = https:/$()/github.com/SmartScaleAI/Zerro/releases/download/staging-channel/appcast-staging.xml
 PRODUCT_BUNDLE_IDENTIFIER = com.cbreeding.Zerro.staging
 PRODUCT_NAME = Zerro Staging
 
@@ -32,3 +35,13 @@ SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) STAGING
 // purchase" to zerro-staging://checkout-complete to match. See
 // Config/Production.xcconfig for how this flows into Info.plist + AppDelegate.
 DEEPLINK_SCHEME = zerro-staging
+
+// Build channel marker (see Production.xcconfig). Staging source builds are
+// community builds too; the official staging release workflow overrides this
+// to "official" alongside OFFICIAL_BUILD while keeping STAGING intact.
+ZERRO_BUILD_CHANNEL = community
+
+// Swift ⇄ C bridge for the official-build marker (Zerro/OfficialBuildMarker.c).
+// Set here so every configuration (Debug and Release via Production.xcconfig,
+// Staging via Staging.xcconfig) imports the same header.
+SWIFT_OBJC_BRIDGING_HEADER = Zerro/Zerro-Bridging-Header.h

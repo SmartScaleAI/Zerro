@@ -41,15 +41,16 @@ final class DevAgentDetection {
     private(set) var entries: [DevAgentEntry] = []
 
     /// Cursor's model list, fetched client-side from `cursor-agent models` during
-    /// the same background warm (Cursor has no server manifest — Phase 2). Empty
+    /// the same background warm (Cursor has no bundled manifest — its list is
+    /// per-account, so it comes from the local CLI). Empty
     /// when cursor-agent isn't installed or the probe found nothing; the Model
     /// section then has no Cursor models to show. Read by
     /// `AgentModelManifestStore.models(forAgent:)` for the `.cursorCLI` source.
     private(set) var cursorModels: [AgentModel] = []
 
     /// Codex's model list, sourced client-side from its OWN per-account list —
-    /// `~/.codex/models_cache.json` — during the same background warm (Phase 2).
-    /// Codex is NOT served by the OpenAI manifest: a ChatGPT-account Codex uses
+    /// `~/.codex/models_cache.json` — during the same background warm.
+    /// Codex is NOT served by the bundled manifest: a ChatGPT-account Codex uses
     /// its own slugs (e.g. `gpt-5.5`) and rejects the API codex ids. Empty when
     /// codex isn't installed / the cache is unreadable; read by
     /// `AgentModelManifestStore.models(forAgent:)` for the `.codexCLI` source.
@@ -79,7 +80,7 @@ final class DevAgentDetection {
             if let completion { pending.append(completion) }
             // Run the blocking probes off the main actor. `DevAgentRegistry.all`
             // is `nonisolated`; entries are `Sendable`. Cursor's model list comes
-            // from its own CLI (no server manifest) in the SAME background hop.
+            // from its own CLI (no manifest to bundle) in the SAME background hop.
             Task.detached(priority: .utility) { [weak self] in
                 let resolved = DevAgentRegistry.all()
                 let cursor = DevAgentDetection.probeCursorModels()
@@ -127,7 +128,7 @@ final class DevAgentDetection {
     // MARK: - Cursor models (client-side CLI)
 
     /// Probe `cursor-agent models` for Cursor's selectable model ids (Phase 2).
-    /// Cursor has no server manifest, so its list is fetched from the CLI. Runs
+    /// Cursor has no bundled manifest, so its list is fetched from the local CLI. Runs
     /// OFF the main actor (blocking `Process`), capped by a short watchdog, and
     /// degrades to `[]` on anything unexpected — a missing CLI, a non-zero exit,
     /// an unparseable format — so it can never break Dev Mode.
@@ -278,8 +279,9 @@ final class DevAgentDetection {
     /// `codex --help`, codex-cli 0.140.0) and a ChatGPT-account Codex rejects the
     /// OpenAI API codex ids — so its account-accurate list lives in this cache,
     /// which the CLI itself refreshes. Pure file read (no spawn); degrades to `[]`
-    /// on a missing/unreadable/garbage cache so it can never break Dev Mode. A
-    /// bundled fallback is added by `AgentModelManifestStore` when this is empty.
+    /// on a missing/unreadable/garbage cache so it can never break Dev Mode. An
+    /// empty list stays empty (no bundled fallback) — Codex then launches on its
+    /// own default model.
     nonisolated private static func probeCodexModels() -> [AgentModel] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let cacheURL = home.appendingPathComponent(".codex/models_cache.json")
@@ -313,7 +315,8 @@ final class DevAgentDetection {
             .filter { $0.visibility == "list" }
             // Dev Mode product exclusion (see `devModelExclusions`): drop GPT-5.4
             // mini and its effort/latency variants even though the user's Codex
-            // account lists them. A bundled fallback applies when this empties.
+            // account lists them. If filtering empties the list it stays empty
+            // and Codex launches on its own default model.
             .filter { !isDevExcluded($0.slug) }
             .sorted { ($0.priority ?? Int.max) < ($1.priority ?? Int.max) }
             .map { AgentModel(modelID: $0.slug, displayName: ($0.displayName?.isEmpty == false ? $0.displayName! : $0.slug)) }

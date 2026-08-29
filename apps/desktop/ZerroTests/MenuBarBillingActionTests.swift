@@ -2,11 +2,10 @@
 //  MenuBarBillingActionTests.swift
 //  ZerroTests
 //
-//  Covers the consolidated menu-bar billing row (Step 3): a SINGLE always-
-//  present "Upgrade" entry whose label, secondary nudge, and paywall trigger
-//  are resolved from the live entitlement, replacing the scattered trial-
-//  upgrade / top-up / past-due CTAs. `MenuBarBillingAction.resolve` is pure, so
-//  these pin the state → (label, trigger) selection directly.
+//  Covers the single always-present menu-bar billing row: its label,
+//  secondary nudge, and paywall trigger are resolved from the live
+//  entitlement. `MenuBarBillingAction.resolve` is pure, so these pin the
+//  state → (label, trigger) selection directly.
 //
 
 import XCTest
@@ -14,85 +13,57 @@ import XCTest
 
 final class MenuBarBillingActionTests: XCTestCase {
 
-    private func resolve(
-        _ state: EntitlementState,
-        isPastDue: Bool = false,
-        isLowBalance: Bool = false
-    ) -> MenuBarBillingAction {
-        MenuBarBillingAction.resolve(state: state, isPastDue: isPastDue, isLowBalance: isLowBalance)
+    private func resolve(_ state: EntitlementState) -> MenuBarBillingAction {
+        MenuBarBillingAction.resolve(state: state)
     }
 
-    private func managed(credits: Int = 200) -> EntitlementState {
-        .managed(creditsRemaining: credits, resetDate: .distantFuture)
-    }
+    // MARK: - Local trial / expired both read "Upgrade", different triggers
 
-    // MARK: - Trial / Expired both read "Upgrade", different triggers
-
-    func testTrialIsVoluntaryUpgrade() {
-        let action = resolve(.trial(creditsRemaining: 9))
+    func testLocalTrialIsVoluntaryUpgrade() {
+        let action = resolve(.localTrial(daysRemaining: 9))
         XCTAssertEqual(action.label, "Upgrade")
         XCTAssertNil(action.secondary)
         XCTAssertEqual(action.trigger, .voluntaryUpgrade)
     }
 
-    func testExpiredIsBlockedUpgrade() {
-        let action = resolve(.expired)
+    func testLocalTrialExpiredIsBlockedUpgrade() {
+        let action = resolve(.localTrialExpired)
         XCTAssertEqual(action.label, "Upgrade")
         XCTAssertNil(action.secondary)
         XCTAssertEqual(action.trigger, .blocked)
     }
 
-    func testByokTrialOffersTheByokLicense() {
-        let active = resolve(.byokTrial(generationsRemaining: 3))
-        XCTAssertEqual(active.label, "Get BYOK License")
-        XCTAssertEqual(active.trigger, .voluntaryUpgrade)
+    // MARK: - Local trial menu-bar line copy
 
-        let complete = resolve(.byokTrialExpired)
-        XCTAssertEqual(complete.label, "Get BYOK License")
-        XCTAssertEqual(complete.trigger, .byokTrialExhausted)
+    func testLocalTrialLineSingularAndPlural() {
+        XCTAssertEqual(
+            MenuBarPanelView.localTrialLineText(daysRemaining: 1),
+            "Free trial \u{00B7} 1 day left"
+        )
+        XCTAssertEqual(
+            MenuBarPanelView.localTrialLineText(daysRemaining: 14),
+            "Free trial \u{00B7} 14 days left"
+        )
     }
 
-    // MARK: - BYOK manages (nothing to upgrade/top up)
+    // MARK: - Licensed manages (nothing to upgrade)
 
-    func testByokManages() {
+    func testLicensedManages() {
         let action = resolve(.byok)
-        XCTAssertEqual(action.label, "Manage Plan")
+        XCTAssertEqual(action.label, "Manage License")
         XCTAssertNil(action.secondary)
         XCTAssertEqual(action.trigger, .manage)
     }
 
-    // MARK: - Managed: healthy / low / past-due
+    // MARK: - No state ever mentions credits, plans, or subscriptions
 
-    func testManagedHealthyAddsMoreCredits() {
-        // Healthy Managed leads with adding credits (where a paid-up user comes
-        // to top up); the trigger matches the label so the paywall opens on the
-        // "Add Credits" copy, not "Manage your plan".
-        let action = resolve(managed())
-        XCTAssertEqual(action.label, "Add Credits")
-        XCTAssertNil(action.secondary)
-        XCTAssertEqual(action.trigger, .topup)
-    }
-
-    func testManagedLowBalanceAddsCredits() {
-        let action = resolve(managed(credits: 2), isLowBalance: true)
-        XCTAssertEqual(action.label, "Add Credits")
-        XCTAssertNil(action.secondary)
-        XCTAssertEqual(action.trigger, .topup)
-    }
-
-    func testManagedPastDueManagesWithNudge() {
-        let action = resolve(managed(), isPastDue: true)
-        XCTAssertEqual(action.label, "Manage Plan")
-        XCTAssertEqual(action.secondary, "Payment issue: update your card")
-        XCTAssertEqual(action.trigger, .manage)
-    }
-
-    func testManagedPastDueTakesPrecedenceOverLowBalance() {
-        // A past-due subscription that's also low on credits: the payment issue
-        // wins (update card), not the top-up — folding in the old status nudge.
-        let action = resolve(managed(credits: 1), isPastDue: true, isLowBalance: true)
-        XCTAssertEqual(action.label, "Manage Plan")
-        XCTAssertEqual(action.trigger, .manage)
-        XCTAssertNotNil(action.secondary)
+    func testNoRowCopyMentionsRetiredConcepts() {
+        for state in [EntitlementState.localTrial(daysRemaining: 3), .localTrialExpired, .byok] {
+            let action = resolve(state)
+            let text = (action.label + " " + (action.secondary ?? "")).lowercased()
+            for banned in ["credit", "plan", "subscription", "top up", "cloud"] {
+                XCTAssertFalse(text.contains(banned), "\(state): \(text)")
+            }
+        }
     }
 }

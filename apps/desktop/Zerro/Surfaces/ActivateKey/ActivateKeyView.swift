@@ -42,14 +42,6 @@ struct ActivateKeyView: View {
     @State private var model = PaywallActivationModel()
     @FocusState private var fieldFocused: Bool
 
-    /// Medium-style date for the Managed reset line (e.g. "Jul 1, 2026").
-    private static let resetDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
-
     var body: some View {
         // Once an activation lands, the window shows the "you're all set"
         // confirmation (driven by the one-shot `purchaseSuccess`) instead of the
@@ -89,7 +81,7 @@ struct ActivateKeyView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text("Paste your license or subscription key below and click Activate.")
+                Text("Paste your license key below and click Activate.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -105,7 +97,7 @@ struct ActivateKeyView: View {
     private var activationField: some View {
         VStack(alignment: .leading, spacing: VFSpacing.sm) {
             HStack(spacing: VFSpacing.sm) {
-                TextField("License or subscription key", text: $model.licenseKey)
+                TextField("License key", text: $model.licenseKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(Color.vfTextPrimary)
@@ -170,7 +162,7 @@ struct ActivateKeyView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                Text(info.detailLine(formatDate: Self.resetDateFormatter.string(from:)))
+                Text(info.detailLine)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.vfTextSecondary)
                     .multilineTextAlignment(.center)
@@ -271,9 +263,9 @@ private struct ActivateKeySuccessBadge: View {
 }
 
 #if DEBUG
-#Preview("Activate key \u{00B7} Success (byok)") {
+#Preview("Activate key \u{00B7} Success (license)") {
     let store = EntitlementStore.preview(.byok)
-    store.purchaseSuccess = .byok
+    store.purchaseSuccess = .license
     return ActivateKeyView().environment(store)
 }
 #endif

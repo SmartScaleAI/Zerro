@@ -2,9 +2,9 @@
 //  OnboardingSetupView.swift
 //  Zerro
 //
-//  Redesigned onboarding setup. Every user verifies an email first; the next
-//  screen selects Zerro Cloud or Local + Own API Keys. The BYOK key screen is
-//  therefore focused only on provider credentials.
+//  Redesigned onboarding setup. The first screen is the welcome + consent
+//  gate; the next screen collects provider API keys and prepares local
+//  transcription. Everything runs on the user's own keys.
 //
 
 import os
@@ -15,21 +15,6 @@ enum OnboardingSetupPolicy {
         case finish
         case wait
         case download
-    }
-
-    static func emailLooksValid(_ email: String) -> Bool {
-        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.contains("@") && trimmed.contains(".")
-    }
-
-    static func canStartFree(email: String, agreed: Bool, isWorking: Bool) -> Bool {
-        emailLooksValid(email) && agreed && !isWorking
-    }
-
-    static func canContinueBYOK(keys: [String], agreed: Bool, isWorking: Bool) -> Bool {
-        agreed && !isWorking && keys.contains {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
     }
 
     static func canContinueBYOK(keys: [String], isWorking: Bool) -> Bool {
@@ -60,7 +45,25 @@ struct OnboardingSetupStepView: View {
     @State private var hasAgreed = false
 
     var body: some View {
-        ManagedSetupView(hasAgreed: $hasAgreed)
+        VStack(spacing: 24) {
+            OnboardingBrandHero(
+                description: "Record your screen, explain what you want, and get it done faster."
+            )
+
+            VStack(spacing: 0) {
+                OnboardingSetupConsent(isAgreed: $hasAgreed)
+
+                OnboardingPrimaryButton(
+                    "Get started",
+                    systemImage: "arrow.right",
+                    isEnabled: hasAgreed,
+                    action: continueSetup
+                )
+                .padding(.top, 20)
+            }
+            .frame(maxWidth: 440)
+        }
+        .frame(maxWidth: .infinity)
         .onAppear {
             // A relaunch after accepting current terms should not ask the user
             // to accept the same version again.
@@ -69,251 +72,15 @@ struct OnboardingSetupStepView: View {
             }
         }
     }
-}
 
-// MARK: - Shared email verification
-
-private struct ManagedSetupView: View {
-    @Environment(OnboardingState.self) private var onboarding
-    @Environment(TrialCreditsManager.self) private var trialCredits
-
-    @Binding var hasAgreed: Bool
-
-    @State private var model = TrialEmailModel(purpose: .onboardingContact)
-    @State private var marketingEmailOptIn = false
-    @State private var showNoCodeHelp = false
-    @FocusState private var focusedField: Field?
-
-    private enum Field: Hashable { case email, code }
-
-    var body: some View {
-        VStack(spacing: 24) {
-            OnboardingBrandHero(description: heroDescription)
-
-            VStack(spacing: 12) {
-                if let terminal = model.terminalState {
-                    terminalContent(terminal)
-                } else {
-                    switch model.step {
-                    case .email: emailContent
-                    case .code: codeContent
-                    }
-                }
-            }
-            .frame(maxWidth: 440)
-        }
-        .frame(maxWidth: .infinity)
-        .onAppear {
-            if model.email.isEmpty, let remembered = trialCredits.rememberedEmail {
-                model.email = remembered
-            }
-            focusedField = model.step == .email ? .email : .code
-        }
-        .onChange(of: model.step) { _, step in
-            focusedField = step == .email ? .email : .code
-        }
-    }
-
-    private var heroDescription: String {
-        if let terminal = model.terminalState { return terminal.message }
-        switch model.step {
-        case .email:
-            return "Record your screen, explain what you want, and get it done faster."
-        case .code:
-            return TrialEmailCopy.codeDelivery(to: model.trimmedEmail)
-        }
-    }
-
-    private var emailContent: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                setupField(isFocused: focusedField == .email) {
-                    TextField("you@example.com", text: $model.email)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .focused($focusedField, equals: .email)
-                        .disabled(model.isWorking)
-                        .onChange(of: model.email) { _, _ in model.handleEdit() }
-                        .onSubmit(startFreeTrial)
-                }
-
-                errorMessage
-            }
-
-            OnboardingSetupConsent(
-                isAgreed: $hasAgreed,
-                marketingEmailOptIn: $marketingEmailOptIn
-            )
-                .padding(.top, 22)
-
-            OnboardingPrimaryButton(
-                model.isWorking ? "Sending code\u{2026}" : "Continue with email",
-                systemImage: model.isWorking ? nil : "arrow.right",
-                isEnabled: OnboardingSetupPolicy.canStartFree(
-                    email: model.email,
-                    agreed: hasAgreed,
-                    isWorking: model.isWorking
-                ),
-                action: startFreeTrial
-            )
-            .padding(.top, 20)
-
-        }
-    }
-
-    private var codeContent: some View {
-        VStack(spacing: 12) {
-            setupField(isFocused: focusedField == .code) {
-                TextField("123456", text: $model.code)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 19, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.vfTextPrimary)
-                    .focused($focusedField, equals: .code)
-                    .disabled(model.isWorking)
-                    .onChange(of: model.code) { _, newValue in
-                        let digits = String(newValue.filter(\.isNumber).prefix(6))
-                        if digits != newValue { model.code = digits }
-                        model.handleEdit()
-                    }
-                    .onSubmit(verifyCode)
-            }
-
-            errorMessage
-
-            OnboardingPrimaryButton(
-                model.isWorking ? "Verifying\u{2026}" : "Verify and continue",
-                systemImage: model.isWorking ? nil : "arrow.right",
-                isEnabled: model.trimmedCode.count == 6 && !model.isWorking,
-                action: verifyCode
-            )
-
-            HStack(spacing: 18) {
-                Button("Use a different email") {
-                    model.useDifferentEmail()
-                    showNoCodeHelp = false
-                }
-                Button(showNoCodeHelp ? "Hide help" : "Didn\u{2019}t get a code?") {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        showNoCodeHelp.toggle()
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Color.vfTextSecondary)
-            .disabled(model.isWorking)
-
-            if showNoCodeHelp {
-                noCodeHelp
-            }
-
-            if model.shouldOfferInfrastructureFallback {
-                infrastructureFallback
-            }
-        }
-    }
-
-    private func terminalContent(_ terminal: TrialEmailTerminalState) -> some View {
-        VStack(spacing: 12) {
-            Text(terminal.headline)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(Color.vfTextPrimary)
-
-            Text("Verify your email to choose how you want to use Zerro.")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.vfTextSecondary)
-        }
-    }
-
-    @ViewBuilder
-    private var errorMessage: some View {
-        if case .failed(let message) = model.phase {
-            Text(message)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfRecordingRed)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var noCodeHelp: some View {
-        VStack(spacing: 8) {
-            Text("Check spam or wait a minute before trying again.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-
-            HStack(spacing: 18) {
-                Button("Resend code", action: startFreeTrial)
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Color.vfTextSecondary)
-        }
-        .padding(.top, 2)
-    }
-
-    private var infrastructureFallback: some View {
-        VStack(spacing: 8) {
-            Text("We\u{2019}re having trouble reaching our servers. Please try again in a moment.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 2)
-    }
-
-    private func setupField<Content: View>(
-        isFocused: Bool,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack(spacing: 10) {
-            content()
-            if model.isWorking {
-                ProgressView().controlSize(.small)
-            }
-        }
-        .padding(.horizontal, 15)
-        .frame(height: 48)
-        .background(Color.vfCardBackground, in: RoundedRectangle(cornerRadius: 13))
-        .overlay(
-            RoundedRectangle(cornerRadius: 13)
-                .strokeBorder(
-                    isFocused ? Color.zerroSetupBlue.opacity(0.8) : Color.white.opacity(0.11),
-                    lineWidth: isFocused ? 1.5 : 1
-                )
-        )
-        .shadow(color: isFocused ? Color.zerroSetupBlue.opacity(0.14) : .clear, radius: 8)
-    }
-
-    private func startFreeTrial() {
-        guard OnboardingSetupPolicy.canStartFree(
-            email: model.email,
-            agreed: hasAgreed,
-            isWorking: model.isWorking
-        ) else { return }
-
-        acceptTermsAndRecordStart()
-        model.sendCode(using: trialCredits)
-    }
-
-    private func verifyCode() {
-        model.verify(
-            using: trialCredits,
-            marketingEmailOptIn: marketingEmailOptIn
-        ) {
-            Log.billing.notice("shared onboarding email verified")
-            onboarding.showPathSelection()
-        }
-    }
-
-    private func acceptTermsAndRecordStart() {
+    private func continueSetup() {
+        guard hasAgreed else { return }
         if onboarding.needsConsent {
             onboarding.recordConsent()
         }
         onboarding.recordOnboardingStarted()
         onboarding.recordScreenViewed(.setup)
+        onboarding.beginBYOKKeys()
     }
 }
 
@@ -321,7 +88,6 @@ private struct ManagedSetupView: View {
 
 struct BYOKSetupView: View {
     @Environment(OnboardingState.self) private var onboarding
-    @Environment(BYOKTrialManager.self) private var trial
     @Environment(ProviderKeyPresence.self) private var keyPresence
     @Environment(PreferencesStore.self) private var preferences
     @Environment(LocalModelManager.self) private var modelManager
@@ -330,13 +96,11 @@ struct BYOKSetupView: View {
     @State private var anthropic = APIKeyFieldModel(provider: .anthropic)
     @State private var gemini = APIKeyFieldModel(provider: .gemini)
     @State private var submissionPhase: SubmissionPhase = .idle
-    @State private var eligibilityConfirmed = false
     @State private var keysValidated = false
     @State private var errorMessage: String?
 
     private enum SubmissionPhase: Equatable {
         case idle
-        case eligibility
         case validating
         case preparingLocalModel
     }
@@ -391,8 +155,7 @@ struct BYOKSetupView: View {
                 .padding(.top, 20)
 
                 Button("Back") {
-                    trial.deselectIfUnstarted()
-                    onboarding.returnToPathSelection()
+                    onboarding.moveBack()
                 }
                     .buttonStyle(.plain)
                     .font(.system(size: 13, weight: .medium))
@@ -406,7 +169,6 @@ struct BYOKSetupView: View {
         .frame(maxWidth: .infinity)
         .onAppear {
             wireModels()
-            eligibilityConfirmed = trial.isSelected
         }
         .onChange(of: validationStates) { _, _ in
             finishValidationIfReady()
@@ -419,7 +181,6 @@ struct BYOKSetupView: View {
     private var submissionTitle: String {
         switch submissionPhase {
         case .idle: return keysValidated ? "Retry local model download" : "Continue"
-        case .eligibility: return "Checking eligibility\u{2026}"
         case .validating: return "Checking keys\u{2026}"
         case .preparingLocalModel: return "Preparing local transcription\u{2026}"
         }
@@ -475,32 +236,7 @@ struct BYOKSetupView: View {
         ) else { return }
 
         errorMessage = nil
-        if eligibilityConfirmed {
-            beginValidation()
-            return
-        }
-
-        submissionPhase = .eligibility
-        Task { @MainActor in
-            do {
-                let eligibility = try await trial.checkEligibility()
-                switch eligibility {
-                case .eligible, .active:
-                    eligibilityConfirmed = true
-                    trial.select()
-                    beginValidation()
-                case .exhausted:
-                    submissionPhase = .idle
-                    errorMessage = "This Mac has already completed its own-key trial."
-                }
-            } catch let error as BYOKTrialError {
-                submissionPhase = .idle
-                errorMessage = error.userMessage
-            } catch {
-                submissionPhase = .idle
-                errorMessage = BYOKTrialError.server.userMessage
-            }
-        }
+        beginValidation()
     }
 
     private func beginValidation() {
@@ -536,11 +272,6 @@ struct BYOKSetupView: View {
         }
 
         keysValidated = true
-        Analytics.captureOnce(
-            "byok_trial_selected",
-            key: "vf.analytics.byokTrialSelected",
-            ["surface": "onboarding"]
-        )
         preferences.sttEngine = .local
         Analytics.capture("stt_engine_changed", [
             "engine": STTEngine.local.rawValue,
@@ -649,6 +380,16 @@ private struct BYOKSetupKeyField: View {
     }
 }
 
+extension ModelProvider {
+    var logoAssetName: String {
+        switch self {
+        case .openai: return "ProviderOpenAI"
+        case .gemini: return "ProviderGemini"
+        case .anthropic: return "ProviderAnthropic"
+        }
+    }
+}
+
 // MARK: - Shared Setup components
 
 private struct OnboardingBrandHero: View {
@@ -739,16 +480,11 @@ struct OnboardingSetupMark<Content: View>: View {
 
 private struct OnboardingSetupConsent: View {
     @Binding var isAgreed: Bool
-    private let marketingEmailOptIn: Binding<Bool>?
     @AppStorage(CrashReporting.isEnabledDefaultsKey)
     private var analyticsEnabled = OnboardingState.analyticsDefaultOptIn
 
-    init(
-        isAgreed: Binding<Bool>,
-        marketingEmailOptIn: Binding<Bool>? = nil
-    ) {
+    init(isAgreed: Binding<Bool>) {
         _isAgreed = isAgreed
-        self.marketingEmailOptIn = marketingEmailOptIn
     }
 
     var body: some View {
@@ -778,21 +514,6 @@ private struct OnboardingSetupConsent: View {
             .onChange(of: analyticsEnabled) { _, enabled in
                 Analytics.setEnabled(enabled)
             }
-
-            if let marketingEmailOptIn {
-                Toggle(isOn: marketingEmailOptIn) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Email me occasional Zerro updates")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.vfTextSecondary)
-                        Text("Tips, feedback requests, product news, and offers. Unsubscribe anytime.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.vfTextTertiary)
-                    }
-                }
-                .toggleStyle(.checkbox)
-                .controlSize(.regular)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -806,15 +527,15 @@ extension Color {
 
 #if DEBUG
 
-#Preview("Setup · Managed") {
-    OnboardingPreviewHost(step: .email) {
+#Preview("Setup") {
+    OnboardingPreviewHost(step: .welcome) {
         OnboardingSetupStepView()
     }
 }
 
-#Preview("Setup · BYOK") {
-    OnboardingPreviewHost(step: .email, path: .byok) {
-        OnboardingSetupStepView()
+#Preview("Setup \u{00B7} Keys") {
+    OnboardingPreviewHost(step: .email) {
+        BYOKSetupView()
     }
 }
 

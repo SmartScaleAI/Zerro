@@ -17,26 +17,29 @@
 //  settings; once the feed is live, no code change should be needed
 //  here — the controller will simply start finding entries.
 //
-//  E7 / Appendix F: the updater delegate filters appcast items to the BYOK
-//  license's 1-year update window (silently — out-of-window users see
-//  "you're up to date", never a refusal). The decision itself is the pure
-//  `UpdateWindowPolicy`; the delegate only adapts `SUAppcastItem`s to it.
+//  The updater delegate filters appcast items to the running app's own
+//  major version (silently — a future major is never auto-offered; see
+//  `UpdateMajorPolicy`). The decision itself is that pure policy; the
+//  delegate only adapts `SUAppcastItem`s to it.
+//
+//  Community builds (plain source checkouts) don't run the official
+//  updater at all: the update channel belongs to the official release
+//  pipeline, so the controller never starts and the check rows hide.
 //
 
 import Combine
 import Sparkle
 import SwiftUI
 
-// MARK: - Update-window delegate (E7)
+// MARK: - Update-major delegate
 
-/// `SPUUpdaterDelegate` implementing the BYOK update-window filter via
-/// `bestValidUpdate(in:for:)`. The window source is an injected closure
-/// (read fresh on every check, so a renewal key pasted mid-session takes
-/// effect on the next check); production reads the real Keychain slots.
-/// Everything else about updating is untouched — Sparkle's default behavior
-/// applies whenever the policy defers.
-final class UpdateWindowUpdaterDelegate: NSObject, SPUUpdaterDelegate {
-    private let currentWindowEnd: () -> Date?
+/// `SPUUpdaterDelegate` implementing the major-version boundary via
+/// `bestValidUpdate(in:for:)`. The allowed major is an injected closure
+/// (read fresh on every check); production reads the running bundle's own
+/// marketing version. Everything else about updating is untouched —
+/// Sparkle's default behavior applies whenever the policy defers.
+final class UpdateMajorUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    private let allowedMajor: () -> Int?
     /// I-02: whether the app is mid-work (recording, processing, or any
     /// Dev-Mode dispatch state) — i.e. anything but a fully idle state
     /// machine. Read fresh on each relaunch request.
@@ -54,27 +57,27 @@ final class UpdateWindowUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     private var pendingRelaunch: (() -> Void)?
 
     init(
-        currentWindowEnd: @escaping () -> Date?,
+        allowedMajor: @escaping () -> Int?,
         isBusy: @escaping @MainActor () -> Bool,
         onNextIdle: @escaping @MainActor (_ callback: @escaping @MainActor () -> Void) -> Void
     ) {
-        self.currentWindowEnd = currentWindowEnd
+        self.allowedMajor = allowedMajor
         self.isBusy = isBusy
         self.onNextIdle = onNextIdle
     }
 
     func bestValidUpdate(in appcast: SUAppcast, for updater: SPUUpdater) -> SUAppcastItem? {
         let candidates = appcast.items.map {
-            UpdateWindowPolicy.Candidate(date: $0.date, version: $0.versionString)
+            UpdateMajorPolicy.Candidate(version: $0.versionString, marketingVersion: $0.displayVersionString)
         }
-        switch UpdateWindowPolicy.decide(candidates: candidates, windowEnd: currentWindowEnd()) {
+        switch UpdateMajorPolicy.decide(candidates: candidates, allowedMajor: allowedMajor()) {
         case .deferToSparkle:
             return nil
         case .noUpdate:
             // Sparkle's explicit "no valid item" sentinel — the check reports
-            // "you're up to date" (decision F.0: silent, never a refusal).
+            // "you're up to date" (silent, never a refusal).
             return SUAppcastItem.empty()
-        case .bestInWindow(let index):
+        case .bestAllowed(let index):
             return appcast.items[index]
         }
     }
@@ -169,7 +172,7 @@ final class UpdaterViewModel: ObservableObject {
     private let controller: SPUStandardUpdaterController
     /// Held strongly for the controller's lifetime — Sparkle keeps only a
     /// weak delegate reference.
-    private let updaterDelegate: UpdateWindowUpdaterDelegate
+    private let updaterDelegate: UpdateMajorUpdaterDelegate
     private var cancellable: AnyCancellable?
 
     /// The busy/idle pair feeds the I-02 relaunch gate and is wired to the
@@ -182,16 +185,11 @@ final class UpdaterViewModel: ObservableObject {
     ) {
         // startingUpdater: true → Sparkle begins its automatic-check
         // schedule immediately (per the user's preference plist). The
-        // updater delegate applies the E7 BYOK update-window filter and
-        // the I-02 idle relaunch gate (and nothing else); nil
-        // userDriverDelegate → default update UI.
-        let delegate = UpdateWindowUpdaterDelegate(
-            currentWindowEnd: {
-                UpdateWindowPolicy.currentWindowEnd(
-                    kindSlot: KeychainStore.licenseProductKind,
-                    createdAtSlot: KeychainStore.byokLicenseCreatedAt
-                )
-            },
+        // updater delegate applies the major-version boundary and the I-02
+        // idle relaunch gate (and nothing else); nil userDriverDelegate →
+        // default update UI.
+        let delegate = UpdateMajorUpdaterDelegate(
+            allowedMajor: { UpdateMajorPolicy.installedMajor() },
             isBusy: isBusy,
             onNextIdle: onNextIdle
         )
@@ -203,9 +201,14 @@ final class UpdaterViewModel: ObservableObject {
         // agent that startup work is what stalls the launch and surfaces as
         // "Failed to launch app in reasonable time". Under previews we still
         // build the controller (the stored property must exist) but DON'T start
-        // it; real launches are unchanged.
+        // it; real launches are unchanged. Community builds also never start
+        // the updater — the official appcast/DMG channel belongs to the
+        // official release pipeline (see `EntitlementEnforcementMode`), and a
+        // source build updates by rebuilding from source.
+        let startsUpdater = !ZerroApp.isRunningInXcodePreview
+            && EntitlementEnforcementMode.productionDefault == .official
         self.controller = SPUStandardUpdaterController(
-            startingUpdater: !ZerroApp.isRunningInXcodePreview,
+            startingUpdater: startsUpdater,
             updaterDelegate: delegate,
             userDriverDelegate: nil
         )
@@ -233,14 +236,18 @@ struct CheckForUpdatesView: View {
     @EnvironmentObject private var updater: UpdaterViewModel
 
     var body: some View {
-        // Render via the shared MenuRow so this item is visually
-        // indistinguishable from "Open Zerro", "Start Recording", etc.
-        // MenuRow's built-in isDisabled handles the greyed/disabled
-        // state when Sparkle is mid-check or otherwise can't check.
-        MenuRow(
-            label: "Check for Updates\u{2026}",
-            isDisabled: !updater.canCheckForUpdates,
-            action: { updater.checkForUpdates() }
-        )
+        // Community builds have no official updater to drive — render
+        // nothing rather than a permanently-disabled row.
+        if EntitlementEnforcementMode.productionDefault == .official {
+            // Render via the shared MenuRow so this item is visually
+            // indistinguishable from "Open Zerro", "Start Recording", etc.
+            // MenuRow's built-in isDisabled handles the greyed/disabled
+            // state when Sparkle is mid-check or otherwise can't check.
+            MenuRow(
+                label: "Check for Updates\u{2026}",
+                isDisabled: !updater.canCheckForUpdates,
+                action: { updater.checkForUpdates() }
+            )
+        }
     }
 }

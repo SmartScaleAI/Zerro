@@ -47,13 +47,13 @@ final class ModelCountCopyGuardTests: XCTestCase {
 
     // MARK: - Copy guards
 
-    /// Every user-facing string on every `PaywallCopy` case, plus the Managed plan
-    /// card subtitle, iterated so a future case with stale wording is caught too.
+    /// Every user-facing string on every `PaywallCopy` case, plus the license
+    /// card's feature lines, iterated so a future case with stale wording is
+    /// caught too.
     private var allPaywallCopySurfaces: [(label: String, text: String)] {
         let cases: [(String, PaywallCopy)] = [
-            ("blocked", .blocked),
-            ("upgrade", .upgrade),
-            ("topup", .topup),
+            ("localTrialUpgrade", .localTrialUpgrade),
+            ("localTrialComplete", .localTrialComplete),
             ("manage", .manage),
         ]
         var surfaces = cases.flatMap { name, copy in
@@ -62,7 +62,9 @@ final class ModelCountCopyGuardTests: XCTestCase {
                 (label: "\(name).subheadline", text: copy.subheadline),
             ]
         }
-        surfaces.append((label: "managedCardSubtitle", text: PaywallCopy.managedCardSubtitle))
+        for (index, line) in PaywallCopy.licenseFeatureLines.enumerated() {
+            surfaces.append((label: "licenseFeatureLines[\(index)]", text: line))
+        }
         return surfaces
     }
 
@@ -76,20 +78,5 @@ final class ModelCountCopyGuardTests: XCTestCase {
                 )
             }
         }
-    }
-
-    /// Positive lock: the two paywall strings that DO state a count must state the
-    /// derived one, not a literal. Keeps the guard above from passing on copy that
-    /// simply dropped the number.
-    func testCountingPaywallCopyIsDerivedFromTheRegistry() {
-        let word = ModelRegistry.selectableCountWord
-        XCTAssertTrue(
-            PaywallCopy.upgrade.subheadline.contains("all \(word) models"),
-            "the upgrade subheadline should state the derived model count"
-        )
-        XCTAssertTrue(
-            PaywallCopy.managedCardSubtitle.contains("all \(word) models"),
-            "the Managed card subtitle should state the derived model count"
-        )
     }
 }

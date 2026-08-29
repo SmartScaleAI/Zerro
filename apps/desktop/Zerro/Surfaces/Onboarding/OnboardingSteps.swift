@@ -63,421 +63,6 @@ struct WelcomeStepView: View {
     }
 }
 
-// MARK: - Email verification (Phase F — required step)
-
-@MainActor
-enum TrialEmailNoCodeContinuation {
-    static func perform(on onboarding: OnboardingState) {
-        perform(on: onboarding) { Analytics.capture($0, $1) }
-    }
-
-    static func perform(
-        on onboarding: OnboardingState,
-        capture: (_ event: String, _ properties: [String: Any]) -> Void
-    ) {
-        // This action intentionally has no TrialCreditsManager dependency, so it
-        // cannot persist an email/token/grant or grant credits.
-        capture("trial_verification_skipped", [
-            "reason": "code_not_received",
-            "surface": "onboarding",
-        ])
-        Log.billing.notice("trial email verification skipped after no-code help — continuing without credits")
-        onboarding.advance()
-    }
-}
-
-/// The required email-verification step (right after Welcome). Every new user
-/// verifies an email here; on success the server-funded trial credits are
-/// granted (via `TrialCreditsManager` / `trial-start`) so the trial works
-/// afterward with no mid-task interruption.
-///
-/// Delivery-failure resilience: repeated infrastructure errors OR the explicit
-/// "Didn't get a code?" help path may continue WITHOUT trial credits. No email
-/// or token is persisted, and Settings keeps the verification affordance.
-struct EmailStepView: View {
-    @Environment(OnboardingState.self) private var onboarding
-    @Environment(TrialCreditsManager.self) private var trialCredits
-    @Environment(EntitlementStore.self) private var entitlements
-
-    private enum Step { case email, code }
-
-    @State private var step: Step = .email
-    @State private var email: String = ""
-    @State private var code: String = ""
-    @State private var working: Bool = false
-    @State private var verified: Bool = false
-    /// A spent email or device is informational, not a retryable send failure.
-    /// Both outcomes remain continuable without granting or resetting credits.
-    @State private var terminalState: TrialEmailTerminalState?
-    @State private var showNoCodeHelp: Bool = false
-    @State private var errorMessage: String?
-    /// True when the last error was an infrastructure failure (network/5xx/send)
-    /// rather than user error (wrong code, etc.) — only these unlock the
-    /// infra fallback and surface "Resend code".
-    @State private var errorIsSystem: Bool = false
-    @State private var systemFailureCount: Int = 0
-    @FocusState private var fieldFocused: Bool
-    @AppStorage(OnboardingPersistenceKeys.legacyBYOKPathActive) private var showBYOKFlow = false
-
-    /// After this many CONSECUTIVE system-class failures, offer the infra
-    /// fallback so a backend/Resend outage can never permanently trap the user.
-    private static let maxSystemFailuresBeforeFallback = 2
-
-    private var showInfraFallback: Bool { systemFailureCount >= Self.maxSystemFailuresBeforeFallback }
-
-    private var trimmedEmail: String { email.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var trimmedCode: String { code.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var emailLooksValid: Bool { trimmedEmail.contains("@") && trimmedEmail.contains(".") }
-
-    var body: some View {
-        Group {
-            if showBYOKFlow {
-                BYOKOnboardingFlowView {
-                    showBYOKFlow = false
-                    prefill()
-                }
-            } else {
-                emailFlow
-            }
-        }
-    }
-
-    private var emailFlow: some View {
-        OnboardingStepLayout {
-            OnboardingIconTile(systemName: "envelope.fill")
-        } content: {
-            VStack(spacing: VFSpacing.lg) {
-                VStack(spacing: VFSpacing.md) {
-                    Text(headline)
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .multilineTextAlignment(.center)
-                    Text(subhead)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.vfTextSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if !verified && terminalState == nil {
-                    field
-                }
-            }
-        } actions: {
-            actions
-        }
-        .onAppear(perform: prefill)
-    }
-
-    // MARK: - Copy
-
-    private var headline: String {
-        if verified { return "Email verified" }
-        if let terminalState { return terminalState.headline }
-        return step == .email ? "Verify your email" : "Enter your code"
-    }
-
-    private var subhead: String {
-        if verified {
-            return "Your free trial is ready. You\u{2019}re good to go."
-        }
-        if let terminalState { return terminalState.message }
-        switch step {
-        case .email:
-            return "Verify your email to start your free trial: no credit card, no API key. We\u{2019}ll send a 6-digit code."
-        case .code:
-            return TrialEmailCopy.codeDelivery(to: trimmedEmail)
-        }
-    }
-
-    // MARK: - Field
-
-    @ViewBuilder
-    private var field: some View {
-        VStack(alignment: .leading, spacing: VFSpacing.xs) {
-            switch step {
-            case .email:
-                fieldCapsule {
-                    TextField("you@example.com", text: $email)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .focused($fieldFocused)
-                        .disabled(working)
-                        .onChange(of: email) { _, _ in clearErrorOnEdit() }
-                        .onSubmit(sendCode)
-                }
-            case .code:
-                fieldCapsule {
-                    TextField("123456", text: $code)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.vfTextPrimary)
-                        .focused($fieldFocused)
-                        .disabled(working)
-                        .onChange(of: code) { _, newValue in
-                            let digits = String(newValue.filter(\.isNumber).prefix(6))
-                            if digits != newValue { code = digits }
-                            clearErrorOnEdit()
-                        }
-                        .onSubmit(verify)
-                }
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.vfRecordingRed)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func fieldCapsule<Inner: View>(@ViewBuilder _ inner: () -> Inner) -> some View {
-        HStack(spacing: VFSpacing.sm) {
-            inner()
-            if working {
-                ProgressView().controlSize(.small).progressViewStyle(.circular)
-            }
-        }
-        .padding(.horizontal, VFSpacing.md)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .fill(Color.vfControlBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: VFRadius.md, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Actions
-
-    @ViewBuilder
-    private var actions: some View {
-        if verified || terminalState != nil {
-            // Verified and genuinely already-used states advance normally.
-            OnboardingPrimaryButton("Continue", systemImage: "arrow.right") { onboarding.advance() }
-        } else {
-            switch step {
-            case .email:
-                if working {
-                    OnboardingPrimaryButton("Sending\u{2026}", isEnabled: false) { }
-                } else {
-                    OnboardingPrimaryButton("Send code", isEnabled: emailLooksValid) { sendCode() }
-                }
-                byokTrialButton
-            case .code:
-                if working {
-                    OnboardingPrimaryButton("Verifying\u{2026}", isEnabled: false) { }
-                } else {
-                    OnboardingPrimaryButton("Verify", isEnabled: trimmedCode.count == 6) { verify() }
-                }
-                Button(showNoCodeHelp ? "Hide delivery options" : "Didn\u{2019}t get a code?") {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        showNoCodeHelp.toggle()
-                    }
-                }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.vfTextSecondary)
-                    .disabled(working)
-                    .padding(.top, 2)
-                if showNoCodeHelp {
-                    noCodeHelp
-                }
-            }
-
-            // Infra fallback — appears ONLY after repeated SYSTEM failures, so a
-            // backend/Resend outage can't trap the user. Framed as an outage
-            // consequence, NOT a skip; the user gets no credits until they
-            // verify later in Settings → Billing.
-            if showInfraFallback {
-                infraFallback
-            }
-        }
-    }
-
-    private var byokTrialButton: some View {
-        Button("Use my own API keys instead") {
-            fieldFocused = false
-            onboarding.selectPath(.byok)
-            showBYOKFlow = true
-            Analytics.capture("byok_trial_selected", ["surface": "onboarding"])
-        }
-        .buttonStyle(.plain)
-        .font(.system(size: 12))
-        .foregroundStyle(Color.vfTextTertiary)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.top, 2)
-    }
-
-    private var infraFallback: some View {
-        VStack(spacing: VFSpacing.xs) {
-            Text("We\u{2019}re having trouble reaching our servers. You can continue and finish verifying your email later in Settings \u{2192} Billing.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Button("Continue for now") {
-                Log.billing.notice("trial email verification: infra fallback taken in onboarding — entering app WITHOUT granted credits (signals a trial-start/Resend outage)")
-                onboarding.advance()
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(Color.vfTextSecondary)
-        }
-        .padding(.top, VFSpacing.sm)
-    }
-
-    private var noCodeHelp: some View {
-        VStack(spacing: VFSpacing.xs) {
-            Text("Check spam or wait a minute before trying again. You can also continue without trial credits and verify later in Settings \u{2192} Billing.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextTertiary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button("Resend code", action: sendCode)
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.vfTextSecondary)
-                .disabled(working)
-
-            Button("Use a different email", action: useDifferentEmail)
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-
-            Button("Continue without trial", action: continueWithoutTrial)
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.vfTextSecondary)
-        }
-        .padding(.top, VFSpacing.xs)
-    }
-
-    // MARK: - Behavior
-
-    private func prefill() {
-        // Pre-fill the remembered email for convenience ONLY. Do NOT treat a
-        // locally-cached email / credit count as "verified": verification is
-        // server-side truth, and a deleted server grant must not still read as
-        // verified locally (the bug this guards against). The user always
-        // re-verifies with a fresh code here — `verify_trial_grant` resumes the
-        // same grant server-side (no refarm), so re-verifying a still-valid email
-        // is cheap and simply continues with the existing balance.
-        if email.isEmpty, let remembered = trialCredits.rememberedEmail {
-            email = remembered
-        }
-        fieldFocused = true
-    }
-
-    private func clearErrorOnEdit() {
-        if errorMessage != nil { errorMessage = nil }
-    }
-
-    private func sendCode() {
-        let address = trimmedEmail
-        guard emailLooksValid else {
-            errorMessage = TrialStartError.invalidEmail.userMessage
-            errorIsSystem = false
-            return
-        }
-        working = true
-        errorMessage = nil
-        Task { @MainActor in
-            defer { working = false }
-            do {
-                try await trialCredits.requestCode(email: address)
-                step = .code
-                code = ""
-                showNoCodeHelp = false
-                fieldFocused = true
-            } catch let error as TrialStartError {
-                handle(error)
-            } catch {
-                handleSystem("Couldn\u{2019}t send the code. Please try again.", error)
-            }
-        }
-    }
-
-    private func verify() {
-        let address = trimmedEmail
-        let entered = trimmedCode
-        guard entered.count == 6 else {
-            errorMessage = TrialStartError.invalidCode.userMessage
-            errorIsSystem = false
-            return
-        }
-        working = true
-        errorMessage = nil
-        Task { @MainActor in
-            defer { working = false }
-            do {
-                _ = try await trialCredits.verifyCode(email: address, code: entered)
-                // Token + email + credits are now stored by TrialCreditsManager.
-                // Refresh the entitlement so the trial credits are reflected
-                // (and the gating affordance unlocks). Then the user continues.
-                entitlements.refresh()
-                systemFailureCount = 0
-                verified = true
-                Log.billing.notice("trial email verified during onboarding")
-            } catch let error as TrialStartError {
-                handle(error)
-            } catch {
-                handleSystem("Couldn\u{2019}t verify the code. Please try again.", error)
-            }
-        }
-    }
-
-    /// Map a typed `TrialStartError`, distinguishing USER state (stay on the
-    /// step) from SYSTEM/infra failure (counts toward the fallback).
-    private func handle(_ error: TrialStartError) {
-        switch error {
-        case .alreadyUsed:
-            // Not an error — the email's trial is spent. Let them continue.
-            terminalState = TrialEmailTerminalState(error)
-            errorMessage = nil
-        case .deviceTrialUsed:
-            // Not an error — this Mac's trial is spent (a new email won't help).
-            // Distinct copy, still continuable. Log so we can measure how often
-            // the hard block fires on real (possibly shared-machine) users.
-            terminalState = TrialEmailTerminalState(error)
-            errorMessage = nil
-            Log.billing.notice("trial email verification: device already trialed (onboarding) — continuing without credits")
-        case .network, .server, .sendFailed, .malformedResponse, .malformedRequest,
-             .invalidContactToken:
-            handleSystem(error.userMessage, error)
-        case .invalidEmail, .disposableEmail, .invalidCode, .codeExpired,
-             .tooManyAttempts, .rateLimited:
-            // User-correctable → stay on the step, no fallback unlock.
-            errorMessage = error.userMessage
-            errorIsSystem = false
-        }
-    }
-
-    private func handleSystem(_ message: String, _ error: Error) {
-        errorMessage = message
-        errorIsSystem = true
-        systemFailureCount += 1
-        Log.billing.error("trial email verification system failure #\(systemFailureCount, privacy: .public) during onboarding: \(String(describing: error), privacy: .public)")
-    }
-
-    private func useDifferentEmail() {
-        step = .email
-        code = ""
-        errorMessage = nil
-        errorIsSystem = false
-        showNoCodeHelp = false
-        fieldFocused = true
-    }
-
-    private func continueWithoutTrial() {
-        TrialEmailNoCodeContinuation.perform(on: onboarding)
-    }
-}
-
 // MARK: - Permissions (merged Screen Recording + Microphone)
 
 /// One native-forward screen for both macOS permissions Zerro needs. Screen
@@ -985,27 +570,16 @@ private struct DevModeShortcutIllustration: View {
 // MARK: - All Set
 
 enum OnboardingReadyCopy {
-    static func trialMessage(
-        for path: OnboardingPath,
-        managedCreditsLimit: Int?,
-        managedCreditsRemaining: Int?
-    ) -> String? {
-        switch path {
-        case .byok:
-            return "Your \(BYOKTrialManager.generationLimit)-generation trial is ready."
-        case .free:
-            guard let credits = managedCreditsLimit ?? managedCreditsRemaining,
-                  credits > 0 else {
-                return nil
-            }
-            return "Your \(credits) free credits are ready."
-        }
+    /// The ready line under the "You're ready." headline: the local 14-day
+    /// trial, derived from `TrialManager`'s single source of truth so the
+    /// copy can't drift from the clock the gate actually enforces.
+    static var trialMessage: String {
+        "Your \(TrialManager.trialLengthDays)-day free trial is ready."
     }
 }
 
 struct AllSetStepView: View {
     @Environment(OnboardingState.self) private var onboarding
-    @Environment(TrialCreditsManager.self) private var trialCredits
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
@@ -1018,12 +592,10 @@ struct AllSetStepView: View {
                     .foregroundStyle(Color.vfTextPrimary)
                     .multilineTextAlignment(.center)
 
-                if let trialReadyMessage {
-                    Text(trialReadyMessage)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.vfSuccessGreen)
-                        .multilineTextAlignment(.center)
-                }
+                Text(OnboardingReadyCopy.trialMessage)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.vfSuccessGreen)
+                    .multilineTextAlignment(.center)
 
                 Text("Open Zerro\u{2019}s overlay and we\u{2019}ll guide you through your first capture. After that, use the shortcut anytime you want to show, speak, and get a result.")
                     .font(.system(size: 14))
@@ -1057,13 +629,6 @@ struct AllSetStepView: View {
         }
     }
 
-    private var trialReadyMessage: String? {
-        OnboardingReadyCopy.trialMessage(
-            for: onboarding.onboardingPath,
-            managedCreditsLimit: trialCredits.creditsLimit,
-            managedCreditsRemaining: trialCredits.creditsRemaining
-        )
-    }
 }
 
 private struct OnboardingSuccessBadge: View {
@@ -1554,12 +1119,6 @@ struct OnboardingSecondaryButton: View {
     }
 }
 
-#Preview("3 · Email") {
-    OnboardingPreviewHost(step: .email) {
-        EmailStepView()
-    }
-}
-
 #Preview("4 · Permissions · Request") {
     OnboardingPreviewHost(
         step: .permissions,
@@ -1610,7 +1169,7 @@ struct OnboardingSecondaryButton: View {
 }
 
 #Preview("Complete") {
-    OnboardingPreviewHost(step: .allSet, path: .byok) {
+    OnboardingPreviewHost(step: .allSet) {
         AllSetStepView()
     }
 }

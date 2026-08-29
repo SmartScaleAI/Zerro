@@ -83,7 +83,7 @@ final class PillFailureCardBridgeTests: XCTestCase {
     // MARK: - Config failures → "Open Settings" card (UX-A)
 
     /// The three config reasons (missing/invalid key, model not installed) map to
-    /// the dedicated `.openSettings` card deep-linked to Account & Billing — NOT
+    /// the dedicated `.openSettings` card deep-linked to API Keys & License — NOT
     /// the Cancel/Retry `.error` card or the reopen-area-selector fallback. Checked
     /// even WITH a processed recording on disk (a re-run fails identically until the
     /// config is fixed, so the fix is in Settings).
@@ -159,96 +159,6 @@ final class PillFailureCardBridgeTests: XCTestCase {
             return XCTFail("a retryable reason with no processed recording should map to .error")
         }
         XCTAssertFalse(retryable)
-    }
-
-    // MARK: - Out-of-credits: record-START block vs post-capture
-
-    /// Record-START out-of-credits (preflight gate, nothing captured): the
-    /// `presentPreflightBlock` path carries the start-specific
-    /// `.outOfCreditsAtStart` reason and routes to the dedicated
-    /// `.outOfCreditsStart` pill — NOT the Cancel/Retry `.error` card (the bug
-    /// reproduced before this fix) nor the post-capture Discard/Upgrade resume
-    /// card. Non-retryable, not a paid block, start-oriented copy, no Retry.
-    func testOutOfCreditsAtStartMapsToStartPillNoRetry() {
-        let appState = AppState()
-        appState.processedRecording = nil // nothing captured at record-start
-        appState.presentPreflightBlock(.outOfCredits)
-
-        // The preflight block carries the start reason, not post-capture `.outOfCredits`.
-        guard case .failed(let reason) = appState.state else {
-            return XCTFail("expected .failed, got \(appState.state)")
-        }
-        XCTAssertEqual(reason, .outOfCreditsAtStart)
-        XCTAssertFalse(reason.isRetryable)
-        // Not a paid block → no held recording / resume affordance.
-        XCTAssertNil(PaidBlockReason(reason))
-        XCTAssertFalse(appState.canRetryFailure)
-        XCTAssertFalse(appState.canResumePaidGeneration)
-
-        // The pill is the start-block card, never `.error` (Cancel/Retry) or
-        // `.paidBlockResume` (Discard/Upgrade).
-        guard case .outOfCreditsStart(let headline, let detail) = appState.pillState else {
-            return XCTFail("record-start out-of-credits should map to .outOfCreditsStart, got \(String(describing: appState.pillState))")
-        }
-        XCTAssertEqual(headline, "Out of credits")
-        XCTAssertEqual(detail, RecordingFailureReason.outOfCreditsAtStart.detail)
-        // Start-appropriate copy: none of the finish/resume phrasing.
-        XCTAssertFalse(detail.contains("finish this recording"), "start copy: \(detail)")
-        XCTAssertFalse(detail.contains("this recording stay available"), "start copy: \(detail)")
-        XCTAssertTrue(detail.contains("start a new recording"), "start copy: \(detail)")
-    }
-
-    /// The start block sets the `.outOfCredits` paywall trigger so the pill's
-    /// "Add Credits" primary opens the top-up paywall with the right copy and
-    /// `paywall_shown.trigger`.
-    func testOutOfCreditsAtStartSetsTopUpPaywallTrigger() {
-        let appState = AppState()
-        let entitlements = EntitlementStore.preview(.managed(creditsRemaining: 0, resetDate: Date()))
-        appState.entitlements = entitlements
-
-        appState.presentPreflightBlock(.outOfCredits)
-
-        XCTAssertEqual(entitlements.paywallTrigger, .outOfCredits,
-                       "the start block must route the paywall to the top-up copy")
-        // Keep a strong ref alive past the assertion (AppState holds it weakly).
-        withExtendedLifetime(entitlements) {}
-    }
-
-    /// POST-CAPTURE out-of-credits (the 402 after a recording was captured, held
-    /// on disk): unchanged. Keeps the `.outOfCredits` resume reason and the
-    /// `.paidBlockResume` Discard/Upgrade card with the finish/resume copy.
-    func testPostCaptureOutOfCreditsKeepsResumePill() {
-        let appState = AppState()
-        appState.processedRecording = makeProcessedRecording() // captured, held on disk
-        appState.state = .failed(reason: .outOfCredits)
-
-        XCTAssertTrue(appState.canResumePaidGeneration)
-        guard case .paidBlockResume(let headline, let detail, let entitled) = appState.pillState else {
-            return XCTFail("post-capture out-of-credits should map to .paidBlockResume, got \(String(describing: appState.pillState))")
-        }
-        XCTAssertEqual(headline, RecordingFailureReason.outOfCredits.headline)
-        XCTAssertEqual(detail, RecordingFailureReason.outOfCredits.detail)
-        // The post-capture copy is finish/resume-oriented — kept intact.
-        XCTAssertTrue(detail.contains("this recording stay available"), "resume copy: \(detail)")
-        XCTAssertFalse(entitled, "no entitlement wired → label is Upgrade, not Generate")
-    }
-
-    func testPaidBlockWithHeldRecordingMapsToResumePill() {
-        let appState = AppState()
-        // A paid block (trial credits exhausted) with a held recording → the
-        // dedicated resume pill, not the compact .error capsule. With no
-        // entitlements wired, `canGenerate` is false → the primary button reads
-        // "Upgrade" (entitled == false).
-        appState.processedRecording = makeProcessedRecording()
-        appState.state = .failed(reason: .trialCreditsExhausted)
-
-        XCTAssertTrue(appState.canResumePaidGeneration)
-        guard case .paidBlockResume(let headline, let detail, let entitled) = appState.pillState else {
-            return XCTFail("a paid block with a held recording should map to .paidBlockResume, got \(String(describing: appState.pillState))")
-        }
-        XCTAssertEqual(headline, RecordingFailureReason.trialCreditsExhausted.headline)
-        XCTAssertEqual(detail, RecordingFailureReason.trialCreditsExhausted.detail)
-        XCTAssertFalse(entitled, "no entitlement wired → label is Upgrade, not Generate")
     }
 
     // MARK: - H-11: error-card primary label

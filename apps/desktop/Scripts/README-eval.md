@@ -1,10 +1,10 @@
 # Model eval harness
 
-Compare chat/vision models on real Zerro recordings **without** deploying,
-Supabase, JWTs, or burning credits. The harness replicates the production
-pipeline exactly — same whisper-1 transcription request, same locked system
-prompt, same chronological frame/speech interleaving, same per-provider wire
-formats — so what you see here is what the Managed path will produce.
+Compare chat/vision models on real Zerro recordings directly against the
+provider APIs with your own keys. The harness replicates the app's generation
+pipeline — same whisper-1 transcription request, same locked system prompt,
+same chronological frame/speech interleaving, same per-provider wire formats —
+so what you see here is what the app produces with the same keys.
 
 Phase 0 also makes the loop **re-runnable end to end**: the raw `.mov` and the
 extracted working dir can both be retained and captured, and a real-pipeline
@@ -21,9 +21,8 @@ export ANTHROPIC_API_KEY=sk-ant-...  # required for anthropic:* models (Phase 0)
 chmod +x Scripts/capture-recording.sh Scripts/zerro-extract.sh
 ```
 
-> The three keys live in `supabase/.env.local` (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
-> `ANTHROPIC_API_KEY`). Export them into your shell before running, e.g.
-> `set -a; source ../../supabase/.env.local; set +a` from `apps/desktop/`.
+> Export the keys into your shell before running, for example from a local,
+> git-ignored env file: `set -a; source /path/to/zerro-eval.env; set +a`.
 
 Requires Node 18+ (uses built-in fetch/FormData). No npm installs.
 `zerro-extract` additionally needs Xcode command-line tools.
@@ -266,9 +265,11 @@ of it. Add a case to the JSON whenever a new real-world malformation shows up.
 
 ## Keep in sync
 
-The system prompt, interleaving, wire formats, and pricing are mirrored from:
-`supabase/functions/generate/{prompt,interleave,cost}.ts` and
-`providers/{openai,gemini}.ts`. If those change, update `eval-models.mjs`. The
+The system prompt, interleaving, wire formats, and pricing were mirrored from
+the archived legacy backend under `supabase/functions/generate/`
+(`{prompt,interleave,cost}.ts` and `providers/{openai,gemini}.ts`); that code
+is kept for reference only and no longer runs. The app's Swift generation
+pipeline is the live counterpart: if it changes, update `eval-models.mjs`. The
 `CHAT_PRICING` table must price every model in the matrix above so no run shows
 "unpriced".
 

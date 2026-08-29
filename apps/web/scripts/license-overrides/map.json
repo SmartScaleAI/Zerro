@@ -1,0 +1,410 @@
+{
+  "@emnapi/runtime@1.11.3": {
+    "files": [
+      "emnapi-1.11.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/toyobayashi/emnapi/v1.11.3/LICENSE"
+  },
+  "@img/sharp-darwin-x64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-freebsd-wasm32@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "note": "Thin platform wrapper that loads @img/sharp-wasm32 (whose sharp, sharp-libvips and emnapi notices are reproduced under its own entry); sharp's Apache-2.0 license applies.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4"
+  },
+  "@img/sharp-libvips-darwin-arm64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-darwin-x64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-arm64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-arm@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-ppc64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-riscv64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-s390x@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linux-x64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linuxmusl-arm64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-libvips-linuxmusl-x64@1.3.3": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Prebuilt libvips binaries. The npm packaging is Apache-2.0 (Lovell Fuller and contributors); the contained libvips and its bundled libraries are LGPL-3.0-or-later and other licenses as itemized in the sharp-libvips THIRD-PARTY-NOTICES reproduced below.",
+    "source": "https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-linux-arm64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linux-arm@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linux-ppc64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linux-riscv64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linux-s390x@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linux-x64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linuxmusl-arm64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-linuxmusl-x64@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lovell/sharp/v0.35.4/LICENSE"
+  },
+  "@img/sharp-wasm32@0.35.4": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md",
+      "emnapi-1.11.3-LICENSE.txt"
+    ],
+    "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply. The wasm build additionally includes @emnapi runtime code under the MIT license (Toyo Li); the emnapi license is reproduced below.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-webcontainers-wasm32@0.35.4": {
+    "files": [
+      "sharp-0.35.4-LICENSE.txt"
+    ],
+    "note": "Thin platform wrapper that loads @img/sharp-wasm32 (whose sharp, sharp-libvips and emnapi notices are reproduced under its own entry); sharp's Apache-2.0 license applies.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4"
+  },
+  "@img/sharp-win32-arm64@0.35.4": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-win32-ia32@0.35.4": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@img/sharp-win32-x64@0.35.4": {
+    "canonical": [
+      "LGPL-3.0-or-later"
+    ],
+    "files": [
+      "sharp-0.35.4-LICENSE.txt",
+      "sharp-libvips-1.3.3-LICENSE.txt",
+      "sharp-libvips-1.3.3-THIRD-PARTY-NOTICES.md"
+    ],
+    "note": "Platform build of sharp that also bundles libvips; sharp's Apache-2.0 license and the sharp-libvips notices both apply.",
+    "source": "https://github.com/lovell/sharp/tree/v0.35.4 and https://github.com/lovell/sharp-libvips/tree/v1.3.3"
+  },
+  "@next/env@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-darwin-arm64@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-darwin-x64@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-linux-arm64-gnu@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-linux-arm64-musl@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-linux-x64-gnu@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-linux-x64-musl@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-win32-arm64-msvc@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@next/swc-win32-x64-msvc@16.3.3": {
+    "files": [
+      "next-js-16.3.3-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/next.js/v16.3.3/license.md"
+  },
+  "@open-draft/deferred-promise@2.2.0": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "The published package declares the MIT license and the author Artem Zakharchenko in its package metadata and includes no license text; the repository commit it was published from (b30f1b683311030e92fcdd08d2bd6574d652b77f, per registry gitHead) also contains no license file. The MIT terms follow.",
+    "source": "https://registry.npmjs.org/@open-draft/deferred-promise/2.2.0"
+  },
+  "@posthog/core@1.32.5": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "Published by PostHog from the posthog-js repository (packages/core). At tag @posthog/core@1.32.5 the package manifest declares the MIT license and packages/core contains no license file; the repository-root LICENSE at that tag is Apache-2.0 (\"Copyright 2020 Posthog / Hiberly, Inc.\" and \"Copyright 2015 Mixpanel, Inc.\") and does not match this package's declared MIT license, so it is not reproduced as this package's license. The MIT terms follow.",
+    "source": "https://registry.npmjs.org/@posthog/core/1.32.5 and https://raw.githubusercontent.com/PostHog/posthog-js/%40posthog/core%401.32.5/packages/core/package.json"
+  },
+  "@radix-ui/number@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-compose-refs@1.1.2": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-context@1.1.2": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-direction@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-id@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-callback-ref@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-escape-keydown@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-layout-effect@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-previous@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-rect@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/react-use-size@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "@radix-ui/rect@1.1.1": {
+    "files": [
+      "radix-ui-primitives-LICENSE.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)"
+  },
+  "client-only@0.0.1": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "The published package declares the MIT license in its npm registry metadata (homepage: https://reactjs.org, published by the React team) and includes no copyright notice or license text; the MIT terms follow.",
+    "source": "https://registry.npmjs.org/client-only/0.0.1"
+  },
+  "data-uri-to-buffer@4.0.1": {
+    "files": [
+      "data-uri-to-buffer-4.0.1-LICENSE.txt"
+    ],
+    "note": "At release 4.0.1 the license text is published in the package README rather than a standalone file; the license section is reproduced below.",
+    "source": "https://raw.githubusercontent.com/TooTallNate/node-data-uri-to-buffer/4.0.1/README.md (license section)"
+  },
+  "is-node-process@1.2.0": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "The published package declares the MIT license in its package metadata (repository: https://github.com/mswjs/is-node-process) and includes no copyright notice or license text; the repository at tag v1.2.0 also contains no license file. The MIT terms follow.",
+    "source": "https://registry.npmjs.org/is-node-process/1.2.0 and https://raw.githubusercontent.com/mswjs/is-node-process/v1.2.0/package.json"
+  },
+  "react-remove-scroll-bar@2.3.8": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "The published package declares the MIT license and the author Anton Korzunov <thekashey@gmail.com> in its package metadata and includes no license text; the repository has no v2.3.8 tag and the commit this version was published from is not present in the public repository, so no repository source can be tied to this exact version. The MIT terms follow.",
+    "source": "https://registry.npmjs.org/react-remove-scroll-bar/2.3.8"
+  },
+  "strict-event-emitter@0.5.1": {
+    "canonical": [
+      "MIT"
+    ],
+    "note": "The published package declares the MIT license and the author Artem Zakharchenko <kettanaito@gmail.com> in its package metadata, and includes no license text of its own; the repository at tag v0.5.1 also contains no license file. The MIT terms follow.",
+    "source": "https://registry.npmjs.org/strict-event-emitter/0.5.1 and https://raw.githubusercontent.com/open-draft/strict-event-emitter/v0.5.1/package.json"
+  }
+}

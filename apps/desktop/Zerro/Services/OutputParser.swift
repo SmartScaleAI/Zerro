@@ -8,7 +8,7 @@
 //  for the §2 output contract (docs/refactor-artifact-response-plan.md),
 //  INCLUDING the three-rule recovery tier (§2 amendment, 2026-06-11).
 //  ADDITIVE in this phase — nothing calls it yet; Phase 4 runs it on every
-//  generation result (Managed and BYOK alike).
+//  generation result.
 //
 //  KEEP IN SYNC: the JS reference implementation is `parseArtifactResponse`
 //  in `apps/desktop/Scripts/eval-models.mjs`. Both implementations must pass

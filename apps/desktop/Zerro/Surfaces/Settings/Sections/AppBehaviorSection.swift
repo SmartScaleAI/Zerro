@@ -49,8 +49,8 @@ struct AppBehaviorSection: View {
 // MARK: - Analytics & Crash Reporting
 
 // Anonymous analytics + crash reporting — the one stream Zerro sends that
-// ISN'T part of generating your result (on Managed/Trial the prepped
-// frames + audio go to a third-party AI provider; this stream is metadata
+// ISN'T part of generating your result (the prepped frames + audio go to
+// the user's own AI provider; this stream is metadata
 // only — never recordings, transcripts, prompts, or keys). On by default,
 // one-click off. The toggle writes to the UserDefaults key both `Analytics`
 // and `CrashReporting` read for their opt-out gate, and `.onChange` flips

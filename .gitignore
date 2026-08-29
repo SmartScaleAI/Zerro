@@ -10,3 +10,6 @@
 
 # FUSE orphan files (created when files are edited while open; runtime junk)
 .fuse_hidden*
+
+# LLVM coverage output (generated on instrumented runs)
+*.profraw

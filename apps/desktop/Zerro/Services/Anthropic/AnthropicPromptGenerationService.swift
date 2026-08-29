@@ -8,7 +8,7 @@
 //  either on-device (whisper.cpp, no key) or on OpenAI cloud, so a Claude-only
 //  user can transcribe with the on-device model and never needs an OpenAI key.
 //
-//  Wire format ported from the Managed proxy's adapter
+//  Wire format ported from the original server-side adapter
 //  (supabase/functions/generate/providers/anthropic.ts — verified against
 //  the Messages API 2026-06-10) and the Phase 0 eval harness. KEEP IN SYNC
 //  with that adapter if either changes:

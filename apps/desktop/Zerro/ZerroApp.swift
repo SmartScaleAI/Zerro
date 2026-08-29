@@ -24,14 +24,6 @@ struct ZerroApp: App {
     /// app's lifetime, injected into the menu-bar content, Settings, and
     /// the Paywall window. The recording-start gate reads `canGenerate`.
     @State private var entitlements: EntitlementStore
-    /// Phase F (billing): the server-funded trial-credits layer. Long-lived like
-    /// the other services; shared between the entitlement layer (trial-credit
-    /// display + token presence) and AppState (proxy token provider for a trial
-    /// generation), and injected into the trial email-capture window.
-    @State private var trialCredits: TrialCreditsManager
-    /// Anonymous own-key trial counter. Generation content never flows through
-    /// this service; it syncs only successful recording UUIDs and a device hash.
-    @State private var byokTrial: BYOKTrialManager
     @State private var recentPrompts: RecentPromptStore
     /// Phase 5 (Local Whisper): the ONE shared on-device-model download/state
     /// manager. Created from `preferences` and injected into Settings so the
@@ -113,21 +105,11 @@ struct ZerroApp: App {
         let prefs = PreferencesStore()
         let perms = PermissionsManager()
         let onb = OnboardingState()
-        // Phase E (billing): one shared session-token manager backs BOTH the
-        // entitlement layer (license→session probe + display refresh) and the
-        // Managed generation proxy, so they share one cached token.
-        let sessionTokens = SessionTokenManager()
-        let managedProxy = ManagedProxyClient(sessionTokens: sessionTokens)
-        // Phase F: the trial-credits layer is shared by the entitlement store and
-        // AppState (it's the proxy token provider for a trial generation).
-        let trial = TrialCreditsManager()
-        let ownKeyTrial = BYOKTrialManager()
-        let ent = EntitlementStore(
-            sessionTokens: sessionTokens,
-            trialCredits: trial,
-            byokTrial: ownKeyTrial
-        )
-        ownKeyTrial.stateDidChange = { [weak ent] in ent?.refresh() }
+        // The local trial clock, over the real Keychain slots. Only official
+        // builds consult it (community mode pins an always-entitled state and
+        // never starts, reads, or evaluates the clock).
+        let trialClock = TrialManager()
+        let ent = EntitlementStore(trialManager: trialClock)
         let history = RecentPromptStore()
         // Phase 5: ONE shared on-device-model manager (created from prefs). Fire
         // download analytics off its state edges in this single place — edge-detected
@@ -174,15 +156,10 @@ struct ZerroApp: App {
         // generation; the menu-bar surfaces + Settings tab read from it
         // via the SwiftUI environment.
         state.recentPromptStore = history
-        // Phase E: the generation pipeline's routing branch reads these to
-        // decide local-BYOK vs Managed-proxy. Same lifetime + weak/owned
-        // contract as the refs above.
+        // Billing: the record-start gate + paywall trigger read the store.
+        // Same lifetime + weak/owned contract as the refs above.
         state.entitlements = ent
-        state.managedProxyClient = managedProxy
-        // Phase F: the trial token provider + trial-credit bookkeeping.
-        state.trialCredits = trial
-        state.byokTrial = ownKeyTrial
-        // Phase 6 (multi-model): the proxy generation path reads the picker's
+        // Phase 6 (multi-model): the generation path reads the picker's
         // selected model from prefs fresh at request time (same lifetime +
         // weak-ref contract as the refs above; prefs lives in @State below).
         state.preferences = prefs
@@ -209,8 +186,6 @@ struct ZerroApp: App {
         _permissions = State(initialValue: perms)
         _onboarding = State(initialValue: onb)
         _entitlements = State(initialValue: ent)
-        _trialCredits = State(initialValue: trial)
-        _byokTrial = State(initialValue: ownKeyTrial)
         _recentPrompts = State(initialValue: history)
         _modelManager = State(initialValue: modelManager)
         _keyPresence = State(initialValue: keyPresence)
@@ -282,9 +257,9 @@ struct ZerroApp: App {
             // any crash report shows a clean "app launched → ..." lead.
             Log.breadcrumb(category: .appLifecycle, message: "app launched")
             #if DEBUG
-            // Phase F: log the trial email Keychain slot disposition at launch
-            // (found/absent/failure, no values) so the reinstall-persistence of
-            // the server-funded grant is observable without a debugger. See the
+            // Log the trial-clock Keychain slot dispositions at launch
+            // (found/absent/failure, no values) so reinstall persistence of the
+            // local trial is observable without a debugger. See the
             // KeychainStore header.
             KeychainStore.debugLogTrialSlotDisposition()
             #endif
@@ -336,7 +311,7 @@ struct ZerroApp: App {
             // WITHOUT finalizing it (an interrupted finishWriting would corrupt
             // it), so it's recoverable instead of junk. recoverOrphanedRecording
             // IfAny OFFERS the survivor (rev 3 — asks before generating, never
-            // auto-spends a credit) and sweeps the rest, or falls back to the
+            // auto-spends the user's provider budget) and sweeps the rest, or falls back to the
             // blanket sweep when there's nothing recoverable. Runs in this
             // one-shot block (NOT App.init body, which SwiftUI may re-invoke);
             // single-instance, so any orphan here is from a prior session,
@@ -382,18 +357,9 @@ struct ZerroApp: App {
             // survives sleep and never relaunches, so a launch-only check would
             // never surface it. App-lifetime observer, registered once here.
             state.startWakeRecoveryObserver()
-            // M5 (resume after purchase): BEFORE the blanket launch sweep,
-            // restore a paid-blocked recording the user was holding across a
-            // quit-during-checkout. If one is restored, AppState re-enters
-            // `.failed` with the recording loaded so the pill returns with a
-            // Continue button; the marker in its working dir keeps the launch
-            // sweep from reclaiming it. Stale/missing/corrupt records are cleared
-            // here. Synchronous + on MainActor so state is set before the
-            // recovery task below runs (which no-ops when state isn't `.idle`).
-            state.restorePendingPaidGenerationIfAny()
-            // Launch recovery still covers crash / force-quit / relaunch (where
+            // Launch recovery covers crash / force-quit / relaunch (where
             // the app actually exited). Both paths OFFER (ask before
-            // generating); neither auto-spends a credit.
+            // generating); neither auto-generates.
             //
             // Dev Mode quit-recovery runs FIRST — it restores real source files
             // (higher stakes) than re-offering a recording. If it makes an offer,
@@ -460,20 +426,6 @@ struct ZerroApp: App {
                 await ent?.revalidateLicenseIfNeeded()
             }
 
-            // Phase E: refresh the Managed credit/status snapshot at launch so
-            // the menu-bar credits line + any past-due nudge are current. No-ops
-            // unless the user is `.managed`; fails open (keeps the cached
-            // snapshot) on any network hiccup, so it never blocks launch.
-            Task { @MainActor [weak ent] in
-                await ent?.refreshManagedEntitlement()
-            }
-
-            // Retry anonymous BYOK-trial usage ids that were completed while the
-            // counter endpoint was unavailable. The generated result was already
-            // delivered locally; this is bookkeeping only.
-            Task { @MainActor [weak ownKeyTrial] in
-                await ownKeyTrial?.syncPending()
-            }
         }
     }
 
@@ -506,7 +458,6 @@ struct ZerroApp: App {
             MenuBarIconView(isRecording: appState.isRecordingActive)
                 .background(OnboardingOpenerRegistrar())
                 .background(PaywallOpenerRegistrar())
-                .background(TrialEmailOpenerRegistrar())
                 .background(ActivateKeyOpenerRegistrar())
                 .background(SettingsWindowRegistrar())
         }
@@ -618,11 +569,6 @@ struct ZerroApp: App {
                 .dockIconVisibility(windowID: OnboardingScene.windowID)
                 .environment(permissions)
                 .environment(onboarding)
-                // Phase F: the required email-verification step needs the trial
-                // layer (to request/verify the code + grant credits) and the
-                // entitlement store (to refresh once credits are granted).
-                .environment(trialCredits)
-                .environment(byokTrial)
                 .environment(entitlements)
                 .environment(preferences)
                 .environment(modelManager)
@@ -636,7 +582,7 @@ struct ZerroApp: App {
         // window's modifiers, but `.defaultLaunchBehavior(.suppressed)`
         // guarantees it NEVER auto-presents at launch — it is brought
         // forward only by the recording-start gate via
-        // `AppDelegate.openPaywall()` when the user is `.expired`.
+        // `AppDelegate.openPaywall()` when the user is `.localTrialExpired`.
         Window("Zerro Unlock", id: PaywallScene.windowID) {
             PaywallView()
                 .applyZerroTitledWindowChrome()
@@ -664,44 +610,6 @@ struct ZerroApp: App {
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
-
-        // Phase F: the trial email-capture window. Like the paywall it NEVER
-        // auto-presents (`.suppressed`); AppState brings it forward via
-        // `AppDelegate.openTrialEmailCapture()` at the first server-funded
-        // generation, and dismisses on verify/cancel.
-        Window("Zerro Free Trial", id: TrialEmailScene.windowID) {
-            TrialEmailCaptureView()
-                .applyZerroTitledWindowChrome()
-                .dockIconVisibility(windowID: TrialEmailScene.windowID)
-                .disablesWindowRestoration()
-                .environment(appState)
-                .environment(trialCredits)
-                .environment(entitlements)
-        }
-        .windowResizability(.contentSize)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-
-        // In-app feedback dialog (replaces the old mailto link). Opened from the
-        // menu-bar "Send feedback" row and the Settings "Send Feedback" row via
-        // openWindow(id:). Mirrors the Settings window's chromeless/fixed-size
-        // treatment (`.hiddenTitleBar` + `.contentSize`); never auto-presents.
-        Window("Zerro Feedback", id: FeedbackScene.windowID) {
-            FeedbackView()
-                .dockIconVisibility(windowID: FeedbackScene.windowID)
-                .disablesWindowRestoration()
-                // The verified trial email (when present) attributes the report;
-                // FeedbackView reads `rememberedEmail` and sends null otherwise.
-                .environment(trialCredits)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
-        .defaultSize(
-            width: FeedbackScene.preferredWidth,
-            height: FeedbackScene.preferredHeight
-        )
 
         // "What's New" changelog window. Auto-presents at launch only when
         // init's one-shot policy check flipped the static (version changed +
@@ -745,7 +653,7 @@ struct ZerroApp: App {
     ///      reachable. DEFERRED: replace with a brief non-blocking
     ///      notification once UNUserNotification permission infra exists.
     ///   2.5 (Phase A) Permissions pass but the user isn't entitled
-    ///      (`EntitlementStore.canGenerate == false`, i.e. `.expired`) —
+    ///      (`EntitlementStore.canGenerate == false`, i.e. `.localTrialExpired`) —
     ///      bring the paywall forward and stop before capture, exactly
     ///      like the gates above. Only the START path gates; 0a/0b (stop /
     ///      processing) above are never entitlement-gated.
@@ -885,34 +793,28 @@ struct ZerroApp: App {
 
         // Phase A entitlement gate. Stops the START path (and only the
         // start path — 0a/0b above always run) before any capture when the
-        // user isn't entitled (`.expired`). A nil `entitlements` is treated
+        // user isn't entitled (`.localTrialExpired`). A nil `entitlements` is treated
         // as FAIL-OPEN: we proceed rather than trap a user behind a paywall
         // because of a wiring/lifetime gap — matching the fail-open contract
         // documented on EntitlementStore.refresh(). The state name is
         // .public (an enum description, no user content).
         if let entitlements, !entitlements.canGenerate {
-            // Tier 3 analytics: the plain not-entitled (`.expired`) open has no
-            // preflight reason → clear any stale block trigger so PaywallView
-            // reports `manual`. (A managed out-of-credits / inactive block routes
-            // to the failure pill below, not here, and sets its own trigger.)
-            if case .byokTrialExpired = entitlements.state {
-                entitlements.paywallTrigger = .byokTrialExhausted
-            } else {
-                entitlements.paywallTrigger = nil
-            }
+            // Tier 3 analytics: the plain not-entitled (expired-trial) open has
+            // no preflight reason → clear any stale block trigger so
+            // PaywallView reports `manual`.
+            entitlements.paywallTrigger = nil
             Log.hotkey.notice("gating: not entitled — opening paywall")
             AppDelegate.openPaywall()
             return
         }
 
         // Pre-flight gate (Phase G UX): catch a DEFINITIVELY-known failure that
-        // would otherwise only surface AFTER a wasted recording — Managed out of
-        // credits, an inactive/cancelled subscription, or a BYOK user with no key
-        // on file. Surfaces the SAME copy the post-recording path uses, before
-        // capture. Strictly fail-open: `preflightBlock` returns nil for anything
-        // inconclusive (no snapshot yet, an in-flight refresh, a Keychain blip),
-        // so a transient infra failure never traps an otherwise-entitled user —
-        // they record, and the proxy + post-recording path stay the backstop.
+        // would otherwise only surface AFTER a wasted recording — a user with
+        // no provider key / transcription path on file. Surfaces the SAME copy
+        // the post-recording path uses, before capture. Strictly fail-open:
+        // `preflightBlock` returns nil for anything inconclusive, so a
+        // transient failure never traps an otherwise-entitled user — they
+        // record, and the post-recording path stays the backstop.
         // The genuinely-not-pre-flightable failures (empty/too-quiet recording,
         // OpenAI transient errors, model-output problems) are unreachable here by
         // construction — they need the recording/API call to exist.
@@ -1006,19 +908,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window forward from the hotkey gate. Mirrors `requestOpenOnboarding`.
     nonisolated(unsafe) static var requestOpenPaywall: (() -> Void)?
 
-    /// Set by `TrialEmailOpenerRegistrar`. Used by `openTrialEmailCapture` to
-    /// bring the trial email-capture window forward when AppState pauses a trial
-    /// user's first server-funded generation (Phase F). Mirrors the two above.
-    nonisolated(unsafe) static var requestOpenTrialEmail: (() -> Void)?
-
     /// Set by `ActivateKeyOpenerRegistrar`. Used by `openActivateKey` to bring the
     /// dedicated "Activate your key" window forward when a checkout-return deep
-    /// link carries an issued key. Mirrors the three above.
+    /// link carries an issued key. Mirrors the two above.
     nonisolated(unsafe) static var requestOpenActivateKey: (() -> Void)?
 
     /// Set by `PaywallOpenerRegistrar` alongside the opener. Used by the
-    /// checkout-return deep link to dismiss the paywall for an already-activated
-    /// buyer (a Managed top-up that updated credits silently).
+    /// checkout-return deep link to dismiss the paywall for an
+    /// already-activated buyer (an idempotent re-click).
     nonisolated(unsafe) static var requestDismissPaywall: (() -> Void)?
 
     /// Set by `ZerroApp`'s one-shot bootstrap when the launch lacked current
@@ -1055,7 +952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated(unsafe) static weak var entitlements: EntitlementStore?
 
     /// Throttle stamp for the app-activation entitlement refresh, so a flurry of
-    /// activations doesn't hammer `/session` / `/entitlement`. MainActor-isolated
+    /// activations doesn't re-read the Keychain + trial clock. MainActor-isolated
     /// (only touched from `refreshEntitlementOnActivation`).
     @MainActor private static var lastActivationRefresh: Date?
 
@@ -1084,10 +981,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Step 5 (billing): refresh the entitlement whenever Zerro becomes
-        // active. This is the fallback for a checkout return where the `zerro://`
-        // deep link didn't fire, AND it silently bumps an already-activated
-        // Managed user's credit balance after a top-up (no paste needed). App-
-        // lifetime observer; throttled so it never hammers the backend.
+        // active. This is the fallback for a checkout return where the
+        // `zerro://` deep link didn't fire. App-lifetime observer; throttled
+        // and purely local (a Keychain read + trial-clock evaluation).
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -1098,14 +994,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Minimum gap between app-activation entitlement refreshes, so a rapid
-    /// ⌘-Tab in/out doesn't spam `/session` / `/entitlement`.
+    /// ⌘-Tab in/out doesn't re-read the Keychain + trial clock every time.
     @MainActor
     private static let activationRefreshThrottle: TimeInterval = 15
 
-    /// Throttled entitlement refresh on app activation. Always recomputes the
-    /// local state (cheap, fail-open); only re-hits `/entitlement` when a license
-    /// is actually on file (`refreshManagedEntitlement` itself no-ops unless the
-    /// user is `.managed`).
+    /// Throttled entitlement refresh on app activation. Recomputes the local
+    /// state (cheap, synchronous — license Keychain read + trial clock).
     @MainActor
     static func refreshEntitlementOnActivation() {
         guard let entitlements else { return }
@@ -1115,9 +1009,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         lastActivationRefresh = now
         entitlements.refresh()
-        if entitlements.hasLicenseOnFile {
-            Task { @MainActor in await entitlements.refreshManagedEntitlement() }
-        }
     }
 
     /// The custom URL scheme THIS build registers for the checkout-return deep
@@ -1198,9 +1089,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///     (requires THIS device's exact active key, so it isn't spoofable) and
     ///     shows the success confirmation without re-POSTing. No purchase
     ///     analytics fire from this handler in either case.
-    ///   • No `license_key` (a Managed top-up or an older link): keep the prior
-    ///     behavior exactly — refresh, then silently surface an already-entitled
-    ///     user or open the paywall focused on the activation field.
+    ///   • No `license_key` (an older or hand-trimmed link): refresh, then
+    ///     silently surface an already-entitled user or open the paywall
+    ///     focused on the activation field.
+    ///   • A COMMUNITY build ignores the link entirely (`.ignoredCommunity`),
+    ///     key or not: no refresh, no storage, no network, no analytics, no
+    ///     field mutation, no window effect. Community builds enforce no
+    ///     licensing and never show the Paywall or Activate Key windows.
     ///
     /// `handleCheckoutReturn` is the AppKit entry point; the work lives here in a
     /// resolver that takes the parsed link + injected `effects` so it's unit-
@@ -1223,7 +1118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         Log.billing.notice(
-            "deep link: checkout-complete received (key=\(parsed.licenseKey != nil, privacy: .public) product=\(parsed.productKind?.rawValue ?? "none", privacy: .public))"
+            "deep link: checkout-complete received (key=\(parsed.licenseKey != nil, privacy: .public))"
         )
         Task { @MainActor in
             _ = await resolveCheckoutReturn(parsed, entitlements: entitlements)
@@ -1253,6 +1148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the Swift 6 language mode). Default to `nil` and resolve here, inside this
         // @MainActor body where `.live` is legitimately reachable.
         let effects = effects ?? .live
+        // Community builds enforce no licensing: the link has nothing to do,
+        // so bail BEFORE any refresh, key check, field mutation, analytics, or
+        // window effect. Only this notice (no key material) is logged.
+        guard entitlements.enforcesLicensing else {
+            Log.billing.notice("deep link: checkout-complete ignored — community build enforces no licensing")
+            return .ignoredCommunity
+        }
         guard let key = parsed.licenseKey else {
             return await resolveCheckoutReturnWithoutKey(entitlements: entitlements, effects: effects)
         }
@@ -1292,33 +1194,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .prefilled
     }
 
-    /// The no-key checkout return (a Managed top-up or an older link): refresh,
-    /// then either confirm a top-up (when the credit balance went up) or, for an
-    /// entitled user with no observable delta, surface silently as before. A
-    /// not-yet-entitled user opens the paywall focused on the activation field
-    /// (a brand-new buyer who must paste).
+    /// The no-key checkout return (an older or hand-trimmed link): refresh,
+    /// then surface an already-entitled user silently. A not-yet-entitled user
+    /// opens the paywall focused on the activation field (a brand-new buyer
+    /// who must paste).
     @MainActor
     private static func resolveCheckoutReturnWithoutKey(
         entitlements: EntitlementStore,
         effects: CheckoutReturnEffects
     ) async -> CheckoutOutcome {
-        // Snapshot the balance BEFORE the refresh so a top-up's delta is visible.
-        let creditsBefore = entitlements.currentDisplayedCredits
         entitlements.refresh()
-        await entitlements.refreshManagedEntitlement()
         if entitlements.isPaidEntitled {
-            // Top-up: if credits demonstrably went up, confirm how many landed.
-            if let info = PurchaseSuccessInfo.topupDelta(
-                before: creditsBefore,
-                after: entitlements.currentDisplayedCredits
-            ) {
-                entitlements.purchaseSuccess = info
-                effects.capture("purchase_success_shown", ["method": "deeplink", "plan": "topup"])
-                effects.openPaywall()
-                Log.billing.notice("deep link: top-up confirmed")
-                return .topupConfirmed
-            }
-            // No computable delta (no credit balance, or no increase) → silent.
             effects.bringAppForward()
             effects.dismissPaywall()
             Log.billing.notice("deep link: already entitled — refreshed silently")
@@ -1331,18 +1217,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .openedPaywallNoKey
     }
 
-    /// Shared success tail for an automatic activation (fresh or already-active):
-    /// re-derive the entitlement, pull the latest Managed credits, then SHOW the
-    /// success confirmation rather than dismissing — the user dismisses it via
-    /// the confirmation's own button. The paywall window is opened to host the
-    /// confirmation (it may not be open after a deep-link activation).
+    /// Shared success tail for an already-active key: re-derive the
+    /// entitlement, then SHOW the success confirmation rather than dismissing —
+    /// the user dismisses it via the confirmation's own button. The paywall
+    /// window is opened to host the confirmation (it may not be open after a
+    /// deep-link activation).
     @MainActor
     private static func finishSuccessfulActivation(
         entitlements: EntitlementStore,
         effects: CheckoutReturnEffects
     ) async {
         entitlements.refresh()
-        await entitlements.refreshManagedEntitlement()
         guard let info = PurchaseSuccessInfo.fromActivatedState(entitlements.state) else {
             // Defensive: no paid state to confirm — fall back to surfacing the
             // app + dismissing the paywall (the prior success behavior).
@@ -1404,12 +1289,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Whether this build presents the licensing windows (Paywall, Activate
+    /// Key) at all. Reads the wired entitlement store's policy; before the
+    /// store is wired, the build's production default answers. Community
+    /// builds never present either window.
+    @MainActor
+    static var presentsLicensingWindows: Bool {
+        entitlements?.enforcesLicensing ?? (EntitlementEnforcementMode.productionDefault == .official)
+    }
+
     /// Brings the paywall window forward. Mirrors `openOnboarding()`:
     /// activate the app (so the window surfaces in front in this
     /// .accessory-policy app), then invoke the captured opener. Called
-    /// from the hotkey entitlement gate.
+    /// from the hotkey entitlement gate. A community build never opens the
+    /// paywall: an accidental call is a no-op that does not even activate
+    /// the app.
     @MainActor
     static func openPaywall() {
+        guard presentsLicensingWindows else {
+            Log.ui.notice("openPaywall() ignored — community build enforces no licensing")
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
         if let opener = requestOpenPaywall {
             opener()
@@ -1449,26 +1349,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Brings the trial email-capture window forward (Phase F). Mirrors
-    /// `openPaywall()`. Called by AppState when a trial user's first server-funded
-    /// generation needs an email verified.
-    @MainActor
-    static func openTrialEmailCapture() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let opener = requestOpenTrialEmail {
-            opener()
-        } else {
-            Log.ui.error("openTrialEmailCapture() called but requestOpenTrialEmail is nil — registrar didn't mount")
-        }
-    }
-
     /// Brings the dedicated "Activate your key" window forward. Mirrors
     /// `openPaywall()`: activate the app first (so the window surfaces in front in
     /// this .accessory-policy app), then invoke the captured opener. Called by the
     /// checkout-return deep link when an issued key is prefilled for explicit
-    /// activation (E-01) — in place of opening the full paywall.
+    /// activation (E-01) — in place of opening the full paywall. A community
+    /// build never opens it: an accidental call is a no-op that does not even
+    /// activate the app.
     @MainActor
     static func openActivateKey() {
+        guard presentsLicensingWindows else {
+            Log.ui.notice("openActivateKey() ignored — community build enforces no licensing")
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
         if let opener = requestOpenActivateKey {
             opener()
@@ -1522,31 +1415,10 @@ private struct PaywallOpenerRegistrar: View {
                     openWindow(id: PaywallScene.windowID)
                 }
                 // Captured alongside the opener so the checkout-return deep link
-                // can dismiss the paywall for an already-activated user (a
-                // top-up) without standing up a second registrar.
+                // can dismiss the paywall for an already-activated user (an
+                // idempotent re-click) without standing up a second registrar.
                 AppDelegate.requestDismissPaywall = {
                     dismissWindow(id: PaywallScene.windowID)
-                }
-            }
-    }
-}
-
-// MARK: - TrialEmailOpenerRegistrar
-//
-// Phase F twin of PaywallOpenerRegistrar. Captures `openWindow` into
-// AppDelegate.requestOpenTrialEmail at launch so AppState can bring the
-// (suppressed-at-launch) trial email-capture window forward when a trial user's
-// first server-funded generation needs email verification.
-
-private struct TrialEmailOpenerRegistrar: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                AppDelegate.requestOpenTrialEmail = {
-                    openWindow(id: TrialEmailScene.windowID)
                 }
             }
     }

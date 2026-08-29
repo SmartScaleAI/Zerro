@@ -20,56 +20,27 @@ import SwiftUI
 
 /// The label + optional secondary nudge + paywall trigger for the single,
 /// always-present menu-bar billing row, resolved from the live entitlement.
-/// This is the consolidation of the old scattered prompts (trial-upgrade,
-/// top-up, past-due, manage) into one row. Pure + `Equatable` so the
+/// Pure + `Equatable` so the
 /// state → (label, trigger) mapping is unit-tested without the view.
 ///
-/// Rules (decision §3):
-///   • `.trial`            → "Upgrade"     (voluntaryUpgrade) — trial still works.
-///   • `.expired`          → "Upgrade"     (blocked) — the gated wall.
-///   • `.managed` past-due → "Manage Plan" (manage) + "update your card" nudge.
-///   • `.managed` low      → "Add Credits" (topup) — lead with top-up packs.
-///   • `.managed` healthy  → "Add Credits" (topup) — a paid-up Managed user
-///     comes here to top up; the trigger matches the label so the paywall
-///     opens on the "Add Credits" copy, not the "Manage your plan" copy.
-///   • `.byok`             → "Manage Plan" (manage) — nothing to upgrade/top up.
+/// Rules:
+///   • `.localTrial`        → "Upgrade"     (voluntaryUpgrade) — trial still works.
+///   • `.localTrialExpired` → "Upgrade"     (blocked) — the gated wall.
+///   • `.byok`              → "Manage License" (manage) — devices/billing only.
 struct MenuBarBillingAction: Equatable {
     let label: String
-    /// A quiet secondary line under the label (currently only the Managed
-    /// past-due warning, folded in from the removed status nudge). `nil` hides it.
+    /// A quiet secondary line under the label. `nil` hides it.
     let secondary: String?
     let trigger: EntitlementStore.PaywallTrigger
 
-    static func resolve(state: EntitlementState, isPastDue: Bool, isLowBalance: Bool) -> MenuBarBillingAction {
+    static func resolve(state: EntitlementState) -> MenuBarBillingAction {
         switch state {
-        case .trial:
+        case .localTrial:
             return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .voluntaryUpgrade)
-        case .expired:
+        case .localTrialExpired:
             return MenuBarBillingAction(label: "Upgrade", secondary: nil, trigger: .blocked)
-        case .byokTrial:
-            return MenuBarBillingAction(label: "Get BYOK License", secondary: nil, trigger: .voluntaryUpgrade)
-        case .byokTrialExpired:
-            return MenuBarBillingAction(label: "Get BYOK License", secondary: nil, trigger: .byokTrialExhausted)
         case .byok:
-            return MenuBarBillingAction(label: "Manage Plan", secondary: nil, trigger: .manage)
-        case .managed:
-            // Past-due is a payment problem → manage (update card), and it folds
-            // in the warning the removed status nudge used to carry.
-            if isPastDue {
-                return MenuBarBillingAction(
-                    label: "Manage Plan",
-                    secondary: "Payment issue: update your card",
-                    trigger: .manage
-                )
-            }
-            // Low balance (but paid up) → buy more credits.
-            if isLowBalance {
-                return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
-            }
-            // Healthy Managed → top-up packs (already top tier; no plan ladder
-            // to sell). The label is "Add Credits", so route through `.topup`
-            // and the paywall opens on the matching "Add Credits" copy.
-            return MenuBarBillingAction(label: "Add Credits", secondary: nil, trigger: .topup)
+            return MenuBarBillingAction(label: "Manage License", secondary: nil, trigger: .manage)
         }
     }
 }
@@ -83,10 +54,9 @@ struct MenuBarPanelView: View {
     @Environment(AppState.self) private var appState
     @Environment(PreferencesStore.self) private var preferences
     @Environment(RecentPromptStore.self) private var recentPrompts
-    /// Read the entitlement so the dropdown can show a quiet "N free
-    /// generations left" line while `.trial` (hidden in every other state).
-    /// Always available in production now — the DEBUG entitlement picker below
-    /// reads this same injected store.
+    /// Read the entitlement so the dropdown can offer the Upgrade / Manage
+    /// License row on official builds that are not yet licensed. The DEBUG
+    /// entitlement picker below reads this same injected store.
     @Environment(EntitlementStore.self) private var entitlements
 
     /// Drives the Recent Prompts side panel (a trailing flyout). Opened on
@@ -142,30 +112,18 @@ struct MenuBarPanelView: View {
         VStack(spacing: 0) {
             header
 
-            // Quiet "N free generations left" line. Shown while `.trial` with a
-            // known credit balance; hidden on `.byok` / `.managed` / `.expired`,
-            // and on a not-yet-granted trial (nil balance) — that user instead
-            // sees the verify-email banner just below.
-            if case .trial(let creditsRemaining) = entitlements.state, let creditsRemaining {
-                trialStatusLine(creditsRemaining: creditsRemaining)
-            }
-            if case .byokTrial(let generationsRemaining) = entitlements.state {
-                byokTrialStatusLine(generationsRemaining: generationsRemaining)
-            }
-
-            // Phase F: a tappable banner for a trial user who hasn't claimed
-            // their free server-funded credits yet (existing users, or those who
-            // took the onboarding infra-failure fallback). Opens the standalone
-            // verification window.
-            if entitlements.needsTrialEmailVerification {
-                trialVerifyBanner()
+            // Quiet "N days left" line. Shown while the local trial is
+            // active; hidden once licensed or expired (the header status
+            // carries those).
+            if case .localTrial(let daysRemaining) = entitlements.state {
+                localTrialStatusLine(daysRemaining: daysRemaining)
             }
 
             menuDivider
 
             // Recent Results reads RecentPromptStore directly and never
             // consults EntitlementStore.canGenerate — reading/copying past
-            // prompts stays open in every entitlement state, `.expired`
+            // prompts stays open in every entitlement state, `.localTrialExpired`
             // included. Only the recording START path (handleHotkey) gates;
             // do not add an entitlement check to this row.
             MenuRow(
@@ -274,8 +232,7 @@ struct MenuBarPanelView: View {
             menuDivider
 
             MenuRow(label: "Send feedback") {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: FeedbackScene.windowID)
+                SupportEmail.open()
                 MenuBarExtraDismiss.dismiss()
             }
             // Phase 14 / C3.4: Sparkle "Check for Updates…". Owns the
@@ -284,14 +241,12 @@ struct MenuBarPanelView: View {
             // out of the environment so the controller stays alive
             // when the dropdown closes.
             CheckForUpdatesView()
-            // The billing entry point (consolidation target): label + paywall
-            // trigger vary by state, replacing the scattered trial-upgrade /
-            // top-up / past-due CTAs. Opens the (context-aware) paywall window.
-            // Hidden for BYOK — they fund generation with their own key, so
-            // there's nothing to upgrade, top up, or manage here.
-            if case .byok = entitlements.state {
-                // BYOK: omit the billing row entirely.
-            } else {
+            // The billing entry point: label + paywall trigger vary by
+            // state. Opens the (context-aware) paywall window. Shown only
+            // while an official build has something to sell — hidden once
+            // licensed (device management lives in Settings) and in community
+            // builds (no license is required).
+            if entitlements.enforcesLicensing && !entitlements.hasActiveLicense {
                 billingActionRow
             }
             MenuRow(label: "Settings\u{2026}", trailing: .hotkey("\u{2318},")) {
@@ -352,21 +307,6 @@ struct MenuBarPanelView: View {
                         )
                     }
             }
-            // Refill the displayed credit balance to full (managed plan
-            // allowance or trial grant limit) so the credits line, low-balance
-            // nudge, and out-of-credits gate can be re-tested without burning
-            // real generations. Display-only — a real /entitlement refresh
-            // restores the true balance.
-            MenuRow(label: "Reset Credits") {
-                entitlements.devResetCredits()
-            }
-            // Trial dev control. The trial is now a pure credit pool (no clock),
-            // so forcing trial/expired is done via the Entitlement picker above;
-            // what remains is wiping the local Phase F email-verification cache
-            // so the onboarding email step re-runs against the server.
-            MenuRow(label: "Reset Trial Verification") {
-                entitlements.devResetTrialVerification()
-            }
             MenuRow(label: "Reset Onboarding") {
                 // Clear both persisted flags in-process; no relaunch
                 // needed. Opens the window immediately so the next
@@ -380,12 +320,6 @@ struct MenuBarPanelView: View {
                 onboarding.hasCompletedOnboarding = false
                 onboarding.currentStep = .welcome
                 permissions.resetRequestFlags()
-                // Phase F: also clear locally-cached trial email-verification
-                // state (token + credits + remembered email) so the email step
-                // returns to its unverified first-run state — otherwise it would
-                // read "Email verified" from the local cache even after the
-                // server grant was deleted.
-                entitlements.devResetTrialVerification()
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: OnboardingScene.windowID)
             }
@@ -491,32 +425,14 @@ struct MenuBarPanelView: View {
 
     /// Header subtitle, driven by the live `EntitlementState`.
     ///
-    /// `.trial` deliberately reads just "Ready": the dedicated trial line
-    /// directly below the header carries the "N free generations left" count,
-    /// so showing it here too would be redundant. Managed shows its own
-    /// monthly credit count (BYOK funds via the user's own key).
+    /// `.localTrial` deliberately reads just "Ready": the dedicated trial line
+    /// directly below the header carries the "N days left" count, so showing
+    /// it here too would be redundant.
     private var headerStatusText: String {
         switch entitlements.state {
-        case .trial:
+        case .localTrial, .byok:
             return "Ready"
-        case .byokTrial:
-            return "Ready"
-        case .byok:
-            return "Ready"
-        case .managed:
-            // Credits are display-only (the server is the spend authority,
-            // Phase E) and read from the live snapshot — so the count is
-            // omitted until the first `/entitlement` refresh lands, rather than
-            // flashing a placeholder.
-            guard let snapshot = entitlements.managedSnapshot else { return "Ready" }
-            // ≤ 0 (charged to/below zero on the final uncapped generation) → the
-            // shared "Out of Credits" label, never a raw negative number.
-            if snapshot.isOutOfCredits { return CreditDisplay.balanceLabel(snapshot.creditsRemaining) }
-            let credits = snapshot.creditsRemaining == 1 ? "1 credit left" : "\(snapshot.creditsRemaining) credits left"
-            return "Ready \u{00B7} \(credits)"
-        case .expired:
-            return "Zerro Cloud Trial complete"
-        case .byokTrialExpired:
+        case .localTrialExpired:
             return "Trial complete"
         }
     }
@@ -525,26 +441,21 @@ struct MenuBarPanelView: View {
     /// the header reads as "inactive" without being alarming (no red).
     private var headerStatusColor: Color {
         switch entitlements.state {
-        case .expired, .byokTrialExpired:
+        case .localTrialExpired:
             return Color.vfTextTertiary
-        case .trial, .byokTrial, .byok, .managed:
+        case .localTrial, .byok:
             return Color.vfSuccessGreen
         }
     }
 
     // MARK: - Consolidated billing entry point
 
-    /// The single, always-present billing row. Its label + secondary nudge +
-    /// paywall trigger are resolved from the live entitlement (see
-    /// `MenuBarBillingAction`), so one row covers the old trial-upgrade, top-up,
-    /// past-due, and manage prompts. Click sets the trigger (so the paywall's
-    /// dynamic copy matches) and opens the context-aware paywall window.
+    /// The single billing row. Its label + secondary nudge + paywall trigger
+    /// are resolved from the live entitlement (see `MenuBarBillingAction`).
+    /// Click sets the trigger (so the paywall's dynamic copy matches) and
+    /// opens the context-aware paywall window.
     private var billingActionRow: some View {
-        let action = MenuBarBillingAction.resolve(
-            state: entitlements.state,
-            isPastDue: entitlements.managedSnapshot?.isPastDue == true,
-            isLowBalance: isBalanceLow
-        )
+        let action = MenuBarBillingAction.resolve(state: entitlements.state)
         return BillingActionRow(label: action.label, secondary: action.secondary) {
             entitlements.paywallTrigger = action.trigger
             AppDelegate.openPaywall()
@@ -552,31 +463,13 @@ struct MenuBarPanelView: View {
         }
     }
 
-    /// Phase F — tappable "verify your email to start your free trial" banner.
-    /// Understated amber treatment like the managed nudge; opens the standalone
-    /// verification window and closes the dropdown.
-    private func trialVerifyBanner() -> some View {
+    private func localTrialStatusLine(daysRemaining: Int) -> some View {
         HStack(spacing: 0) {
-            Text("Verify your email to start your Zerro Cloud Trial")
+            Text(Self.localTrialLineText(daysRemaining: daysRemaining))
                 .font(.system(size: 11))
-                .foregroundStyle(Color.vfBrandAccent)
-                .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            MenuBarExtraDismiss.dismiss()
-            AppDelegate.openTrialEmailCapture()
-        }
-    }
-
-    private func trialStatusLine(creditsRemaining credits: Int) -> some View {
-        HStack(spacing: 0) {
-            Text(Self.trialLineText(credits: credits))
-                .font(.system(size: 11))
-                .foregroundStyle(Color.vfTextSecondary)
+                .foregroundStyle(
+                    daysRemaining <= 3 ? Color.vfWarningAmber : Color.vfTextSecondary
+                )
                 .fixedSize()
             Spacer(minLength: 0)
         }
@@ -584,51 +477,12 @@ struct MenuBarPanelView: View {
         .padding(.vertical, 2)
     }
 
-    private func byokTrialStatusLine(generationsRemaining: Int) -> some View {
-        HStack(spacing: 0) {
-            Text(
-                generationsRemaining == 1
-                    ? "BYOK Trial \u{00B7} 1 generation left"
-                    : "BYOK Trial \u{00B7} \(generationsRemaining) generations left"
-            )
-            .font(.system(size: 11))
-            .foregroundStyle(
-                generationsRemaining <= 3 ? Color.vfWarningAmber : Color.vfTextSecondary
-            )
-            .fixedSize()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
-    }
-
-    /// The trial is a pool of server-funded CREDITS with no time limit, so the
-    /// line shows the remaining balance — the only thing that bounds it. The
-    /// unit is credits, never a flat generation count (§1.5): a generation's
-    /// cost varies by model, so "N generations" would mislead.
-    private static func trialLineText(credits: Int) -> String {
-        credits == 1
-            ? "Zerro Cloud Trial \u{00B7} 1 credit left"
-            : "Zerro Cloud Trial \u{00B7} \(credits) credits left"
-    }
-
-    // MARK: - Low-balance top-up / upgrade (multi-model 6B.4)
-
-    /// True when the spendable balance has dropped to the low-balance nudge
-    /// threshold (price-agnostic — charging is metered server-side). Managed
-    /// reads the snapshot's combined plan+top-up balance (F4 — the same number
-    /// the server's spend gate checks); BYOK/expired have no balance to nudge on.
-    private var isBalanceLow: Bool {
-        switch entitlements.state {
-        case .managed:
-            guard let snapshot = entitlements.managedSnapshot else { return false }
-            return CreditDisplay.isLowBalance(balance: snapshot.creditsRemaining, type: .paid)
-        case .trial(let credits):
-            guard let credits else { return false }
-            return CreditDisplay.isLowBalance(balance: credits, type: .trial)
-        case .byok, .expired, .byokTrial, .byokTrialExpired:
-            return false
-        }
+    /// The local trial is a clock, so the line shows the remaining whole days
+    /// — the only thing that bounds it. Singular/plural handled explicitly.
+    static func localTrialLineText(daysRemaining: Int) -> String {
+        daysRemaining == 1
+            ? "Free trial \u{00B7} 1 day left"
+            : "Free trial \u{00B7} \(daysRemaining) days left"
     }
 
     /// Open/close delays for the hover-driven side panels (Recent Prompts,
@@ -1068,13 +922,9 @@ private struct ModelPicker: View {
                         availableProviders: availableProviders
                     ) == model.id,
                     isDisabled: isBYOKGated(model, availableProviders: availableProviders),
-                    showsLock: isTrialLocked(model)
+                    showsLock: false
                 ) {
-                    if isTrialLocked(model) {
-                        openUpgrade()
-                    } else {
-                        select(model)
-                    }
+                    select(model)
                 }
             }
         }
@@ -1089,10 +939,6 @@ private struct ModelPicker: View {
             entitlement: entitlements.state,
             availableProviders: availableProviders
         )
-    }
-
-    private func isTrialLocked(_ model: ModelEntry) -> Bool {
-        ModelSelectionPolicy.isTrialLocked(model, entitlement: entitlements.state)
     }
 
     private func isBYOKGated(
@@ -1110,7 +956,6 @@ private struct ModelPicker: View {
         for model: ModelEntry,
         availableProviders: Set<ModelProvider>
     ) -> String? {
-        if isTrialLocked(model) { return "Upgrade to use this model" }
         if isBYOKGated(model, availableProviders: availableProviders) {
             return "Add \(model.provider.displayName) key"
         }
@@ -1130,12 +975,6 @@ private struct ModelPicker: View {
         dismiss()
     }
 
-    private func openUpgrade() {
-        entitlements.paywallTrigger = .voluntaryUpgrade
-        dismiss()
-        MenuBarExtraDismiss.dismiss()
-        AppDelegate.openPaywall()
-    }
 }
 
 private struct ModelPickerRow: View {
@@ -1299,15 +1138,6 @@ private struct EntitlementDebugPicker: View {
                     dismiss()
                 }
             }
-            // Phase E: overlay a `past_due` snapshot on the current Managed
-            // state so the "update your card" nudge (§9.1) is testable.
-            EntitlementDebugRow(
-                name: "Zerro Cloud \u{00B7} Past due",
-                isSelected: entitlements.managedSnapshot?.isPastDue == true
-            ) {
-                entitlements.devForceManagedPastDue()
-                dismiss()
-            }
         }
         .frame(width: 220)
     }
@@ -1393,14 +1223,14 @@ private func previewRecentPromptStore() -> RecentPromptStore {
 // so these previews are `#if DEBUG`-guarded — `#Preview` bodies otherwise
 // compile in Release too.
 #if DEBUG
-#Preview("Dropdown \u{00B7} Trial") {
+#Preview("Dropdown \u{00B7} Free trial") {
     MenuPanelChrome {
         MenuBarPanelView()
             .environment(AppState())
             .environment(previewRecentPromptStore())
-            // A trial with 12 server-funded generations left → the quiet
-            // "12 free generations left" line. In-memory; no real Keychain.
-            .environment(EntitlementStore.preview(.trial(creditsRemaining: 12)))
+            // An active local trial → the quiet "N days left" line.
+            // In-memory; no real Keychain.
+            .environment(EntitlementStore.preview(.localTrial(daysRemaining: 12)))
             .environmentObject(UpdaterViewModel())
     }
     .padding(40)
@@ -1413,7 +1243,7 @@ private func previewRecentPromptStore() -> RecentPromptStore {
             MenuBarPanelView(highlightRecentPrompts: true)
                 .environment(AppState())
                 .environment(previewRecentPromptStore())
-                .environment(EntitlementStore.preview(.trial(creditsRemaining: 12)))
+                .environment(EntitlementStore.preview(.localTrial(daysRemaining: 12)))
                 .environmentObject(UpdaterViewModel())
         }
 
@@ -1431,51 +1261,21 @@ private func previewRecentPromptStore() -> RecentPromptStore {
     .background(Color.vfPanelBackground)
 }
 
-// Confirms the trial line is HIDDEN outside `.trial`.
-#Preview("Dropdown \u{00B7} Expired (no trial line)") {
+// Confirms the trial line changes on expiry.
+#Preview("Dropdown \u{00B7} Trial expired") {
     MenuPanelChrome {
         MenuBarPanelView()
             .environment(AppState())
             .environment(previewRecentPromptStore())
-            .environment(EntitlementStore.preview(.expired))
+            .environment(EntitlementStore.preview(.localTrialExpired))
             .environmentObject(UpdaterViewModel())
     }
     .padding(40)
     .background(Color.vfPanelBackground)
 }
 
-#Preview("Dropdown \u{00B7} Trial last generation") {
-    MenuPanelChrome {
-        MenuBarPanelView()
-            .environment(AppState())
-            .environment(previewRecentPromptStore())
-            // One credit left → verifies the singular "1 free generation left" copy.
-            .environment(EntitlementStore.preview(.trial(creditsRemaining: 1)))
-            .environmentObject(UpdaterViewModel())
-    }
-    .padding(40)
-    .background(Color.vfPanelBackground)
-}
-
-// Header subtitle reconciliation: Managed is the only state with a real
-// credit count; BYOK shows just "Ready" (no credits concept).
-#Preview("Dropdown \u{00B7} Managed (credits)") {
-    MenuPanelChrome {
-        MenuBarPanelView()
-            .environment(AppState())
-            .environment(previewRecentPromptStore())
-            .environment(EntitlementStore.preview(
-                .managed(creditsRemaining: 142, resetDate: .now)
-            ))
-            .environmentObject(UpdaterViewModel())
-    }
-    .padding(40)
-    .background(Color.vfPanelBackground)
-}
-
-// BYOK has no billing row (nothing to upgrade/top up/manage) — this dropdown
-// should show only Settings + Quit below the divider, no "Manage Plan" row.
-#Preview("Dropdown \u{00B7} BYOK (no credits)") {
+// A licensed user has no trial line and no upsell row.
+#Preview("Dropdown \u{00B7} Licensed") {
     MenuPanelChrome {
         MenuBarPanelView()
             .environment(AppState())

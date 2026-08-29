@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/SmartScaleAI/Zerro/security/advisories/new
+    about: >-
+      Please report vulnerabilities privately here, never as a public
+      issue. Fallback contact: support@getzerro.app (see SECURITY.md).
+  - name: Support for the official Zerro app
+    url: https://getzerro.app
+    about: >-
+      Purchase, license, and activation questions for official builds are
+      handled by support@getzerro.app rather than the issue tracker.

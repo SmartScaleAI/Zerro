@@ -116,6 +116,15 @@ final class WhatsNewPolicyTests: XCTestCase {
         XCTAssertNil(Changelog.entry(for: "0.0.0-never-shipped"))
     }
 
+    func testShippedChangelogContainsExactlyTheReleasedVersions() {
+        // Settings → About & Support → What's New shows every entry, so the
+        // shipped list is exactly the production release line: 1.0.0 and
+        // nothing else (staging-only verification entries never ship).
+        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.0"])
+        // The 1.0.0 entry keeps its four launch highlights.
+        XCTAssertEqual(Changelog.entry(for: "1.0.0")?.highlights.count, 4)
+    }
+
     func testEntriesAreUniquePerVersion() {
         // Duplicate versions would make `entry(for:)` ambiguous and render
         // twice in the window.

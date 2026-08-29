@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 #
-# release.sh — Phase 1 local release script for Zerro (Sparkle, direct download)
+# release.sh — local release diagnostic for Zerro (Sparkle, direct download)
 #
 # Builds, signs (Developer ID), notarizes, staples, packages a .dmg, and
 # regenerates the signed Sparkle appcast — all locally so you can debug the
-# fiddly bits (notarization!) fast. It deliberately STOPS before uploading;
-# it prints the exact files to publish and the git tag command to run.
+# fiddly bits (notarization!) fast. It deliberately STOPS before uploading:
+# official publication happens through the automated release workflow
+# (.github/workflows/release-app.yml). It prints the local artifacts to test.
 #
 # Usage:
 #   ./Scripts/release.sh <marketing_version> <build_number>
 #   ./Scripts/release.sh 1.0.2 3
 #
-#   <marketing_version>  human version, e.g. 1.0.2  -> MARKETING_VERSION
-#   <build_number>       integer Sparkle compares,  -> CURRENT_PROJECT_VERSION
-#                        MUST be higher than the last shipped build (currently 2).
+#   <marketing_version>  human version, exactly X.Y.Z (no prefix/suffix, no
+#                        missing component, no leading zeros) -> MARKETING_VERSION
+#   <build_number>       positive integer Sparkle compares (no 0, no sign, no
+#                        decimals, no leading zeros)          -> CURRENT_PROJECT_VERSION
+#                        MUST exceed the latest published build; see the GitHub Releases page or Scripts/README-release.md.
+#                        The checked-in apps/desktop/VERSION and apps/desktop/BUILD_NUMBER are what
+#                        CI ships; this script warns when its arguments differ from them.
 #
 # Prereqs (see Scripts/README-release.md for full setup):
 #   - Xcode + command line tools
@@ -87,14 +92,22 @@ trap 'die "Failed at line $LINENO. See output above."' ERR
 # ----------------------------------------------------------------------------
 # Argument parsing & validation
 # ----------------------------------------------------------------------------
-[[ $# -eq 2 ]] || die "Usage: $0 <marketing_version> <build_number>   e.g. $0 1.0.2 3"
+[[ $# -eq 2 ]] || die "Usage: $0 <marketing_version> <build_number>   e.g. $0 1.0.2 3   (exactly X.Y.Z; positive integer)"
 MARKETING_VERSION="$1"
 BUILD_NUMBER="$2"
 
-[[ "$MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-  || die "marketing_version '$MARKETING_VERSION' should look like 1.0.2"
-[[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] \
-  || die "build_number '$BUILD_NUMBER' must be a positive integer"
+# One rule set for every entry point (Scripts/release_metadata.py): the version
+# must be exactly X.Y.Z and the build a positive integer. Fails here, before any
+# preflight, file change, or build.
+python3 "$SCRIPT_DIR/release_metadata.py" validate --marketing "$MARKETING_VERSION" --build "$BUILD_NUMBER" \
+  || die "invalid arguments: marketing_version must be exactly X.Y.Z and build_number a positive integer (see Scripts/release_metadata.py)"
+# The checked-in metadata is authoritative for CI; flag a local build that
+# would report something different from what the release workflow ships.
+CHECKED_IN_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../VERSION" 2>/dev/null || true)"
+CHECKED_IN_BUILD="$(tr -d '[:space:]' < "$SCRIPT_DIR/../BUILD_NUMBER" 2>/dev/null || true)"
+if [[ "$MARKETING_VERSION" != "$CHECKED_IN_VERSION" || "$BUILD_NUMBER" != "$CHECKED_IN_BUILD" ]]; then
+  warn "arguments ($MARKETING_VERSION build $BUILD_NUMBER) differ from the checked-in apps/desktop/VERSION ($CHECKED_IN_VERSION) / BUILD_NUMBER ($CHECKED_IN_BUILD); CI releases use the files."
+fi
 
 # ----------------------------------------------------------------------------
 # Preflight checks (fail before doing slow work)
@@ -266,9 +279,9 @@ info "Appcast preview:"
 sed 's/^/      /' "$APPCAST_PATH"
 
 # ----------------------------------------------------------------------------
-# 7. Done — print publish instructions (intentionally NOT automated in Phase 1)
+# 7. Done — local artifacts ready for testing (official publication is CI's job)
 # ----------------------------------------------------------------------------
-step "Release built successfully — finish publishing manually"
+step "Local release artifacts built — ready for testing (official publication happens through CI)"
 cat <<EOF
 
   ${c_bold}Artifacts ready in dist/:${c_rst}
@@ -282,10 +295,11 @@ cat <<EOF
        - Temporarily host the new dmg + appcast somewhere (or a staging path).
        - In the app: "Check for Updates…" → confirm it finds, verifies, installs.
 
-  2. PUBLISH to getzerro.app so these URLs serve the new files:
-       ${DOWNLOAD_URL_PREFIX}$APP_NAME.dmg
-       ${DOWNLOAD_URL_PREFIX}appcast.xml
-     (Upload via your site repo / Vercel deploy — whatever serves getzerro.app.)
+  2. SHIP THROUGH CI, not by uploading these files: the official artifacts are
+     the GitHub Release assets that .github/workflows/release-app.yml publishes
+     (getzerro.app/$APP_NAME.dmg and getzerro.app/appcast.xml redirect to the
+     latest release). Bump apps/desktop/VERSION in the staging → main promotion
+     PR, or run Scripts/cut-release.sh <version> from main.
 
   3. COMMIT the version bump and TAG the release:
        git add -A

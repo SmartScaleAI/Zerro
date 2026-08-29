@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AA01F0A12FDE000000000001 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = AA01F0A12FDE000000000002 /* PostHog */; };
 		AA02F0A12FDE000000000012 /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = AA02F0A12FDE000000000011 /* whisper */; };
+		FF7D9A2E00000000000000B1 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = FF7D9A2E00000000000000B2 /* THIRD_PARTY_NOTICES.md */; };
 		FF3B56702FCC52E400F27154 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FF3B566F2FCC52E400F27154 /* Sparkle */; };
 		FF90F6FD2FC7C346004BFBAD /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = FF90F6FC2FC7C346004BFBAD /* KeyboardShortcuts */; };
 /* End PBXBuildFile section */
@@ -26,6 +27,7 @@
 /* Begin PBXFileReference section */
 		18AA00000000000000000002 /* ZerroTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZerroTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF8546CF2FC74ACC000EB1A6 /* Zerro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zerro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF7D9A2E00000000000000B2 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = THIRD_PARTY_NOTICES.md; path = ../../THIRD_PARTY_NOTICES.md; sourceTree = SOURCE_ROOT; };
 		FFCF610000000000000000C1 /* Production.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Production.xcconfig; sourceTree = "<group>"; };
 		FFCF610000000000000000C2 /* Staging.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Staging.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -82,6 +84,7 @@
 			isa = PBXGroup;
 			children = (
 				FFCF610000000000000000C0 /* Config */,
+				FF7D9A2E00000000000000B2 /* THIRD_PARTY_NOTICES.md */,
 				FF8546D12FC74ACC000EB1A6 /* Zerro */,
 				18AA00000000000000000006 /* ZerroTests */,
 				FF8546D02FC74ACC000EB1A6 /* Products */,
@@ -224,6 +227,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FF7D9A2E00000000000000B1 /* THIRD_PARTY_NOTICES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -461,7 +465,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1000;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = H6NWCRRAHV;
 				ENABLE_APP_SANDBOX = NO;
@@ -483,7 +487,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.0;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
@@ -512,7 +516,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1000;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = H6NWCRRAHV;
 				ENABLE_APP_SANDBOX = NO;
@@ -534,7 +538,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.0;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
@@ -618,7 +622,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1000;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = H6NWCRRAHV;
 				ENABLE_APP_SANDBOX = NO;
@@ -640,7 +644,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.0;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
