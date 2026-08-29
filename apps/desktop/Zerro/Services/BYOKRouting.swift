@@ -119,8 +119,8 @@ enum BYOKCostEstimator {
 
     /// Estimated USD chat cost for `usage` on the REQUESTED model id (the
     /// price table keys on what we asked for — a provider may report a dated
-    /// alias the table doesn't carry, same rule as the server). `nil` for an
-    /// unpriced id (logged as unpriced, never guessed).
+    /// alias the table doesn't carry; such ids remain unpriced rather than
+    /// guessed). `nil` for an unpriced id (logged as unpriced, never guessed).
     static func chatCostUSD(modelID: String, usage: TokenUsage) -> Double? {
         guard let price = pricing[modelID] else { return nil }
         let tiered = price.tierThreshold.map { usage.inputTokens > $0 } ?? false

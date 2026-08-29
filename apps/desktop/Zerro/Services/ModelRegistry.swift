@@ -49,7 +49,7 @@ struct ModelEntry: Equatable, Identifiable, Sendable {
     let displayName: String
     /// The picker's "Recommended for Zerro" badge (exactly one model).
     let recommended: Bool
-    /// Mirrors the server kill switch — disabled entries never render.
+    /// Local app kill switch — disabled entries never render.
     let enabled: Bool
 
     init(

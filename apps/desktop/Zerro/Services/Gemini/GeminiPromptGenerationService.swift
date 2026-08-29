@@ -44,8 +44,8 @@ struct GeminiPromptGenerationService: PromptGenerationService {
     // under the project's MainActor-default isolation (same as the OpenAI
     // impl's `model` static).
     private nonisolated static let base = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
-    /// Mirrors the server's GEMINI_THINKING_LEVEL default — the rewrite task
-    /// rarely benefits from deep thinking, and "high" bills thinking tokens.
+    /// Uses low thinking because the rewrite task rarely benefits from deep
+    /// thinking, and higher levels bill additional thinking tokens.
     private nonisolated static let thinkingLevel = "low"
 
     /// B-04 — output-token cap so a BYOK generation on the user's own key is

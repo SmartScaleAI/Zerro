@@ -72,8 +72,8 @@ struct OpenAIPromptGenerationService: PromptGenerationService {
     /// ~1k tokens;
     /// 16384 is ample headroom (a normal response never truncates — only a
     /// runaway is cut, surfaced as `.truncated` via finish_reason "length").
-    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` —
-    /// matching the server and required by the GPT-5.x family.
+    /// Sent as `max_completion_tokens` — NOT the deprecated `max_tokens` — as
+    /// required by the GPT-5.x family.
     private nonisolated static let maxCompletionTokens = 16384
 
     init(model: String = OpenAIPromptGenerationService.defaultModel) {
