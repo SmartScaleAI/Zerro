@@ -11,14 +11,44 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Make the image's nvm-managed Node/npm available even when this script runs in
-# a non-login shell that has not sourced ~/.bashrc (where nvm is normally set
-# up). Without this, `npm` may be missing depending on how `install` is invoked.
+# Make THIS install process use the image's nvm default Node (and its npm) even
+# when invoked from a non-login shell that has not sourced ~/.bashrc. The Cloud
+# Agent runtime may also prepend /exec-daemon (which bundles Node 22.14) ahead of
+# the nvm Node on PATH, so `nvm use default` alone is not enough — explicitly
+# move the nvm default Node's bin dir to the front of PATH for this process so
+# npm ci and the checks below run on it (the persistent ~/.bashrc block set up
+# further down does the same for future Cloud Agent shells).
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-if ! command -v npm >/dev/null 2>&1 && [ -s "$NVM_DIR/nvm.sh" ]; then
+if [ -s "$NVM_DIR/nvm.sh" ]; then
   # shellcheck disable=SC1091
   . "$NVM_DIR/nvm.sh"
+  nvm use default >/dev/null
+  nvm_node_bin="$(dirname "$(nvm which default 2>/dev/null)" 2>/dev/null || true)"
+  if [ -n "$nvm_node_bin" ] && [ -x "$nvm_node_bin/node" ]; then
+    case ":$PATH:" in
+      *":$nvm_node_bin:"*) PATH="$nvm_node_bin:${PATH//":$nvm_node_bin:"/":"}" ;;
+      *) PATH="$nvm_node_bin:$PATH" ;;
+    esac
+    export PATH
+  fi
 fi
+
+# Require Node >= 22.18: apps/web's `node --test "lib/**/*.test.ts"` suite needs
+# native TypeScript type-stripping (stabilized in Node 22.18). Fail loudly
+# rather than silently running npm ci / the suites on an incompatible Node.
+node_version="$(node --version 2>/dev/null || true)"
+if [ -z "$node_version" ]; then
+  echo "ERROR: no usable node found (nvm default missing and no node on PATH)." >&2
+  exit 1
+fi
+node_major="${node_version#v}"; node_major="${node_major%%.*}"
+node_rest="${node_version#v*.}"; node_minor="${node_rest%%.*}"
+if [ "$node_major" -lt 22 ] || { [ "$node_major" -eq 22 ] && [ "$node_minor" -lt 18 ]; }; then
+  echo "ERROR: Node $node_version is too old for apps/web's node --test TypeScript suites (need >= 22.18)." >&2
+  echo "       Set a newer Node as the nvm default, e.g. \`nvm alias default 22\`." >&2
+  exit 1
+fi
+echo "Using Node $node_version ($(command -v node))."
 
 # --- Make `node` resolve to the image's nvm Node (>= 22.22) ------------------
 # The Cloud Agent runtime prepends /exec-daemon (which bundles Node 22.14) to
@@ -52,13 +82,26 @@ EOF
 fi
 
 # --- Deno: runtime for the supabase/functions test suite ---------------------
-# Installed to /usr/local (binary lands in /usr/local/bin/deno) so it is on PATH
-# for every shell without touching any shell profile. Skip the download when a
-# working deno is already present (keeps re-runs fast and idempotent).
-if ! command -v deno >/dev/null 2>&1; then
-  curl -fsSL https://deno.land/install.sh | sudo env DENO_INSTALL=/usr/local sh
+# Pinned to the exact version validated during this environment's setup, for
+# reproducibility. Installed to /usr/local (binary lands in /usr/local/bin/deno)
+# so it is on PATH for every shell without touching any shell profile. Skip the
+# download only when the pinned version is already present; if a DIFFERENT
+# version exists, replace it rather than silently accepting it.
+DENO_VERSION="2.9.6"
+current_deno=""
+if command -v deno >/dev/null 2>&1; then
+  current_deno="$(deno --version | head -1 | awk '{print $2}')"
 fi
-deno --version | head -1
+if [ "$current_deno" != "$DENO_VERSION" ]; then
+  curl -fsSL https://deno.land/install.sh | sudo env DENO_INSTALL=/usr/local sh -s "v$DENO_VERSION"
+  hash -r 2>/dev/null || true
+fi
+installed_deno="$(deno --version | head -1 | awk '{print $2}')"
+if [ "$installed_deno" != "$DENO_VERSION" ]; then
+  echo "ERROR: expected Deno $DENO_VERSION but found ${installed_deno:-none} ($(command -v deno || echo 'not on PATH'))." >&2
+  exit 1
+fi
+echo "Using Deno $installed_deno ($(command -v deno))."
 
 # --- Web app dependencies ----------------------------------------------------
 # npm ci installs exactly what apps/web/package-lock.json pins. The default
