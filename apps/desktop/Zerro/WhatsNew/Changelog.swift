@@ -52,6 +52,16 @@ enum Changelog {
     /// entry here, so this list can't silently fall behind.
     static let entries: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "1.0.1",
+            date: nil,
+            highlights: [
+                ChangelogHighlight(
+                    "Staging builds now receive updates through Zerro’s public GitHub Releases channel.",
+                    kind: .improved
+                ),
+            ]
+        ),
+        ChangelogEntry(
             version: "1.0.0",
             date: nil,
             highlights: [
