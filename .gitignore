@@ -13,3 +13,7 @@
 
 # LLVM coverage output (generated on instrumented runs)
 *.profraw
+
+# Python bytecode (apps/desktop/Scripts/*.py release tooling; regenerated on every run)
+__pycache__/
+*.pyc
