@@ -33,7 +33,6 @@ const PRODUCT_COPY = [
   "components/marketing/built-right.tsx",
   "components/marketing/hero.tsx",
   "components/marketing/final-cta.tsx",
-  "components/marketing/what-is-zerro.tsx",
   "components/marketing/footer.tsx",
   "components/structured-data.tsx",
   "app/page.tsx",
