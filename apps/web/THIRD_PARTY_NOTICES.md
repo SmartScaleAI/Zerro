@@ -14,7 +14,7 @@ Regenerate it after dependency changes and verify with
 The Inter typeface, embedded in the built site, is licensed under the
 SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 
-## Package inventory (156 packages)
+## Package inventory (85 packages)
 
 | Package | Version | License |
 |---|---|---|
@@ -64,71 +64,9 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | @next/swc-win32-x64-msvc | 16.3.3 | MIT |
 | @posthog/core | 1.32.5 | MIT |
 | @posthog/types | 1.386.4 | MIT |
-| @radix-ui/number | 1.1.1 | MIT |
-| @radix-ui/primitive | 1.1.3 | MIT |
-| @radix-ui/react-accessible-icon | 1.1.7 | MIT |
-| @radix-ui/react-accordion | 1.2.12 | MIT |
-| @radix-ui/react-alert-dialog | 1.1.15 | MIT |
-| @radix-ui/react-arrow | 1.1.7 | MIT |
-| @radix-ui/react-aspect-ratio | 1.1.7 | MIT |
-| @radix-ui/react-avatar | 1.1.10 | MIT |
-| @radix-ui/react-checkbox | 1.3.3 | MIT |
-| @radix-ui/react-collapsible | 1.1.12 | MIT |
-| @radix-ui/react-collection | 1.1.7 | MIT |
-| @radix-ui/react-compose-refs | 1.1.2 | MIT |
-| @radix-ui/react-context | 1.1.2 | MIT |
-| @radix-ui/react-context-menu | 2.2.16 | MIT |
-| @radix-ui/react-dialog | 1.1.15 | MIT |
-| @radix-ui/react-direction | 1.1.1 | MIT |
-| @radix-ui/react-dismissable-layer | 1.1.11 | MIT |
-| @radix-ui/react-dropdown-menu | 2.1.16 | MIT |
-| @radix-ui/react-focus-guards | 1.1.3 | MIT |
-| @radix-ui/react-focus-scope | 1.1.7 | MIT |
-| @radix-ui/react-form | 0.1.8 | MIT |
-| @radix-ui/react-hover-card | 1.1.15 | MIT |
-| @radix-ui/react-id | 1.1.1 | MIT |
-| @radix-ui/react-label | 2.1.7 | MIT |
-| @radix-ui/react-menu | 2.1.16 | MIT |
-| @radix-ui/react-menubar | 1.1.16 | MIT |
-| @radix-ui/react-navigation-menu | 1.2.14 | MIT |
-| @radix-ui/react-one-time-password-field | 0.1.8 | MIT |
-| @radix-ui/react-password-toggle-field | 0.1.3 | MIT |
-| @radix-ui/react-popover | 1.1.15 | MIT |
-| @radix-ui/react-popper | 1.2.8 | MIT |
-| @radix-ui/react-portal | 1.1.9 | MIT |
-| @radix-ui/react-presence | 1.1.5 | MIT |
-| @radix-ui/react-primitive | 2.1.3 | MIT |
-| @radix-ui/react-progress | 1.1.7 | MIT |
-| @radix-ui/react-radio-group | 1.3.8 | MIT |
-| @radix-ui/react-roving-focus | 1.1.11 | MIT |
-| @radix-ui/react-scroll-area | 1.2.10 | MIT |
-| @radix-ui/react-select | 2.2.6 | MIT |
-| @radix-ui/react-separator | 1.1.7 | MIT |
-| @radix-ui/react-slider | 1.3.6 | MIT |
-| @radix-ui/react-slot | 1.2.3 | MIT |
-| @radix-ui/react-switch | 1.2.6 | MIT |
-| @radix-ui/react-tabs | 1.1.13 | MIT |
-| @radix-ui/react-toast | 1.2.15 | MIT |
-| @radix-ui/react-toggle | 1.1.10 | MIT |
-| @radix-ui/react-toggle-group | 1.1.11 | MIT |
-| @radix-ui/react-toolbar | 1.1.11 | MIT |
-| @radix-ui/react-tooltip | 1.2.8 | MIT |
-| @radix-ui/react-use-callback-ref | 1.1.1 | MIT |
-| @radix-ui/react-use-controllable-state | 1.2.2 | MIT |
-| @radix-ui/react-use-effect-event | 0.0.2 | MIT |
-| @radix-ui/react-use-escape-keydown | 1.1.1 | MIT |
-| @radix-ui/react-use-is-hydrated | 0.1.0 | MIT |
-| @radix-ui/react-use-layout-effect | 1.1.1 | MIT |
-| @radix-ui/react-use-previous | 1.1.1 | MIT |
-| @radix-ui/react-use-rect | 1.1.1 | MIT |
-| @radix-ui/react-use-size | 1.1.1 | MIT |
-| @radix-ui/react-visually-hidden | 1.2.3 | MIT |
-| @radix-ui/rect | 1.1.1 | MIT |
 | @swc/helpers | 0.5.23 | Apache-2.0 |
 | @types/react | 19.2.15 | MIT |
-| @types/react-dom | 19.2.3 | MIT |
 | @types/trusted-types | 2.0.7 | MIT |
-| aria-hidden | 1.2.6 | MIT |
 | baseline-browser-mapping | 2.10.32 | Apache-2.0 |
 | caniuse-lite | 1.0.30001793 | CC-BY-4.0 |
 | class-variance-authority | 0.7.1 | Apache-2.0 |
@@ -137,29 +75,22 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | core-js | 3.49.0 | MIT |
 | csstype | 3.2.3 | MIT |
 | detect-libc | 2.1.2 | Apache-2.0 |
-| detect-node-es | 1.1.0 | MIT |
 | dompurify | 3.4.13 | (MPL-2.0 OR Apache-2.0) |
 | fflate | 0.4.8 | MIT |
 | framer-motion | 12.40.0 | MIT |
-| get-nonce | 1.0.1 | MIT |
 | lucide-react | 1.17.0 | ISC |
 | motion | 12.40.0 | MIT |
 | motion-dom | 12.40.0 | MIT |
 | motion-utils | 12.39.0 | MIT |
 | nanoid | 3.3.18 | MIT |
 | next | 16.3.3 | MIT |
-| next-themes | 0.4.6 | MIT |
 | picocolors | 1.1.1 | ISC |
 | postcss | 8.5.23 | MIT |
 | posthog-js | 1.386.8 | SEE LICENSE IN LICENSE |
 | preact | 10.29.2 | MIT |
 | query-selector-shadow-dom | 1.0.1 | MIT |
-| radix-ui | 1.4.3 | MIT |
 | react | 19.2.4 | MIT |
 | react-dom | 19.2.4 | MIT |
-| react-remove-scroll | 2.7.2 | MIT |
-| react-remove-scroll-bar | 2.3.8 | MIT |
-| react-style-singleton | 2.2.3 | MIT |
 | reselect | 5.2.0 | MIT |
 | scheduler | 0.27.0 | MIT |
 | semver | 7.8.5 | ISC |
@@ -170,8 +101,6 @@ SIL Open Font License 1.1 — see the [Inter](#inter-typeface) section.
 | tailwind-merge | 3.6.0 | MIT |
 | tslib | 2.8.1 | 0BSD |
 | tw-animate-css | 1.4.0 | MIT |
-| use-callback-ref | 1.3.3 | MIT |
-| use-sidecar | 1.1.3 | MIT |
 | use-sync-external-store | 1.6.0 | MIT |
 | web-vitals | 5.3.0 | Apache-2.0 |
 
@@ -3490,63 +3419,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 15: @radix-ui/number@1.1.1, @radix-ui/react-compose-refs@1.1.2, @radix-ui/react-context@1.1.2, @radix-ui/react-direction@1.1.1, @radix-ui/react-id@1.1.1, @radix-ui/react-use-callback-ref@1.1.1, @radix-ui/react-use-escape-keydown@1.1.1, @radix-ui/react-use-layout-effect@1.1.1, @radix-ui/react-use-previous@1.1.1, @radix-ui/react-use-rect@1.1.1, @radix-ui/react-use-size@1.1.1, @radix-ui/rect@1.1.1
-
-```text
---- radix-ui-primitives-LICENSE.txt ---
-
-MIT License
-
-Copyright (c) 2022 WorkOS
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Source: https://raw.githubusercontent.com/radix-ui/primitives/fcef0668a5c827e5a4baac405474d75680f9a4eb/LICENSE (gitHead of each installed @radix-ui package version per its npm registry metadata)
-```
-
-### Text 16: @radix-ui/primitive@1.1.3, @radix-ui/react-accessible-icon@1.1.7, @radix-ui/react-accordion@1.2.12, @radix-ui/react-alert-dialog@1.1.15, @radix-ui/react-arrow@1.1.7, @radix-ui/react-aspect-ratio@1.1.7, @radix-ui/react-avatar@1.1.10, @radix-ui/react-checkbox@1.3.3, @radix-ui/react-collapsible@1.1.12, @radix-ui/react-collection@1.1.7, @radix-ui/react-context-menu@2.2.16, @radix-ui/react-dialog@1.1.15, @radix-ui/react-dismissable-layer@1.1.11, @radix-ui/react-dropdown-menu@2.1.16, @radix-ui/react-focus-guards@1.1.3, @radix-ui/react-focus-scope@1.1.7, @radix-ui/react-form@0.1.8, @radix-ui/react-hover-card@1.1.15, @radix-ui/react-label@2.1.7, @radix-ui/react-menu@2.1.16, @radix-ui/react-menubar@1.1.16, @radix-ui/react-navigation-menu@1.2.14, @radix-ui/react-one-time-password-field@0.1.8, @radix-ui/react-password-toggle-field@0.1.3, @radix-ui/react-popover@1.1.15, @radix-ui/react-popper@1.2.8, @radix-ui/react-portal@1.1.9, @radix-ui/react-presence@1.1.5, @radix-ui/react-primitive@2.1.3, @radix-ui/react-progress@1.1.7, @radix-ui/react-radio-group@1.3.8, @radix-ui/react-roving-focus@1.1.11, @radix-ui/react-scroll-area@1.2.10, @radix-ui/react-select@2.2.6, @radix-ui/react-separator@1.1.7, @radix-ui/react-slider@1.3.6, @radix-ui/react-slot@1.2.3, @radix-ui/react-switch@1.2.6, @radix-ui/react-tabs@1.1.13, @radix-ui/react-toast@1.2.15, @radix-ui/react-toggle@1.1.10, @radix-ui/react-toggle-group@1.1.11, @radix-ui/react-toolbar@1.1.11, @radix-ui/react-tooltip@1.2.8, @radix-ui/react-use-controllable-state@1.2.2, @radix-ui/react-use-effect-event@0.0.2, @radix-ui/react-use-is-hydrated@0.1.0, @radix-ui/react-visually-hidden@1.2.3, radix-ui@1.4.3
-
-```text
-MIT License
-
-Copyright (c) 2022 WorkOS
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 17: @swc/helpers@0.5.23
+### Text 15: @swc/helpers@0.5.23
 
 ```text
 Apache License
@@ -3752,7 +3625,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### Text 18: @types/react@19.2.15, @types/react-dom@19.2.3, @types/trusted-types@2.0.7
+### Text 16: @types/react@19.2.15, @types/trusted-types@2.0.7
 
 ```text
 MIT License
@@ -3778,33 +3651,7 @@ MIT License
     SOFTWARE
 ```
 
-### Text 19: aria-hidden@1.2.6, react-remove-scroll@2.7.2, react-style-singleton@2.2.3, use-callback-ref@1.3.3, use-sidecar@1.1.3
-
-```text
-MIT License
-
-Copyright (c) 2017 Anton Korzunov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 20: baseline-browser-mapping@2.10.32
+### Text 17: baseline-browser-mapping@2.10.32
 
 ```text
 Apache License
@@ -4010,7 +3857,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 21: caniuse-lite@1.0.30001793
+### Text 18: caniuse-lite@1.0.30001793
 
 ```text
 Attribution 4.0 International
@@ -4410,7 +4257,7 @@ public licenses.
 Creative Commons may be contacted at creativecommons.org.
 ```
 
-### Text 22: class-variance-authority@0.7.1
+### Text 19: class-variance-authority@0.7.1
 
 ```text
 Apache License
@@ -4605,7 +4452,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 23: client-only@0.0.1
+### Text 20: client-only@0.0.1
 
 ```text
 The published package declares the MIT license in its npm registry metadata (homepage: https://reactjs.org, published by the React team) and includes no copyright notice or license text; the MIT terms follow.
@@ -4633,7 +4480,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Source: https://registry.npmjs.org/client-only/0.0.1
 ```
 
-### Text 24: clsx@2.1.1
+### Text 21: clsx@2.1.1
 
 ```text
 MIT License
@@ -4647,7 +4494,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 25: core-js@3.49.0
+### Text 22: core-js@3.49.0
 
 ```text
 Copyright (c) 2013–2025 Denis Pushkarev (zloirock.ru)
@@ -4672,7 +4519,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Text 26: csstype@3.2.3
+### Text 23: csstype@3.2.3
 
 ```text
 Copyright (c) 2017-2018 Fredrik Nicol
@@ -4696,7 +4543,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 27: detect-libc@2.1.2
+### Text 24: detect-libc@2.1.2
 
 ```text
 Apache License
@@ -4902,33 +4749,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 28: detect-node-es@1.1.0
-
-```text
-MIT License
-
-Copyright (c) 2017 Ilya Kantor
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 29: dompurify@3.4.13
+### Text 25: dompurify@3.4.13
 
 ```text
 This package is distributed under "(MPL-2.0 OR Apache-2.0)". All license texts provided with the package are reproduced below.
@@ -5514,7 +5335,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 ```
 
-### Text 30: fflate@0.4.8
+### Text 26: fflate@0.4.8
 
 ```text
 MIT License
@@ -5540,7 +5361,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 31: framer-motion@12.40.0
+### Text 27: framer-motion@12.40.0
 
 ```text
 The MIT License (MIT)
@@ -5566,33 +5387,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 32: get-nonce@1.0.1
-
-```text
-MIT License
-
-Copyright (c) 2020 Anton Korzunov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 33: lucide-react@1.17.0
+### Text 28: lucide-react@1.17.0
 
 ```text
 ISC License
@@ -5640,7 +5435,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 34: motion@12.40.0, motion-dom@12.40.0, motion-utils@12.39.0
+### Text 29: motion@12.40.0, motion-dom@12.40.0, motion-utils@12.39.0
 
 ```text
 The MIT License (MIT)
@@ -5666,7 +5461,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 35: nanoid@3.3.18
+### Text 30: nanoid@3.3.18
 
 ```text
 The MIT License (MIT)
@@ -5691,7 +5486,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 36: next@16.3.3
+### Text 31: next@16.3.3
 
 ```text
 The MIT License (MIT)
@@ -5717,33 +5512,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 37: next-themes@0.4.6
-
-```text
-MIT License
-
-Copyright (c) 2022 Paco Coursey
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 38: picocolors@1.1.1
+### Text 32: picocolors@1.1.1
 
 ```text
 ISC License
@@ -5763,7 +5532,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 39: postcss@8.5.23
+### Text 33: postcss@8.5.23
 
 ```text
 The MIT License (MIT)
@@ -5788,7 +5557,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 40: preact@10.29.2
+### Text 34: preact@10.29.2
 
 ```text
 The MIT License (MIT)
@@ -5814,7 +5583,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 41: query-selector-shadow-dom@1.0.1
+### Text 35: query-selector-shadow-dom@1.0.1
 
 ```text
 MIT License
@@ -5840,7 +5609,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 42: react@19.2.4, react-dom@19.2.4, scheduler@0.27.0, use-sync-external-store@1.6.0
+### Text 36: react@19.2.4, react-dom@19.2.4, scheduler@0.27.0, use-sync-external-store@1.6.0
 
 ```text
 MIT License
@@ -5866,35 +5635,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 43: react-remove-scroll-bar@2.3.8
-
-```text
-The published package declares the MIT license and the author Anton Korzunov <thekashey@gmail.com> in its package metadata and includes no license text; the repository has no v2.3.8 tag and the commit this version was published from is not present in the public repository, so no repository source can be tied to this exact version. The MIT terms follow.
-
---- MIT license terms ---
-
-MIT License
-
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
-associated documentation files (the "Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
-following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial
-portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
-LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
-EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-Source: https://registry.npmjs.org/react-remove-scroll-bar/2.3.8
-```
-
-### Text 44: reselect@5.2.0
+### Text 37: reselect@5.2.0
 
 ```text
 The MIT License (MIT)
@@ -5920,7 +5661,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 45: semver@7.8.5
+### Text 38: semver@7.8.5
 
 ```text
 The ISC License
@@ -5940,7 +5681,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 46: shadcn@4.8.2
+### Text 39: shadcn@4.8.2
 
 ```text
 MIT License
@@ -5966,7 +5707,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 47: source-map-js@1.2.1
+### Text 40: source-map-js@1.2.1
 
 ```text
 Copyright (c) 2009-2011, Mozilla Foundation and contributors
@@ -5998,7 +5739,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Text 48: styled-jsx@5.1.6
+### Text 41: styled-jsx@5.1.6
 
 ```text
 MIT License
@@ -6024,7 +5765,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 49: tailwind-merge@3.6.0
+### Text 42: tailwind-merge@3.6.0
 
 ```text
 MIT License
@@ -6050,7 +5791,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 50: tslib@2.8.1
+### Text 43: tslib@2.8.1
 
 ```text
 Copyright (c) Microsoft Corporation.
@@ -6067,7 +5808,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### Text 51: tw-animate-css@1.4.0
+### Text 44: tw-animate-css@1.4.0
 
 ```text
 MIT License
@@ -6093,7 +5834,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 52: web-vitals@5.3.0
+### Text 45: web-vitals@5.3.0
 
 ```text
 Apache License
