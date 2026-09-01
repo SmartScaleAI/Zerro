@@ -29,7 +29,6 @@ components/
                       navbar, footer, ...)
   legal/              Shared shell for the privacy and terms pages
   ui/                 Reusable primitives (shadcn/ui-style)
-  theme/              Theme provider and toggles
 lib/                  Site config, analytics, and shared utilities
 public/               Static assets (logo, videos, favicons, llms.txt)
 ```

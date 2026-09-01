@@ -184,7 +184,8 @@ Opus 4.7's documented tendency to add preamble/caveats and "argue" with the
 ## Artifact-contract eval (modes → typed-artifact refactor, Phase 0)
 
 `--artifact` scores models against the typed-artifact output contract
-(`docs/refactor-artifact-response-plan.md` §2) instead of running a recording.
+(§2, mirrored in `Scripts/artifact-eval/prompt-v2.md`) instead of running a
+recording.
 Input is the labeled, text-only fixture set
 `Scripts/artifact-eval/fixtures.json` — 40 cases of
 `{ id, transcript, ocr_summary, clicks, expected: { has_artifact, type|null, notes } }`

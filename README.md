@@ -17,7 +17,6 @@ your accounts to do the work.
 apps/
   desktop/   macOS app (Swift / Xcode). Open apps/desktop/Zerro.xcodeproj
   web/       Website at getzerro.app (Next.js). Deployed by Vercel
-docs/        Cross-cutting docs
 .github/     CI and release automation
 ```
 

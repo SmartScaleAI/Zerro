@@ -53,7 +53,7 @@
 // The transcript is cached per working dir (transcript.eval.json) so repeated
 // runs against different models don't re-pay Whisper.
 //
-// ARTIFACT MODE (refactor Phase 0 — docs/refactor-artifact-response-plan.md):
+// ARTIFACT MODE (refactor Phase 0):
 //   node Scripts/eval-models.mjs --artifact \
 //     --models gemini:gemini-3.5-flash,anthropic:claude-sonnet-4-6 \
 //     [--fixtures Scripts/artifact-eval/fixtures.json]   # default
@@ -413,7 +413,7 @@ function arg(name, fallback) {
 // `--artifact` swaps the recorded-working-dir input for the labeled text-only
 // fixture set (Scripts/artifact-eval/fixtures.json) and scores each model's
 // raw output against the typed-artifact contract
-// (docs/refactor-artifact-response-plan.md §2). Four metrics, per the plan:
+// (§2 of that contract). Four metrics, per the plan:
 //   (a) attach / no-attach accuracy — artifact attached iff the label says so
 //   (b) type accuracy               — right type, among cases where the label
 //                                     expects an artifact AND the model attached
