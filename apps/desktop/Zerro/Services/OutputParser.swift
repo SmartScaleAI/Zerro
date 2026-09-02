@@ -5,8 +5,8 @@
 //  Created by Colin Breeding on 6/11/26.
 //
 //  Phase 2 of the modes → typed-artifact refactor: the client-side parser
-//  for the §2 output contract (docs/refactor-artifact-response-plan.md),
-//  INCLUDING the three-rule recovery tier (§2 amendment, 2026-06-11).
+//  for the §2 output contract, INCLUDING the three-rule recovery tier
+//  (§2 amendment, 2026-06-11).
 //  ADDITIVE in this phase — nothing calls it yet; Phase 4 runs it on every
 //  generation result.
 //

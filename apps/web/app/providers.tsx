@@ -9,7 +9,7 @@ import { sanitizePostHogEvent } from "@/lib/analytics-sanitize";
 // PostHog for the marketing site. Deliberately the opposite posture of the
 // macOS app: autocapture ON (a landing page is the right place for it), but
 // cookieless (memory persistence, no consent banner), session replay OFF, and
-// only identified people get profiles. See docs/ANALYTICS-WEBSITE-PLAN.md.
+// only identified people get profiles.
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;

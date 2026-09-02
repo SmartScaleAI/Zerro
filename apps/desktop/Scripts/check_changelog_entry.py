@@ -102,7 +102,7 @@ def main() -> int:
         "%s. The in-app What's New pop would silently skip this release." % problem,
         "Add a ChangelogEntry for %s at the TOP of apps/desktop/Zerro/WhatsNew/"
         "Changelog.swift in the same PR that bumps apps/desktop/VERSION\n"
-        "(docs/DEPLOY-RUNBOOK.md, step 6). For an intentional internal-only release, "
+        "(see apps/desktop/Scripts/RELEASE-AUTOMATION.md). For an intentional internal-only release, "
         "put %s in the release PR title / commit message,\n"
         "or set ZERRO_ALLOW_NO_CHANGELOG=1 for the local scripts." % (version, SKIP_MARKER))
 

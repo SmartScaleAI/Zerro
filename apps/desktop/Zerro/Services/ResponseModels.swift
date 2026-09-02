@@ -4,8 +4,7 @@
 //
 //  Created by Colin Breeding on 6/11/26.
 //
-//  Phase 2 of the modes → typed-artifact refactor
-//  (docs/refactor-artifact-response-plan.md): the data model for a parsed
+//  Phase 2 of the modes → typed-artifact refactor: the data model for a parsed
 //  model response — chat text plus at most one typed artifact. ADDITIVE in
 //  this phase: nothing constructs these yet; Phase 4 wires OutputParser
 //  into the generation paths and Phase 5 renders them.

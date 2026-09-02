@@ -6,7 +6,8 @@
 //  release notes shipped inside the app (no network fetch, no dependency on
 //  the deferred Sparkle appcast pipeline). Edited as part of each release —
 //  add a new entry at the TOP of `entries` in the same PR that bumps
-//  VERSION / CFBundleShortVersionString (see docs/DEPLOY-RUNBOOK.md).
+//  VERSION / CFBundleShortVersionString (see
+//  apps/desktop/Scripts/RELEASE-AUTOMATION.md).
 //
 //  Read by two surfaces: the launch-time auto-pop (via `WhatsNewPolicy` —
 //  `entry(for:)` is its "does the current version have notes" guard) and the

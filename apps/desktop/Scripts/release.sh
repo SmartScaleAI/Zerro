@@ -145,8 +145,9 @@ fi
 ok "build_number $BUILD_NUMBER > current $LAST_BUILD"
 
 # The version must have a What's New entry in Changelog.swift, or the in-app
-# pop silently skips this release (same gate CI runs; see docs/DEPLOY-RUNBOOK.md
-# step 6). Intentional internal-only release: ZERRO_ALLOW_NO_CHANGELOG=1.
+# pop silently skips this release (same gate CI runs; see
+# Scripts/RELEASE-AUTOMATION.md). Intentional internal-only release:
+# ZERRO_ALLOW_NO_CHANGELOG=1.
 python3 "$SCRIPT_DIR/check_changelog_entry.py" --version "$MARKETING_VERSION" \
   || die "No What's New entry for $MARKETING_VERSION in Changelog.swift (set ZERRO_ALLOW_NO_CHANGELOG=1 to skip intentionally)."
 ok "Changelog.swift has a What's New entry for $MARKETING_VERSION"
