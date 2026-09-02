@@ -53,6 +53,16 @@ enum Changelog {
     /// entry here, so this list can't silently fall behind.
     static let entries: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "1.0.3",
+            date: nil,
+            highlights: [
+                ChangelogHighlight(
+                    "Internal maintenance updates.",
+                    kind: .note
+                ),
+            ]
+        ),
+        ChangelogEntry(
             version: "1.0.0",
             date: nil,
             highlights: [

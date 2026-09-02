@@ -118,9 +118,10 @@ final class WhatsNewPolicyTests: XCTestCase {
 
     func testShippedChangelogContainsExactlyTheReleasedVersions() {
         // Settings → About & Support → What's New shows every entry, so the
-        // shipped list is exactly the production release line: 1.0.0 and
-        // nothing else (staging-only verification entries never ship).
-        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.0"])
+        // shipped list is exactly the production release line: 1.0.3 then
+        // 1.0.0. Staging-only 1.0.1 / 1.0.2 verification entries never ship.
+        XCTAssertEqual(Changelog.entries.map(\.version), ["1.0.3", "1.0.0"])
+        XCTAssertEqual(Changelog.entry(for: "1.0.3")?.highlights.count, 1)
         // The 1.0.0 entry keeps its four launch highlights.
         XCTAssertEqual(Changelog.entry(for: "1.0.0")?.highlights.count, 4)
     }
