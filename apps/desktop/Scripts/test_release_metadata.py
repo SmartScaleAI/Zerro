@@ -314,10 +314,10 @@ class ChangelogResetTests(unittest.TestCase):
     def test_shipped_changelog_contains_exactly_the_released_versions(self) -> None:
         src = (HERE.parent / "Zerro" / "WhatsNew" / "Changelog.swift").read_text(encoding="utf-8")
         versions = re.findall(r'version:\s*"([^"]+)"', src)
-        self.assertEqual(versions, ["1.0.2", "1.0.1", "1.0.0"])
-        # One highlight per staging verification release; the 1.0.0 reset keeps its four.
+        self.assertEqual(versions, ["1.0.3", "1.0.2", "1.0.1", "1.0.0"])
+        # One highlight per staging release; the 1.0.0 reset keeps its four.
         entries = src.split("ChangelogEntry(")[1:]
-        self.assertEqual([e.count("ChangelogHighlight(") for e in entries], [1, 1, 4])
+        self.assertEqual([e.count("ChangelogHighlight(") for e in entries], [1, 1, 1, 4])
         self.assertNotIn("releaseDate", src, "the unused date helper is gone")
         self.assertEqual(rm.read_version(), versions[0], "the newest entry matches the checked-in VERSION")
 
