@@ -5,9 +5,12 @@
 #
 # Bundle ID: com.cbreeding.Zerro  |  App is NOT sandboxed (data lives in ~/Library/*)
 #
-# NOTE: Keychain items (trial token/email, BYOK license, API keys) are
-# intentionally built to persist across delete+reinstall. This script deletes
-# them explicitly — that's the only way to get a true "new user" trial state.
+# NOTE: Keychain items (trial clock dates, trial token/email, BYOK license,
+# API keys) are intentionally built to persist across delete+reinstall. This
+# script deletes them explicitly — that's the only way to get a true "new
+# user" trial state. The local trial clock is trial_start_date /
+# trial_max_date_seen (TrialManager / KeychainStore); omitting those leaves
+# a partial trial after reset + reinstall.
 #
 # Usage:  bash reset-for-testing.sh [--environment local|staging|production]
 #         bash reset-for-testing.sh --delete-app   # also removes the selected app
@@ -28,7 +31,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --help|-h)
-      sed -n '1,14p' "$0"
+      sed -n '1,17p' "$0"
       exit 0
       ;;
     *)
@@ -95,7 +98,8 @@ echo "==> Deleting Keychain items (these survive reinstall by design)"
 for acct in \
   openai_api_key gemini_api_key anthropic_api_key \
   byok_license_key byok_instance_id byok_last_validated byok_license_created_at \
-  license_product_kind trial_email trial_token onboarding_contact_token byok_trial_token
+  license_product_kind trial_email trial_token onboarding_contact_token byok_trial_token \
+  trial_start_date trial_max_date_seen
 do
   security delete-generic-password -s "$BUNDLE_ID" -a "$acct" >/dev/null 2>&1 \
     && echo "    deleted: $acct"

@@ -22,6 +22,7 @@
 //    • genuine Keychain read failure fails OPEN (full trial, not expired)
 //      and never initializes over a possibly-present value
 //    • the production slots use the device-only protection class
+//    • reset-for-testing.sh deletes both trial-clock Keychain accounts
 //    • the in-memory preview factory works over its own fake slots
 //
 
@@ -295,6 +296,31 @@ final class TrialManagerTests: XCTestCase {
         )
         XCTAssertEqual(KeychainStore.trialStartDate.account, "trial_start_date")
         XCTAssertEqual(KeychainStore.trialMaxDateSeen.account, "trial_max_date_seen")
+    }
+
+    /// SMA-6: leftover `trial_start_date` / `trial_max_date_seen` made
+    /// reset+reinstall resume a 6–7 day clock instead of a fresh 14-day
+    /// trial. Pin the reset script to the production account names so the
+    /// wipe list cannot drift from `KeychainStore` again.
+    func testResetForTestingScriptDeletesTrialClockAccounts() throws {
+        let scriptURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("reset-for-testing.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        XCTAssertTrue(
+            script.contains("-a \"$acct\""),
+            "reset-for-testing.sh must still delete Keychain items via security -a \"$acct\""
+        )
+        for account in [
+            KeychainStore.trialStartDate.account,
+            KeychainStore.trialMaxDateSeen.account,
+        ] {
+            XCTAssertTrue(
+                script.contains(account),
+                "reset-for-testing.sh must delete Keychain account \(account) or reset+reinstall resumes a partial trial"
+            )
+        }
     }
 
     // MARK: - Preview factory
